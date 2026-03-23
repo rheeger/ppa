@@ -2,6 +2,10 @@
 ppa.yml
 ppa.yaml
 ppa.json
+archive-mcp.yml
+archive-mcp.yaml
+archive-mcp.json
+archive-mcp.example.json
 .env.pgvector
 
 # Operator logs
