@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ppa"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+  "pydantic>=2.0",
+  "ruamel.yaml>=0.17",
+  "mcp>=1.0",
+  "psycopg[binary]>=3.2",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["archive_mcp*", "hfa*", "archive_sync*", "archive_doctor*"]

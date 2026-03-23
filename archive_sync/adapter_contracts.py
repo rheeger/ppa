@@ -1,0 +1,199 @@
+"""Explicit adapter contract registry for archive-sync sources."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class AdapterSpec:
+    adapter_name: str
+    source_id: str
+    emitted_card_types: tuple[str, ...]
+    deterministic_fields_owned: tuple[str, ...]
+    identity_keys: tuple[str, ...]
+    external_id_fields: tuple[str, ...]
+    relationship_fields: tuple[str, ...]
+    supports_incremental_cursor: bool
+
+
+ADAPTER_SPECS: dict[str, AdapterSpec] = {
+    "contacts": AdapterSpec(
+        adapter_name="ContactsAdapter",
+        source_id="contacts",
+        emitted_card_types=("person",),
+        deterministic_fields_owned=("summary", "emails", "phones", "company", "title", "aliases", "birthday"),
+        identity_keys=("summary", "emails", "phones", "linkedin", "github", "twitter", "instagram", "telegram", "discord"),
+        external_id_fields=("source_id", "linkedin", "linkedin_url", "github", "twitter", "instagram", "telegram", "discord"),
+        relationship_fields=("reports_to", "people", "orgs"),
+        supports_incremental_cursor=False,
+    ),
+    "seed-people": AdapterSpec(
+        adapter_name="SeedPeopleAdapter",
+        source_id="seed-people",
+        emitted_card_types=("person",),
+        deterministic_fields_owned=("summary", "emails", "phones", "aliases", "company", "title"),
+        identity_keys=("summary", "emails", "phones"),
+        external_id_fields=("source_id",),
+        relationship_fields=("people", "orgs"),
+        supports_incremental_cursor=False,
+    ),
+    "gmail-correspondents": AdapterSpec(
+        adapter_name="GmailCorrespondentsAdapter",
+        source_id="gmail-correspondents",
+        emitted_card_types=("person",),
+        deterministic_fields_owned=("summary", "emails", "company", "emails_seen_count"),
+        identity_keys=("summary", "emails"),
+        external_id_fields=("source_id",),
+        relationship_fields=("people", "orgs"),
+        supports_incremental_cursor=True,
+    ),
+    "linkedin": AdapterSpec(
+        adapter_name="LinkedInAdapter",
+        source_id="linkedin",
+        emitted_card_types=("person",),
+        deterministic_fields_owned=("summary", "company", "companies", "title", "titles", "linkedin", "linkedin_url", "linkedin_connected_on"),
+        identity_keys=("summary", "linkedin", "linkedin_url", "emails"),
+        external_id_fields=("source_id", "linkedin", "linkedin_url"),
+        relationship_fields=("people", "orgs"),
+        supports_incremental_cursor=False,
+    ),
+    "notion-people": AdapterSpec(
+        adapter_name="NotionPeopleAdapter",
+        source_id="notion-people",
+        emitted_card_types=("person",),
+        deterministic_fields_owned=("summary", "emails", "company", "title", "aliases"),
+        identity_keys=("summary", "emails"),
+        external_id_fields=("source_id",),
+        relationship_fields=("people", "orgs"),
+        supports_incremental_cursor=False,
+    ),
+    "notion-staff": AdapterSpec(
+        adapter_name="NotionStaffAdapter",
+        source_id="notion-staff",
+        emitted_card_types=("person",),
+        deterministic_fields_owned=("summary", "emails", "company", "title", "aliases"),
+        identity_keys=("summary", "emails"),
+        external_id_fields=("source_id",),
+        relationship_fields=("people", "orgs"),
+        supports_incremental_cursor=False,
+    ),
+    "copilot-finance": AdapterSpec(
+        adapter_name="CopilotFinanceAdapter",
+        source_id="copilot-finance",
+        emitted_card_types=("finance",),
+        deterministic_fields_owned=("summary", "amount", "currency", "date_start", "date_end", "counterparties", "location"),
+        identity_keys=("source_id",),
+        external_id_fields=("source_id",),
+        relationship_fields=("people", "orgs", "counterparties"),
+        supports_incremental_cursor=True,
+    ),
+    "apple-health": AdapterSpec(
+        adapter_name="AppleHealthAdapter",
+        source_id="apple-health",
+        emitted_card_types=("medical_record",),
+        deterministic_fields_owned=("summary", "record_type", "record_subtype", "status", "occurred_at", "recorded_at", "source_system"),
+        identity_keys=("source_id", "encounter_source_id"),
+        external_id_fields=("source_id", "encounter_source_id"),
+        relationship_fields=("people", "orgs"),
+        supports_incremental_cursor=True,
+    ),
+    "medical-records": AdapterSpec(
+        adapter_name="MedicalRecordsAdapter",
+        source_id="medical-records",
+        emitted_card_types=("medical_record", "vaccination"),
+        deterministic_fields_owned=("summary", "record_type", "record_subtype", "status", "occurred_at", "recorded_at", "source_system", "source_format"),
+        identity_keys=("source_id", "encounter_source_id"),
+        external_id_fields=("source_id", "encounter_source_id"),
+        relationship_fields=("people", "orgs"),
+        supports_incremental_cursor=True,
+    ),
+    "gmail-messages": AdapterSpec(
+        adapter_name="GmailMessagesAdapter",
+        source_id="gmail-messages",
+        emitted_card_types=("email_thread", "email_message", "email_attachment"),
+        deterministic_fields_owned=("subject", "snippet", "sent_at", "participants", "participant_emails", "attachments", "calendar_events"),
+        identity_keys=("source_id", "gmail_thread_id", "gmail_message_id", "attachment_id"),
+        external_id_fields=("source_id", "gmail_thread_id", "gmail_message_id", "message_id_header", "attachment_id"),
+        relationship_fields=("thread", "messages", "attachments", "calendar_events", "people", "orgs"),
+        supports_incremental_cursor=True,
+    ),
+    "calendar-events": AdapterSpec(
+        adapter_name="CalendarEventsAdapter",
+        source_id="calendar-events",
+        emitted_card_types=("calendar_event",),
+        deterministic_fields_owned=("summary", "title", "start_at", "end_at", "timezone", "status", "organizer_email", "attendee_emails"),
+        identity_keys=("source_id", "calendar_id", "event_id", "ical_uid"),
+        external_id_fields=("source_id", "calendar_id", "event_id", "event_etag", "ical_uid"),
+        relationship_fields=("people", "orgs", "source_messages", "source_threads", "meeting_transcripts"),
+        supports_incremental_cursor=True,
+    ),
+    "otter-transcripts": AdapterSpec(
+        adapter_name="OtterTranscriptsAdapter",
+        source_id="otter-transcripts",
+        emitted_card_types=("meeting_transcript", "calendar_event"),
+        deterministic_fields_owned=("summary", "meeting_url", "transcript_url", "recording_url", "speaker_names", "participant_emails", "host_email"),
+        identity_keys=("source_id", "otter_meeting_id", "otter_conversation_id"),
+        external_id_fields=("source_id", "otter_meeting_id", "otter_conversation_id", "event_id_hint"),
+        relationship_fields=("calendar_events", "meeting_transcripts", "people", "orgs"),
+        supports_incremental_cursor=True,
+    ),
+    "photos": AdapterSpec(
+        adapter_name="PhotosAdapter",
+        source_id="photos",
+        emitted_card_types=("media_asset",),
+        deterministic_fields_owned=("summary", "captured_at", "modified_at", "media_type", "keywords", "labels", "albums", "folders"),
+        identity_keys=("source_id", "photos_asset_id"),
+        external_id_fields=("source_id", "photos_asset_id"),
+        relationship_fields=("people", "orgs"),
+        supports_incremental_cursor=True,
+    ),
+    "file-libraries": AdapterSpec(
+        adapter_name="FileLibrariesAdapter",
+        source_id="file-libraries",
+        emitted_card_types=("document",),
+        deterministic_fields_owned=("summary", "document_type", "document_date", "authors", "counterparties", "content_sha", "text_source"),
+        identity_keys=("source_id", "content_sha"),
+        external_id_fields=("source_id", "content_sha", "extracted_text_sha"),
+        relationship_fields=("people", "orgs", "authors", "counterparties"),
+        supports_incremental_cursor=True,
+    ),
+    "imessage": AdapterSpec(
+        adapter_name="IMessageAdapter",
+        source_id="imessage",
+        emitted_card_types=("imessage_thread", "imessage_message", "imessage_attachment"),
+        deterministic_fields_owned=("summary", "service", "protocol", "thread_type", "participant_names", "sender_name", "is_from_me"),
+        identity_keys=("source_id", "imessage_chat_id", "imessage_message_id", "attachment_id"),
+        external_id_fields=("source_id", "imessage_chat_id", "imessage_message_id", "attachment_id"),
+        relationship_fields=("thread", "messages", "people", "orgs"),
+        supports_incremental_cursor=True,
+    ),
+    "beeper": AdapterSpec(
+        adapter_name="BeeperAdapter",
+        source_id="beeper",
+        emitted_card_types=("beeper_thread", "beeper_message", "beeper_attachment", "person"),
+        deterministic_fields_owned=("summary", "service", "protocol", "thread_type", "participant_names", "sender_name", "is_from_me"),
+        identity_keys=("source_id", "beeper_room_id", "beeper_event_id", "attachment_id", "emails"),
+        external_id_fields=("source_id", "beeper_room_id", "beeper_event_id", "attachment_id"),
+        relationship_fields=("thread", "messages", "people", "orgs"),
+        supports_incremental_cursor=True,
+    ),
+    "github-history": AdapterSpec(
+        adapter_name="GitHubHistoryAdapter",
+        source_id="github-history",
+        emitted_card_types=("git_repository", "git_commit", "git_thread", "git_message"),
+        deterministic_fields_owned=("summary", "repository_name_with_owner", "commit_sha", "thread_kind", "message_type", "actor_login"),
+        identity_keys=("source_id", "repository_id", "commit_sha", "github_thread_id", "github_message_id"),
+        external_id_fields=("source_id", "repository_id", "commit_sha", "github_thread_id", "github_message_id", "review_commit_sha"),
+        relationship_fields=("repository", "thread", "messages", "people", "orgs"),
+        supports_incremental_cursor=True,
+    ),
+}
+
+
+def get_adapter_spec(source_id: str) -> AdapterSpec:
+    return ADAPTER_SPECS[source_id]
+
+
+def iter_adapter_specs() -> tuple[AdapterSpec, ...]:
+    return tuple(ADAPTER_SPECS[source_id] for source_id in sorted(ADAPTER_SPECS))

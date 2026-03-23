@@ -1,0 +1,21 @@
+services:
+  archive-postgres:
+    image: pgvector/pgvector:pg17
+    container_name: archive-pgvector
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-archive}
+      POSTGRES_USER: ${POSTGRES_USER:-archive}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-archive}
+    ports:
+      - "127.0.0.1::5432"
+    volumes:
+      - archive_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-archive} -d ${POSTGRES_DB:-archive}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  archive_pgdata:
