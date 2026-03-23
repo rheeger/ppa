@@ -230,18 +230,13 @@ class LoaderMixin:
     vector_dimension: int
 
     def ensure_ready(self) -> None:
-        try:
-            with self._connect() as conn:
-                self._create_schema(conn)
+        with self._connect() as conn:
+            row = conn.execute(
+                f"SELECT value FROM {self.schema}.meta WHERE key = %s",
+                ("schema_version",),
+            ).fetchone()
+            if row is not None:
                 self._run_pending_migrations(conn)
-                row = conn.execute(
-                    f"SELECT value FROM {self.schema}.meta WHERE key = %s",
-                    ("schema_version",),
-                ).fetchone()
-                if row is None or int(row["value"]) != INDEX_SCHEMA_VERSION:
-                    self.rebuild()
-        except Exception:
-            self.rebuild()
 
     def bootstrap(self) -> dict[str, str]:
         with self._connect() as conn:
@@ -753,6 +748,12 @@ class LoaderMixin:
         force_full: bool | None = None,
         disable_manifest_cache: bool | None = None,
     ) -> RebuildRunResult:
+        if os.environ.get("PPA_FORBID_REBUILD", "").strip().lower() in {"1", "true", "yes"}:
+            raise RuntimeError(
+                "Rebuild is forbidden (PPA_FORBID_REBUILD=1). "
+                "This is a safety guard for production databases. "
+                "Unset PPA_FORBID_REBUILD to allow rebuilds."
+            )
         workers = workers or get_rebuild_workers()
         batch_size = batch_size or get_rebuild_batch_size()
         commit_interval = commit_interval or get_rebuild_commit_interval()

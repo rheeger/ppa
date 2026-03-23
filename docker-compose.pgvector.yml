@@ -19,3 +19,5 @@ services:
 
 volumes:
   archive_pgdata:
+    external: true
+    name: archive-mcp_archive_pgdata

@@ -20,5 +20,6 @@ export PPA_EMBEDDING_VERSION="1"
 export PPA_USE_ARNOLD_OPENAI_KEY="1"
 
 export PPA_INSTANCE_NAME="Heeger-Friedman Family Archives"
+export PPA_FORBID_REBUILD="1"
 
 exec "$SCRIPT_DIR/.venv/bin/python" -m archive_mcp

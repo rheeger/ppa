@@ -65,6 +65,7 @@ class MigrationRunner:
             ).fetchall()
             return {int(row["version"]) if isinstance(row, dict) else int(row[0]) for row in rows}
         except Exception:
+            self.conn.rollback()
             return set()
 
     def pending(self) -> list[Migration]:

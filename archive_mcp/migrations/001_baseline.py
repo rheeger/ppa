@@ -20,16 +20,26 @@ def upgrade(conn, schema: str) -> None:
         SELECT COUNT(*) AS cnt
         FROM information_schema.tables
         WHERE table_schema = %s
-          AND table_name IN ('cards', 'edges', 'chunks', 'embeddings', 'meta', 'note_manifest')
+          AND table_name IN ('cards', 'edges', 'chunks', 'embeddings', 'meta')
         """,
         (schema,),
     ).fetchone()
     count = row["cnt"] if isinstance(row, dict) else row[0]
-    if count < 6:
+    if count < 5:
         raise RuntimeError(
-            f"Baseline migration expects at least 6 core tables in schema '{schema}', "
+            f"Baseline migration expects at least 5 core tables in schema '{schema}', "
             f"found {count}. Run _create_schema() first for fresh databases."
         )
+    conn.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {schema}.note_manifest (
+            rel_path TEXT PRIMARY KEY,
+            content_hash TEXT NOT NULL,
+            schema_version INTEGER NOT NULL DEFAULT 0,
+            chunk_version INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
 
 
 def downgrade(conn, schema: str) -> None:
