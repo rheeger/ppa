@@ -2,7 +2,7 @@
 
 A semantic memory engine that indexes a personal digital life and turns data exhaust (emails, texts, calendar, photos, medical records, documents, code history) into a searchable, interconnected private knowledge base.
 
-PPA is the **engine**. The [Heeger-Friedman Archives (HFA)](https://github.com/rheeger/hey-arnold) is one **instance** — the Heeger-Friedman family's private data running on the PPA engine.
+PPA is the **engine**. Each deployment is an **instance** — one person's or family's private data running on the PPA engine.
 
 ## Architecture
 
@@ -19,14 +19,55 @@ The vault outlasts any database or query layer. If Postgres dies, re-derive it. 
 
 ## Packages
 
-| Package          | Description                                                                    |
-| ---------------- | ------------------------------------------------------------------------------ |
-| `archive_mcp`    | MCP server, index pipeline, retrieval, embeddings (31 modules)                 |
-| `hfa`            | Schema library, vault I/O, provenance, identity resolution (17 modules)        |
-| `archive_sync`   | Source adapters for 16+ data sources (Gmail, Calendar, iMessage, Photos, etc.) |
-| `archive_doctor` | Vault validation, dedup sweep, stats, purge                                    |
+| Package          | Description                                                    |
+| ---------------- | -------------------------------------------------------------- |
+| `archive_mcp`    | MCP server, index pipeline, retrieval, embeddings (31 modules) |
+| `hfa`            | Schema library, vault I/O, provenance, identity resolution     |
+| `archive_sync`   | Source adapters for 18 data sources                            |
+| `archive_doctor` | Vault validation, dedup sweep, stats, purge                    |
 
-All four ship as one installable package (`pip install -e .`). Python import names are frozen during transition — the repo is `ppa/` but imports remain `archive_mcp`, `hfa`, `archive_sync`, `archive_doctor`.
+All four ship as one installable package (`pip install -e .`). Python import names are transitional — the repo is `ppa/` but imports remain `archive_mcp`, `hfa`, `archive_sync`, `archive_doctor` until the canonical rename in a future phase.
+
+## Supported Sources
+
+PPA ships adapters for 18 data sources across six categories:
+
+**Communication**
+
+- Gmail messages (full thread import with incremental sync)
+- Gmail correspondents (contact graph from message history)
+- iMessage (local `chat.db` snapshot)
+- Beeper (unified messaging bridge)
+- Otter.ai transcripts (meeting recordings)
+
+**Calendar & Scheduling**
+
+- Google Calendar events
+
+**People & Identity**
+
+- Google Contacts
+- LinkedIn (export-driven)
+- Notion people directories
+- Seed people (manual/curated entries)
+
+**Files & Media**
+
+- File libraries (local directory scan)
+- Google Photos (metadata + private annotations)
+- GitHub history (commits, PRs, issues)
+
+**Health & Medical**
+
+- Apple Health (export-driven)
+- Medical records (structured clinical data)
+- Epic EHI (electronic health information export)
+
+**Finance**
+
+- Copilot finance (transaction and account data)
+
+Each adapter produces vault-format markdown cards with typed frontmatter and provenance metadata. Adapters are incremental where the source supports it.
 
 ## Quickstart
 
@@ -49,10 +90,10 @@ make embed-pending
 ### Run the MCP server
 
 ```bash
-# Local (Docker Postgres)
+# Local development (Docker Postgres)
 ./run-local-seed-mcp.sh
 
-# Arnold production (via SSH tunnel)
+# Remote instance (via SSH tunnel)
 ./scripts/ppa-tunnel.sh &   # forward port 5433
 ./run-arnold-mcp.sh
 ```
@@ -64,10 +105,10 @@ make embed-pending
 ```json
 {
   "mcpServers": {
-    "archive-seed-local": {
+    "archive-local": {
       "command": "/path/to/ppa/run-local-seed-mcp.sh"
     },
-    "archive-arnold": {
+    "archive-remote": {
       "command": "/path/to/ppa/run-arnold-mcp.sh"
     }
   }
@@ -76,7 +117,7 @@ make embed-pending
 
 ## Environment Variables
 
-All env vars use the `PPA_` prefix. No backward-compatible aliases.
+All env vars use the `PPA_` prefix.
 
 ### Core
 
@@ -178,11 +219,11 @@ Search hits are retrieval aids, not canonical truth. The vault is truth.
 .venv/bin/python -m pytest tests/
 ```
 
-274 tests covering:
+275 tests covering:
 
-- HFA schema library (16 tests)
-- Source adapters for all 16+ data sources (130+ tests)
-- Archive doctor operations (7 tests)
+- Schema library and vault I/O (64 tests)
+- Source adapters for all 18 data sources (121 tests)
+- Vault doctor operations (7 tests)
 - MCP server behavior and command dispatch (28 tests)
 - Live Postgres integration: rebuild, search, vector search, hybrid ranking, graph expansion
 - Script behavior for backup, init-vault, post-import, spool imports
@@ -191,9 +232,9 @@ Live retrieval tests start a disposable pgvector Docker container automatically.
 
 ## Production Safety
 
-The Arnold MCP launcher sets `PPA_FORBID_REBUILD=1` which blocks any rebuild operation. This prevents accidental data loss on the production database.
+Production MCP launchers should set `PPA_FORBID_REBUILD=1` to block rebuild operations and prevent accidental data loss on the production database.
 
-**Never run** `rebuild-indexes` or `bootstrap-postgres` against Arnold production. The index was built locally and transferred via dump-restore. If a rebuild is ever needed, build locally, dump, and restore.
+**Never run** `rebuild-indexes` or `bootstrap-postgres` against a production instance. The index should be built locally and transferred via dump-restore. If a rebuild is ever needed, build locally, dump, and restore.
 
 **Verify via psql, not Python.** For production verification, use direct SSH + psql commands to avoid triggering vault scans.
 
@@ -203,14 +244,15 @@ Shell scripts (`scripts/ppa-*.sh`) for vault operations:
 
 - `ppa-init-vault.sh` — scaffold a new vault
 - `ppa-backup.sh` / `ppa-backup-encrypt.sh` / `ppa-backup-restore.sh` — encrypted vault backup and restore
+- `ppa-backup-upload.sh` / `ppa-backup-upload-icloud.sh` / `ppa-backup-upload-gdrive.sh` — backup upload to cloud storage
 - `ppa-provision-storage.sh` / `ppa-unlock.sh` / `ppa-mount.sh` / `ppa-lock.sh` — encrypted volume management
 - `ppa-post-import.sh` — run sync + doctor after vault imports
 - `ppa-pg-backup.sh` — stream Postgres dump to backup location
-- `ppa-tunnel.sh` — SSH tunnel to Arnold Postgres
+- `ppa-tunnel.sh` — SSH tunnel to remote Postgres instance
 
 Python scripts (`scripts/ppa-*.py`) for source extraction and import:
 
-- Gmail, Calendar, iMessage, Photos, GitHub, Otter, Beeper adapters
+- Gmail, Calendar, iMessage, Photos, GitHub extraction and parallel import
 - Google workspace backfill and account scope migration
 
 ## Documentation
