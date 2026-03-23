@@ -1,4 +1,4 @@
-"""Embedding provider abstractions for archive-mcp.
+"""Embedding provider abstractions for ppa.
 
 The OpenAI-compatible client path is the same transport family intended for
 `runtime.local_model_runtime` (CPU/local or remote). Planner and reranker

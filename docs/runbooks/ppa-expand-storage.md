@@ -7,7 +7,7 @@
 | **Encrypted archive mount** | LUKS + ext4 on `hfa-vault.img` (sparse file under `/mnt/user/archive-secure/` on Unraid) | **`/srv/hfa-secure/vault`**, **`/srv/hfa-secure/postgres`** (Postgres PGDATA) | **Yes** — vault + index live here               |
 | **VM root disk**            | Ubuntu LVM on the VM vdisk (e.g. `/dev/mapper/ubuntu--vg-ubuntu--lv`)                    | OS, **`/var/lib/docker`**, logs, journals                                     | **No** — only Docker engine + images + metadata |
 
-Going forward, **the canonical vault and the Postgres cluster for `archive-mcp` both live on the encrypted mount**, not on `/`.
+Going forward, **the canonical vault and the Postgres cluster for `ppa` both live on the encrypted mount**, not on `/`.
 
 - **256 GiB (or larger)** is the right class of target for **`hfa-vault.img`** / the LUKS filesystem so you can fit **vault + full `archive_seed` cluster + WAL/headroom** without fighting the ~100 GiB ceiling you hit earlier.
 - The **VM vdisk** must be large enough that **`/`** never sits at **100%** (Docker layers, logs). That is a **separate** resize (often **64–128 GiB** is plenty for OS+Docker if PGDATA stays on `/srv/hfa-secure`). You can still grow the VM disk to **256 GiB** if you want one simple number for the Unraid VM, but it is **not** what holds the encrypted archive data.
@@ -26,7 +26,7 @@ Going forward, **the canonical vault and the Postgres cluster for `archive-mcp` 
 
 ```bash
 # Stop services that use the mount (adjust to your units)
-sudo systemctl stop hfa-archive-mcp.service hfa-archive-postgres.service || true
+sudo systemctl stop hfa-ppa.service hfa-archive-postgres.service || true
 sudo umount /srv/hfa-secure
 
 # Note active loop device for the image (adjust path if .env differs)
@@ -50,7 +50,7 @@ sudo mount "/dev/mapper/$MAP" /srv/hfa-secure
 df -h /srv/hfa-secure
 ```
 
-3. **Reconcile ownership** if needed (`vault` / `postgres` dirs under mount), then start **`hfa-archive-postgres`**, then **`hfa-archive-mcp`**.
+3. **Reconcile ownership** if needed (`vault` / `postgres` dirs under mount), then start **`hfa-archive-postgres`**, then **`hfa-ppa`**.
 
 Exact **`losetup` / `cryptsetup open`** steps should match how **`hfa-archive-unlock.sh`** attaches the image on your host (loop device vs persistent mapping). When in doubt, use the same sequence as a clean boot after **`hfa-archive-unlock`** / **`hfa-archive-mount`**, inserting **truncate → cryptsetup resize → resize2fs** after the backing file is larger and before final **`mount`**.
 

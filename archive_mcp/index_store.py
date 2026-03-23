@@ -218,7 +218,7 @@ class BaseArchiveIndex:
 
 
 class PostgresArchiveIndex(SchemaDDLMixin, EmbedderMixin, QueryMixin, LoaderMixin, BaseArchiveIndex):
-    """Postgres-backed derived index for archive-mcp.
+    """Postgres-backed derived index for ppa.
 
     Concrete implementation composing mixin modules:
     - SchemaDDLMixin: DDL, table creation, index management

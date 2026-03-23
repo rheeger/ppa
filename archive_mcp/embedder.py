@@ -418,12 +418,12 @@ class EmbedderMixin:
         with self._connect() as conn:
             queue_count = self._materialize_embed_queue(
                 conn, embedding_model=embedding_model, embedding_version=embedding_version)
-            print(f"[archive-mcp] step 4/{total_steps} materialize embed work queue complete "
+            print(f"[ppa] step 4/{total_steps} materialize embed work queue complete "
                   f"pending_chunks={queue_count} elapsed={time.time() - t0:.1f}s", flush=True)
             if include_context_prefix:
                 t1 = time.time()
                 ctx_count = self._materialize_embed_context(conn)
-                print(f"[archive-mcp] step 4/{total_steps} materialize embed context lookup complete "
+                print(f"[ppa] step 4/{total_steps} materialize embed context lookup complete "
                       f"cards={ctx_count} elapsed={time.time() - t1:.1f}s", flush=True)
         _log_rebuild_step(4, total_steps, "materialize complete",
                           f"queue={queue_count} context={'yes' if include_context_prefix else 'no'} total_elapsed={time.time() - t0:.1f}s")

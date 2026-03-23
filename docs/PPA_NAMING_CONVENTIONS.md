@@ -1,7 +1,7 @@
 # PPA Naming Conventions
 
 > **Status**: Locked as of Phase 2 (2026-03-23).
-> All new work should land on these names. Existing `ARCHIVE_*`/`HFA_*` names are backward-compatible aliases until explicitly retired.
+> PPA code reads `PPA_*` env vars exclusively. Integration layers (e.g. the hey-arnold Makefile) translate their own variable names to `PPA_*` when invoking PPA subprocesses.
 
 ## Product Name
 
@@ -16,13 +16,13 @@
 
 ## Repo and Package Names
 
-| Artifact              | Canonical        | Current (transitional)                         |
-| --------------------- | ---------------- | ---------------------------------------------- |
-| MCP server repo       | `ppa`            | `archive-mcp`                                  |
-| Source sync module    | `ppa-sync`       | `archive-sync` (in `hey-arnold-hfa/skills/`)   |
-| Vault repair module   | `ppa-doctor`     | `archive-doctor` (in `hey-arnold-hfa/skills/`) |
-| Shared schema library | `ppa-core`       | `hfa` (in `hey-arnold-hfa/skills/`)            |
-| Arnold integration    | `hey-arnold-hfa` | `hey-arnold-hfa` (thin consumer after split)   |
+| Artifact              | Canonical        | Current (transitional)                   |
+| --------------------- | ---------------- | ---------------------------------------- |
+| MCP server repo       | `ppa`            | `ppa` (split complete)                   |
+| Source sync module    | `ppa-sync`       | `archive_sync` (in `ppa/`)              |
+| Vault repair module   | `ppa-doctor`     | `archive_doctor` (in `ppa/`)            |
+| Shared schema library | `ppa-core`       | `hfa` (in `ppa/`)                       |
+| Arnold integration    | `hey-arnold`     | `hey-arnold` (thin consumer after split) |
 
 ## Python Import Paths
 
@@ -37,23 +37,23 @@ Frozen during the transition. Renamed to `ppa` namespace after the split is conf
 
 ## Environment Variables
 
-Canonical prefix: `PPA_`. Backward-compatible aliases: `ARCHIVE_*`, `HFA_*`.
+Canonical prefix: `PPA_`. No aliases in PPA code. Integration layers (e.g. the hey-arnold Makefile) are responsible for translation.
 
 See [PPA_RUNTIME_CONTRACT.md](PPA_RUNTIME_CONTRACT.md) for the full env contract.
 
 ## Service and Timer Names
 
-Canonical prefix: `ppa-`. Current `hfa-archive-*` names are transitional (renamed in Phase 2.8).
+Canonical prefix: `ppa-`. Systemd unit renames are complete.
 
-| Canonical                   | Current (transitional)         |
-| --------------------------- | ------------------------------ |
-| `ppa-mcp.service`           | `hfa-archive-mcp.service`      |
-| `ppa-postgres.service`      | `hfa-archive-postgres.service` |
-| `ppa-health-audit.service`  | —                              |
-| `ppa-index-refresh.service` | —                              |
-| `ppa-embed-pending.service` | —                              |
-| `ppa-sync@.service`         | —                              |
-| `ppa-sync@.timer`           | —                              |
+| Canonical                   | Status    |
+| --------------------------- | --------- |
+| `ppa-mcp.service`           | Deployed  |
+| `ppa-postgres.service`      | Deployed  |
+| `ppa-health-audit.service`  | Planned   |
+| `ppa-index-refresh.service` | Planned   |
+| `ppa-embed-pending.service` | Planned   |
+| `ppa-sync@.service`         | Planned   |
+| `ppa-sync@.timer`           | Planned   |
 
 Instance timer examples: `ppa-sync@gmail-messages.timer`, `ppa-sync@calendar-events.timer`.
 
@@ -78,13 +78,13 @@ Instance timer examples: `ppa-sync@gmail-messages.timer`, `ppa-sync@calendar-eve
 
 ## Make Targets
 
-Canonical prefix: `ppa-`. Current `hfa-archive-*` targets are transitional.
+Canonical prefix: `ppa-`. Rename from `hfa-archive-*` is complete.
 
 Safe targets (no Python invocation on Arnold):
 
-- `make ppa-health` (current: `hfa-archive-health`)
-- `make ppa-pg-backup` (current: `hfa-archive-pg-backup`)
-- `make ppa-mcp-status` (current: `hfa-archive-mcp-status`)
+- `make ppa-health`
+- `make ppa-pg-backup`
+- `make ppa-mcp-status`
 
 ## CLI Commands
 

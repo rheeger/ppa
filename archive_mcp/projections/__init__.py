@@ -1,4 +1,4 @@
-"""Projection registry helpers for archive-mcp."""
+"""Projection registry helpers for ppa."""
 
 from .base import (SHARED_TYPED_COLUMNS, ProjectionRowBuffer,
                    build_projection_row)

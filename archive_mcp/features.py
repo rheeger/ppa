@@ -1,4 +1,4 @@
-"""Shared canonical feature extraction helpers for archive-mcp."""
+"""Shared canonical feature extraction helpers for ppa."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Projection and rule registries for archive-mcp.
+"""Projection and rule registries for ppa.
 
 Typed projections, chunk rule specs, and edge rule specs are all derived
 from the unified card registry (card_registry.py).  Generic projections

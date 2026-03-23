@@ -1,6 +1,6 @@
 # HFA “borrow from QMD” — what we implemented
 
-This is a plain-language record of the work done to bring QMD-style retrieval patterns into **archive-mcp** while keeping HFA’s canonical cards, typed projections, and security boundaries. It matches the plan’s phases in substance; a few items are intentionally shallow (called out below).
+This is a plain-language record of the work done to bring QMD-style retrieval patterns into **ppa** while keeping HFA’s canonical cards, typed projections, and security boundaries. It matches the plan’s phases in substance; a few items are intentionally shallow (called out below).
 
 ---
 
@@ -97,13 +97,13 @@ This is a plain-language record of the work done to bring QMD-style retrieval pa
 
 1. After pulling these changes, **rebuild the derived index** if you want chunk v4 materialized everywhere: `archive_rebuild_indexes` (or your usual rebuild path).
 2. **Re-run embed** for your embedding model/version so new chunk boundaries and optional context prefixes are reflected in vectors.
-3. Tune **`archive-mcp.yml`** `retrieval` section if you want planner variants, reranker, or explain verbosity different from defaults.
+3. Tune **`ppa.yml`** `retrieval` section if you want planner variants, reranker, or explain verbosity different from defaults.
 
 ---
 
 ## Tests
 
-- Full `archive-mcp` pytest suite (including live Postgres when Docker is available) should pass with `.venv/bin/python -m pytest`.
+- Full `ppa` pytest suite (including live Postgres when Docker is available) should pass with `.venv/bin/python -m pytest`.
 - `test_retrieval_pipeline.py` covers merges, fusion meta, planner hints, rerank blend, and heuristic ordering.
 
-This document is the human-readable “done + caveats” summary for the QMD borrowing work in **archive-mcp**.
+This document is the human-readable “done + caveats” summary for the QMD borrowing work in **ppa**.

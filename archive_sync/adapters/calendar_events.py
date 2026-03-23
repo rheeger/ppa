@@ -11,9 +11,9 @@ from pathlib import Path
 from typing import Any
 
 from .base import BaseAdapter, FetchedBatch, deterministic_provenance
-from arnoldlib.google_cli_auth import (CALENDAR_READONLY_SCOPES,
-                                       account_name_from_email,
-                                       build_google_cli_token_manager)
+from ppa_google_auth import (CALENDAR_READONLY_SCOPES,
+                             account_name_from_email,
+                             build_google_cli_token_manager)
 from hfa.identity import IdentityCache
 from hfa.schema import CalendarEventCard
 from hfa.thread_hash import compute_calendar_event_body_sha_from_payload

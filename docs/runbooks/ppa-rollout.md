@@ -28,7 +28,7 @@
 - unlock and mount the encrypted archive volume
 - configure the local `archive` MCP server for MCPorter
 - enable `hfa-archive-postgres.service`
-- enable `hfa-archive-mcp.service`
+- enable `hfa-ppa.service`
 
 ### Encrypted mount, gate secrets, and who can write what
 
@@ -55,7 +55,7 @@ ssh arnold@192.168.50.27 'df -h / /srv/hfa-secure; echo ---; sudo du -sh /srv/hf
 **Rules of thumb:**
 
 - **`/`**: keep a few **gigabytes free** (e.g. ≥5 GiB `Avail`). If root is full, recover with **`journalctl --vacuum-time=3d`**, **`apt clean`**, and careful **`docker system prune`** (see Docker docs — `prune -af` removes unused images). Longer-term: **grow the VM disk** or move Docker data root to a larger volume.
-- **`/srv/hfa-secure`**: if **approx_dump_size + vault + existing PGDATA + margin** exceeds **Avail** on that mount, **do not** write a full `.dump` next to PGDATA. Use **`make pipe-restore-seed-arnold`** in `archive-mcp` (streams **`pg_dump` → `pg_restore`** into `hfa-archive-postgres` with **no** giant file on the VM). You still need the **encrypted LV large enough for the restored live cluster + vault** after the dump file is gone — if not, **grow the sparse image / LUKS volume** before cutover.
+- **`/srv/hfa-secure`**: if **approx_dump_size + vault + existing PGDATA + margin** exceeds **Avail** on that mount, **do not** write a full `.dump` next to PGDATA. Use **`make pipe-restore-seed-arnold`** in `ppa` (streams **`pg_dump` → `pg_restore`** into `hfa-archive-postgres` with **no** giant file on the VM). You still need the **encrypted LV large enough for the restored live cluster + vault** after the dump file is gone — if not, **grow the sparse image / LUKS volume** before cutover.
 
 - **After a full-disk episode:** if **`rm`** or writes on `/srv/hfa-secure` return **Input/output error**, treat the mount as suspect — check **`dmesg`**, ensure **`/`** is not stuck at **100%** (Docker/journal), then **stop** services using the mount, **unmount**, and **fsck** the underlying filesystem per your Unraid/Linux procedure before retrying.
 
@@ -63,10 +63,10 @@ ssh arnold@192.168.50.27 'df -h / /srv/hfa-secure; echo ---; sudo du -sh /srv/hf
 
 ### Fast path (large dumps, e.g. 100+ GiB): local file → rsync → parallel `pg_restore`
 
-If **`/srv/hfa-secure`** has room for **dump file + live PGDATA** (see **Disk preflight**), prefer **`archive-mcp`**:
+If **`/srv/hfa-secure`** has room for **dump file + live PGDATA** (see **Disk preflight**), prefer **`ppa`**:
 
 ```bash
-cd /path/to/archive-mcp
+cd /path/to/ppa
 make dump-seed-schema
 # optional: PG_RESTORE_JOBS=8
 make scp-restore-seed-arnold
@@ -83,17 +83,17 @@ This uses **`rsync`** (resumable) and **`pg_restore --jobs`** from a file on PGD
 **Local dump (PG 17):** use `pg_dump` from the running Docker service, not an older host client (e.g. Homebrew `postgresql@14`).
 
 ```bash
-cd /path/to/archive-mcp
+cd /path/to/ppa
 make dump-seed-schema
 # writes archive_seed.dump; override: make dump-schema DUMP_SCHEMA=other ARCHIVE_DUMP_OUT=other.dump
 ```
 
-**Stream to Arnold** (one write on the encrypted volume; adjust host). For **large** dumps (~100+ GiB), prefer **`make dump-seed-schema-stream-arnold`** in `archive-mcp` — it logs `step 1/4`…`4/4` and pipes through **`pv`** (install with `brew install pv`) for bytes, rate, and optional ETA when `ARCHIVE_STREAM_BYTES` is set. The remote side uses **`sudo tee`** because PGDATA is owned by the container `postgres` uid, not the `archive` user.
+**Stream to Arnold** (one write on the encrypted volume; adjust host). For **large** dumps (~100+ GiB), prefer **`make dump-seed-schema-stream-arnold`** in `ppa` — it logs `step 1/4`…`4/4` and pipes through **`pv`** (install with `brew install pv`) for bytes, rate, and optional ETA when `ARCHIVE_STREAM_BYTES` is set. The remote side uses **`sudo tee`** because PGDATA is owned by the container `postgres` uid, not the `archive` user.
 
 **If the encrypted volume cannot fit dump + vault + PGDATA** (see **Disk preflight** above), use **pipe restore** instead — **no** `archive_seed.dump` on Arnold:
 
 ```bash
-cd /path/to/archive-mcp
+cd /path/to/ppa
 export PATH="/opt/homebrew/bin:$PATH"   # if pv is from Homebrew
 export ARCHIVE_STREAM_BYTES=$((135 * 1024 * 1024 * 1024))   # optional ETA
 make pipe-restore-seed-arnold
@@ -104,7 +104,7 @@ Then skip the `pg_restore` file path in the next subsection (restore already ran
 After `make dump-seed-schema`, you can still pipe a local file once (then remove the local `.dump` if you do not want two copies on disk):
 
 ```bash
-cd /path/to/archive-mcp
+cd /path/to/ppa
 make dump-seed-schema
 cat archive_seed.dump | ssh arnold@192.168.50.27 'sudo tee /srv/hfa-secure/postgres/archive_seed.dump > /dev/null'
 ```
@@ -160,7 +160,7 @@ ssh arnold@192.168.50.27 'set -a; . /home/arnold/openclaw/.env; set +a; sudo -u 
 ### Transport
 
 - public archive access uses HTTPS/TLS to the gate
-- `archive-mcp` has no public listener
+- `ppa` has no public listener
 - gate-to-archive transport remains local-only
 
 ### Storage

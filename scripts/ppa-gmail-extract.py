@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from archive_sync.adapters.gmail_messages import CALENDAR_MIME_TYPES, GmailMessagesAdapter, _iter_parts
-from arnoldlib.google_cli_auth import build_google_cli_token_manager
+from ppa_google_auth import build_google_cli_token_manager
 
 
 def _encode_body_data(value: str) -> str:

@@ -184,7 +184,7 @@ class _RebuildProgressReporter:
         eta = (remaining / rate) if rate > 0 and self.total_items > 0 else 0.0
         suffix = f" {extra}" if extra else ""
         self._emit(
-            f"[archive-mcp] step {self.step_number}/{self.total_steps} {self.stage} "
+            f"[ppa] step {self.step_number}/{self.total_steps} {self.stage} "
             f"{self._progress_bar(count)} {count}/{total_label} ({percent:.1f}%) "
             f"elapsed={elapsed:.1f}s rate={rate:.1f}/s eta={eta:.1f}s{suffix}",
             count,
@@ -195,7 +195,7 @@ class _RebuildProgressReporter:
         elapsed = time.time() - self.started_at
         suffix = f" {extra}" if extra else ""
         self._emit(
-            f"[archive-mcp] step {self.step_number}/{self.total_steps} {self.stage} "
+            f"[ppa] step {self.step_number}/{self.total_steps} {self.stage} "
             f"{self._progress_bar(total_label if isinstance(total_label, int) else count)} "
             f"complete {count}/{total_label} elapsed={elapsed:.1f}s{suffix}",
             count,
@@ -204,7 +204,7 @@ class _RebuildProgressReporter:
 
 def _log_rebuild_step(step_number: int, total_steps: int, title: str, detail: str = "") -> None:
     suffix = f" {detail}" if detail else ""
-    print(f"[archive-mcp] step {step_number}/{total_steps} {title}{suffix}", flush=True)
+    print(f"[ppa] step {step_number}/{total_steps} {title}{suffix}", flush=True)
 
 
 def _chunked(iterable: Iterable[Any], size: int) -> Iterable[list[Any]]:

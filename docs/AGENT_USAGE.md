@@ -2,7 +2,7 @@
 
 ## Goal
 
-Agents should use HFA and `archive-mcp` to retrieve evidence, not to replace the canonical archive.
+Agents should use HFA and `ppa` to retrieve evidence, not to replace the canonical archive.
 
 ## Retrieval Order
 
@@ -72,13 +72,13 @@ For semantic retrieval:
 ## Operational Safety
 
 - If imports have run recently, rebuild indexes before relying on derived retrieval.
-- If `archive-mcp` is configured against Postgres, treat that Postgres index as the primary retrieval surface.
+- If `ppa` is configured against Postgres, treat that Postgres index as the primary retrieval surface.
 - If exact reads succeed but search looks stale, treat the index as stale and rebuild it.
 - If the index is unavailable, fall back to canonical reads instead of inventing missing results.
 
 ## Practical Tool Usage
 
-Current `archive-mcp` tool order:
+Current `ppa` tool order:
 
 - `archive_read`
 - `archive_query`

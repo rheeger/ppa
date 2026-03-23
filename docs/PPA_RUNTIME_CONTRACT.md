@@ -1,9 +1,8 @@
 # PPA Runtime Contract
 
-> **Status**: Frozen as of Phase 2.6 (2026-03-23).
-> This document is the single authoritative reference for all runtime surfaces
-> that must survive the Phase 2.7 boundary split. Any breaking change requires
-> an explicit migration step and backward-compatible alias period.
+> **Status**: Frozen as of Phase 2.9 (2026-03-23).
+> This document is the single authoritative reference for all PPA runtime surfaces.
+> Any breaking change requires an explicit migration step.
 
 ---
 
@@ -43,62 +42,61 @@ Seed-link subcommands (`seed-link-*`, `link-*`, `review-link-candidate`, `benchm
 
 ### 2.1 Resolution rule
 
-Every PPA environment variable follows the same precedence:
+PPA code reads `PPA_*` env vars exclusively via `_ppa_env()`. No alias fallback exists.
+Integration layers (e.g. the hey-arnold Makefile) are responsible for translating
+their own variable names to `PPA_*` when invoking PPA subprocesses.
 
-1. **`PPA_*`** canonical name (checked first)
-2. **`ARCHIVE_*`** or **`HFA_*`** alias (checked second)
-3. Config file value (if applicable)
-4. Code default
-
-The first non-empty value wins. Setting both canonical and alias is allowed; the canonical name takes precedence.
+1. **`PPA_*`** env var (only source checked)
+2. Config file value (if applicable)
+3. Code default
 
 ### 2.2 Core environment variables
 
-| Canonical (`PPA_*`)      | Alias(es)                    | Purpose                    | Default                            |
-| ------------------------ | ---------------------------- | -------------------------- | ---------------------------------- |
-| `PPA_INDEX_DSN`          | `ARCHIVE_INDEX_DSN`          | Postgres connection string | _(required)_                       |
-| `PPA_INDEX_SCHEMA`       | `ARCHIVE_INDEX_SCHEMA`       | Postgres schema name       | `archive_mcp`                      |
-| `PPA_PATH`               | `HFA_VAULT_PATH`             | Vault root directory       | `~/Archive/production/hf-archives` |
-| `PPA_EMBEDDING_PROVIDER` | `ARCHIVE_EMBEDDING_PROVIDER` | Embedding provider         | `hash`                             |
-| `PPA_EMBEDDING_MODEL`    | `ARCHIVE_EMBEDDING_MODEL`    | Embedding model            | `default-embedding-model`          |
-| `PPA_EMBEDDING_VERSION`  | `ARCHIVE_EMBEDDING_VERSION`  | Embedding schema version   | `1`                                |
-| `PPA_MCP_TOOL_PROFILE`   | `ARCHIVE_MCP_TOOL_PROFILE`   | Tool profile gate          | `full`                             |
-| `PPA_CONFIG_PATH`        | `ARCHIVE_CONFIG_PATH`        | Explicit config file path  | _(auto-discover)_                  |
-| `PPA_RUNTIME_MODE`       | `ARCHIVE_RUNTIME_MODE`       | Runtime mode               | `stdio`                            |
-| `PPA_SEED_LINKS_ENABLED` | `ARCHIVE_SEED_LINKS_ENABLED` | Enable seed-link subsystem | `0` (disabled)                     |
+| Variable                 | Purpose                    | Default                            |
+| ------------------------ | -------------------------- | ---------------------------------- |
+| `PPA_INDEX_DSN`          | Postgres connection string | _(required)_                       |
+| `PPA_INDEX_SCHEMA`       | Postgres schema name       | `archive_mcp`                      |
+| `PPA_PATH`               | Vault root directory       | `~/Archive/production/hf-archives` |
+| `PPA_EMBEDDING_PROVIDER` | Embedding provider         | `hash`                             |
+| `PPA_EMBEDDING_MODEL`    | Embedding model            | `default-embedding-model`          |
+| `PPA_EMBEDDING_VERSION`  | Embedding schema version   | `1`                                |
+| `PPA_MCP_TOOL_PROFILE`   | Tool profile gate          | `full`                             |
+| `PPA_CONFIG_PATH`        | Explicit config file path  | _(auto-discover)_                  |
+| `PPA_RUNTIME_MODE`       | Runtime mode               | `stdio`                            |
+| `PPA_SEED_LINKS_ENABLED` | Enable seed-link subsystem | `0` (disabled)                     |
 
 ### 2.3 Tuning environment variables
 
-These control rebuild, embedding, and flush behavior. All follow the `PPA_*` / `ARCHIVE_*` dual-lookup pattern.
+These control rebuild, embedding, and flush behavior.
 
-| Canonical (`PPA_*`)                | Alias (`ARCHIVE_*`)                    | Default        |
-| ---------------------------------- | -------------------------------------- | -------------- |
-| `PPA_VECTOR_DIMENSION`             | `ARCHIVE_VECTOR_DIMENSION`             | `1536`         |
-| `PPA_CHUNK_CHAR_LIMIT`             | `ARCHIVE_CHUNK_CHAR_LIMIT`             | `1200`         |
-| `PPA_EMBED_BATCH_SIZE`             | `ARCHIVE_EMBED_BATCH_SIZE`             | `32`           |
-| `PPA_EMBED_MAX_RETRIES`            | `ARCHIVE_EMBED_MAX_RETRIES`            | `3`            |
-| `PPA_EMBED_CONCURRENCY`            | `ARCHIVE_EMBED_CONCURRENCY`            | `4`            |
-| `PPA_EMBED_WRITE_BATCH_SIZE`       | `ARCHIVE_EMBED_WRITE_BATCH_SIZE`       | _(= batch)_    |
-| `PPA_EMBED_PROGRESS_EVERY`         | `ARCHIVE_EMBED_PROGRESS_EVERY`         | `0`            |
-| `PPA_EMBED_DEFER_VECTOR_INDEX`     | `ARCHIVE_EMBED_DEFER_VECTOR_INDEX`     | `0`            |
-| `PPA_REBUILD_WORKERS`              | `ARCHIVE_REBUILD_WORKERS`              | _(cpu count)_  |
-| `PPA_REBUILD_BATCH_SIZE`           | `ARCHIVE_REBUILD_BATCH_SIZE`           | `1000`         |
-| `PPA_REBUILD_COMMIT_INTERVAL`      | `ARCHIVE_REBUILD_COMMIT_INTERVAL`      | `5000`         |
-| `PPA_REBUILD_PROGRESS_EVERY`       | `ARCHIVE_REBUILD_PROGRESS_EVERY`       | `10000`        |
-| `PPA_REBUILD_EXECUTOR`             | `ARCHIVE_REBUILD_EXECUTOR`             | `thread`       |
-| `PPA_REBUILD_STAGING_MODE`         | `ARCHIVE_REBUILD_STAGING_MODE`         | `direct`       |
-| `PPA_FORCE_FULL_REBUILD`           | `ARCHIVE_FORCE_FULL_REBUILD`           | `0`            |
-| `PPA_DISABLE_MANIFEST_CACHE`       | `ARCHIVE_DISABLE_MANIFEST_CACHE`       | `0`            |
-| `PPA_SEED_FROZEN`                  | `ARCHIVE_SEED_FROZEN`                  | `0`            |
-| `PPA_REBUILD_RESUME`               | `ARCHIVE_REBUILD_RESUME`               | `0`            |
-| `PPA_REBUILD_FLUSH_MAX_TOTAL_ROWS` | `ARCHIVE_REBUILD_FLUSH_MAX_TOTAL_ROWS` | _(adaptive)_   |
-| `PPA_REBUILD_FLUSH_ROW_MULT`       | `ARCHIVE_REBUILD_FLUSH_ROW_MULT`       | `120`          |
-| `PPA_REBUILD_FLUSH_MAX_EDGES`      | `ARCHIVE_REBUILD_FLUSH_MAX_EDGES`      | `100000`       |
-| `PPA_REBUILD_FLUSH_MAX_CHUNKS`     | `ARCHIVE_REBUILD_FLUSH_MAX_CHUNKS`     | `50000`        |
-| `PPA_REBUILD_FLUSH_MAX_BYTES`      | `ARCHIVE_REBUILD_FLUSH_MAX_BYTES`      | `268435456`    |
-| `PPA_OPENAI_TIMEOUT_SECONDS`       | `ARCHIVE_OPENAI_TIMEOUT_SECONDS`       | `60`           |
-| `PPA_OPENAI_MAX_RETRIES`           | `ARCHIVE_OPENAI_MAX_RETRIES`           | `3`            |
-| `PPA_OPENAI_BASE_URL`              | `ARCHIVE_OPENAI_BASE_URL`              | OpenAI default |
+| Variable                           | Default        |
+| ---------------------------------- | -------------- |
+| `PPA_VECTOR_DIMENSION`             | `1536`         |
+| `PPA_CHUNK_CHAR_LIMIT`             | `1200`         |
+| `PPA_EMBED_BATCH_SIZE`             | `32`           |
+| `PPA_EMBED_MAX_RETRIES`            | `3`            |
+| `PPA_EMBED_CONCURRENCY`            | `4`            |
+| `PPA_EMBED_WRITE_BATCH_SIZE`       | _(= batch)_    |
+| `PPA_EMBED_PROGRESS_EVERY`         | `0`            |
+| `PPA_EMBED_DEFER_VECTOR_INDEX`     | `0`            |
+| `PPA_REBUILD_WORKERS`              | _(cpu count)_  |
+| `PPA_REBUILD_BATCH_SIZE`           | `1000`         |
+| `PPA_REBUILD_COMMIT_INTERVAL`      | `5000`         |
+| `PPA_REBUILD_PROGRESS_EVERY`       | `10000`        |
+| `PPA_REBUILD_EXECUTOR`             | `thread`       |
+| `PPA_REBUILD_STAGING_MODE`         | `direct`       |
+| `PPA_FORCE_FULL_REBUILD`           | `0`            |
+| `PPA_DISABLE_MANIFEST_CACHE`       | `0`            |
+| `PPA_SEED_FROZEN`                  | `0`            |
+| `PPA_REBUILD_RESUME`               | `0`            |
+| `PPA_REBUILD_FLUSH_MAX_TOTAL_ROWS` | _(adaptive)_   |
+| `PPA_REBUILD_FLUSH_ROW_MULT`       | `120`          |
+| `PPA_REBUILD_FLUSH_MAX_EDGES`      | `100000`       |
+| `PPA_REBUILD_FLUSH_MAX_CHUNKS`     | `50000`        |
+| `PPA_REBUILD_FLUSH_MAX_BYTES`      | `268435456`    |
+| `PPA_OPENAI_TIMEOUT_SECONDS`       | `60`           |
+| `PPA_OPENAI_MAX_RETRIES`           | `3`            |
+| `PPA_OPENAI_BASE_URL`              | OpenAI default |
 
 ### 2.4 Arnold integration environment variables
 

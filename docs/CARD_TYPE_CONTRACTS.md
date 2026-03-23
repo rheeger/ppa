@@ -1,6 +1,6 @@
 # Card Type Contracts
 
-This document is the canonical contract index for card types consumed by `archive-mcp`.
+This document is the canonical contract index for card types consumed by `ppa`.
 
 ## Contract Rules
 
@@ -47,4 +47,4 @@ Every ingest adapter must declare:
 - relationship fields
 - whether it supports incremental cursor checkpoints
 
-The adapter contract is explicit so `archive-mcp` does not have to rediscover canonical intent from adapter implementation details.
+The adapter contract is explicit so `ppa` does not have to rediscover canonical intent from adapter implementation details.

@@ -13,7 +13,7 @@ from pathlib import Path
 
 from archive_sync.adapters.gmail_correspondents import load_own_aliases
 from archive_sync.adapters.gmail_messages import GmailMessagesAdapter
-from arnoldlib.google_cli_auth import build_google_cli_token_manager
+from ppa_google_auth import build_google_cli_token_manager
 from hfa.identity import IdentityCache
 from hfa.sync_state import load_sync_state, update_cursor
 from hfa.vault import write_card

@@ -12,8 +12,8 @@ import urllib.request
 from pathlib import Path
 
 from archive_sync.adapters.calendar_events import CalendarEventsAdapter
-from arnoldlib.google_cli_auth import (CALENDAR_READONLY_SCOPES,
-                                       build_google_cli_token_manager)
+from ppa_google_auth import (CALENDAR_READONLY_SCOPES,
+                             build_google_cli_token_manager)
 
 
 def _read_json(path: Path, default: dict) -> dict:

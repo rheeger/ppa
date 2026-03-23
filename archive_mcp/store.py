@@ -1,4 +1,4 @@
-"""Archive store/service abstraction for archive-mcp."""
+"""Archive store/service abstraction for ppa."""
 
 from __future__ import annotations
 

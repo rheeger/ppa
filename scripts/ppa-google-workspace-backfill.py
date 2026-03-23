@@ -15,8 +15,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 from archive_sync.adapters.gmail_correspondents import GmailCorrespondentsAdapter
-from arnoldlib.accounts import ACCOUNTS
-from arnoldlib.google_cli_auth import account_name_from_email
+from ppa_google_auth import ACCOUNTS, account_name_from_email
 
 DEFAULT_ACCOUNTS = [
     "rheeger@gmail.com",

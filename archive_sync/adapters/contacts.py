@@ -106,7 +106,7 @@ class ContactsAdapter(BaseAdapter):
         account_email = os.environ.get("GOOGLE_ACCOUNT", "").strip().lower()
         if account_email:
             try:
-                from arnoldlib.google_cli_auth import account_name_from_email
+                from ppa_google_auth import account_name_from_email
 
                 account_name = account_name_from_email(account_email)
             except Exception:
@@ -141,7 +141,7 @@ class ContactsAdapter(BaseAdapter):
         )
 
     def _fetch_google_page_via_direct(self, account: str, *, fields: str, page_token: str | None) -> dict[str, Any]:
-        from arnoldlib.google_cli_auth import build_google_cli_token_manager
+        from ppa_google_auth import build_google_cli_token_manager
 
         manager = build_google_cli_token_manager(account_name=account, services=["contacts"])
         if manager is None:
@@ -184,20 +184,28 @@ class ContactsAdapter(BaseAdapter):
     def _fetch_google(self) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         try:
-            from arnoldlib.accounts import ACCOUNTS
-            from arnoldlib.bootstrap import bootstrap
+            from ppa_google_auth import ACCOUNTS
 
-            bootstrap()
+            _has_arnoldlib = True
+            try:
+                from arnoldlib.bootstrap import bootstrap
+                bootstrap()
+            except ImportError:
+                _has_arnoldlib = False
+
             fields = "names,emailAddresses,phoneNumbers,organizations,birthdays,urls,biographies,nicknames"
             for account in self._selected_google_accounts(ACCOUNTS):
                 page_token = None
                 while True:
                     try:
-                        try:
-                            response = self._fetch_google_page_via_proxy(account, fields=fields, page_token=page_token)
-                        except Exception as exc:
-                            if not self._should_fallback_to_direct_google(exc):
-                                raise
+                        if _has_arnoldlib:
+                            try:
+                                response = self._fetch_google_page_via_proxy(account, fields=fields, page_token=page_token)
+                            except Exception as exc:
+                                if not self._should_fallback_to_direct_google(exc):
+                                    raise
+                                response = self._fetch_google_page_via_direct(account, fields=fields, page_token=page_token)
+                        else:
                             response = self._fetch_google_page_via_direct(account, fields=fields, page_token=page_token)
                     except Exception:
                         break

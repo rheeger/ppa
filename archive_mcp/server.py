@@ -20,7 +20,7 @@ except ImportError:  # pragma: no cover
             return decorator
 
         def run(self):
-            raise RuntimeError("mcp package is required to run archive-mcp")
+            raise RuntimeError("mcp package is required to run ppa")
 
 
 from hfa.provenance import validate_provenance

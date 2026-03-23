@@ -20,7 +20,7 @@ from typing import Any
 
 from .base import BaseAdapter, FetchedBatch, deterministic_provenance
 from .gmail_correspondents import load_own_aliases
-from arnoldlib.google_cli_auth import build_google_cli_token_manager
+from ppa_google_auth import build_google_cli_token_manager
 from hfa.identity import IdentityCache
 from hfa.schema import EmailAttachmentCard, EmailMessageCard, EmailThreadCard
 from hfa.thread_hash import (

@@ -12,7 +12,7 @@ Maintenance layer for HFA vault quality.
 ## When To Run It
 
 - After imports: run `dedup-sweep`, `validate`, and `stats`
-- After imports that affect agent retrieval: rebuild the derived `archive-mcp` index after doctor checks pass
+- After imports that affect agent retrieval: rebuild the derived `ppa` index after doctor checks pass
 - After schema or provenance changes: run `validate`
 - Before wiping or re-importing a source: use `purge-source`
 - For routine health checks: run `stats`

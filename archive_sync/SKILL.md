@@ -44,5 +44,5 @@ This order seeds identity from stronger sources before weaker ones.
 - Use `_meta/own-emails.json` to exclude self aliases from Gmail correspondent extraction.
 - The Photos adapter is read-only and uses `osxphotos`; private people and label extraction should stay optional.
 - When adding a new adapter, follow `docs/hfa/PLAYBOOK.md`.
-- After imports, rebuild the derived `archive-mcp` index if agents or tools rely on indexed retrieval.
+- After imports, rebuild the derived `ppa` index if agents or tools rely on indexed retrieval.
 - Treat the vault as canonical and any derived search/index layer as rebuildable.

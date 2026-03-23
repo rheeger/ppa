@@ -13,6 +13,12 @@ dependencies = [
   "psycopg[binary]>=3.2",
 ]
 
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.0",
+  "ruff>=0.1",
+]
+
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["archive_mcp*", "hfa*", "archive_sync*", "archive_doctor*"]
+include = ["archive_mcp*", "hfa*", "archive_sync*", "archive_doctor*", "ppa_google_auth*"]

@@ -47,9 +47,9 @@ Vault maintenance commands built on the same library.
 - `stats`
 - `purge-source`
 
-### `archive-mcp/`
+### `ppa/`
 
-Query interface for the vault. The current rewrite lives in the separate local `archive-mcp` workspace and consumes `hfa` directly via `HFA_LIB_PATH` instead of re-implementing note traversal or frontmatter parsing.
+Query interface for the vault. The current rewrite lives in the separate local `ppa` workspace and consumes `hfa` directly via `HFA_LIB_PATH` instead of re-implementing note traversal or frontmatter parsing.
 
 ## Derived Index Layer
 
@@ -57,7 +57,7 @@ HFA remains vault-canonical. Query indexes are derived artifacts, not the source
 
 Current implementation slice:
 
-- `archive-mcp` builds a derived relational index from canonical cards.
+- `ppa` builds a derived relational index from canonical cards.
 - Exact lookup, structured query, lexical search, timeline, stats, and graph traversal should prefer the derived index instead of scanning the vault.
 - Final answer grounding should still read canonical markdown cards.
 
@@ -171,7 +171,7 @@ For Apple Photos imports, the current adapter shape is:
 
 ### Derived Index Build
 
-`vault -> archive-mcp index builder -> cards/external_ids/edges/search index`
+`vault -> ppa index builder -> cards/external_ids/edges/search index`
 
 ### Agent Retrieval
 
@@ -205,5 +205,5 @@ As of this refactor checkpoint:
 - `archive-sync` is migrated to `hfa`
 - `archive-doctor` is migrated to `hfa`
 - post-import automation and backup assets exist in `hey-arnold`
-- `archive-mcp` has been rewritten locally as an external consumer of `hfa`, but that workspace is outside this repo and is not part of PR `#6`
+- `ppa` has been rewritten locally as an external consumer of `hfa`, but that workspace is outside this repo and is not part of PR `#6`
 - live VM rollout is still pending because the default deploy flow targets `main`; use `make deploy-workspace DEPLOY_BRANCH=hfa` for branch preview deploys before merge

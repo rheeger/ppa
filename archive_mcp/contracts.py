@@ -1,4 +1,4 @@
-"""Shared contracts for the archive-mcp service and projection layers."""
+"""Shared contracts for the ppa service and projection layers."""
 
 from __future__ import annotations
 

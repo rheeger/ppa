@@ -19,7 +19,6 @@ from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-ARCHIVE_MCP_ROOT = REPO_ROOT.parent / "archive-mcp"
 
 from archive_sync.adapters.apple_health import AppleHealthAdapter
 from archive_sync.adapters.calendar_events import CalendarEventsAdapter

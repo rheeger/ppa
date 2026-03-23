@@ -91,7 +91,7 @@ If **`mountpoint /mnt/user`** reports **“not a mountpoint”**, then **`hfa-va
 - archive Postgres data:
   - `/srv/hfa-secure/postgres`
 - archive runtime workspace:
-  - `/home/arnold/openclaw/archive-mcp`
+  - `/home/arnold/openclaw/ppa`
 
 ## Cloud Backup Destinations
 

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`archive-mcp` now treats typed projections as a first-class derived layer instead of a collection of special cases.
+`ppa` now treats typed projections as a first-class derived layer instead of a collection of special cases.
 
 The architecture has three derived responsibilities:
 

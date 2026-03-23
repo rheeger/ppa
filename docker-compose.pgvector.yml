@@ -20,4 +20,8 @@ services:
 volumes:
   archive_pgdata:
     external: true
+    # Legacy volume name from the archive-mcp era. To migrate:
+    #   docker volume create ppa_pgdata && docker run --rm \
+    #     -v archive-mcp_archive_pgdata:/from -v ppa_pgdata:/to busybox cp -a /from/. /to/
+    # Then change the name below to ppa_pgdata and remove this comment.
     name: archive-mcp_archive_pgdata

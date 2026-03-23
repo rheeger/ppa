@@ -1,0 +1,4 @@
+{
+  "vault_path": "~/Archive/production/hf-archives",
+  "index_dsn": "postgresql://archive:archive@127.0.0.1:64276/archive"
+}

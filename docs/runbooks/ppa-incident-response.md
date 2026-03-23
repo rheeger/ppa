@@ -13,7 +13,7 @@ This runbook covers immediate response steps for suspected archive credential co
 
 ### Archive runtime containment
 
-- stop `hfa-archive-mcp.service`
+- stop `hfa-ppa.service`
 - stop `hfa-archive-postgres.service`
 - unmount and lock the encrypted archive volume
 

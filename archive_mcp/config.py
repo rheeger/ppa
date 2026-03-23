@@ -1,4 +1,4 @@
-"""Typed config loading for archive-mcp."""
+"""Typed config loading for ppa."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ def _load_config_payload(path: Path) -> dict[str, Any]:
         payload = json.loads(text or "{}")
     else:
         if yaml is None:
-            raise RuntimeError("YAML support is unavailable but an archive-mcp YAML config was requested")
+            raise RuntimeError("YAML support is unavailable but a ppa YAML config was requested")
         payload = yaml.safe_load(text) or {}
     if not isinstance(payload, dict):
         raise RuntimeError(f"Archive config must be an object: {path}")

@@ -133,25 +133,25 @@ Rules:
 - Do the live smoke test only after the HFA pytest suite is green.
 - Keep the first smoke dataset intentionally small so failures are easy to inspect and retry.
 
-## External `archive-mcp` Consumer
+## External `ppa` Consumer
 
-1. Keep `archive-mcp` in its separate local workspace for now.
+1. Keep `ppa` in its separate local workspace for now.
 2. Point `HFA_LIB_PATH` at `.../hey-arnold-hfa/skills`.
 3. Point `HFA_VAULT_PATH` at the target vault.
 4. Point `ARCHIVE_INDEX_DSN` at the Postgres instance that backs the derived index.
-5. Run `python -m pytest tests/test_server.py -q` in the `archive-mcp` workspace after MCP changes.
+5. Run `python -m pytest tests/test_server.py -q` in the `ppa` workspace after MCP changes.
 6. Run `python -m pytest tests/test_retrieval_integration.py -q` when retrieval, chunking, ranking, or embedding behavior changes.
 
 Rules:
 
-- Treat `archive-mcp` as an external consumer of `hfa`, not as code that belongs in the `hey-arnold` PR.
+- Treat `ppa` as an external consumer of `hfa`, not as code that belongs in the `hey-arnold` PR.
 - If more external consumers appear, package `hfa` explicitly rather than copying logic across repos.
-- Treat Postgres as the required `archive-mcp` index backend.
+- Treat Postgres as the required `ppa` index backend.
 - Prefer live `pgvector` retrieval tests over mocked assertions for ranking work.
 
 ## Local Postgres Smoke Test
 
-1. `cd archive-mcp`
+1. `cd ppa`
 2. Copy `.env.pgvector.example` to `.env.pgvector`.
 3. Run `make pg-up`.
 4. Run `make bootstrap-postgres`.
@@ -162,7 +162,7 @@ Rules:
 Rules:
 
 - Keep local Postgres bound to `127.0.0.1`.
-- The local Docker workflow auto-discovers the mapped port through the `archive-mcp` Makefile; do not hardcode a port in the smoke path.
+- The local Docker workflow auto-discovers the mapped port through the `ppa` Makefile; do not hardcode a port in the smoke path.
 - Use the local smoke test before moving changes to Arnold.
 
 ## Arnold VM Archive Postgres
@@ -170,9 +170,9 @@ Rules:
 1. Run `make hfa-archive-env`.
 2. Run `make hfa-archive-pg-enable`.
 3. Run `make hfa-archive-pg-status`.
-4. Run `make hfa-archive-mcp-sync`.
-5. Run `make hfa-archive-mcp-install`.
-6. Run `make hfa-archive-mcp-configure`.
+4. Run `make hfa-ppa-sync`.
+5. Run `make hfa-ppa-install`.
+6. Run `make hfa-ppa-configure`.
 7. Run `make hfa-archive-bootstrap-postgres` (DB prerequisites only; use after `pg_restore` the same way).
 8. Run `make hfa-archive-index-rebuild`.
 9. Run `make hfa-archive-index-status`.
@@ -184,16 +184,16 @@ Rules:
 - Treat the VM vault as canonical and the index as disposable.
 - Use `make hfa-archive-bootstrap` when you want the default end-to-end bootstrap flow.
 - `make hfa-archive-index-bootstrap` is a convenience bundle: env, secure env, mount, sync, install, configure, then `hfa-archive-bootstrap-postgres`. Prefer the granular steps above (or `hfa-archive-bootstrap-postgres` alone after code and `.env` are already correct) to avoid redundant unlock/rsync during cutovers.
-- For **manual** SSH checks against Postgres or `archive-mcp`, **source `/home/arnold/openclaw/.env`** and use **`$ARCHIVE_INDEX_DSN`** (and related vars) — do not assume the literal password `archive` in examples. See `docs/runbooks/hfa-archive-rollout.md`.
+- For **manual** SSH checks against Postgres or `ppa`, **source `/home/arnold/openclaw/.env`** and use **`$ARCHIVE_INDEX_DSN`** (and related vars) — do not assume the literal password `archive` in examples. See `docs/runbooks/hfa-archive-rollout.md`.
 
 ## Rebuilding The Derived Archive Index
 
 1. Confirm the canonical vault is the one you intend to index.
 2. Point `HFA_VAULT_PATH` at that vault.
 3. Point `HFA_LIB_PATH` at `.../hey-arnold-hfa/skills`.
-4. Point `ARCHIVE_INDEX_DSN` at the Postgres database used by `archive-mcp`.
+4. Point `ARCHIVE_INDEX_DSN` at the Postgres database used by `ppa`.
 5. Run `python -m archive_mcp bootstrap-postgres` the first time against a fresh database.
-6. Run `python -m archive_mcp rebuild-indexes` from the `archive-mcp` workspace.
+6. Run `python -m archive_mcp rebuild-indexes` from the `ppa` workspace.
 7. Run `python -m archive_mcp index-status` to confirm counts, schema version, `chunk_schema_version`, and `chunk_count`.
 8. If semantic retrieval is in scope, run `python -m archive_mcp embed-pending` for the target model/version.
 
@@ -230,15 +230,15 @@ Rules:
 - Treat backlog reporting as operational telemetry, not as canonical evidence.
 - The built-in `hash` provider is for local/dev/test plumbing, not production semantic quality.
 - For production-quality semantic retrieval, configure `ARCHIVE_EMBEDDING_PROVIDER=openai` and supply an OpenAI key (literal `OPENAI_API_KEY`, or `op://` resolution — see below).
-- Keep provider model and vector dimension aligned with the index configuration. `archive-mcp` now rejects mismatched provider/index dimensions.
+- Keep provider model and vector dimension aligned with the index configuration. `ppa` now rejects mismatched provider/index dimensions.
 - Prefer embedding in batches and read failure reporting instead of assuming the entire run succeeded.
-- On Arnold, `make hfa-archive-env` writes `ARCHIVE_USE_ARNOLD_OPENAI_KEY`, `ARCHIVE_OPENAI_API_KEY_OP_REF` (default `op://Arnold/OPENAI_API_KEY/credential`), and `ARCHIVE_OP_SERVICE_ACCOUNT_TOKEN_FILE` (default general SA file `op-service-account-token`, same vault family as `arnoldlib` — not the gate-only `op-tokens-service-account-token`). `archive-mcp` uses those to `op read` the key at runtime; ensure user `archive` can read the token file (mode/ACL) if systemd loads `.env` but the subprocess still opens the file.
+- On Arnold, `make hfa-archive-env` writes `ARCHIVE_USE_ARNOLD_OPENAI_KEY`, `ARCHIVE_OPENAI_API_KEY_OP_REF` (default `op://Arnold/OPENAI_API_KEY/credential`), and `ARCHIVE_OP_SERVICE_ACCOUNT_TOKEN_FILE` (default general SA file `op-service-account-token`, same vault family as `arnoldlib` — not the gate-only `op-tokens-service-account-token`). `ppa` uses those to `op read` the key at runtime; ensure user `archive` can read the token file (mode/ACL) if systemd loads `.env` but the subprocess still opens the file.
 
 ## Evaluating Retrieval Quality
 
 1. Rebuild the index after any chunking, edge, or ranking change.
 2. Embed pending chunks for the model/version you want to evaluate.
-3. Run the `archive-mcp` pytest suite.
+3. Run the `ppa` pytest suite.
 4. If Docker is available, run the live retrieval integration tests so ranking is checked against real Postgres + `pgvector`.
 5. Smoke-test a small set of exact, lexical, vector, and hybrid queries against canonical cards.
 
@@ -277,6 +277,6 @@ Rules:
 - Doctor stats: `python skills/archive-doctor/handler.py stats`
 - Post-import automation: `bash scripts/hfa-post-import.sh`
 - Backup automation: `bash scripts/hfa-backup.sh`
-- Rebuild archive-mcp index: `python -m archive_mcp rebuild-indexes`
-- Bootstrap archive-mcp Postgres schema: `python -m archive_mcp bootstrap-postgres`
-- Archive-mcp index status: `python -m archive_mcp index-status`
+- Rebuild ppa index: `python -m archive_mcp rebuild-indexes`
+- Bootstrap ppa Postgres schema: `python -m archive_mcp bootstrap-postgres`
+- ppa index status: `python -m archive_mcp index-status`

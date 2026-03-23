@@ -6,7 +6,7 @@ HFA is vault-canonical. The markdown vault remains the source of truth. Indexes 
 
 ## Current Implementation Slice
 
-The first indexing slice lives in `archive-mcp` and provides:
+The first indexing slice lives in `ppa` and provides:
 
 - exact lookup by UID and path
 - structured query over indexed card metadata
@@ -184,7 +184,7 @@ Indexing changes should follow a test-first workflow:
 2. implement the smallest change that makes those tests pass
 3. verify parity against canonical-card behavior where applicable
 
-Retrieval changes should include live backend coverage when possible. In `archive-mcp`, that now means Docker-backed `pgvector` integration tests in addition to fake-index MCP tests.
+Retrieval changes should include live backend coverage when possible. In `ppa`, that now means Docker-backed `pgvector` integration tests in addition to fake-index MCP tests.
 
 ## Pgvector Next
 

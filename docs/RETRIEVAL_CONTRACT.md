@@ -1,6 +1,6 @@
 # Retrieval Contract
 
-This document defines the retrieval modes that `archive-mcp` must keep distinct.
+This document defines the retrieval modes that `ppa` must keep distinct.
 
 ## Retrieval Modes
 

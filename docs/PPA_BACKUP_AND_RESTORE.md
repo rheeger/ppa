@@ -100,11 +100,11 @@ ls /tmp/hfa-vault-restore/ | head -20
 find /tmp/hfa-vault-restore/ -name '*.md' | wc -l  # should be ~1.85M
 
 # If verified, swap into production (stop MCP first)
-sudo systemctl stop hfa-archive-mcp.service
+sudo systemctl stop hfa-ppa.service
 sudo rsync -a --delete /tmp/hfa-vault-restore/ /srv/hfa-secure/vault/
 sudo chown -R archive:archive /srv/hfa-secure/vault/
 sudo chmod -R 700 /srv/hfa-secure/vault/
-sudo systemctl start hfa-archive-mcp.service
+sudo systemctl start hfa-ppa.service
 
 # Clean up temp restore
 sudo rm -rf /tmp/hfa-vault-restore
@@ -145,7 +145,7 @@ sudo docker exec hfa-archive-postgres psql -U archive -d archive \
 # Expected: ~1,837,313
 
 # Restart MCP
-sudo systemctl restart hfa-archive-mcp.service
+sudo systemctl restart hfa-ppa.service
 ```
 
 **Alternative**: If no Postgres dump exists but the vault is intact, you can rebuild the index from the vault. However, this takes hours and may OOM on Arnold. Prefer rebuilding locally and doing a fresh dump-restore:
@@ -163,7 +163,7 @@ sudo systemctl restart hfa-archive-mcp.service
 1. Restore the vault first (from encrypted backup)
 2. Restore the Postgres index (from pg_dump, or rebuild from restored vault)
 3. Verify with the health check: `bash scripts/ppa-health.sh`
-4. Re-enable MCP: `sudo systemctl start hfa-archive-mcp.service`
+4. Re-enable MCP: `sudo systemctl start hfa-ppa.service`
 
 ## Retention Policy
 

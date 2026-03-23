@@ -1,4 +1,4 @@
-"""Live Postgres retrieval quality tests for archive-mcp."""
+"""Live Postgres retrieval quality tests for ppa."""
 
 from __future__ import annotations
 
@@ -423,7 +423,7 @@ def _seed_live_vault(vault: Path) -> None:
 def pgvector_dsn() -> str:
     if not _docker_available():
         pytest.skip("Docker is required for live Postgres retrieval tests")
-    container_name = f"archive-mcp-test-{uuid.uuid4().hex[:10]}"
+    container_name = f"ppa-test-{uuid.uuid4().hex[:10]}"
     port = _pick_port()
     dsn = f"postgresql://archive:archive@127.0.0.1:{port}/archive"
     subprocess.run(

@@ -2,12 +2,12 @@
 
 ## Scope
 
-This document covers the production security posture for the HFA vault, `archive-mcp`, the Hey Arnold VM, the passkey gate, and remote archive access from Robbie's Mac.
+This document covers the production security posture for the HFA vault, `ppa`, the Hey Arnold VM, the passkey gate, and remote archive access from Robbie's Mac.
 
 It assumes:
 
 - the canonical vault lives on encrypted parity-backed storage
-- `archive-mcp` stays local-only on the VM
+- `ppa` stays local-only on the VM
 - public remote access terminates at the passkey gate
 - no plaintext archive content is uploaded to cloud backup destinations
 
@@ -45,14 +45,14 @@ Accidental or malicious plaintext replication into parity-backed backup paths, c
 
 - Keep raw archive contents encrypted at rest on parity-backed storage.
 - Force public archive access through the gate.
-- Keep `archive-mcp` and Postgres off the public network.
+- Keep `ppa` and Postgres off the public network.
 - Separate archive read, sensitive read, admin, and public remote-read capabilities.
 - Ensure OpenClaw cannot directly read raw vault files from the mounted archive path.
 - Restrict cloud backups to encrypted artifacts only.
 
 ## Non-Goals
 
-- No direct public `archive-mcp` exposure.
+- No direct public `ppa` exposure.
 - No plaintext mirrors on Unraid, Google Drive, iCloud, or any other remote destination.
 - No claim of true end-to-end opaque MCP payload encryption through the gate.
 
@@ -114,8 +114,8 @@ This intentionally excludes raw note reads and admin/index operations.
 ### Feasible secure model
 
 - `Mac -> HTTPS/TLS -> passkey-gate`
-- `passkey-gate -> local-only transport -> archive-mcp`
-- `archive-mcp -> local vault mount + localhost Postgres`
+- `passkey-gate -> local-only transport -> ppa`
+- `ppa -> local vault mount + localhost Postgres`
 
 ### Why TLS terminates at the gate
 
@@ -130,7 +130,7 @@ That means the gate is trusted to inspect archive request metadata and content f
 
 ### Local transport preference
 
-Prefer a Unix domain socket or equivalent host-local transport between the gate-side MCP execution path and `archive-mcp`. Loopback TCP is acceptable if socket transport is impractical.
+Prefer a Unix domain socket or equivalent host-local transport between the gate-side MCP execution path and `ppa`. Loopback TCP is acceptable if socket transport is impractical.
 
 ## Identity And Runtime Isolation
 
@@ -143,7 +143,7 @@ Prefer a Unix domain socket or equivalent host-local transport between the gate-
 
 ### `archive`
 
-- runs `archive-mcp`
+- runs `ppa`
 - owns the mounted vault and archive index paths
 - is the primary runtime identity for canonical archive reads
 
@@ -196,13 +196,13 @@ No plaintext archive content may be uploaded to cloud or copied to remote backup
 - archive-prefixed scripts
 - archive-prefixed systemd units
 - archive-scoped docs and runbooks
-- a stable `archive-mcp` runtime contract
+- a stable `ppa` runtime contract
 
 This avoids inventing a second archive tree while still keeping the service operable and extractable later.
 
 ## Future Extraction Seam
 
-If `archive-mcp` later becomes its own repo:
+If `ppa` later becomes its own repo:
 
 - preserve the `python -m archive_mcp serve` entrypoint
 - preserve the archive env contract
