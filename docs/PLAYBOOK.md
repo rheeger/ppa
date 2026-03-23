@@ -136,7 +136,7 @@ Rules:
 ## External `ppa` Consumer
 
 1. Keep `ppa` in its separate local workspace for now.
-2. Point `HFA_LIB_PATH` at `.../hey-arnold-hfa/skills`.
+2. Point `HFA_LIB_PATH` at `.../hey-arnold/skills`.
 3. Point `HFA_VAULT_PATH` at the target vault.
 4. Point `ARCHIVE_INDEX_DSN` at the Postgres instance that backs the derived index.
 5. Run `python -m pytest tests/test_server.py -q` in the `ppa` workspace after MCP changes.
@@ -190,7 +190,7 @@ Rules:
 
 1. Confirm the canonical vault is the one you intend to index.
 2. Point `HFA_VAULT_PATH` at that vault.
-3. Point `HFA_LIB_PATH` at `.../hey-arnold-hfa/skills`.
+3. Point `HFA_LIB_PATH` at `.../hey-arnold/skills`.
 4. Point `ARCHIVE_INDEX_DSN` at the Postgres database used by `ppa`.
 5. Run `python -m archive_mcp bootstrap-postgres` the first time against a fresh database.
 6. Run `python -m archive_mcp rebuild-indexes` from the `ppa` workspace.

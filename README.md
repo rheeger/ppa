@@ -2,7 +2,7 @@
 
 A semantic memory engine that indexes a personal digital life and turns data exhaust (emails, texts, calendar, photos, medical records, documents, code history) into a searchable, interconnected private knowledge base.
 
-PPA is the **engine**. The [Heeger-Friedman Archives (HFA)](https://github.com/rheeger/hey-arnold-hfa) is one **instance** — the Heeger-Friedman family's private data running on the PPA engine.
+PPA is the **engine**. The [Heeger-Friedman Archives (HFA)](https://github.com/rheeger/hey-arnold) is one **instance** — the Heeger-Friedman family's private data running on the PPA engine.
 
 ## Architecture
 

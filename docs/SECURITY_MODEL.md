@@ -188,9 +188,9 @@ Example:
 
 No plaintext archive content may be uploaded to cloud or copied to remote backup destinations.
 
-## Archive Containment Inside `hey-arnold-hfa`
+## Archive Containment Inside `hey-arnold`
 
-`hey-arnold-hfa` is the dedicated archive tree. Containment should come from:
+`hey-arnold` is the dedicated archive tree. Containment should come from:
 
 - archive-prefixed Make targets
 - archive-prefixed scripts

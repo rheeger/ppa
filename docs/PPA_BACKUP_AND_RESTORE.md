@@ -46,7 +46,7 @@ cd /home/arnold/.openclaw/worktrees/hfa
 sudo -E bash scripts/hfa-backup.sh
 ```
 
-Or via Make (from the `hey-arnold-hfa` repo on Mac):
+Or via Make (from the `hey-arnold` repo on Mac):
 
 ```bash
 make hfa-backup-encrypt

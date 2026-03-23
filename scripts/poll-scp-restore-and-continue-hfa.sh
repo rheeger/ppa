@@ -4,7 +4,7 @@
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-HFA_ROOT="$(cd "$ROOT/../hey-arnold-hfa" && pwd)"
+HFA_ROOT="$(cd "$ROOT/../hey-arnold" && pwd)"
 LOG="${ARCHIVE_SCP_RESTORE_LOG_FILE:-$ROOT/logs/archive-scp-restore.log}"
 STATUS_FILE="${ARCHIVE_SCP_RESTORE_STATUS_FILE:-$ROOT/logs/archive-scp-restore.status}"
 WATCH_LOG="${SCP_RESTORE_WATCH_LOG:-$ROOT/logs/scp-restore-watch.log}"
@@ -88,7 +88,7 @@ if ! grep -q 'step 4/5 complete — pg_restore finished' "$LOG" 2>/dev/null; the
 fi
 
 if [[ ! -d "$HFA_ROOT" ]]; then
-  wl "error: hey-arnold-hfa not found at ${HFA_ROOT}"
+  wl "error: hey-arnold not found at ${HFA_ROOT}"
   exit 1
 fi
 

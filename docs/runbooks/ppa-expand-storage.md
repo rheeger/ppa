@@ -14,7 +14,7 @@ Going forward, **the canonical vault and the Postgres cluster for `ppa` both liv
 
 ## New installs
 
-`make hfa-archive-provision-storage` (from `hey-arnold-hfa`) passes **`HFA_ARCHIVE_IMAGE_SIZE`** (Makefile default **256G** unless overridden). That only applies when **`hfa-vault.img` does not exist yet**.
+`make hfa-archive-provision-storage` (from `hey-arnold`) passes **`HFA_ARCHIVE_IMAGE_SIZE`** (Makefile default **256G** unless overridden). That only applies when **`hfa-vault.img` does not exist yet**.
 
 ## Grow an existing `hfa-vault.img` (LUKS + ext4)
 
