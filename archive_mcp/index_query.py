@@ -572,7 +572,7 @@ class QueryMixin:
         clauses, params = self._filter_clauses(alias="c", start_date=start_date, end_date=end_date)
         params.append(limit)
         sql = f"""
-            SELECT c.activity_at AS created, c.rel_path, c.summary
+            SELECT c.activity_at AS created, c.rel_path, c.summary, c.type
             FROM {self.schema}.cards c
             WHERE {' AND '.join(clauses)}
             ORDER BY c.activity_at ASC, c.rel_path ASC

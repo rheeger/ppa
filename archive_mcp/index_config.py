@@ -62,13 +62,18 @@ CARD_TYPE_PRIORS = {
     "email_message": 0.08,
     "imessage_thread": 0.08,
     "git_commit": 0.08,
+    "document": 0.07,
+    "beeper_thread": 0.07,
     "imessage_message": 0.06,
     "git_message": 0.06,
     "medical_record": 0.05,
     "vaccination": 0.05,
+    "beeper_message": 0.05,
     "finance": 0.04,
+    "media_asset": 0.04,
     "email_attachment": 0.03,
     "imessage_attachment": 0.03,
+    "beeper_attachment": 0.03,
 }
 
 PROJECTIONS_BY_LOAD_ORDER = tuple(sorted(PROJECTION_REGISTRY, key=lambda projection: projection.load_order))

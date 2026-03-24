@@ -177,6 +177,16 @@ def _card_summary(card: BaseCard, rel_path: Path) -> str:
     return f"- {rel_path}: {card.summary[:80]}"
 
 
+def _format_search_line(row: dict) -> str:
+    """Render a search/query result row with type, date, and fuller summary."""
+    rel_path = row.get("rel_path", "")
+    card_type = row.get("type", "")
+    date = str(row.get("activity_at", ""))[:10]
+    summary = str(row.get("summary", ""))[:200]
+    meta = ", ".join(part for part in [card_type, date] if part)
+    return f"- {rel_path} [{meta}]: {summary}"
+
+
 def _all_cards(vault: Path) -> list[tuple[Path, BaseCard, str, dict]]:
     rows: list[tuple[Path, BaseCard, str, dict]] = []
     for note in iter_parsed_notes(vault):
@@ -200,7 +210,7 @@ def archive_search(query: str, limit: int = 20) -> str:
         return error
     assert store is not None
     rows = store.search(query, limit=limit)["rows"]
-    results = [f"- {row['rel_path']}: {str(row['summary'])[:80]}" for row in rows]
+    results = [_format_search_line(row) for row in rows]
     return "\n".join(results) if results else "No matches"
 
 
@@ -251,7 +261,7 @@ def archive_query(
         org_filter=org_filter,
         limit=limit,
     )["rows"]
-    results = [f"- {row['rel_path']}: {str(row['summary'])[:80]}" for row in rows]
+    results = [_format_search_line(row) for row in rows]
     return "\n".join(results) if results else "No matches"
 
 
@@ -324,7 +334,7 @@ def archive_timeline(start_date: str = "", end_date: str = "", limit: int = 20) 
         return error
     assert store is not None
     rows = store.timeline(start_date=start_date, end_date=end_date, limit=limit)["rows"]
-    results = [f"- {row['created']} {row['rel_path']}: {str(row['summary'])[:60]}" for row in rows]
+    results = [f"- {str(row['created'])[:10]} {row['rel_path']}: {str(row['summary'])[:160]}" for row in rows]
     return "\n".join(results) if results else "No matches"
 
 
@@ -1145,10 +1155,15 @@ def archive_vector_search(
         return f"No vector matches for {model} v{version}"
     lines = [f"Vector matches for {model} v{version}:"]
     for row in rows:
+        card_type = str(row.get("type", ""))
+        date = str(row.get("activity_at", ""))[:10]
+        summary = str(row.get("summary", ""))[:200]
         lines.append(
-            f"- {row['rel_path']} matched_by={row['matched_by']} score={float(row['score']):.4f} "
+            f"- {row['rel_path']} [{card_type}, {date}] matched_by={row['matched_by']} score={float(row['score']):.4f} "
             f"sim={float(row['similarity']):.4f} chunk={row['chunk_type']}#{row['chunk_index']} "
-            f"provenance_bias={row['provenance_bias']} matched_chunks={row['matched_chunk_count']}: {row['preview']}"
+            f"provenance_bias={row['provenance_bias']} matched_chunks={row['matched_chunk_count']}\n"
+            f"  summary: {summary}\n"
+            f"  preview: {row['preview']}"
         )
     return "\n".join(lines)
 
@@ -1223,15 +1238,21 @@ def archive_hybrid_search(
         return f"No hybrid matches for '{query}'"
     lines = [f"Hybrid matches for '{query}':"]
     for row in rows:
+        card_type = str(row.get("type", ""))
+        date = str(row.get("activity_at", ""))[:10]
         graph_hops = f" graph_hops={row['graph_hops']}" if row.get("graph_hops") else ""
         chunk = ""
         if int(row.get("chunk_index", -1)) >= 0 and str(row.get("chunk_type", "")):
             chunk = f" chunk={row['chunk_type']}#{row['chunk_index']}"
+        summary = str(row.get("summary", ""))[:200]
+        preview = str(row.get("preview", ""))
         lines.append(
-            f"- {row['rel_path']} matched_by={row['matched_by']} score={float(row['score']):.4f} "
+            f"- {row['rel_path']} [{card_type}, {date}] matched_by={row['matched_by']} score={float(row['score']):.4f} "
             f"lexical={float(row['lexical_score']):.4f} vector={float(row['vector_similarity']):.4f} "
             f"exact_match={str(bool(row['exact_match'])).lower()}{graph_hops}{chunk} "
-            f"provenance_bias={row['provenance_bias']}: {row['preview']}"
+            f"provenance_bias={row['provenance_bias']}\n"
+            f"  summary: {summary}\n"
+            f"  preview: {preview}"
         )
     return "\n".join(lines)
 
