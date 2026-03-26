@@ -37,14 +37,10 @@ class EmbedderMixin:
     - self._ensure_embeddings_vector_index(conn)
     """
 
-    def embedding_status(
-        self, *, embedding_model: str, embedding_version: int
-    ) -> dict[str, int | str]:
+    def embedding_status(self, *, embedding_model: str, embedding_version: int) -> dict[str, int | str]:
         self.ensure_ready()
         with self._connect() as conn:
-            total_row = conn.execute(
-                f"SELECT COUNT(*) AS count FROM {self.schema}.chunks"
-            ).fetchone()
+            total_row = conn.execute(f"SELECT COUNT(*) AS count FROM {self.schema}.chunks").fetchone()
             embedded_row = conn.execute(
                 f"""
                 SELECT COUNT(*) AS count
@@ -134,16 +130,12 @@ class EmbedderMixin:
             ) org ON true
             """
         )
-        row = conn.execute(
-            f"SELECT count(*) AS cnt FROM {self.schema}.card_embed_context"
-        ).fetchone()
+        row = conn.execute(f"SELECT count(*) AS cnt FROM {self.schema}.card_embed_context").fetchone()
         count = int(row["cnt"]) if row else 0
         conn.commit()
         return count
 
-    def _materialize_embed_queue(
-        self, conn, *, embedding_model: str, embedding_version: int
-    ) -> int:
+    def _materialize_embed_queue(self, conn, *, embedding_model: str, embedding_version: int) -> int:
         """Build a work queue of chunk_keys that need embedding. Workers pop from this
         queue instead of scanning the full chunks table with LEFT JOIN on every batch.
         """
@@ -170,9 +162,7 @@ class EmbedderMixin:
             """,
             (embedding_model, embedding_version),
         )
-        row = conn.execute(
-            f"SELECT count(*) AS cnt FROM {self.schema}.embed_queue"
-        ).fetchone()
+        row = conn.execute(f"SELECT count(*) AS cnt FROM {self.schema}.embed_queue").fetchone()
         count = int(row["cnt"]) if row else 0
         conn.commit()
         return count
@@ -248,9 +238,7 @@ class EmbedderMixin:
         values_sql = ",".join(["(%s, %s, %s, %s::vector)"] * len(rows))
         params: list[Any] = []
         for chunk_key, vector_literal in rows:
-            params.extend(
-                [chunk_key, embedding_model, embedding_version, vector_literal]
-            )
+            params.extend([chunk_key, embedding_model, embedding_version, vector_literal])
         conn.execute(
             f"""
             INSERT INTO {self.schema}.embeddings(chunk_key, embedding_model, embedding_version, embedding)
@@ -322,9 +310,7 @@ class EmbedderMixin:
             if len(vectors) != len(batch):
                 conn.rollback()
                 result.failed = len(batch)
-                result.last_error = (
-                    "Embedding provider returned mismatched vector count"
-                )
+                result.last_error = "Embedding provider returned mismatched vector count"
                 return result
 
             payload: list[tuple[str, str]] = []
@@ -392,9 +378,7 @@ class EmbedderMixin:
         )
 
         _log_rebuild_step(2, total_steps, "count embedding backlog")
-        backlog_status = self.embedding_status(
-            embedding_model=embedding_model, embedding_version=embedding_version
-        )
+        backlog_status = self.embedding_status(embedding_model=embedding_model, embedding_version=embedding_version)
         pending_chunks = int(backlog_status["pending_chunk_count"])
         total_chunks = int(backlog_status["chunk_count"])
         already_embedded = int(backlog_status["embedded_chunk_count"])
@@ -450,9 +434,7 @@ class EmbedderMixin:
                 conn.commit()
             _log_rebuild_step(3, total_steps, "drop vector index complete")
         else:
-            _log_rebuild_step(
-                3, total_steps, "skip vector index drop (incremental mode)"
-            )
+            _log_rebuild_step(3, total_steps, "skip vector index drop (incremental mode)")
 
         _log_rebuild_step(4, total_steps, "materialize embed work queue and context")
         t0 = time.time()
@@ -532,16 +514,12 @@ class EmbedderMixin:
                         last_error = batch_result.last_error
                     fail_suffix = f" failed={failed}" if failed else ""
                     err_suffix = f" last_error={last_error}" if last_error else ""
-                    progress.update(
-                        embedded, extra=f"embedded={embedded}{fail_suffix}{err_suffix}"
-                    )
+                    progress.update(embedded, extra=f"embedded={embedded}{fail_suffix}{err_suffix}")
             return worker_result
 
         try:
             with ThreadPoolExecutor(max_workers=max(1, concurrency)) as executor:
-                futures = {
-                    executor.submit(run_worker) for _ in range(max(1, concurrency))
-                }
+                futures = {executor.submit(run_worker) for _ in range(max(1, concurrency))}
                 while futures:
                     done, futures = wait(futures, return_when=FIRST_COMPLETED)
                     for future in done:
@@ -560,9 +538,7 @@ class EmbedderMixin:
                     conn.commit()
                 _log_rebuild_step(6, total_steps, "rebuild vector index complete")
             else:
-                _log_rebuild_step(
-                    6, total_steps, "skip vector index rebuild (incremental mode)"
-                )
+                _log_rebuild_step(6, total_steps, "skip vector index rebuild (incremental mode)")
         result: dict[str, int | str] = {
             "provider": provider_name,
             "embedding_model": embedding_model,

@@ -19,7 +19,6 @@ from .index_config import (
     _coerce_source_fields,
     _field_provenance_bonus,
     _field_provenance_label,
-    _format_row,
     _vector_literal,
     get_seed_links_enabled,
 )
@@ -34,16 +33,13 @@ logger = logging.getLogger("ppa.index_query")
 
 
 class QueryMixin:
-
     def status(self) -> dict[str, str]:
         self.ensure_ready()
         with self._connect() as conn:
             rows = conn.execute(f"SELECT key, value FROM {self.schema}.meta").fetchall()
             payload = {str(row["key"]): str(row["value"]) for row in rows}
             try:
-                mc = conn.execute(
-                    f"SELECT COUNT(*) AS c FROM {self.schema}.note_manifest"
-                ).fetchone()
+                mc = conn.execute(f"SELECT COUNT(*) AS c FROM {self.schema}.note_manifest").fetchone()
                 payload["manifest_row_count"] = str(int(mc["c"] or 0))
             except Exception:
                 payload["manifest_row_count"] = "0"
@@ -55,28 +51,16 @@ class QueryMixin:
                 if chk:
                     payload["rebuild_checkpoint_status"] = str(chk.get("status") or "")
                     payload["rebuild_checkpoint_mode"] = str(chk.get("mode") or "")
-                    payload["rebuild_checkpoint_loaded_cards"] = str(
-                        int(chk.get("loaded_card_count") or 0)
-                    )
-                    payload["rebuild_checkpoint_vault_fp"] = str(
-                        chk.get("vault_manifest_hash") or ""
-                    )
-                    payload["rebuild_checkpoint_updated_at"] = str(
-                        chk.get("updated_at") or ""
-                    )
+                    payload["rebuild_checkpoint_loaded_cards"] = str(int(chk.get("loaded_card_count") or 0))
+                    payload["rebuild_checkpoint_vault_fp"] = str(chk.get("vault_manifest_hash") or "")
+                    payload["rebuild_checkpoint_updated_at"] = str(chk.get("updated_at") or "")
             except Exception:
                 pass
             try:
                 mig_status = self._migration_status(conn)
-                payload["migration_applied_count"] = str(
-                    mig_status.get("applied_count", 0)
-                )
-                payload["migration_pending_count"] = str(
-                    mig_status.get("pending_count", 0)
-                )
-                payload["migration_latest_applied"] = str(
-                    mig_status.get("latest_applied", "none")
-                )
+                payload["migration_applied_count"] = str(mig_status.get("applied_count", 0))
+                payload["migration_pending_count"] = str(mig_status.get("pending_count", 0))
+                payload["migration_latest_applied"] = str(mig_status.get("latest_applied", "none"))
             except Exception:
                 pass
         return payload
@@ -107,12 +91,8 @@ class QueryMixin:
                         "typed_projection": projection.table_name,
                         "registered": True,
                         "materialized_row_count": int(stats["row_count"] or 0),
-                        "canonical_ready_ratio": float(
-                            stats["canonical_ready_ratio"] or 0.0
-                        ),
-                        "migration_blockers": [
-                            note for note in stats["migration_notes"] or [] if note
-                        ],
+                        "canonical_ready_ratio": float(stats["canonical_ready_ratio"] or 0.0),
+                        "migration_blockers": [note for note in stats["migration_notes"] or [] if note],
                     }
                 )
         return projection_status_payload(rows)
@@ -152,24 +132,16 @@ class QueryMixin:
                 """,
                 (card_uid,),
             ).fetchone()
-            migration_notes = (
-                [str(row["migration_notes"])]
-                if row and str(row["migration_notes"] or "").strip()
-                else []
-            )
+            migration_notes = [str(row["migration_notes"])] if row and str(row["migration_notes"] or "").strip() else []
             return projection_explain_payload(
                 card_uid=card_uid,
                 card_type=card_type,
                 typed_projection=projection.table_name,
-                canonical_ready=(
-                    bool(row["canonical_ready"]) if row is not None else False
-                ),
+                canonical_ready=(bool(row["canonical_ready"]) if row is not None else False),
                 field_mappings=[
                     {
                         "typed_column": column.name,
-                        "canonical_fields": (
-                            [column.source_field] if column.source_field else []
-                        ),
+                        "canonical_fields": ([column.source_field] if column.source_field else []),
                         "status": "materialized" if row is not None else "missing",
                     }
                     for column in projection.columns
@@ -217,17 +189,13 @@ class QueryMixin:
         return clauses, params
 
     @staticmethod
-    def _merge_lexical_uid_rows(
-        a: list[dict[str, Any]], b: list[dict[str, Any]]
-    ) -> list[dict[str, Any]]:
+    def _merge_lexical_uid_rows(a: list[dict[str, Any]], b: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Keep best lexical_score per card_uid (same rule as retrieval_pipeline.merge_lexical_rows)."""
         by_uid: dict[str, dict[str, Any]] = {str(r["card_uid"]): dict(r) for r in a}
         for row in b:
             uid = str(row["card_uid"])
             prev = by_uid.get(uid)
-            if prev is None or float(row.get("lexical_score", 0.0)) > float(
-                prev.get("lexical_score", 0.0)
-            ):
+            if prev is None or float(row.get("lexical_score", 0.0)) > float(prev.get("lexical_score", 0.0)):
                 by_uid[uid] = dict(row)
         return list(by_uid.values())
 
@@ -306,7 +274,7 @@ class QueryMixin:
         with self._connect() as conn:
             inner_fts = f"""
                 {select_sql}
-                WHERE {' AND '.join(clauses)}
+                WHERE {" AND ".join(clauses)}
                   AND c.search_document @@ plainto_tsquery('english', %s)
             """
             fts_sql = _wrap_lexical_order(inner_fts)
@@ -324,7 +292,7 @@ class QueryMixin:
 
             inner_exact = f"""
                 {select_sql}
-                WHERE {' AND '.join(clauses)}
+                WHERE {" AND ".join(clauses)}
                   AND (
                       c.slug = %s
                       OR EXISTS (
@@ -350,9 +318,7 @@ class QueryMixin:
                 normalized_query,
                 branch_limit,
             ]
-            exact_rows = [
-                dict(r) for r in conn.execute(exact_sql, exact_params).fetchall()
-            ]
+            exact_rows = [dict(r) for r in conn.execute(exact_sql, exact_params).fetchall()]
 
         merged = self._merge_lexical_uid_rows(fts_rows, exact_rows)
         merged.sort(key=self._lexical_row_sort_key)
@@ -392,7 +358,7 @@ class QueryMixin:
                 ON card.uid = chunk.card_uid
             WHERE embedding.embedding_model = %s
               AND embedding.embedding_version = %s
-              AND {' AND '.join(clauses)}
+              AND {" AND ".join(clauses)}
             ORDER BY embedding.embedding <=> %s::vector ASC, card.activity_at DESC, chunk.chunk_index ASC
             LIMIT %s
         """
@@ -409,9 +375,7 @@ class QueryMixin:
         ).fetchall()
         return [dict(row) for row in rows]
 
-    def _aggregate_vector_candidates(
-        self, rows: list[dict[str, Any]], *, limit: int
-    ) -> list[dict[str, Any]]:
+    def _aggregate_vector_candidates(self, rows: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
         """Collapse chunk-level vector rows to card-level, keeping best similarity.
 
         Returns rows sorted by similarity desc with provenance metadata but no
@@ -460,9 +424,7 @@ class QueryMixin:
         )
         return ranked[:limit]
 
-    def _score_and_rank_vector(
-        self, rows: list[dict[str, Any]], *, limit: int
-    ) -> list[dict[str, Any]]:
+    def _score_and_rank_vector(self, rows: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
         """Apply composite scoring to card-level vector candidates.
 
         Scores combine similarity, type priors, recency, provenance, and a
@@ -471,9 +433,7 @@ class QueryMixin:
         """
         _apply_recency_boost(rows, key_name="recency_score")
         for entry in rows:
-            chunk_match_boost = min(
-                max(int(entry["matched_chunk_count"]) - 1, 0) * 0.025, 0.1
-            )
+            chunk_match_boost = min(max(int(entry["matched_chunk_count"]) - 1, 0) * 0.025, 0.1)
             entry["score"] = round(
                 (float(entry["similarity"]) * 1.35)
                 + _card_type_prior(str(entry["type"]))
@@ -524,9 +484,7 @@ class QueryMixin:
             """,
             (anchor_uids, anchor_uids, anchor_uids),
         ).fetchall()
-        return {
-            str(row["neighbor_uid"]) for row in rows if str(row["neighbor_uid"]).strip()
-        }
+        return {str(row["neighbor_uid"]) for row in rows if str(row["neighbor_uid"]).strip()}
 
     def vector_search(
         self,
@@ -743,25 +701,21 @@ class QueryMixin:
         sql = f"""
             SELECT DISTINCT c.rel_path, c.summary, c.type, c.activity_at
             FROM {self.schema}.cards c
-            WHERE {' AND '.join(clauses)}
+            WHERE {" AND ".join(clauses)}
             ORDER BY c.activity_at DESC, c.rel_path ASC
             LIMIT %s
         """
         with self._connect() as conn:
             return [dict(row) for row in conn.execute(sql, params).fetchall()]
 
-    def timeline(
-        self, *, start_date: str = "", end_date: str = "", limit: int = 20
-    ) -> list[dict[str, Any]]:
+    def timeline(self, *, start_date: str = "", end_date: str = "", limit: int = 20) -> list[dict[str, Any]]:
         self.ensure_ready()
-        clauses, params = self._filter_clauses(
-            alias="c", start_date=start_date, end_date=end_date
-        )
+        clauses, params = self._filter_clauses(alias="c", start_date=start_date, end_date=end_date)
         params.append(limit)
         sql = f"""
             SELECT c.activity_at AS created, c.rel_path, c.summary, c.type
             FROM {self.schema}.cards c
-            WHERE {' AND '.join(clauses)}
+            WHERE {" AND ".join(clauses)}
             ORDER BY c.activity_at ASC, c.rel_path ASC
             LIMIT %s
         """
@@ -771,9 +725,7 @@ class QueryMixin:
     def stats(self) -> tuple[int, list[dict[str, Any]], list[dict[str, Any]]]:
         self.ensure_ready()
         with self._connect() as conn:
-            total_row = conn.execute(
-                f"SELECT COUNT(*) AS count FROM {self.schema}.cards"
-            ).fetchone()
+            total_row = conn.execute(f"SELECT COUNT(*) AS count FROM {self.schema}.cards").fetchone()
             by_type = conn.execute(
                 f"SELECT type, COUNT(*) AS count FROM {self.schema}.cards GROUP BY type ORDER BY count DESC, type ASC"
             ).fetchall()

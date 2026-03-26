@@ -7,7 +7,6 @@ import os
 import re
 import tempfile
 from pathlib import Path
-from typing import Any
 
 IDENTIFIER_PREFIX_ALIASES = {
     "emails": "email",

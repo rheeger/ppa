@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from collections import Counter
 from pathlib import Path
 
@@ -140,7 +139,10 @@ def main() -> int:
     while next_index < len(thread_files):
         if args.max_threads and processed_threads >= args.max_threads:
             checkpoint()
-            print(json.dumps({"status": "paused", "reason": "max_threads", "next_index": next_index}, indent=2), flush=True)
+            print(
+                json.dumps({"status": "paused", "reason": "max_threads", "next_index": next_index}, indent=2),
+                flush=True,
+            )
             return 0
 
         thread_data = json.loads(thread_files[next_index].read_text(encoding="utf-8"))

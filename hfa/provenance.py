@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
 import hashlib
 import json
 import re
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from hfa.schema import DETERMINISTIC_ONLY
@@ -103,9 +103,7 @@ def validate_provenance(card_data: dict[str, Any], prov: dict[str, ProvenanceEnt
             errors.append(f"Field '{field_name}' is missing provenance")
             continue
         if field_name in DETERMINISTIC_ONLY and entry.method != "deterministic":
-            errors.append(
-                f"Field '{field_name}' is deterministic-only but provenance method is '{entry.method}'"
-            )
+            errors.append(f"Field '{field_name}' is deterministic-only but provenance method is '{entry.method}'")
     return errors
 
 

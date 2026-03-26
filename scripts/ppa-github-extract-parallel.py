@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import sys
 from pathlib import Path
 
 from archive_sync.adapters.github_history import GitHubHistoryAdapter
@@ -13,7 +12,9 @@ from archive_sync.adapters.github_history import GitHubHistoryAdapter
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Parallel GitHub archive extraction using gh")
-    parser.add_argument("--vault", default=os.environ.get("PPA_PATH", str(Path.home() / "Archive" / "production" / "hf-archives")))
+    parser.add_argument(
+        "--vault", default=os.environ.get("PPA_PATH", str(Path.home() / "Archive" / "production" / "hf-archives"))
+    )
     parser.add_argument("--stage-dir", required=True)
     parser.add_argument("--max-repos", type=int, default=None)
     parser.add_argument("--max-commits-per-repo", type=int, default=None)

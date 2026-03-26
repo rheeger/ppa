@@ -19,13 +19,14 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Iterator
 
-from .base import BaseAdapter, FetchedBatch, deterministic_provenance
 from hfa.identity import IdentityCache
 from hfa.provenance import ProvenanceEntry
 from hfa.schema import CalendarEventCard, MeetingTranscriptCard
 from hfa.thread_hash import compute_meeting_transcript_body_sha_from_payload
 from hfa.uid import generate_uid
-from hfa.vault import find_note_by_slug, iter_notes, read_note, write_card
+from hfa.vault import find_note_by_slug, read_note, write_card
+
+from .base import BaseAdapter, FetchedBatch, deterministic_provenance
 
 MEETING_SOURCE = "otter.meeting"
 TITLE_TOKEN_RE = re.compile(r"[a-z0-9]+")
@@ -450,7 +451,9 @@ class OtterMcpClient:
         meeting_id_arg: str | None = None,
         transcript_id_arg: str | None = None,
     ) -> None:
-        self.mcporter_bin = _clean(mcporter_bin or os.environ.get("MCPORTER_CMD") or os.environ.get("MCPORTER_BIN") or "mcporter")
+        self.mcporter_bin = _clean(
+            mcporter_bin or os.environ.get("MCPORTER_CMD") or os.environ.get("MCPORTER_BIN") or "mcporter"
+        )
         self.server_name = _clean(server_name or os.environ.get("OTTER_MCP_SERVER", "otter_meeting_mcp"))
         self.timeout_seconds = int(timeout_seconds)
         self.list_tool = _clean(list_tool or os.environ.get("OTTER_MCP_LIST_TOOL", ""))
@@ -518,9 +521,20 @@ class OtterMcpClient:
                 return ""
 
             discovered = {
-                "list": self.list_tool or _pick("search") or _pick("list", "meeting") or _pick("list", "speech") or _pick("recent", "meeting"),
-                "detail": self.detail_tool or _pick("fetch") or _pick("get", "meeting") or _pick("get", "speech") or _pick("meeting"),
-                "transcript": self.transcript_tool or _pick("transcript") or _pick("fetch") or _pick("get", "transcript"),
+                "list": self.list_tool
+                or _pick("search")
+                or _pick("list", "meeting")
+                or _pick("list", "speech")
+                or _pick("recent", "meeting"),
+                "detail": self.detail_tool
+                or _pick("fetch")
+                or _pick("get", "meeting")
+                or _pick("get", "speech")
+                or _pick("meeting"),
+                "transcript": self.transcript_tool
+                or _pick("transcript")
+                or _pick("fetch")
+                or _pick("get", "transcript"),
             }
             if not discovered["transcript"]:
                 discovered["transcript"] = discovered["detail"]
@@ -528,11 +542,7 @@ class OtterMcpClient:
             return discovered
 
     def _call_tool(self, tool_name: str, **kwargs: Any) -> dict[str, Any]:
-        args = [
-            f"{key}={_coerce_cli_value(value)}"
-            for key, value in kwargs.items()
-            if value not in (None, [])
-        ]
+        args = [f"{key}={_coerce_cli_value(value)}" for key, value in kwargs.items() if value not in (None, [])]
         stdout, _ = self._run_mcporter("call", f"{self.server_name}.{tool_name}", *args)
         return _parse_json_from_stdout(stdout)
 
@@ -560,7 +570,9 @@ class OtterMcpClient:
 
     def _call_with_id_fallbacks(self, tool_name: str, meeting_id: str, explicit_arg: str = "") -> dict[str, Any]:
         attempted: list[str] = []
-        arg_names = [name for name in [explicit_arg, "meetingId", "meeting_id", "otid", "id", "speechId", "speech_id"] if name]
+        arg_names = [
+            name for name in [explicit_arg, "meetingId", "meeting_id", "otid", "id", "speechId", "speech_id"] if name
+        ]
         last_error: Exception | None = None
         for arg_name in dict.fromkeys(arg_names):
             try:
@@ -725,9 +737,7 @@ class OtterTranscriptsAdapter(BaseAdapter):
             start_at = _clean(frontmatter.get("start_at", ""))
             organizer_email = _clean(frontmatter.get("organizer_email", "")).lower()
             attendee_emails = {
-                _clean(email).lower()
-                for email in _coerce_list(frontmatter.get("attendee_emails"))
-                if _clean(email)
+                _clean(email).lower() for email in _coerce_list(frontmatter.get("attendee_emails")) if _clean(email)
             }
             candidate = {
                 "wikilink": wikilink,
@@ -940,7 +950,9 @@ class OtterTranscriptsAdapter(BaseAdapter):
             expanded.extend(self._build_calendar_backlink_items(vault_path, transcript_row))
         return expanded
 
-    def _extract_people_from_payload(self, payloads: list[dict[str, Any]]) -> tuple[list[str], list[str], list[str], list[str], str, str]:
+    def _extract_people_from_payload(
+        self, payloads: list[dict[str, Any]]
+    ) -> tuple[list[str], list[str], list[str], list[str], str, str]:
         speaker_names: list[str] = []
         speaker_emails: list[str] = []
         participant_names: list[str] = []
@@ -964,7 +976,9 @@ class OtterTranscriptsAdapter(BaseAdapter):
                         speaker.get("display_name"),
                         speaker.get("displayName"),
                     )
-                    email = _first_nonempty(speaker.get("email"), speaker.get("speaker_email"), speaker.get("speakerEmail"))
+                    email = _first_nonempty(
+                        speaker.get("email"), speaker.get("speaker_email"), speaker.get("speakerEmail")
+                    )
                     if name and name not in speaker_names:
                         speaker_names.append(name)
                     if email and email.lower() not in speaker_emails:
@@ -973,7 +987,9 @@ class OtterTranscriptsAdapter(BaseAdapter):
                 for participant in _coerce_list(payload.get(field_name)):
                     if not isinstance(participant, dict):
                         continue
-                    name = _first_nonempty(participant.get("name"), participant.get("display_name"), participant.get("displayName"))
+                    name = _first_nonempty(
+                        participant.get("name"), participant.get("display_name"), participant.get("displayName")
+                    )
                     email = _first_nonempty(participant.get("email"))
                     if name and name not in participant_names:
                         participant_names.append(name)
@@ -993,7 +1009,9 @@ class OtterTranscriptsAdapter(BaseAdapter):
                         participant_emails.append(email)
             host = payload.get("host") or payload.get("owner") or {}
             if isinstance(host, dict):
-                host_name = host_name or _first_nonempty(host.get("name"), host.get("display_name"), host.get("displayName"))
+                host_name = host_name or _first_nonempty(
+                    host.get("name"), host.get("display_name"), host.get("displayName")
+                )
                 host_email = host_email or _first_nonempty(host.get("email"))
         return speaker_names, speaker_emails, participant_names, participant_emails, host_name, host_email.lower()
 
@@ -1182,9 +1200,7 @@ class OtterTranscriptsAdapter(BaseAdapter):
         if len(scored) == 1:
             return [best_link]
         winners = [
-            link
-            for score, delta, link in scored
-            if best_score - score <= 10.0 and abs(delta - best_delta) <= 15 * 60
+            link for score, delta, link in scored if best_score - score <= 10.0 and abs(delta - best_delta) <= 15 * 60
         ]
         if winners:
             return list(dict.fromkeys(winners))
@@ -1226,7 +1242,9 @@ class OtterTranscriptsAdapter(BaseAdapter):
             row.get("name"),
         )
         detail_metadata = detail_payload.get("metadata") if isinstance(detail_payload.get("metadata"), dict) else {}
-        transcript_metadata = transcript_payload.get("metadata") if isinstance(transcript_payload.get("metadata"), dict) else {}
+        transcript_metadata = (
+            transcript_payload.get("metadata") if isinstance(transcript_payload.get("metadata"), dict) else {}
+        )
         status = _first_nonempty(detail_payload.get("status"), row.get("status"))
         start_at = _normalize_iso_datetime(
             detail_payload.get("start_at")
@@ -1286,19 +1304,23 @@ class OtterTranscriptsAdapter(BaseAdapter):
             transcript_payload.get("ical_uid"),
             transcript_payload.get("iCalUID"),
         )
-        speaker_names, speaker_emails, participant_names, participant_emails, host_name, host_email = self._extract_people_from_payload(
-            [row, detail_payload, transcript_payload]
+        speaker_names, speaker_emails, participant_names, participant_emails, host_name, host_email = (
+            self._extract_people_from_payload([row, detail_payload, transcript_payload])
         )
         summary_text = self._extract_summary_text([detail_payload, transcript_payload])
         action_items = self._extract_action_items([detail_payload, transcript_payload])
         transcript_lines = self._transcript_lines([transcript_payload, detail_payload])
         if not transcript_lines:
             return None
-        body = self._render_body(summary_text=summary_text, action_items=action_items, transcript_lines=transcript_lines)
+        body = self._render_body(
+            summary_text=summary_text, action_items=action_items, transcript_lines=transcript_lines
+        )
         transcript_body_sha = compute_meeting_transcript_body_sha_from_payload(
             {
                 "otter_meeting_id": meeting_id,
-                "otter_conversation_id": _first_nonempty(detail_payload.get("conversation_id"), detail_payload.get("conversationId")),
+                "otter_conversation_id": _first_nonempty(
+                    detail_payload.get("conversation_id"), detail_payload.get("conversationId")
+                ),
                 "title": title,
                 "status": status,
                 "start_at": start_at,
@@ -1341,7 +1363,9 @@ class OtterTranscriptsAdapter(BaseAdapter):
         )
         return {
             "otter_meeting_id": meeting_id,
-            "otter_conversation_id": _first_nonempty(detail_payload.get("conversation_id"), detail_payload.get("conversationId")),
+            "otter_conversation_id": _first_nonempty(
+                detail_payload.get("conversation_id"), detail_payload.get("conversationId")
+            ),
             "account_email": _clean(account_email).lower(),
             "title": title,
             "meeting_url": _first_nonempty(
@@ -1441,7 +1465,9 @@ class OtterTranscriptsAdapter(BaseAdapter):
         hash_cache_enabled = bool(getattr(config, "otter_transcript_body_sha_cache_enabled", True))
         quick_update_enabled = bool(quick_update and hash_cache_enabled)
         existing_state = (
-            self._load_existing_transcript_state(vault_path, account_email=account_email) if quick_update_enabled else {}
+            self._load_existing_transcript_state(vault_path, account_email=account_email)
+            if quick_update_enabled
+            else {}
         )
         filters = {
             "account_email": _clean(account_email).lower(),
@@ -1453,11 +1479,15 @@ class OtterTranscriptsAdapter(BaseAdapter):
         hit_cap = False
         next_window_date_text = _first_nonempty(state.get("next_window_date", ""))
 
-        def _process_rows(rows: list[dict[str, Any]], *, state_page_token: str | None, next_window_date: str | None) -> None:
+        def _process_rows(
+            rows: list[dict[str, Any]], *, state_page_token: str | None, next_window_date: str | None
+        ) -> None:
             nonlocal emitted_meetings, skipped_unchanged_meetings, failed_hydrations
             pending_rows: list[dict[str, Any]] = []
             for row in rows:
-                meeting_id = _first_nonempty(row.get("id"), row.get("otid"), row.get("meeting_id"), row.get("meetingId"))
+                meeting_id = _first_nonempty(
+                    row.get("id"), row.get("otid"), row.get("meeting_id"), row.get("meetingId")
+                )
                 if not meeting_id or meeting_id in completed_meeting_ids:
                     continue
                 if max_meetings is not None and emitted_meetings + len(pending_rows) >= max_meetings:
@@ -1466,7 +1496,9 @@ class OtterTranscriptsAdapter(BaseAdapter):
                     row_updated_at = _normalize_iso_datetime(
                         row.get("updated_at") or row.get("updatedAt") or row.get("modified_at") or row.get("modifiedAt")
                     )
-                    if row_updated_at and row_updated_at == existing_state.get(meeting_id, {}).get("otter_updated_at", ""):
+                    if row_updated_at and row_updated_at == existing_state.get(meeting_id, {}).get(
+                        "otter_updated_at", ""
+                    ):
                         skipped_unchanged_meetings += 1
                         continue
                 pending_rows.append(row)
@@ -1491,7 +1523,9 @@ class OtterTranscriptsAdapter(BaseAdapter):
                     processed = 0
                     for future in as_completed(futures):
                         row = futures[future]
-                        meeting_id = _first_nonempty(row.get("id"), row.get("otid"), row.get("meeting_id"), row.get("meetingId"))
+                        meeting_id = _first_nonempty(
+                            row.get("id"), row.get("otid"), row.get("meeting_id"), row.get("meetingId")
+                        )
                         try:
                             item = future.result()
                         except Exception as exc:
@@ -1512,7 +1546,9 @@ class OtterTranscriptsAdapter(BaseAdapter):
                             continue
                         if item is None:
                             failed_hydrations += 1
-                            self._append_failure_row(files["failures"], {"meeting_id": meeting_id, "error": "Transcript unavailable"})
+                            self._append_failure_row(
+                                files["failures"], {"meeting_id": meeting_id, "error": "Transcript unavailable"}
+                            )
                             self._write_stage_state(
                                 files["state"],
                                 account_email=account_email,
@@ -1736,7 +1772,9 @@ class OtterTranscriptsAdapter(BaseAdapter):
                     if _clean(email)
                 ]
                 matched_calendar_events = self._match_calendar_event(
-                    title=_first_nonempty(row.get("title"), row.get("summary"), frontmatter.get("title"), frontmatter.get("summary")),
+                    title=_first_nonempty(
+                        row.get("title"), row.get("summary"), frontmatter.get("title"), frontmatter.get("summary")
+                    ),
                     event_id_hint=_first_nonempty(row.get("event_id_hint"), frontmatter.get("event_id_hint")),
                     ical_uid=_first_nonempty(row.get("ical_uid"), frontmatter.get("ical_uid")),
                     conference_url=_first_nonempty(row.get("conference_url"), frontmatter.get("conference_url")),
@@ -1794,7 +1832,9 @@ class OtterTranscriptsAdapter(BaseAdapter):
                         date=today,
                         method="deterministic",
                     )
-                    write_card(vault_path, event_rel_path, event_card, body=event_body, provenance=updated_event_provenance)
+                    write_card(
+                        vault_path, event_rel_path, event_card, body=event_body, provenance=updated_event_provenance
+                    )
                     stats["calendar_events_updated"] += 1
 
                 if progress_every and stats["rows_scanned"] % max(1, progress_every) == 0:
@@ -2017,7 +2057,9 @@ class OtterTranscriptsAdapter(BaseAdapter):
         hash_cache_enabled = bool(getattr(config, "otter_transcript_body_sha_cache_enabled", True))
         quick_update_enabled = bool(quick_update and hash_cache_enabled)
         existing_state = (
-            self._load_existing_transcript_state(vault_path, account_email=account_email) if quick_update_enabled else {}
+            self._load_existing_transcript_state(vault_path, account_email=account_email)
+            if quick_update_enabled
+            else {}
         )
         page_token = cursor.get("page_token")
         emitted_meetings = int(cursor.get("emitted_meetings", 0) or 0)
@@ -2037,7 +2079,9 @@ class OtterTranscriptsAdapter(BaseAdapter):
             batch_skipped = 0
             pending_rows: list[dict[str, Any]] = []
             for row in rows:
-                meeting_id = _first_nonempty(row.get("id"), row.get("otid"), row.get("meeting_id"), row.get("meetingId"))
+                meeting_id = _first_nonempty(
+                    row.get("id"), row.get("otid"), row.get("meeting_id"), row.get("meetingId")
+                )
                 if not meeting_id:
                     continue
                 if max_meetings is not None and emitted_meetings + len(pending_rows) >= max_meetings:
@@ -2046,7 +2090,9 @@ class OtterTranscriptsAdapter(BaseAdapter):
                     row_updated_at = _normalize_iso_datetime(
                         row.get("updated_at") or row.get("updatedAt") or row.get("modified_at") or row.get("modifiedAt")
                     )
-                    if row_updated_at and row_updated_at == existing_state.get(meeting_id, {}).get("otter_updated_at", ""):
+                    if row_updated_at and row_updated_at == existing_state.get(meeting_id, {}).get(
+                        "otter_updated_at", ""
+                    ):
                         batch_skipped += 1
                         total_skipped += 1
                         continue
@@ -2115,7 +2161,9 @@ class OtterTranscriptsAdapter(BaseAdapter):
         stage_dir = kwargs.get("stage_dir")
         if stage_dir:
             batch_size = max(1, int(kwargs.get("batch_size") or 100))
-            yield from self._iter_staged_batches(vault_path, stage_dir, batch_size=batch_size, max_items=kwargs.get("max_items"))
+            yield from self._iter_staged_batches(
+                vault_path, stage_dir, batch_size=batch_size, max_items=kwargs.get("max_items")
+            )
             return
         yield from self._live_fetch_batches(vault_path, cursor, config=config, **kwargs)
 
@@ -2146,7 +2194,9 @@ class OtterTranscriptsAdapter(BaseAdapter):
             today = date.today().isoformat()
             provenance = {}
             if meeting_ref:
-                provenance["meeting_transcripts"] = ProvenanceEntry(source=MEETING_SOURCE, date=today, method="deterministic")
+                provenance["meeting_transcripts"] = ProvenanceEntry(
+                    source=MEETING_SOURCE, date=today, method="deterministic"
+                )
             return card, provenance, ""
 
         meeting_id = _first_nonempty(item.get("otter_meeting_id"))

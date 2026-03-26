@@ -72,14 +72,17 @@ def load_archive_config(explicit_path: str | None = None) -> ArchiveConfig:
         {
             "mode": _ppa_env("PPA_RUNTIME_MODE", default=runtime.get("mode", "stdio") or "stdio"),
             "tool_profile": _ppa_env("PPA_MCP_TOOL_PROFILE", default=runtime.get("tool_profile", "full") or "full"),
-            "enable_long_lived_runtime": str(runtime.get("enable_long_lived_runtime", "0")).strip().lower() in {"1", "true", "yes", "on"},
+            "enable_long_lived_runtime": str(runtime.get("enable_long_lived_runtime", "0")).strip().lower()
+            in {"1", "true", "yes", "on"},
         },
         runtime,
     )
     embeddings = _merge_dict(
         {
             "provider": _ppa_env("PPA_EMBEDDING_PROVIDER", default=embeddings.get("provider", "hash") or "hash"),
-            "model": _ppa_env("PPA_EMBEDDING_MODEL", default=embeddings.get("model", "archive-hash-dev") or "archive-hash-dev"),
+            "model": _ppa_env(
+                "PPA_EMBEDDING_MODEL", default=embeddings.get("model", "archive-hash-dev") or "archive-hash-dev"
+            ),
             "version": int(_ppa_env("PPA_EMBEDDING_VERSION", default=str(embeddings.get("version", 1) or 1))),
         },
         embeddings,
@@ -102,7 +105,8 @@ def load_archive_config(explicit_path: str | None = None) -> ArchiveConfig:
                 else str(seed_links.get("enabled", "0")).strip().lower() in {"1", "true", "yes", "on"}
             ),
             "include_llm": str(seed_links.get("include_llm", "1")).strip().lower() in {"1", "true", "yes", "on"},
-            "apply_promotions": str(seed_links.get("apply_promotions", "1")).strip().lower() in {"1", "true", "yes", "on"},
+            "apply_promotions": str(seed_links.get("apply_promotions", "1")).strip().lower()
+            in {"1", "true", "yes", "on"},
         },
         seed_links,
     )

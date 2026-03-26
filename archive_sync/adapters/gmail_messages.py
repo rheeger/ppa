@@ -18,17 +18,19 @@ from email.header import decode_header
 from email.utils import getaddresses, parsedate_to_datetime
 from typing import Any
 
-from .base import BaseAdapter, FetchedBatch, deterministic_provenance
-from .gmail_correspondents import load_own_aliases
-from ppa_google_auth import build_google_cli_token_manager
 from hfa.identity import IdentityCache
 from hfa.schema import EmailAttachmentCard, EmailMessageCard, EmailThreadCard
 from hfa.thread_hash import (
     compute_email_attachment_metadata_sha_from_payload,
     compute_email_message_body_sha_from_payload,
-    compute_email_thread_body_sha_from_payload)
+    compute_email_thread_body_sha_from_payload,
+)
 from hfa.uid import generate_uid
 from hfa.vault import iter_notes, read_note
+from ppa_google_auth import build_google_cli_token_manager
+
+from .base import BaseAdapter, FetchedBatch, deterministic_provenance
+from .gmail_correspondents import load_own_aliases
 
 THREAD_SOURCE = "gmail.thread"
 MESSAGE_SOURCE = "gmail.message"
@@ -80,7 +82,9 @@ def _message_uid(account_email: str, message_id: str) -> str:
 
 
 def _attachment_uid(account_email: str, message_id: str, attachment_id: str) -> str:
-    return generate_uid("email-attachment", ATTACHMENT_SOURCE, _attachment_identity(account_email, message_id, attachment_id))
+    return generate_uid(
+        "email-attachment", ATTACHMENT_SOURCE, _attachment_identity(account_email, message_id, attachment_id)
+    )
 
 
 def _wikilink_from_uid(uid: str) -> str:
@@ -272,8 +276,12 @@ def _parse_ics(data: str) -> dict[str, str]:
 def _parse_google_calendar_html(html_body: str, headers: list[dict[str, Any]]) -> dict[str, str]:
     if not html_body:
         return {}
-    matches = {match.group("key"): html.unescape(match.group("value")) for match in META_ITEMPROP_RE.finditer(html_body)}
-    time_values = {match.group("key"): html.unescape(match.group("value")) for match in TIME_ITEMPROP_RE.finditer(html_body)}
+    matches = {
+        match.group("key"): html.unescape(match.group("value")) for match in META_ITEMPROP_RE.finditer(html_body)
+    }
+    time_values = {
+        match.group("key"): html.unescape(match.group("value")) for match in TIME_ITEMPROP_RE.finditer(html_body)
+    }
     subject = _decode_mime_header(_header_value(headers, "Subject"))
     invite: dict[str, str] = {}
     subject_match = CALENDAR_SUBJECT_RE.match(subject)
@@ -303,7 +311,9 @@ def _parse_google_calendar_html(html_body: str, headers: list[dict[str, Any]]) -
     plain_html = _strip_html(html_body).lower()
     sender_values = _extract_addresses(_header_values(headers, "Sender") + _header_values(headers, "From"))
     sender_emails = {email for _, email in sender_values}
-    is_google_calendar = "calendar-notification@google.com" in sender_emails or "invitation from google calendar" in plain_html
+    is_google_calendar = (
+        "calendar-notification@google.com" in sender_emails or "invitation from google calendar" in plain_html
+    )
     has_calendar_language = any(
         phrase in plain_html
         for phrase in (
@@ -462,7 +472,9 @@ class GmailMessagesAdapter(BaseAdapter):
                         "Precondition check failed",
                     )
                 )
-                is_transient = bool(TRANSIENT_GMAIL_STATUS_RE.search(message)) or is_quota_error or is_failed_precondition
+                is_transient = (
+                    bool(TRANSIENT_GMAIL_STATUS_RE.search(message)) or is_quota_error or is_failed_precondition
+                )
                 if attempt >= attempts or not is_transient:
                     raise
                 if is_quota_error:
@@ -564,7 +576,8 @@ class GmailMessagesAdapter(BaseAdapter):
         filtered_messages = [
             record
             for record in message_records
-            if existing_message_hashes.get(str(record.get("message_id", "")).strip()) != str(record.get("message_body_sha", "")).strip()
+            if existing_message_hashes.get(str(record.get("message_id", "")).strip())
+            != str(record.get("message_body_sha", "")).strip()
         ]
         filtered_attachments = [
             record
@@ -702,7 +715,10 @@ class GmailMessagesAdapter(BaseAdapter):
 
         worker_count = max(1, min(int(attachment_workers), len(jobs)))
         if worker_count == 1:
-            return {f"{message_id}:{attachment_id}": self._fetch_attachment_body(message_id, attachment_id) for message_id, attachment_id in jobs}
+            return {
+                f"{message_id}:{attachment_id}": self._fetch_attachment_body(message_id, attachment_id)
+                for message_id, attachment_id in jobs
+            }
 
         def _load(job: tuple[str, str]) -> tuple[str, str]:
             message_id, attachment_id = job
@@ -781,7 +797,9 @@ class GmailMessagesAdapter(BaseAdapter):
         for email_value in [from_email, *to_emails, *cc_emails, *bcc_emails, *reply_to_emails]:
             if email_value and email_value not in participant_emails:
                 participant_emails.append(email_value)
-        sent_at = _parse_internal_date(message.get("internalDate")) or _parse_datetime_header(_header_value(headers, "Date"))
+        sent_at = _parse_internal_date(message.get("internalDate")) or _parse_datetime_header(
+            _header_value(headers, "Date")
+        )
         people_links = self._resolve_people(identity_cache, participant_emails)
         body = _extract_text_body(message.get("payload", {}) or {})
         attachments = _extract_attachments(message.get("payload", {}) or {})
@@ -939,7 +957,10 @@ class GmailMessagesAdapter(BaseAdapter):
                 timestamps.append(message_record["sent_at"])
             if message_record["invite_ical_uid"] and message_record["invite_ical_uid"] not in invite_ical_uids:
                 invite_ical_uids.append(message_record["invite_ical_uid"])
-            if message_record["invite_event_id_hint"] and message_record["invite_event_id_hint"] not in invite_event_id_hints:
+            if (
+                message_record["invite_event_id_hint"]
+                and message_record["invite_event_id_hint"] not in invite_event_id_hints
+            ):
                 invite_event_id_hints.append(message_record["invite_event_id_hint"])
             has_attachments = has_attachments or message_record["has_attachments"]
             thread_hash_payload.append(
@@ -1049,9 +1070,11 @@ class GmailMessagesAdapter(BaseAdapter):
         existing_message_hashes: dict[str, str] = {}
         existing_attachment_hashes: dict[str, str] = {}
         if quick_update_enabled:
-            existing_thread_state, existing_message_hashes, existing_attachment_hashes = self._load_existing_quick_update_state(
-                vault_path,
-                account_email=account,
+            existing_thread_state, existing_message_hashes, existing_attachment_hashes = (
+                self._load_existing_quick_update_state(
+                    vault_path,
+                    account_email=account,
+                )
             )
         emitted_threads = 0
         emitted_messages = 0
@@ -1154,7 +1177,9 @@ class GmailMessagesAdapter(BaseAdapter):
                     page_next_token = None
                     continue
 
-            with ThreadPoolExecutor(max_workers=max(1, min(fetch_workers, len(page_thread_ids) - page_index))) as executor:
+            with ThreadPoolExecutor(
+                max_workers=max(1, min(fetch_workers, len(page_thread_ids) - page_index))
+            ) as executor:
                 inflight: dict[int, Any] = {}
                 next_submit_index = page_index
 
@@ -1196,13 +1221,15 @@ class GmailMessagesAdapter(BaseAdapter):
                         max_attachments=max_attachments,
                     )
                     if quick_update_enabled:
-                        thread_records, message_records, attachment_records, filter_skip_details = self._filter_quick_update_records(
-                            thread_record=thread_record,
-                            message_records=message_records,
-                            attachment_records=attachment_records,
-                            existing_thread_state=existing_thread_state,
-                            existing_message_hashes=existing_message_hashes,
-                            existing_attachment_hashes=existing_attachment_hashes,
+                        thread_records, message_records, attachment_records, filter_skip_details = (
+                            self._filter_quick_update_records(
+                                thread_record=thread_record,
+                                message_records=message_records,
+                                attachment_records=attachment_records,
+                                existing_thread_state=existing_thread_state,
+                                existing_message_hashes=existing_message_hashes,
+                                existing_attachment_hashes=existing_attachment_hashes,
+                            )
                         )
                         for key, value in filter_skip_details.items():
                             batch_skip_details[key] += value

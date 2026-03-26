@@ -112,21 +112,13 @@ def _resolve_openai_api_key() -> str:
     )
 
 
-def _post_json(
-    url: str, headers: dict[str, str], payload: dict[str, object]
-) -> dict[str, object] | None:
+def _post_json(url: str, headers: dict[str, str], payload: dict[str, object]) -> dict[str, object] | None:
     data = json.dumps(payload).encode("utf-8")
     req = request.Request(url, data=data, headers=headers, method="POST")
     from .index_config import _ppa_env
 
-    timeout_seconds = float(
-        _ppa_env(
-            "PPA_OPENAI_TIMEOUT_SECONDS", default=str(DEFAULT_OPENAI_TIMEOUT_SECONDS)
-        )
-    )
-    max_retries = int(
-        _ppa_env("PPA_OPENAI_MAX_RETRIES", default=str(DEFAULT_OPENAI_MAX_RETRIES))
-    )
+    timeout_seconds = float(_ppa_env("PPA_OPENAI_TIMEOUT_SECONDS", default=str(DEFAULT_OPENAI_TIMEOUT_SECONDS)))
+    max_retries = int(_ppa_env("PPA_OPENAI_MAX_RETRIES", default=str(DEFAULT_OPENAI_MAX_RETRIES)))
     for attempt in range(max_retries + 1):
         try:
             with request.urlopen(req, timeout=timeout_seconds) as response:
@@ -148,9 +140,7 @@ class HashEmbeddingProvider:
     name = "hash"
 
     def __init__(self, *, model: str | None = None, dimension: int | None = None):
-        self.model = (
-            model or get_default_embedding_model()
-        ).strip() or get_default_embedding_model()
+        self.model = (model or get_default_embedding_model()).strip() or get_default_embedding_model()
         self.dimension = int(dimension or get_vector_dimension())
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
@@ -184,9 +174,7 @@ class OpenAIEmbeddingProvider:
         dimension: int | None = None,
         base_url: str | None = None,
     ):
-        self.model = (
-            model or get_default_embedding_model()
-        ).strip() or get_default_embedding_model()
+        self.model = (model or get_default_embedding_model()).strip() or get_default_embedding_model()
         self.dimension = int(dimension or get_vector_dimension())
         from .index_config import _ppa_env
 
@@ -243,24 +231,18 @@ class OpenAIEmbeddingProvider:
                 raise RuntimeError("OpenAI embedding response missing embedding")
             vector = [float(value) for value in embedding]
             if len(vector) != self.dimension:
-                raise RuntimeError(
-                    f"OpenAI embedding dimension mismatch: got {len(vector)} expected {self.dimension}"
-                )
+                raise RuntimeError(f"OpenAI embedding dimension mismatch: got {len(vector)} expected {self.dimension}")
             vectors.append(vector)
         if len(vectors) != len(texts):
             raise RuntimeError("OpenAI embedding response count mismatch")
-        logger.debug(
-            "embed_response elapsed_ms=%d", int((time.monotonic() - t_embed) * 1000)
-        )
+        logger.debug("embed_response elapsed_ms=%d", int((time.monotonic() - t_embed) * 1000))
         return vectors
 
 
 def get_embedding_provider(model: str = "") -> EmbeddingProvider:
     from .index_config import _ppa_env
 
-    provider_name = _ppa_env(
-        "PPA_EMBEDDING_PROVIDER", default=DEFAULT_EMBEDDING_PROVIDER
-    ).lower()
+    provider_name = _ppa_env("PPA_EMBEDDING_PROVIDER", default=DEFAULT_EMBEDDING_PROVIDER).lower()
     resolved_model = model.strip() or get_default_embedding_model()
     if provider_name == "hash":
         return HashEmbeddingProvider(model=resolved_model)

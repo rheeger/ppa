@@ -48,15 +48,8 @@ from .chunk_builders import (  # noqa: F401 — re-exported for backward compat
 from .chunking import render_chunks_for_card  # noqa: F401
 from .embedder import EmbedderMixin
 from .explain import projection_explain_payload  # noqa: F401
-from .explain import projection_inventory_payload, projection_status_payload
 from .features import (
-    CHUNKABLE_TEXT_FIELDS,
     TIMELINE_FIELDS,  # noqa: F401
-    build_context_prefix_for_embed_row,
-    card_activity_at,
-    iter_external_ids,
-    json_text,
-    primary_person,
 )
 from .index_config import (  # noqa: F401 — re-exported for backward compat
     CARD_TYPE_PRIORS,
@@ -136,7 +129,7 @@ from .loader import (  # noqa: F401 — re-exported for backward compat
     _sanitize_copy_value,
     get_rebuild_flush_caps,
 )
-from .materializer import (  # noqa: F401 — re-exported for backward compat
+from .materializer import (  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat
     EXTERNAL_ID_TARGET_PREFIX,
     _append_edge,
     _body_wikilinks,
@@ -146,33 +139,21 @@ from .materializer import (  # noqa: F401 — re-exported for backward compat
     _chunk_key,
     _clean_text,
     _coerce_string_list,
-)
-from .materializer import _content_hash as _content_hash  # noqa: F401
-from .materializer import (  # noqa: F401 — re-exported for backward compat
     _dedupe_rows,
     _iter_string_values,
     _materialize_row,
     _materialize_row_batch,
     _normalize_exact_text,
-)
-from .materializer import _normalize_slug as _normalize_slug  # noqa: F401
-from .materializer import (  # noqa: F401 — re-exported for backward compat
     _resolve_person_reference,
     _resolve_slug,
     _slug_from_wikilink,
     _synthetic_external_id_path,
     _wikilinks_from_frontmatter,
 )
+from .materializer import _content_hash as _content_hash  # noqa: F401
+from .materializer import _normalize_slug as _normalize_slug  # noqa: F401
 from .projections.base import ProjectionRowBuffer  # noqa: F401
-from .projections.base import build_projection_row
 from .projections.registry import CHUNK_RULE_SPECS  # noqa: F401
-from .projections.registry import (
-    EDGE_RULE_SPECS,
-    PROJECTION_REGISTRY,
-    PROJECTION_REGISTRY_VERSION,
-    TYPED_PROJECTIONS,
-    projection_for_card_type,
-)
 from .scanner import (  # noqa: F401 — re-exported for backward compat
     CanonicalRow,
     NoteManifestRow,
@@ -234,9 +215,7 @@ class BaseArchiveIndex:
     ) -> list[dict[str, Any]]:
         raise NotImplementedError
 
-    def timeline(
-        self, *, start_date: str = "", end_date: str = "", limit: int = 20
-    ) -> list[dict[str, Any]]:
+    def timeline(self, *, start_date: str = "", end_date: str = "", limit: int = 20) -> list[dict[str, Any]]:
         raise NotImplementedError
 
     def stats(self) -> tuple[int, list[dict[str, Any]], list[dict[str, Any]]]:
@@ -258,9 +237,7 @@ class BaseArchiveIndex:
     ) -> list[dict[str, Any]]:
         raise NotImplementedError
 
-    def embedding_status(
-        self, *, embedding_model: str, embedding_version: int
-    ) -> dict[str, int | str]:
+    def embedding_status(self, *, embedding_model: str, embedding_version: int) -> dict[str, int | str]:
         raise NotImplementedError
 
     def embedding_backlog(
@@ -318,9 +295,7 @@ class BaseArchiveIndex:
         raise NotImplementedError
 
 
-class PostgresArchiveIndex(
-    SchemaDDLMixin, EmbedderMixin, QueryMixin, LoaderMixin, BaseArchiveIndex
-):
+class PostgresArchiveIndex(SchemaDDLMixin, EmbedderMixin, QueryMixin, LoaderMixin, BaseArchiveIndex):
     """Postgres-backed derived index for ppa.
 
     Concrete implementation composing mixin modules:
@@ -352,9 +327,7 @@ class PostgresArchiveIndex(
             import psycopg
             from psycopg.rows import dict_row
         except ImportError as exc:  # pragma: no cover
-            raise RuntimeError(
-                "psycopg is required for Postgres archive indexes"
-            ) from exc
+            raise RuntimeError("psycopg is required for Postgres archive indexes") from exc
         from .index_config import get_connect_timeout, get_statement_timeout_ms
 
         timeout_ms = get_statement_timeout_ms()

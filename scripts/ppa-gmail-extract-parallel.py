@@ -72,7 +72,9 @@ def main() -> int:
 
     output_root = Path(args.output_root).expanduser().resolve()
     output_root.mkdir(parents=True, exist_ok=True)
-    windows = deque((label, query) for label, query in _build_windows(args.start_year, args.end_year, args.years_per_window))
+    windows = deque(
+        (label, query) for label, query in _build_windows(args.start_year, args.end_year, args.years_per_window)
+    )
     inflight: dict[str, subprocess.Popen[str]] = {}
     attempts: dict[str, int] = {}
 
@@ -132,7 +134,16 @@ def main() -> int:
             completed.append(label)
             if code != 0:
                 if _window_retryable(stderr) and attempts.get(label, 0) < max(1, args.max_window_retries):
-                    query = next((candidate_query for candidate_label, candidate_query in _build_windows(args.start_year, args.end_year, args.years_per_window) if candidate_label == label), "")
+                    query = next(
+                        (
+                            candidate_query
+                            for candidate_label, candidate_query in _build_windows(
+                                args.start_year, args.end_year, args.years_per_window
+                            )
+                            if candidate_label == label
+                        ),
+                        "",
+                    )
                     windows.appendleft((label, query))
                     print(
                         json.dumps(

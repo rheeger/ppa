@@ -14,8 +14,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from hfa.vault import (ParsedNoteRecord, extract_wikilinks, iter_note_paths,
-                       read_note_file)
+from hfa.vault import ParsedNoteRecord, extract_wikilinks, iter_note_paths, read_note_file
 
 from .index_store import PostgresArchiveIndex, get_index_dsn
 from .seed_links import compute_link_quality_gate, run_seed_link_backfill
@@ -92,7 +91,9 @@ def _top_level(rel_path: Path) -> str:
 
 def _sample_row_sort_key(rel_path: Path) -> tuple[int, int, str]:
     stem = rel_path.stem
-    has_hash_suffix = 1 if len(stem) >= 9 and stem[-9] == "-" and all(ch in "0123456789abcdef" for ch in stem[-8:]) else 0
+    has_hash_suffix = (
+        1 if len(stem) >= 9 and stem[-9] == "-" and all(ch in "0123456789abcdef" for ch in stem[-8:]) else 0
+    )
     return (has_hash_suffix, len(rel_path.as_posix()), rel_path.as_posix())
 
 
@@ -151,13 +152,7 @@ def _select_candidate_paths(
         elif entry > heap[0]:
             heapq.heapreplace(heap, entry)
 
-    candidates = sorted(
-        {
-            Path(rel_path)
-            for heap in heaps.values()
-            for _score, rel_path in heap
-        }
-    )
+    candidates = sorted({Path(rel_path) for heap in heaps.values() for _score, rel_path in heap})
     return slug_map, candidates, dict(counts_by_top_level)
 
 
@@ -325,7 +320,9 @@ def _cleaning_snapshot(vault: Path) -> dict[str, int]:
         "email_messages_with_attachments": _count_cards_with_nonempty_field(vault, "Email", "attachments"),
         "email_threads_with_messages": _count_cards_with_nonempty_field(vault, "EmailThreads", "messages"),
         "email_threads_with_people": _count_cards_with_nonempty_field(vault, "EmailThreads", "people"),
-        "email_threads_with_calendar_events": _count_cards_with_nonempty_field(vault, "EmailThreads", "calendar_events"),
+        "email_threads_with_calendar_events": _count_cards_with_nonempty_field(
+            vault, "EmailThreads", "calendar_events"
+        ),
         "imessage_messages_with_thread": _count_cards_with_nonempty_field(vault, "IMessage", "thread"),
         "imessage_messages_with_people": _count_cards_with_nonempty_field(vault, "IMessage", "people"),
         "imessage_threads_with_messages": _count_cards_with_nonempty_field(vault, "IMessageThreads", "messages"),

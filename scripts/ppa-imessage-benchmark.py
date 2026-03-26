@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import os
 import statistics
-import sys
 import time
 from pathlib import Path
 
@@ -20,7 +19,10 @@ def _workers_list(value: str) -> list[int]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Benchmark iMessage processing worker counts")
-    parser.add_argument("--vault", default=os.environ.get("PPA_PATH", str(Path.home() / "Archive" / "tests" / "hf-archives-imessage-scratch")))
+    parser.add_argument(
+        "--vault",
+        default=os.environ.get("PPA_PATH", str(Path.home() / "Archive" / "tests" / "hf-archives-imessage-scratch")),
+    )
     parser.add_argument("--snapshot-dir", required=True)
     parser.add_argument("--source-label", default="local-messages")
     parser.add_argument("--max-messages", type=int, default=20000)

@@ -20,7 +20,9 @@ def test_google_account_scope_migration_rewrites_ids_paths_and_links(tmp_path):
     repo_root = Path(__file__).resolve().parent.parent
     vault = tmp_path / "hf-archives"
     (vault / "_meta").mkdir(parents=True)
-    (vault / "_meta" / "sync-state.json").write_text(json.dumps({"gmail-messages:rheeger@gmail.com": {"page_token": None}}), encoding="utf-8")
+    (vault / "_meta" / "sync-state.json").write_text(
+        json.dumps({"gmail-messages:rheeger@gmail.com": {"page_token": None}}), encoding="utf-8"
+    )
 
     old_thread_uid = "hfa-email-thread-oldthread"
     old_message_uid = "hfa-email-message-oldmessage"
@@ -92,10 +94,30 @@ def test_google_account_scope_migration_rewrites_ids_paths_and_links(tmp_path):
         source_threads=[f"[[{old_thread_uid}]]"],
     )
 
-    write_card(vault, f"EmailThreads/2026-03/{old_thread_uid}.md", thread, provenance=deterministic_provenance(thread, "gmail.thread"))
-    write_card(vault, f"Email/2026-03/{old_message_uid}.md", message, provenance=deterministic_provenance(message, "gmail.message"))
-    write_card(vault, f"EmailAttachments/2026-03/{old_attachment_uid}.md", attachment, provenance=deterministic_provenance(attachment, "gmail.attachment"))
-    write_card(vault, f"Calendar/2026-03/{old_event_uid}.md", event, provenance=deterministic_provenance(event, "calendar.event"))
+    write_card(
+        vault,
+        f"EmailThreads/2026-03/{old_thread_uid}.md",
+        thread,
+        provenance=deterministic_provenance(thread, "gmail.thread"),
+    )
+    write_card(
+        vault,
+        f"Email/2026-03/{old_message_uid}.md",
+        message,
+        provenance=deterministic_provenance(message, "gmail.message"),
+    )
+    write_card(
+        vault,
+        f"EmailAttachments/2026-03/{old_attachment_uid}.md",
+        attachment,
+        provenance=deterministic_provenance(attachment, "gmail.attachment"),
+    )
+    write_card(
+        vault,
+        f"Calendar/2026-03/{old_event_uid}.md",
+        event,
+        provenance=deterministic_provenance(event, "calendar.event"),
+    )
     (vault / "Scratch").mkdir()
     (vault / "Scratch" / "reference.md").write_text(
         f"---\nuid: scratch-note\nsource_id: scratch\ncreated: 2026-03-08\nupdated: 2026-03-08\ntype: person\nsummary: scratch\n---\n[[{old_thread_uid}]]\n[[{old_event_uid}]]\n",

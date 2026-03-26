@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
+import sys
 from pathlib import Path
 
 from .benchmark import (
@@ -13,6 +15,14 @@ from .benchmark import (
     benchmark_seed_links,
     build_benchmark_sample,
 )
+from .commands import explain
+from .commands import graph as graph_cmd
+from .commands import query as query_cmd
+from .commands import read as read_cmd
+from .commands import search as search_cmd
+from .commands import status as status_cmd
+from .commands._resolve import resolve_index, resolve_store
+from .errors import PpaError
 from .index_config import get_seed_links_enabled
 from .log import configure_logging
 from .server import (
@@ -26,7 +36,6 @@ from .server import (
     archive_projection_explain,
     archive_projection_inventory,
     archive_projection_status,
-    archive_rebuild_indexes,
     archive_review_link_candidate,
     archive_seed_link_backfill,
     archive_seed_link_enqueue,
@@ -39,9 +48,19 @@ from .server import (
 )
 from .store import get_archive_store
 
-_SEED_LINKS_DISABLED_MSG = (
-    "Seed links are not enabled. Set PPA_SEED_LINKS_ENABLED=1 to enable."
-)
+_cli_log = logging.getLogger("ppa.cli")
+
+
+def _print_json(data: object) -> None:
+    print(json.dumps(data, indent=2, default=str))
+
+
+def _cli_fail(exc: PpaError) -> None:
+    print(str(exc), file=sys.stderr)
+    raise SystemExit(1)
+
+
+_SEED_LINKS_DISABLED_MSG = "Seed links are not enabled. Set PPA_SEED_LINKS_ENABLED=1 to enable."
 
 _SEED_LINK_COMMANDS = frozenset(
     {
@@ -62,12 +81,8 @@ _SEED_LINK_COMMANDS = frozenset(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Archive MCP server and index maintenance"
-    )
-    parser.add_argument(
-        "-v", "--verbose", action="store_true", help="DEBUG logging on stderr"
-    )
+    parser = argparse.ArgumentParser(description="Archive MCP server and index maintenance")
+    parser.add_argument("-v", "--verbose", action="store_true", help="DEBUG logging on stderr")
     subparsers = parser.add_subparsers(dest="command")
 
     subparsers.add_parser("serve")
@@ -76,9 +91,7 @@ def main() -> None:
     rebuild_parser.add_argument("--batch-size", type=int)
     rebuild_parser.add_argument("--commit-interval", type=int)
     rebuild_parser.add_argument("--progress-every", type=int)
-    rebuild_parser.add_argument(
-        "--executor", dest="executor_kind", choices=["serial", "thread", "process"]
-    )
+    rebuild_parser.add_argument("--executor", dest="executor_kind", choices=["serial", "thread", "process"])
     rebuild_parser.add_argument("--force-full-rebuild", action="store_true")
     rebuild_parser.add_argument("--disable-manifest-cache", action="store_true")
     subparsers.add_parser("index-status")
@@ -136,9 +149,7 @@ def main() -> None:
     subparsers.add_parser("link-quality-gate")
 
     sample_parser = subparsers.add_parser("build-benchmark-sample")
-    sample_parser.add_argument(
-        "--source-vault", default=str(DEFAULT_BENCHMARK_SOURCE_VAULT)
-    )
+    sample_parser.add_argument("--source-vault", default=str(DEFAULT_BENCHMARK_SOURCE_VAULT))
     sample_parser.add_argument("--output-vault", required=True)
     sample_parser.add_argument("--per-group-limit", type=int, default=200)
     sample_parser.add_argument("--max-notes", type=int, default=5000)
@@ -149,30 +160,22 @@ def main() -> None:
     bench_parser = subparsers.add_parser("benchmark-rebuild")
     bench_parser.add_argument("--vault", required=True)
     bench_parser.add_argument("--schema", default="archive_benchmark")
-    bench_parser.add_argument(
-        "--profile", choices=sorted(BENCHMARK_PROFILES), default="local-laptop"
-    )
+    bench_parser.add_argument("--profile", choices=sorted(BENCHMARK_PROFILES), default="local-laptop")
     bench_parser.add_argument("--workers", type=int)
     bench_parser.add_argument("--batch-size", type=int)
     bench_parser.add_argument("--commit-interval", type=int)
     bench_parser.add_argument("--progress-every", type=int)
-    bench_parser.add_argument(
-        "--executor", dest="executor_kind", choices=["serial", "thread", "process"]
-    )
+    bench_parser.add_argument("--executor", dest="executor_kind", choices=["serial", "thread", "process"])
 
     seed_bench_parser = subparsers.add_parser("benchmark-seed-links")
     seed_bench_parser.add_argument("--vault", required=True)
     seed_bench_parser.add_argument("--schema", default="archive_seed_links_benchmark")
-    seed_bench_parser.add_argument(
-        "--profile", choices=sorted(BENCHMARK_PROFILES), default="local-laptop"
-    )
+    seed_bench_parser.add_argument("--profile", choices=sorted(BENCHMARK_PROFILES), default="local-laptop")
     seed_bench_parser.add_argument("--workers", type=int)
     seed_bench_parser.add_argument("--batch-size", type=int)
     seed_bench_parser.add_argument("--commit-interval", type=int)
     seed_bench_parser.add_argument("--progress-every", type=int)
-    seed_bench_parser.add_argument(
-        "--executor", dest="executor_kind", choices=["serial", "thread", "process"]
-    )
+    seed_bench_parser.add_argument("--executor", dest="executor_kind", choices=["serial", "thread", "process"])
     seed_bench_parser.add_argument("--include-llm", action="store_true")
     seed_bench_parser.add_argument("--apply-promotions", action="store_true")
     seed_bench_parser.add_argument("--modules", default="")
@@ -187,6 +190,69 @@ def main() -> None:
     subparsers.add_parser("migration-status")
     subparsers.add_parser("health")
 
+    search_parser = subparsers.add_parser("search", help="Full-text search (JSON on stdout)")
+    search_parser.add_argument("query")
+    search_parser.add_argument("--limit", type=int, default=20)
+    read_parser = subparsers.add_parser("read", help="Read one note by path or UID (JSON)")
+    read_parser.add_argument("path_or_uid")
+    read_many_parser = subparsers.add_parser("read-many", help="Read multiple notes (JSON)")
+    read_many_parser.add_argument("paths", nargs="+", metavar="PATH_OR_UID")
+    query_parser = subparsers.add_parser("query", help="Structured query (JSON)")
+    query_parser.add_argument("--type", dest="type_filter", default="")
+    query_parser.add_argument("--source", dest="source_filter", default="")
+    query_parser.add_argument("--people", dest="people_filter", default="")
+    query_parser.add_argument("--org", dest="org_filter", default="")
+    query_parser.add_argument("--limit", type=int, default=20)
+    graph_parser = subparsers.add_parser("graph", help="Wikilink graph from a note (JSON)")
+    graph_parser.add_argument("note_path")
+    graph_parser.add_argument("--hops", type=int, default=2)
+    person_parser = subparsers.add_parser("person", help="Person profile by slug (JSON)")
+    person_parser.add_argument("name")
+    timeline_parser = subparsers.add_parser("timeline", help="Notes in date range (JSON)")
+    timeline_parser.add_argument("--start", dest="start_date", default="")
+    timeline_parser.add_argument("--end", dest="end_date", default="")
+    timeline_parser.add_argument("--limit", type=int, default=20)
+    subparsers.add_parser("stats", help="Vault/index stats (JSON)")
+    subparsers.add_parser("validate", help="Validate all vault cards (JSON)")
+    subparsers.add_parser("duplicates", help="Dedup candidates from _meta (JSON)")
+    vec_parser = subparsers.add_parser("vector-search", help="Semantic search (JSON)")
+    vec_parser.add_argument("query")
+    vec_parser.add_argument("--limit", type=int, default=20)
+    vec_parser.add_argument("--embedding-model", default="")
+    vec_parser.add_argument("--embedding-version", type=int, default=0)
+    vec_parser.add_argument("--type", dest="type_filter", default="")
+    vec_parser.add_argument("--source", dest="source_filter", default="")
+    vec_parser.add_argument("--people", dest="people_filter", default="")
+    vec_parser.add_argument("--start-date", dest="start_date", default="")
+    vec_parser.add_argument("--end-date", dest="end_date", default="")
+    hybrid_parser = subparsers.add_parser("hybrid-search", help="Hybrid lexical+vector (JSON)")
+    hybrid_parser.add_argument("query")
+    hybrid_parser.add_argument("--limit", type=int, default=20)
+    hybrid_parser.add_argument("--embedding-model", default="")
+    hybrid_parser.add_argument("--embedding-version", type=int, default=0)
+    hybrid_parser.add_argument("--type", dest="type_filter", default="")
+    hybrid_parser.add_argument("--source", dest="source_filter", default="")
+    hybrid_parser.add_argument("--people", dest="people_filter", default="")
+    hybrid_parser.add_argument("--start-date", dest="start_date", default="")
+    hybrid_parser.add_argument("--end-date", dest="end_date", default="")
+    explain_parser = subparsers.add_parser("explain", help="Retrieval explain payload (JSON)")
+    explain_parser.add_argument("query")
+    explain_parser.add_argument("--mode", default="hybrid")
+    explain_parser.add_argument("--limit", type=int, default=10)
+    explain_parser.add_argument("--embedding-model", default="")
+    explain_parser.add_argument("--embedding-version", type=int, default=0)
+    emb_stat_parser = subparsers.add_parser("embedding-status", help="Embedding coverage (JSON)")
+    emb_stat_parser.add_argument("--embedding-model", default="")
+    emb_stat_parser.add_argument("--embedding-version", type=int, default=0)
+    emb_back_parser = subparsers.add_parser("embedding-backlog", help="Pending embedding chunks (JSON)")
+    emb_back_parser.add_argument("--limit", type=int, default=20)
+    emb_back_parser.add_argument("--embedding-model", default="")
+    emb_back_parser.add_argument("--embedding-version", type=int, default=0)
+    subparsers.add_parser(
+        "status",
+        help="Index and runtime status as JSON (same as archive_status_json MCP tool)",
+    )
+
     parser.set_defaults(command="serve")
     args = parser.parse_args()
     # Stderr-only logging for all subcommands; keep stdout for MCP JSON-RPC / CLI JSON. See archive_mcp/log.py.
@@ -197,6 +263,191 @@ def main() -> None:
         result = run_health_checks()
         print(json.dumps(result, indent=2))
         raise SystemExit(0 if result["ok"] else 1)
+    if args.command == "search":
+        try:
+            store = resolve_store()
+            out = search_cmd.search(args.query, limit=args.limit, store=store, logger=_cli_log)
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "read":
+        try:
+            store = resolve_store()
+            out = read_cmd.read(args.path_or_uid, store=store, logger=_cli_log)
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "read-many":
+        try:
+            store = resolve_store()
+            out = read_cmd.read_many(args.paths, store=store, logger=_cli_log)
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "query":
+        try:
+            store = resolve_store()
+            out = query_cmd.query(
+                type_filter=args.type_filter,
+                source_filter=args.source_filter,
+                people_filter=args.people_filter,
+                org_filter=args.org_filter,
+                limit=args.limit,
+                store=store,
+                logger=_cli_log,
+            )
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "graph":
+        try:
+            store = resolve_store()
+            out = graph_cmd.graph(args.note_path, hops=args.hops, store=store, logger=_cli_log)
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "person":
+        try:
+            store = resolve_store()
+            out = graph_cmd.person(args.name, store=store, logger=_cli_log)
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "timeline":
+        try:
+            store = resolve_store()
+            out = graph_cmd.timeline(
+                start_date=args.start_date,
+                end_date=args.end_date,
+                limit=args.limit,
+                store=store,
+                logger=_cli_log,
+            )
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "stats":
+        try:
+            index = resolve_index()
+            out = status_cmd.stats(index=index, logger=_cli_log)
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "validate":
+        try:
+            vault = resolve_store().vault
+            out = status_cmd.validate(vault=vault, logger=_cli_log)
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "duplicates":
+        try:
+            vault = resolve_store().vault
+            out = status_cmd.duplicates(vault=vault, logger=_cli_log)
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "vector-search":
+        try:
+            store = resolve_store()
+            out = search_cmd.vector_search(
+                args.query,
+                store=store,
+                logger=_cli_log,
+                limit=args.limit,
+                embedding_model=args.embedding_model,
+                embedding_version=args.embedding_version,
+                type_filter=args.type_filter,
+                source_filter=args.source_filter,
+                people_filter=args.people_filter,
+                start_date=args.start_date,
+                end_date=args.end_date,
+            )
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "hybrid-search":
+        try:
+            store = resolve_store()
+            out = search_cmd.hybrid_search(
+                args.query,
+                store=store,
+                logger=_cli_log,
+                limit=args.limit,
+                embedding_model=args.embedding_model,
+                embedding_version=args.embedding_version,
+                type_filter=args.type_filter,
+                source_filter=args.source_filter,
+                people_filter=args.people_filter,
+                start_date=args.start_date,
+                end_date=args.end_date,
+            )
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "explain":
+        try:
+            store = resolve_store()
+            out = explain.retrieval_explain(
+                args.query,
+                store=store,
+                logger=_cli_log,
+                mode=args.mode,
+                limit=args.limit,
+                embedding_model=args.embedding_model,
+                embedding_version=args.embedding_version,
+            )
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "embedding-status":
+        try:
+            store = resolve_store()
+            out = status_cmd.embedding_status(
+                store=store,
+                logger=_cli_log,
+                embedding_model=args.embedding_model,
+                embedding_version=args.embedding_version,
+            )
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "embedding-backlog":
+        try:
+            store = resolve_store()
+            out = status_cmd.embedding_backlog(
+                store=store,
+                logger=_cli_log,
+                limit=args.limit,
+                embedding_model=args.embedding_model,
+                embedding_version=args.embedding_version,
+            )
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "status":
+        try:
+            store = resolve_store()
+            out = status_cmd.status_json(store=store, logger=_cli_log)
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
     if args.command in _SEED_LINK_COMMANDS and not get_seed_links_enabled():
         print(_SEED_LINKS_DISABLED_MSG)
         return
@@ -223,9 +474,7 @@ def main() -> None:
                     progress_every=args.progress_every,
                     executor_kind=args.executor_kind,
                     force_full=bool(getattr(args, "force_full_rebuild", False)),
-                    disable_manifest_cache=bool(
-                        getattr(args, "disable_manifest_cache", False)
-                    ),
+                    disable_manifest_cache=bool(getattr(args, "disable_manifest_cache", False)),
                 ),
                 indent=2,
             )
@@ -366,9 +615,7 @@ def main() -> None:
         )
         return
     if args.command == "benchmark-seed-links":
-        selected_modules = [
-            item.strip() for item in args.modules.split(",") if item.strip()
-        ]
+        selected_modules = [item.strip() for item in args.modules.split(",") if item.strip()]
         print(
             json.dumps(
                 benchmark_seed_links(

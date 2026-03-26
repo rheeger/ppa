@@ -9,8 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
-from hfa.provenance import (ProvenanceEntry, read_provenance, strip_provenance,
-                            validate_provenance, write_provenance)
+from hfa.provenance import ProvenanceEntry, read_provenance, strip_provenance, validate_provenance, write_provenance
 from hfa.schema import BaseCard, card_to_frontmatter, validate_card_strict
 from hfa.yaml_parser import parse_frontmatter, render_card
 
@@ -110,7 +109,9 @@ def read_note_file(path: str | Path, *, vault_root: str | Path | None = None) ->
         rel_path = path
     else:
         rel_path = path.relative_to(Path(vault_root))
-    return ParsedNoteRecord(rel_path=rel_path, content=content, frontmatter=frontmatter, body=body, provenance=provenance)
+    return ParsedNoteRecord(
+        rel_path=rel_path, content=content, frontmatter=frontmatter, body=body, provenance=provenance
+    )
 
 
 def iter_parsed_notes(vault: str | Path) -> Iterator[ParsedNoteRecord]:

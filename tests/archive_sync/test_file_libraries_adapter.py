@@ -72,7 +72,9 @@ def test_ingest_creates_document_card_and_resolves_people(tmp_vault: Path, tmp_p
 def test_stage_documents_writes_manifest_without_touching_vault(tmp_vault: Path, tmp_path: Path):
     docs_root = tmp_path / "docs"
     docs_root.mkdir()
-    (docs_root / "endaoment-overview.md").write_text("# Endaoment Overview\n\nCharitable infrastructure", encoding="utf-8")
+    (docs_root / "endaoment-overview.md").write_text(
+        "# Endaoment Overview\n\nCharitable infrastructure", encoding="utf-8"
+    )
     stage_dir = tmp_path / "stage"
 
     adapter = FileLibrariesAdapter()
@@ -142,7 +144,9 @@ def test_quick_update_skips_unchanged_documents(tmp_vault: Path, tmp_path: Path)
 def test_import_from_stage_writes_document_cards(tmp_vault: Path, tmp_path: Path):
     docs_root = tmp_path / "docs"
     docs_root.mkdir()
-    (docs_root / "endaoment-overview.md").write_text("# Endaoment Overview\n\nCharitable infrastructure", encoding="utf-8")
+    (docs_root / "endaoment-overview.md").write_text(
+        "# Endaoment Overview\n\nCharitable infrastructure", encoding="utf-8"
+    )
     stage_dir = tmp_path / "stage"
     adapter = FileLibrariesAdapter()
 

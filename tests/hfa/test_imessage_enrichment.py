@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import pytest
+
 from hfa.imessage_enrichment import IMessageThreadSummaryEnrichment
 from hfa.provenance import ProvenanceEntry
 from hfa.schema import IMessageMessageCard, IMessageThreadCard
@@ -65,22 +66,34 @@ def test_imessage_thread_summary_enrichment_tracks_message_content_hash(tmp_vaul
         messages=["[[hfa-imessage-message-111111111111]]", "[[hfa-imessage-message-222222222222]]"],
     )
 
-    write_card(tmp_vault, "IMessage/2026-03/hfa-imessage-message-111111111111.md", message_one, body="Dinner on Sunday?", provenance={
-        "summary": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
-        "imessage_message_id": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
-        "imessage_chat_id": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
-        "sender_handle": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
-        "participant_handles": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
-        "sent_at": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
-    })
-    write_card(tmp_vault, "IMessage/2026-03/hfa-imessage-message-222222222222.md", message_two, body="Yes, 7pm works.", provenance={
-        "summary": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
-        "imessage_message_id": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
-        "imessage_chat_id": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
-        "sender_handle": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
-        "participant_handles": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
-        "sent_at": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
-    })
+    write_card(
+        tmp_vault,
+        "IMessage/2026-03/hfa-imessage-message-111111111111.md",
+        message_one,
+        body="Dinner on Sunday?",
+        provenance={
+            "summary": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
+            "imessage_message_id": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
+            "imessage_chat_id": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
+            "sender_handle": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
+            "participant_handles": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
+            "sent_at": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
+        },
+    )
+    write_card(
+        tmp_vault,
+        "IMessage/2026-03/hfa-imessage-message-222222222222.md",
+        message_two,
+        body="Yes, 7pm works.",
+        provenance={
+            "summary": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
+            "imessage_message_id": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
+            "imessage_chat_id": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
+            "sender_handle": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
+            "participant_handles": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
+            "sent_at": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
+        },
+    )
 
     provider = StubProvider()
     monkeypatch.setattr("hfa.imessage_enrichment.get_provider_chain", lambda vault_path: [provider])
@@ -102,14 +115,20 @@ def test_imessage_thread_summary_enrichment_tracks_message_content_hash(tmp_vaul
     )
     assert step.should_run(thread, "", existing_provenance, str(tmp_vault)) is False
 
-    write_card(tmp_vault, "IMessage/2026-03/hfa-imessage-message-222222222222.md", message_two, body="Yes, 8pm works instead.", provenance={
-        "summary": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
-        "imessage_message_id": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
-        "imessage_chat_id": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
-        "sender_handle": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
-        "participant_handles": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
-        "sent_at": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
-    })
+    write_card(
+        tmp_vault,
+        "IMessage/2026-03/hfa-imessage-message-222222222222.md",
+        message_two,
+        body="Yes, 8pm works instead.",
+        provenance={
+            "summary": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
+            "imessage_message_id": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
+            "imessage_chat_id": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
+            "sender_handle": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
+            "participant_handles": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
+            "sent_at": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
+        },
+    )
     monkeypatch.setattr("hfa.imessage_enrichment.compute_imessage_thread_body_sha", compute_imessage_thread_body_sha)
     thread.thread_body_sha = compute_imessage_thread_body_sha(thread, tmp_vault)
     assert step.should_run(thread, "", existing_provenance, str(tmp_vault)) is True

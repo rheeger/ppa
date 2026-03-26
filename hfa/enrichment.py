@@ -6,8 +6,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
-from hfa.provenance import (ProvenanceEntry, compute_input_hash,
-                            merge_provenance)
+from hfa.provenance import ProvenanceEntry, compute_input_hash, merge_provenance
 from hfa.schema import BaseCard, validate_card_permissive, validate_card_strict
 from hfa.vault import iter_notes, read_note, write_card
 
@@ -92,7 +91,9 @@ def run_enrichment_pipeline(
                 current_provenance = merge_provenance(current_provenance, {field_name: prov_entry})
             card = validate_card_strict(card_data)
 
-        if not dry_run and card.model_dump(mode="python") != validate_card_permissive(frontmatter).model_dump(mode="python"):
+        if not dry_run and card.model_dump(mode="python") != validate_card_permissive(frontmatter).model_dump(
+            mode="python"
+        ):
             write_card(vault_path, str(rel_path), card, body=current_body, provenance=current_provenance)
 
     return summary

@@ -8,11 +8,11 @@ from pathlib import Path
 
 import pytest
 
+from archive_doctor.handler import cmd_dedup_sweep, cmd_validate
 from archive_sync.adapters.contacts import ContactsAdapter
 from archive_sync.adapters.copilot_finance import CopilotFinanceAdapter
 from archive_sync.adapters.linkedin import LinkedInAdapter
 from archive_sync.adapters.notion_people import NotionPeopleAdapter, NotionStaffAdapter
-from archive_doctor.handler import cmd_dedup_sweep, cmd_validate
 from hfa.vault import read_note
 
 

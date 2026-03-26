@@ -13,16 +13,16 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from hfa.schema import DETERMINISTIC_ONLY, LLM_ELIGIBLE
+
+from .projections.registry import EDGE_RULE_SPECS, PROJECTION_REGISTRY
+
 
 def _ppa_env(canonical: str, default: str = "") -> str:
     """Read a PPA env var. No alias fallback — consumers must use PPA_* names."""
     value = os.environ.get(canonical, "").strip()
     return value if value else default
 
-
-from hfa.schema import DETERMINISTIC_ONLY, LLM_ELIGIBLE
-
-from .projections.registry import EDGE_RULE_SPECS, PROJECTION_REGISTRY
 
 # ---------------------------------------------------------------------------
 # Schema / chunk / manifest version constants

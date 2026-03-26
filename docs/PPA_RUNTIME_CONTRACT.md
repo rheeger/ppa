@@ -8,21 +8,43 @@
 
 ## 1. CLI Entrypoint
 
-The canonical entrypoint is:
+The canonical entrypoints are:
 
 ```
 python -m archive_mcp serve
 ```
 
-This starts the MCP server using stdio transport. When no subcommand is given, `serve` is the default.
+and, after `pip install -e .`, the console script:
+
+```
+ppa serve
+```
+
+Both invoke `archive_mcp.__main__:main`. This starts the MCP server using stdio transport when `serve` is used. When no subcommand is given, `serve` is the default.
 
 ### CLI subcommands (frozen)
 
 | Subcommand                 | Purpose                                             | Safety on production |
 | -------------------------- | --------------------------------------------------- | -------------------- |
 | `serve`                    | Start MCP server (stdio)                            | Safe                 |
+| `search <query>`           | Full-text search (JSON on stdout)                   | Safe                 |
+| `read <path_or_uid>`       | Read one note (JSON)                                | Safe                 |
+| `read-many <uid> …`        | Read multiple notes (JSON)                           | Safe                 |
+| `query`                    | Structured query with `--type` / `--source` / etc. (JSON) | Safe            |
+| `graph <note_path>`        | Wikilink graph from a note (JSON)                   | Safe                 |
+| `person <name>`            | Person profile by slug (JSON)                       | Safe                 |
+| `timeline`                 | Notes in date range (JSON)                          | Safe                 |
+| `stats`                    | Vault/index stats (JSON)                            | Safe                 |
+| `validate`                 | Validate all vault cards (JSON)                     | Safe                 |
+| `duplicates`               | Dedup candidates from `_meta` (JSON)                | Safe                 |
+| `vector-search <query>`    | Semantic search (JSON)                              | Safe                 |
+| `hybrid-search <query>`    | Hybrid lexical + vector (JSON)                      | Safe                 |
+| `explain <query>`        | Retrieval explain payload (JSON)                    | Safe                 |
+| `embedding-status`         | Embedding coverage (JSON)                           | Safe                 |
+| `embedding-backlog`        | Pending embedding chunks (JSON)                     | Safe                 |
+| `status`                   | Index + runtime status JSON (same as MCP `archive_status_json`) | Safe      |
 | `rebuild-indexes`          | Truncate and rebuild all index tables from vault    | **DESTRUCTIVE**      |
-| `index-status`             | Report index health (triggers vault scan on import) | Slow, may OOM        |
+| `index-status`             | Report index health (human-readable text, MCP parity) | Slow, may OOM    |
 | `bootstrap-postgres`       | Create extensions and base schema layout            | Safe on fresh DB     |
 | `embed-pending`            | Process embedding backlog                           | Safe                 |
 | `migrate`                  | Apply pending SQL schema migrations                 | Safe                 |
@@ -36,6 +58,8 @@ This starts the MCP server using stdio transport. When no subcommand is given, `
 | `benchmark-rebuild`        | Benchmark rebuild performance                       | Safe                 |
 
 Seed-link subcommands (`seed-link-*`, `link-*`, `review-link-candidate`, `benchmark-seed-links`) are gated by `PPA_SEED_LINKS_ENABLED` and exit with a message when disabled.
+
+MCP tools whose names end in `_json` (for example `archive_search_json`, `archive_hybrid_search_json`, `archive_retrieval_explain_json`) are unchanged on the wire; they share the same underlying command functions as their non-JSON siblings, with formatting handled in `server.py`.
 
 ---
 
@@ -252,7 +276,9 @@ TLS terminates at the gate. The gate authenticates, enforces tool policy, issues
 | `migrate.py`        | —     | `MigrationRunner`: applies numbered SQL migrations           |
 | `config.py`         | —     | Config loading with `PPA_*` / `ARCHIVE_*` dual-lookup        |
 | `contracts.py`      | —     | Shared dataclasses and protocols                             |
-| `server.py`         | —     | MCP tool definitions and tool-profile gating                 |
+| `errors.py`         | —     | `PpaError` hierarchy for commands vs. string errors          |
+| `commands/`         | —     | Shared command layer: search, read, query, graph, status, admin, explain, seed_links; used by MCP and CLI |
+| `server.py`         | —     | MCP tool wrappers, tool-profile gating, string formatting    |
 | `store.py`          | —     | `ArchiveStore` service boundary                              |
 
 ### Import paths (frozen during transition)

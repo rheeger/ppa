@@ -10,15 +10,14 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from .base import BaseAdapter, FetchedBatch, deterministic_provenance
-from ppa_google_auth import (CALENDAR_READONLY_SCOPES,
-                             account_name_from_email,
-                             build_google_cli_token_manager)
 from hfa.identity import IdentityCache
 from hfa.schema import CalendarEventCard
 from hfa.thread_hash import compute_calendar_event_body_sha_from_payload
 from hfa.uid import generate_uid
 from hfa.vault import iter_notes, read_note
+from ppa_google_auth import CALENDAR_READONLY_SCOPES, account_name_from_email, build_google_cli_token_manager
+
+from .base import BaseAdapter, FetchedBatch, deterministic_provenance
 
 EVENT_SOURCE = "calendar.event"
 
@@ -356,7 +355,10 @@ class CalendarEventsAdapter(BaseAdapter):
                 continue
             if normalized_account and str(frontmatter.get("account_email", "")).strip().lower() != normalized_account:
                 continue
-            if normalized_calendar_id and str(frontmatter.get("calendar_id", "")).strip().lower() != normalized_calendar_id:
+            if (
+                normalized_calendar_id
+                and str(frontmatter.get("calendar_id", "")).strip().lower() != normalized_calendar_id
+            ):
                 continue
             event_id = str(frontmatter.get("event_id", "")).strip()
             if not event_id:
@@ -413,7 +415,9 @@ class CalendarEventsAdapter(BaseAdapter):
             account_email=account_email,
         )
         transcript_by_ical_uid, transcript_by_event_id = self._meeting_transcript_lookup(vault_path)
-        quick_update_enabled = bool(quick_update and bool(getattr(config, "calendar_event_body_sha_cache_enabled", True)))
+        quick_update_enabled = bool(
+            quick_update and bool(getattr(config, "calendar_event_body_sha_cache_enabled", True))
+        )
         existing_event_state = (
             self._load_existing_event_state(
                 vault_path,
@@ -514,7 +518,9 @@ class CalendarEventsAdapter(BaseAdapter):
                         "organizer_email": organizer_email,
                         "organizer_name": organizer_name,
                         "attendee_emails": attendee_emails,
-                        "recurrence": [str(item).strip() for item in event.get("recurrence", []) or [] if str(item).strip()],
+                        "recurrence": [
+                            str(item).strip() for item in event.get("recurrence", []) or [] if str(item).strip()
+                        ],
                         "conference_url": conference_url,
                         "source_messages": deduped_messages,
                         "source_threads": deduped_threads,
@@ -539,7 +545,9 @@ class CalendarEventsAdapter(BaseAdapter):
                         "organizer_email": organizer_email,
                         "organizer_name": organizer_name,
                         "attendee_emails": attendee_emails,
-                        "recurrence": [str(item).strip() for item in event.get("recurrence", []) or [] if str(item).strip()],
+                        "recurrence": [
+                            str(item).strip() for item in event.get("recurrence", []) or [] if str(item).strip()
+                        ],
                         "conference_url": conference_url,
                         "source_messages": deduped_messages,
                         "source_threads": deduped_threads,

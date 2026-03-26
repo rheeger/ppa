@@ -54,7 +54,10 @@ def main() -> int:
 
     output_root = Path(args.output_root).expanduser().resolve()
     output_root.mkdir(parents=True, exist_ok=True)
-    windows = deque((label, time_min, time_max) for label, time_min, time_max in _build_windows(args.start_year, args.end_year, args.years_per_window))
+    windows = deque(
+        (label, time_min, time_max)
+        for label, time_min, time_max in _build_windows(args.start_year, args.end_year, args.years_per_window)
+    )
     inflight: dict[str, subprocess.Popen[str]] = {}
 
     while windows or inflight:
@@ -93,7 +96,10 @@ def main() -> int:
             )
             inflight[label] = proc
             print(
-                json.dumps({"status": "started", "label": label, "time_min": time_min, "time_max": time_max, "pid": proc.pid}, indent=2),
+                json.dumps(
+                    {"status": "started", "label": label, "time_min": time_min, "time_max": time_max, "pid": proc.pid},
+                    indent=2,
+                ),
                 flush=True,
             )
 

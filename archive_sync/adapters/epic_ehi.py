@@ -168,11 +168,7 @@ _VACCINE_STOP = frozenset(
 
 
 def _significant_tokens(text: str) -> set[str]:
-    return {
-        t
-        for t in _normalize_name_key(text).split()
-        if len(t) >= 3 and t not in _VACCINE_STOP
-    }
+    return {t for t in _normalize_name_key(text).split() if len(t) >= 3 and t not in _VACCINE_STOP}
 
 
 def _vaccine_same_event(date_a: str, label_a: str, date_b: str, label_b: str) -> bool:
@@ -325,9 +321,7 @@ def collect_epic_ehi_items(
     )
 
     imm_admin_rows = [
-        r
-        for r in _read_tsv_rows(base / "IMM_ADMIN.tsv")
-        if _clean(r.get("DOCUMENT_ID")) in docs_for_patient
+        r for r in _read_tsv_rows(base / "IMM_ADMIN.tsv") if _clean(r.get("DOCUMENT_ID")) in docs_for_patient
     ]
 
     imm_admin_vaccinations: list[dict[str, Any]] = []
@@ -336,7 +330,9 @@ def collect_epic_ehi_items(
         line = _clean(row.get("LINE"))
         cdr = _clean(row.get("CONTACT_DATE_REAL"))
         occurred = _parse_date_like(_first_nonempty(row.get("IMM_DATE"), row.get("CONTACT_DATE")))
-        vname = _first_nonempty(row.get("IMM_TYPE_ID_NAME"), row.get("IMM_TYPE_FREE_TEXT"), row.get("IMM_PRODUCT_C_NAME"))
+        vname = _first_nonempty(
+            row.get("IMM_TYPE_ID_NAME"), row.get("IMM_TYPE_FREE_TEXT"), row.get("IMM_PRODUCT_C_NAME")
+        )
         details_json = {
             "epic_pathway": "epic_ehi_immunizations",
             "epic_patient_id": patient_id,
@@ -402,8 +398,10 @@ def collect_epic_ehi_items(
         medinfo = medinfo_by_order.get(order_med_id, {})
         rate_bits = _first_nonempty(
             medinfo.get("CALC_DOSE_INFO"),
-            medinfo.get("MIN_RATE") and f"rate {medinfo.get('MIN_RATE')}-{medinfo.get('MAX_RATE')} {medinfo.get('RATE_UNIT_C_NAME', '')}".strip(),
-            medinfo.get("MIN_VOLUME") and f"vol {medinfo.get('MIN_VOLUME')}-{medinfo.get('MAX_VOLUME')} {medinfo.get('VOLUME_UNIT_C_NAME', '')}".strip(),
+            medinfo.get("MIN_RATE")
+            and f"rate {medinfo.get('MIN_RATE')}-{medinfo.get('MAX_RATE')} {medinfo.get('RATE_UNIT_C_NAME', '')}".strip(),
+            medinfo.get("MIN_VOLUME")
+            and f"vol {medinfo.get('MIN_VOLUME')}-{medinfo.get('MAX_VOLUME')} {medinfo.get('VOLUME_UNIT_C_NAME', '')}".strip(),
         )
         details_json = {
             "epic_pathway": "epic_ehi_medications",
@@ -499,7 +497,9 @@ def collect_epic_ehi_items(
 
     _log_step(4, "Epic EHI: PAT_IMMUNIZATIONS + IMMUNE", "")
     pat_imm_rows = [r for r in _read_tsv_rows(base / "PAT_IMMUNIZATIONS.tsv") if _clean(r.get("PAT_ID")) == patient_id]
-    immune_by_id = {_clean(r.get("IMMUNE_ID")): r for r in _read_tsv_rows(base / "IMMUNE.tsv") if _clean(r.get("IMMUNE_ID"))}
+    immune_by_id = {
+        _clean(r.get("IMMUNE_ID")): r for r in _read_tsv_rows(base / "IMMUNE.tsv") if _clean(r.get("IMMUNE_ID"))
+    }
     imm_hx_by_immune: dict[str, list[dict[str, str]]] = defaultdict(list)
     for r in _read_tsv_rows(base / "IMMUNE_HISTORY.tsv"):
         iid = _clean(r.get("IMMUNE_ID"))
@@ -563,7 +563,9 @@ def collect_epic_ehi_items(
     _log_step(5, "Epic EHI: problems / conditions", "")
     problem_rows = [r for r in _read_tsv_rows(base / "PAT_PROBLEM_LIST.tsv") if _clean(r.get("PAT_ID")) == patient_id]
     problem_meta = {
-        _clean(r.get("PROBLEM_LIST_ID")): r for r in _read_tsv_rows(base / "PROBLEM_LIST.tsv") if _clean(r.get("PROBLEM_LIST_ID"))
+        _clean(r.get("PROBLEM_LIST_ID")): r
+        for r in _read_tsv_rows(base / "PROBLEM_LIST.tsv")
+        if _clean(r.get("PROBLEM_LIST_ID"))
     }
     dx_link_rows = [r for r in _read_tsv_rows(base / "PAT_ENC_DX.tsv") if _clean(r.get("PAT_ENC_CSN_ID")) in enc_csns]
     dx_by_problem: dict[str, list[dict[str, str]]] = defaultdict(list)
@@ -586,7 +588,9 @@ def collect_epic_ehi_items(
         plid = _clean(row.get("PROBLEM_LIST_ID"))
         meta = problem_meta.get(plid, {})
         dx_rows_p = dx_by_problem.get(plid, [])
-        primary = next((d for d in dx_rows_p if _clean(d.get("PRIMARY_DX_YN")).upper() == "Y"), dx_rows_p[0] if dx_rows_p else {})
+        primary = next(
+            (d for d in dx_rows_p if _clean(d.get("PRIMARY_DX_YN")).upper() == "Y"), dx_rows_p[0] if dx_rows_p else {}
+        )
         dx_id = _clean(primary.get("DX_ID"))
         ed = edg.get(dx_id, {})
         label = _first_nonempty(ed.get("PAT_FRIENDLY_TEXT"), ed.get("DX_NAME"), f"Epic problem {plid}")
@@ -738,7 +742,9 @@ def collect_epic_ehi_items(
                     "code_system": "epic_adt_event",
                     "code": eid,
                     "code_display": etype,
-                    "value_text": _first_nonempty(row.get("COMMENTS"), row.get("REASON_C_NAME"), row.get("BED_ID_BED_LABEL")),
+                    "value_text": _first_nonempty(
+                        row.get("COMMENTS"), row.get("REASON_C_NAME"), row.get("BED_ID_BED_LABEL")
+                    ),
                     "value_numeric": 0.0,
                     "unit": "",
                     "raw_source_ref": f"epic:adt:{eid}",

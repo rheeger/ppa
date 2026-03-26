@@ -10,8 +10,7 @@ import pytest
 
 from archive_doctor.handler import cmd_dedup_sweep, cmd_purge_source, cmd_stats, cmd_validate
 from hfa.provenance import ProvenanceEntry
-from hfa.schema import (EmailMessageCard, EmailThreadCard, FinanceCard,
-                        PersonCard)
+from hfa.schema import EmailMessageCard, EmailThreadCard, FinanceCard, PersonCard
 from hfa.sync_state import save_sync_state
 from hfa.vault import read_note, write_card
 
@@ -206,7 +205,9 @@ def test_stats_prints_counts(tmp_vault, capsys):
         category="Travel",
     )
     write_card(tmp_vault, "People/jane-smith.md", person, provenance=person_provenance("contacts.apple"))
-    write_card(tmp_vault, "Finance/2026-03/hfa-finance-111122223333.md", finance, provenance=finance_provenance("copilot"))
+    write_card(
+        tmp_vault, "Finance/2026-03/hfa-finance-111122223333.md", finance, provenance=finance_provenance("copilot")
+    )
 
     cmd_stats(Namespace(vault=str(tmp_vault)))
     output = capsys.readouterr().out
@@ -239,7 +240,10 @@ def test_stats_counts_orphaned_thread_and_message_links(tmp_vault, capsys):
         tmp_vault,
         "Email/2026-03/hfa-email-message-111122223333.md",
         message,
-        provenance={**email_message_provenance("gmail.message"), "attachments": ProvenanceEntry("gmail.message", "2026-03-08", "deterministic")},
+        provenance={
+            **email_message_provenance("gmail.message"),
+            "attachments": ProvenanceEntry("gmail.message", "2026-03-08", "deterministic"),
+        },
     )
 
     cmd_stats(Namespace(vault=str(tmp_vault)))
@@ -292,7 +296,10 @@ def test_stats_prints_hash_coverage_and_quick_update_counters(tmp_vault, capsys)
         tmp_vault,
         "Email/2026-03/hfa-email-message-aaaabbbbcccc.md",
         message,
-        provenance={**email_message_provenance("gmail.message"), "message_body_sha": ProvenanceEntry("gmail.message", "2026-03-08", "deterministic")},
+        provenance={
+            **email_message_provenance("gmail.message"),
+            "message_body_sha": ProvenanceEntry("gmail.message", "2026-03-08", "deterministic"),
+        },
     )
     save_sync_state(
         tmp_vault,

@@ -50,6 +50,7 @@ class EdgeRuleSpec:
 @dataclass(frozen=True)
 class DeclEdgeRule:
     """Declarative edge rule: extract values from source fields and emit edges."""
+
     field_name: str
     edge_type: str
     target: Literal["card", "person"]
@@ -65,6 +66,7 @@ class CardTypeRegistration:
     and person-edge labelling into a single registration so adding a card
     type is a two-file change (schema model + registration).
     """
+
     card_type: str
     projection_table: str
     projection_columns: tuple[ProjectionColumnSpec, ...]
@@ -137,7 +139,9 @@ class ArchiveStore(Protocol):
 
     def embedding_status(self, *, embedding_model: str = "", embedding_version: int = 0) -> JsonDict: ...
 
-    def embedding_backlog(self, *, limit: int = 20, embedding_model: str = "", embedding_version: int = 0) -> JsonDict: ...
+    def embedding_backlog(
+        self, *, limit: int = 20, embedding_model: str = "", embedding_version: int = 0
+    ) -> JsonDict: ...
 
     def embed_pending(self, *, limit: int = 0, embedding_model: str = "", embedding_version: int = 0) -> JsonDict: ...
 

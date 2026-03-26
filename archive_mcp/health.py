@@ -25,9 +25,7 @@ from .migrate import MigrationRunner
 
 
 def _default_vault_path() -> Path:
-    return Path(
-        _ppa_env("PPA_PATH", default=str(Path.home() / "Archive" / "vault"))
-    ).expanduser()
+    return Path(_ppa_env("PPA_PATH", default=str(Path.home() / "Archive" / "vault"))).expanduser()
 
 
 def _check_vault(vault_path: Path) -> dict[str, Any]:

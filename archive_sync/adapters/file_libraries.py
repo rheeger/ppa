@@ -15,8 +15,7 @@ import threading
 import zipfile
 from collections import Counter
 from collections.abc import Iterable
-from concurrent.futures import (ProcessPoolExecutor, ThreadPoolExecutor,
-                                as_completed)
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import date, datetime, timezone
 from email import policy
 from email.parser import BytesParser
@@ -26,11 +25,12 @@ from time import perf_counter
 from typing import Any
 from xml.etree import ElementTree
 
-from .base import BaseAdapter, FetchedBatch, deterministic_provenance
 from hfa.identity import IdentityCache
 from hfa.schema import DocumentCard
 from hfa.uid import generate_uid
 from hfa.vault import read_note
+
+from .base import BaseAdapter, FetchedBatch, deterministic_provenance
 
 try:
     from pypdf import PdfReader
@@ -370,10 +370,14 @@ def _detect_date(text: str) -> str:
         return f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
     if match := MONTH_NAME_DATE_RE.search(text):
         try:
-            return datetime.strptime(
-                f"{match.group(1)} {match.group(2)} {match.group(3)}",
-                "%B %d %Y",
-            ).date().isoformat()
+            return (
+                datetime.strptime(
+                    f"{match.group(1)} {match.group(2)} {match.group(3)}",
+                    "%B %d %Y",
+                )
+                .date()
+                .isoformat()
+            )
         except ValueError:
             pass
     if match := YEAR_MONTH_RE.search(text):
@@ -516,7 +520,9 @@ def _init_stage_worker(vault_path: str) -> None:  # pragma: no cover - process p
     _STAGE_WORKER_IDENTITY_CACHE = IdentityCache(vault_path)
 
 
-def _stage_analyze_candidate(candidate: tuple[str, str, str]) -> tuple[str, dict[str, Any] | None, str | None, str, str]:
+def _stage_analyze_candidate(
+    candidate: tuple[str, str, str],
+) -> tuple[str, dict[str, Any] | None, str | None, str, str]:
     global _STAGE_WORKER_IDENTITY_CACHE
     if _STAGE_WORKER_IDENTITY_CACHE is None:  # pragma: no cover - defensive
         raise RuntimeError("Stage worker identity cache was not initialized")
@@ -872,7 +878,9 @@ def _extract_xlsx(path: Path) -> dict[str, Any]:
         namespace = {"a": workbook.tag.partition("}")[0].strip("{")}
         sheet_names = [sheet.attrib.get("name", "") for sheet in workbook.findall(".//a:sheet", namespace)]
         text_rows: list[str] = []
-        for name in sorted(item for item in archive.namelist() if item.startswith("xl/worksheets/sheet") and item.endswith(".xml")):
+        for name in sorted(
+            item for item in archive.namelist() if item.startswith("xl/worksheets/sheet") and item.endswith(".xml")
+        ):
             root = ElementTree.fromstring(archive.read(name))
             ns = {"a": root.tag.partition("}")[0].strip("{")}
             for row in root.findall(".//a:row", ns):
@@ -919,7 +927,9 @@ def _extract_pptx(path: Path) -> dict[str, Any]:
         for slide_name in slide_names:
             root = ElementTree.fromstring(archive.read(slide_name))
             ns = {"a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
-            slide_text = " ".join(_clean(node.text or "") for node in root.findall(".//a:t", ns) if _clean(node.text or ""))
+            slide_text = " ".join(
+                _clean(node.text or "") for node in root.findall(".//a:t", ns) if _clean(node.text or "")
+            )
             if slide_text:
                 text_parts.append(slide_text)
             if len("\n".join(text_parts)) >= MAX_EXTRACT_CHARS:
@@ -1144,8 +1154,14 @@ class FileLibrariesAdapter(BaseAdapter):
         text = _trim_text(str(payload.get("text", "")))
         document_type = _clean(payload.get("document_type", "")) or extension
         authors = _clean_list(payload.get("authors", []))
-        extracted_names = _extract_name_candidates(text) if document_type in {"pdf", "doc", "docx", "email_export", "contact_card"} else []
-        counterparties = _clean_list(payload.get("counterparties", []) + _counterparties_from_filename(path) + extracted_names)
+        extracted_names = (
+            _extract_name_candidates(text)
+            if document_type in {"pdf", "doc", "docx", "email_export", "contact_card"}
+            else []
+        )
+        counterparties = _clean_list(
+            payload.get("counterparties", []) + _counterparties_from_filename(path) + extracted_names
+        )
         email_candidates = _clean_list(
             list(payload.get("emails", [])) + EMAIL_RE.findall(text[:12000]) + EMAIL_RE.findall(relative_path)
         )
@@ -1175,7 +1191,10 @@ class FileLibrariesAdapter(BaseAdapter):
         if not extraction_status:
             if text:
                 extraction_status = "content_extracted"
-            elif any(payload.get(key) for key in ("emails", "phones", "websites", "location", "date_start", "date_end", "sheet_names")):
+            elif any(
+                payload.get(key)
+                for key in ("emails", "phones", "websites", "location", "date_start", "date_end", "sheet_names")
+            ):
                 extraction_status = "structured_only"
             else:
                 extraction_status = "metadata_only"
@@ -1272,16 +1291,22 @@ class FileLibrariesAdapter(BaseAdapter):
                         continue
                     if dirname.startswith(".") or dirname in SKIP_DIR_NAMES or suffix in SKIP_DIR_SUFFIXES:
                         skip_counts["skipped_directory"] += 1
-                        stats["skip_details"]["skipped_directory"] = stats["skip_details"].get("skipped_directory", 0) + 1
+                        stats["skip_details"]["skipped_directory"] = (
+                            stats["skip_details"].get("skipped_directory", 0) + 1
+                        )
                         continue
                     kept_dirnames.append(dirname)
                 dirnames[:] = kept_dirnames
-                candidate_paths = [current_dir / name for name in filenames] + [current_dir / name for name in package_dirs]
+                candidate_paths = [current_dir / name for name in filenames] + [
+                    current_dir / name for name in package_dirs
+                ]
                 for path in candidate_paths:
                     suffix = path.suffix.lower()
                     if suffix not in INCLUDED_EXTENSIONS:
                         skip_counts["unsupported_extension"] += 1
-                        stats["skip_details"]["unsupported_extension"] = stats["skip_details"].get("unsupported_extension", 0) + 1
+                        stats["skip_details"]["unsupported_extension"] = (
+                            stats["skip_details"].get("unsupported_extension", 0) + 1
+                        )
                         continue
                     if path.name.startswith("~$"):
                         skip_counts["temp_lock_file"] += 1
@@ -1299,7 +1324,9 @@ class FileLibrariesAdapter(BaseAdapter):
                         continue
                     if size_bytes > MAX_FILE_BYTES:
                         skip_counts["skipped_too_large"] += 1
-                        stats["skip_details"]["skipped_too_large"] = stats["skip_details"].get("skipped_too_large", 0) + 1
+                        stats["skip_details"]["skipped_too_large"] = (
+                            stats["skip_details"].get("skipped_too_large", 0) + 1
+                        )
                         continue
                     candidates.append((root_label, root_path, path))
                     stats["candidates"] += 1
@@ -1340,7 +1367,9 @@ class FileLibrariesAdapter(BaseAdapter):
             verbose=verbose,
         )
         existing_hashes = self._load_existing_hashes(vault_path) if quick_update else {}
-        max_workers = max(1, int(workers or os.environ.get("HFA_FILE_LIBRARY_STAGE_WORKERS") or min(8, os.cpu_count() or 1)))
+        max_workers = max(
+            1, int(workers or os.environ.get("HFA_FILE_LIBRARY_STAGE_WORKERS") or min(8, os.cpu_count() or 1))
+        )
         started_at = perf_counter()
         processed = 0
         emitted = 0
@@ -1497,7 +1526,9 @@ class FileLibrariesAdapter(BaseAdapter):
     ) -> Iterable[FetchedBatch]:
         if kwargs.get("stage_dir"):
             requested_batch_size = kwargs.get("batch_size")
-            batch_size = max(1, int(requested_batch_size or os.environ.get("HFA_FILE_LIBRARY_BATCH_SIZE") or DEFAULT_BATCH_SIZE))
+            batch_size = max(
+                1, int(requested_batch_size or os.environ.get("HFA_FILE_LIBRARY_BATCH_SIZE") or DEFAULT_BATCH_SIZE)
+            )
             yield from self._iter_staged_batches(
                 kwargs["stage_dir"],
                 batch_size=batch_size,
@@ -1507,7 +1538,9 @@ class FileLibrariesAdapter(BaseAdapter):
         selected_roots = self._selected_roots(kwargs.get("roots"))
         quick_update = bool(kwargs.get("quick_update", True))
         max_files = kwargs.get("max_files")
-        batch_size = max(1, int(kwargs.get("batch_size") or os.environ.get("HFA_FILE_LIBRARY_BATCH_SIZE") or DEFAULT_BATCH_SIZE))
+        batch_size = max(
+            1, int(kwargs.get("batch_size") or os.environ.get("HFA_FILE_LIBRARY_BATCH_SIZE") or DEFAULT_BATCH_SIZE)
+        )
         existing_hashes = self._load_existing_hashes(vault_path) if quick_update else {}
         identity_cache = IdentityCache(vault_path)
         batch_items: list[dict[str, Any]] = []

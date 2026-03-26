@@ -5,10 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
-from archive_mcp.index_store import (NoteManifestRow,  # noqa: E402
-                                     _classify_manifest_rebuild_delta,
-                                     _vault_paths_and_fingerprint)
+from archive_mcp.index_store import (
+    NoteManifestRow,  # noqa: E402
+    _classify_manifest_rebuild_delta,
+    _vault_paths_and_fingerprint,
+)
 
 
 def _row(rel_path: str, uid: str, card_type: str = "document") -> MagicMock:

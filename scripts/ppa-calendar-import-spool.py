@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from collections import Counter
 from pathlib import Path
 
@@ -135,7 +134,9 @@ def main() -> int:
     while next_index < len(event_files):
         if args.max_events and processed_events >= args.max_events:
             checkpoint()
-            print(json.dumps({"status": "paused", "reason": "max_events", "next_index": next_index}, indent=2), flush=True)
+            print(
+                json.dumps({"status": "paused", "reason": "max_events", "next_index": next_index}, indent=2), flush=True
+            )
             return 0
 
         event = json.loads(event_files[next_index].read_text(encoding="utf-8"))

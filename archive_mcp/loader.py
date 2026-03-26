@@ -12,17 +12,14 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from functools import partial
 from itertools import islice
-from pathlib import Path
 from typing import Any
 
 from .index_config import (
     CHUNK_SCHEMA_VERSION,
-    DEFAULT_POSTGRES_SCHEMA,
     INDEX_SCHEMA_VERSION,
     MANIFEST_SCHEMA_VERSION,
     PROJECTIONS_BY_LOAD_ORDER,
     get_force_full_rebuild,
-    get_index_dsn,
     get_rebuild_batch_size,
     get_rebuild_commit_interval,
     get_rebuild_executor,
@@ -30,7 +27,6 @@ from .index_config import (
     get_rebuild_staging_mode,
     get_rebuild_workers,
     get_seed_frozen_enabled,
-    get_vector_dimension,
     manifest_cache_disabled,
 )
 from .materializer import _build_person_lookup, _materialize_row_batch
@@ -51,13 +47,10 @@ from .scanner import (
 logger = logging.getLogger("ppa.loader")
 
 PROJECTION_COLUMNS_BY_TABLE = {
-    projection.table_name: tuple(column.name for column in projection.columns)
-    for projection in PROJECTION_REGISTRY
+    projection.table_name: tuple(column.name for column in projection.columns) for projection in PROJECTION_REGISTRY
 }
 PROJECTION_NAMES = tuple(projection.table_name for projection in PROJECTION_REGISTRY)
-TYPED_PROJECTION_TABLES = tuple(
-    projection.table_name for projection in TYPED_PROJECTIONS
-)
+TYPED_PROJECTION_TABLES = tuple(projection.table_name for projection in TYPED_PROJECTIONS)
 
 
 @dataclass(slots=True)
@@ -89,38 +82,28 @@ def get_rebuild_flush_caps(commit_interval: int) -> _RebuildFlushCaps:
         try:
             max_total_rows = max(1, int(raw_total))
         except ValueError:
-            max_total_rows = max(
-                commit_interval * DEFAULT_REBUILD_FLUSH_ROW_MULT, 50_000
-            )
+            max_total_rows = max(commit_interval * DEFAULT_REBUILD_FLUSH_ROW_MULT, 50_000)
     else:
-        mult_raw = _ppa_env(
-            "PPA_REBUILD_FLUSH_ROW_MULT", default=str(DEFAULT_REBUILD_FLUSH_ROW_MULT)
-        )
+        mult_raw = _ppa_env("PPA_REBUILD_FLUSH_ROW_MULT", default=str(DEFAULT_REBUILD_FLUSH_ROW_MULT))
         try:
             mult = max(1, int(mult_raw))
         except ValueError:
             mult = DEFAULT_REBUILD_FLUSH_ROW_MULT
         max_total_rows = max(commit_interval * mult, 50_000)
 
-    raw_edges = _ppa_env(
-        "PPA_REBUILD_FLUSH_MAX_EDGES", default=str(DEFAULT_REBUILD_FLUSH_MAX_EDGES)
-    )
+    raw_edges = _ppa_env("PPA_REBUILD_FLUSH_MAX_EDGES", default=str(DEFAULT_REBUILD_FLUSH_MAX_EDGES))
     try:
         max_edges = max(1, int(raw_edges))
     except ValueError:
         max_edges = DEFAULT_REBUILD_FLUSH_MAX_EDGES
 
-    raw_chunks = _ppa_env(
-        "PPA_REBUILD_FLUSH_MAX_CHUNKS", default=str(DEFAULT_REBUILD_FLUSH_MAX_CHUNKS)
-    )
+    raw_chunks = _ppa_env("PPA_REBUILD_FLUSH_MAX_CHUNKS", default=str(DEFAULT_REBUILD_FLUSH_MAX_CHUNKS))
     try:
         max_chunks = max(1, int(raw_chunks))
     except ValueError:
         max_chunks = DEFAULT_REBUILD_FLUSH_MAX_CHUNKS
 
-    raw_bytes = _ppa_env(
-        "PPA_REBUILD_FLUSH_MAX_BYTES", default=str(DEFAULT_REBUILD_FLUSH_MAX_BYTES)
-    )
+    raw_bytes = _ppa_env("PPA_REBUILD_FLUSH_MAX_BYTES", default=str(DEFAULT_REBUILD_FLUSH_MAX_BYTES))
     try:
         max_bytes = max(1, int(raw_bytes))
     except ValueError:
@@ -187,10 +170,7 @@ class _RebuildProgressReporter:
     def _should_log(self, count: int) -> bool:
         if count <= 0:
             return False
-        if (
-            self.progress_every
-            and count - self.last_logged_count >= self.progress_every
-        ):
+        if self.progress_every and count - self.last_logged_count >= self.progress_every:
             return True
         return (time.time() - self.last_log_at) >= self.min_interval_seconds
 
@@ -236,9 +216,7 @@ class _RebuildProgressReporter:
         )
 
 
-def _log_rebuild_step(
-    step_number: int, total_steps: int, title: str, detail: str = ""
-) -> None:
+def _log_rebuild_step(step_number: int, total_steps: int, title: str, detail: str = "") -> None:
     suffix = f" {detail}" if detail else ""
     logger.info("step %d/%d %s%s", step_number, total_steps, title, suffix)
 
@@ -334,9 +312,7 @@ class LoaderMixin:
         columns = ", ".join(PROJECTION_COLUMNS_BY_TABLE[table_name])
         target = f"{table_name}{dest_suffix}" if dest_suffix else table_name
         with conn.cursor() as cur:
-            with cur.copy(
-                f"COPY {self.schema}.{target} ({columns}) FROM STDIN"
-            ) as copy:
+            with cur.copy(f"COPY {self.schema}.{target} ({columns}) FROM STDIN") as copy:
                 for row in rows:
                     copy.write_row(tuple(_sanitize_copy_value(value) for value in row))
 
@@ -347,10 +323,7 @@ class LoaderMixin:
         *,
         dest_suffix: str = "",
     ) -> dict[str, int]:
-        counts = {
-            table_name: len(buffer.rows_for(table_name))
-            for table_name in PROJECTION_NAMES
-        }
+        counts = {table_name: len(buffer.rows_for(table_name)) for table_name in PROJECTION_NAMES}
         for projection in PROJECTION_REGISTRY:
             self._copy_rows(
                 conn,
@@ -445,9 +418,7 @@ class LoaderMixin:
             """,
             (uid_list,),
         )
-        conn.execute(
-            f"DELETE FROM {self.schema}.chunks WHERE card_uid = ANY(%s)", (uid_list,)
-        )
+        conn.execute(f"DELETE FROM {self.schema}.chunks WHERE card_uid = ANY(%s)", (uid_list,))
         conn.execute(
             f"DELETE FROM {self.schema}.edges WHERE source_uid = ANY(%s) OR target_uid = ANY(%s)",
             (uid_list, uid_list),
@@ -461,9 +432,7 @@ class LoaderMixin:
             f"DELETE FROM {self.schema}.external_ids WHERE card_uid = ANY(%s)",
             (uid_list,),
         )
-        conn.execute(
-            f"DELETE FROM {self.schema}.card_orgs WHERE card_uid = ANY(%s)", (uid_list,)
-        )
+        conn.execute(f"DELETE FROM {self.schema}.card_orgs WHERE card_uid = ANY(%s)", (uid_list,))
         conn.execute(
             f"DELETE FROM {self.schema}.card_people WHERE card_uid = ANY(%s)",
             (uid_list,),
@@ -472,9 +441,7 @@ class LoaderMixin:
             f"DELETE FROM {self.schema}.card_sources WHERE card_uid = ANY(%s)",
             (uid_list,),
         )
-        conn.execute(
-            f"DELETE FROM {self.schema}.cards WHERE uid = ANY(%s)", (uid_list,)
-        )
+        conn.execute(f"DELETE FROM {self.schema}.cards WHERE uid = ANY(%s)", (uid_list,))
 
     def _ensure_unlogged_stage_tables(self, conn) -> None:
         for projection in PROJECTIONS_BY_LOAD_ORDER:
@@ -494,9 +461,7 @@ class LoaderMixin:
             table = projection.table_name
             stage = f"{table}_stage"
             conn.execute(f"TRUNCATE TABLE {self.schema}.{table}")
-            conn.execute(
-                f"INSERT INTO {self.schema}.{table} SELECT * FROM {self.schema}.{stage}"
-            )
+            conn.execute(f"INSERT INTO {self.schema}.{table} SELECT * FROM {self.schema}.{stage}")
             conn.execute(f"DROP TABLE IF EXISTS {self.schema}.{stage}")
 
     def _clear_rebuild_checkpoint(self, conn) -> None:
@@ -587,9 +552,7 @@ class LoaderMixin:
     def _projection_table_counts(self, conn) -> dict[str, int]:
         out: dict[str, int] = {}
         for projection in PROJECTION_REGISTRY:
-            row = conn.execute(
-                f"SELECT COUNT(*) AS c FROM {self.schema}.{projection.table_name}"
-            ).fetchone()
+            row = conn.execute(f"SELECT COUNT(*) AS c FROM {self.schema}.{projection.table_name}").fetchone()
             out[projection.table_name] = int(row["c"] or 0)
         return out
 
@@ -621,9 +584,7 @@ class LoaderMixin:
         load_buffer = ProjectionRowBuffer()
         load_buffer_pending_bytes = 0
         chunked_rows = _chunked(rows_to_process, batch_size)
-        materialize_batches_total = max(
-            1, (len(rows_to_process) + batch_size - 1) // batch_size
-        )
+        materialize_batches_total = max(1, (len(rows_to_process) + batch_size - 1) // batch_size)
         materialize_reporter = _RebuildProgressReporter(
             step_number=5,
             total_steps=6,
@@ -653,11 +614,7 @@ class LoaderMixin:
                 for batch_rows in chunked_rows:
                     yield materialize_fn(batch_rows)
                 return
-            executor_cls = (
-                ProcessPoolExecutor
-                if executor_kind == "process"
-                else ThreadPoolExecutor
-            )
+            executor_cls = ProcessPoolExecutor if executor_kind == "process" else ThreadPoolExecutor
             map_kwargs: dict[str, Any] = {}
             if executor_kind == "process":
                 map_kwargs["chunksize"] = max(
@@ -668,9 +625,7 @@ class LoaderMixin:
                 yield from executor.map(materialize_fn, chunked_rows, **map_kwargs)
 
         wait_started_at = time.time()
-        for batch_index, materialized in enumerate(
-            _consume_materialized_batches(), start=1
-        ):
+        for batch_index, materialized in enumerate(_consume_materialized_batches(), start=1):
             materialize_seconds += time.time() - wait_started_at
             load_buffer.extend(materialized)
             load_buffer_pending_bytes += _estimate_projection_buffer_bytes(materialized)
@@ -695,15 +650,9 @@ class LoaderMixin:
                 buffer_edges = len(load_buffer.rows_for("edges"))
                 buffer_chunks = len(load_buffer.rows_for("chunks"))
                 card_rows_before_flush = load_buffer.rows_for("cards")
-                last_rel = (
-                    str(card_rows_before_flush[-1][1]) if card_rows_before_flush else ""
-                )
-                last_uid = (
-                    str(card_rows_before_flush[-1][0]) if card_rows_before_flush else ""
-                )
-                flushed = self._flush_load_buffer(
-                    conn, load_buffer, dest_suffix=dest_suffix
-                )
+                last_rel = str(card_rows_before_flush[-1][1]) if card_rows_before_flush else ""
+                last_uid = str(card_rows_before_flush[-1][0]) if card_rows_before_flush else ""
+                flushed = self._flush_load_buffer(conn, load_buffer, dest_suffix=dest_suffix)
                 conn.commit()
                 load_elapsed = time.time() - load_started_at
                 load_seconds += load_elapsed
@@ -766,9 +715,7 @@ class LoaderMixin:
             final_card_rows = load_buffer.rows_for("cards")
             final_last_rel = str(final_card_rows[-1][1]) if final_card_rows else ""
             final_last_uid = str(final_card_rows[-1][0]) if final_card_rows else ""
-            flushed = self._flush_load_buffer(
-                conn, load_buffer, dest_suffix=dest_suffix
-            )
+            flushed = self._flush_load_buffer(conn, load_buffer, dest_suffix=dest_suffix)
             conn.commit()
             load_elapsed = time.time() - load_started_at
             load_seconds += load_elapsed
@@ -844,18 +791,10 @@ class LoaderMixin:
         batch_size = batch_size or get_rebuild_batch_size()
         commit_interval = commit_interval or get_rebuild_commit_interval()
         flush_caps = get_rebuild_flush_caps(commit_interval)
-        progress_every = (
-            get_rebuild_progress_every() if progress_every is None else progress_every
-        )
+        progress_every = get_rebuild_progress_every() if progress_every is None else progress_every
         executor_kind = (executor_kind or get_rebuild_executor()).strip().lower()
-        force_full = (
-            get_force_full_rebuild() if force_full is None else bool(force_full)
-        )
-        disable_manifest = (
-            manifest_cache_disabled()
-            if disable_manifest_cache is None
-            else bool(disable_manifest_cache)
-        )
+        force_full = get_force_full_rebuild() if force_full is None else bool(force_full)
+        disable_manifest = manifest_cache_disabled() if disable_manifest_cache is None else bool(disable_manifest_cache)
         staging_mode = get_rebuild_staging_mode()
         versions = (
             INDEX_SCHEMA_VERSION,
@@ -911,21 +850,18 @@ class LoaderMixin:
                 and not disable_manifest
                 and not duplicate_uid_count
                 and bool(manifest_map)
-                and int(meta.get("manifest_schema_version", 0))
-                == MANIFEST_SCHEMA_VERSION
+                and int(meta.get("manifest_schema_version", 0)) == MANIFEST_SCHEMA_VERSION
                 and int(meta.get("schema_version", 0)) == versions[0]
                 and int(meta.get("chunk_schema_version", 0)) == versions[1]
                 and int(meta.get("projection_registry_version", 0)) == versions[2]
             )
             if incremental_ok:
-                rebuild_mode, materialize_uids, purge_uids, manifest_counters = (
-                    _classify_manifest_rebuild_delta(
-                        rows,
-                        manifest_by_path=manifest_map,
-                        file_stats=file_stats,
-                        versions=versions,
-                        duplicate_uid_count=duplicate_uid_count,
-                    )
+                rebuild_mode, materialize_uids, purge_uids, manifest_counters = _classify_manifest_rebuild_delta(
+                    rows,
+                    manifest_by_path=manifest_map,
+                    file_stats=file_stats,
+                    versions=versions,
+                    duplicate_uid_count=duplicate_uid_count,
                 )
                 deleted_paths = set(manifest_map.keys()) - {r.rel_path for r in rows}
             seed_ok = False
@@ -955,9 +891,7 @@ class LoaderMixin:
                             f"unchanged={manifest_counters.get('unchanged', 0)} deleted={manifest_counters.get('deleted', 0)}"
                         ),
                     )
-                _log_rebuild_step(
-                    4, 6, "prepare schema", f"mode=noop schema={self.schema}"
-                )
+                _log_rebuild_step(4, 6, "prepare schema", f"mode=noop schema={self.schema}")
                 total_seconds = round(time.time() - started_at, 6)
                 self._upsert_meta(
                     conn,
@@ -1000,9 +934,7 @@ class LoaderMixin:
                         f"unchanged={manifest_counters.get('unchanged', 0)} deleted={manifest_counters.get('deleted', 0)}"
                     ),
                 )
-                _log_rebuild_step(
-                    4, 6, "prepare schema", f"mode=incremental schema={self.schema}"
-                )
+                _log_rebuild_step(4, 6, "prepare schema", f"mode=incremental schema={self.schema}")
                 step4_started_at = time.time()
                 self._create_schema(conn, recreate_typed=False, ensure_indexes=False)
                 conn.commit()
@@ -1014,9 +946,7 @@ class LoaderMixin:
                 conn.execute(f"TRUNCATE TABLE {self.schema}.duplicate_uid_rows")
                 self._copy_rows(conn, "duplicate_uid_rows", duplicate_uid_rows)
                 conn.commit()
-                rows_to_process = [
-                    r for r in rows if str(r.card.uid) in materialize_uids
-                ]
+                rows_to_process = [r for r in rows if str(r.card.uid) in materialize_uids]
                 _log_rebuild_step(
                     5,
                     6,
@@ -1026,31 +956,27 @@ class LoaderMixin:
                         f"batch_size={batch_size} executor={executor_kind}"
                     ),
                 )
-                counts, materialize_seconds, load_seconds, _committed = (
-                    self._run_projection_materialize_loop(
-                        conn,
-                        rows_to_process=rows_to_process,
-                        slug_map=slug_map,
-                        path_to_uid=path_to_uid,
-                        person_lookup=person_lookup,
-                        workers=workers,
-                        batch_size=batch_size,
-                        commit_interval=commit_interval,
-                        flush_caps=flush_caps,
-                        executor_kind=executor_kind,
-                        progress_every=progress_every,
-                        dest_suffix="",
-                        run_id=run_id,
-                        vault_fp=vault_fingerprint,
-                        versions=versions,
-                        write_checkpoint=False,
-                        rebuild_mode="incremental",
-                    )
+                counts, materialize_seconds, load_seconds, _committed = self._run_projection_materialize_loop(
+                    conn,
+                    rows_to_process=rows_to_process,
+                    slug_map=slug_map,
+                    path_to_uid=path_to_uid,
+                    person_lookup=person_lookup,
+                    workers=workers,
+                    batch_size=batch_size,
+                    commit_interval=commit_interval,
+                    flush_caps=flush_caps,
+                    executor_kind=executor_kind,
+                    progress_every=progress_every,
+                    dest_suffix="",
+                    run_id=run_id,
+                    vault_fp=vault_fingerprint,
+                    versions=versions,
+                    write_checkpoint=False,
+                    rebuild_mode="incremental",
                 )
                 ensure_indexes_started_at = time.time()
-                _log_rebuild_step(
-                    6, 6, "ensure indexes", "ensure_indexes=1 recreate_typed=0"
-                )
+                _log_rebuild_step(6, 6, "ensure indexes", "ensure_indexes=1 recreate_typed=0")
                 self._create_schema(conn, recreate_typed=False, ensure_indexes=True)
                 conn.commit()
                 _log_rebuild_step(
@@ -1059,9 +985,7 @@ class LoaderMixin:
                     "ensure indexes complete",
                     f"elapsed={round(time.time() - ensure_indexes_started_at, 3)}s",
                 )
-                manifest_entries = _build_manifest_rows_from_canonical(
-                    rows, self.vault, file_stats, versions
-                )
+                manifest_entries = _build_manifest_rows_from_canonical(rows, self.vault, file_stats, versions)
                 self._replace_note_manifest(conn, manifest_entries)
                 conn.commit()
                 final_counts = self._projection_table_counts(conn)
@@ -1072,10 +996,7 @@ class LoaderMixin:
                     6,
                     6,
                     "finalize manifest complete",
-                    (
-                        f"reused={manifest_counters.get('unchanged', 0)} "
-                        f"manifest_notes={len(manifest_entries)}"
-                    ),
+                    (f"reused={manifest_counters.get('unchanged', 0)} manifest_notes={len(manifest_entries)}"),
                 )
                 self._clear_meta_for_finalize(conn)
                 self._upsert_meta(
@@ -1089,15 +1010,10 @@ class LoaderMixin:
                         "manifest_note_count": str(len(rows)),
                         "manifest_last_scan_seconds": str(round(scan_seconds, 6)),
                         "manifest_last_changed_count": str(
-                            manifest_counters.get("new", 0)
-                            + manifest_counters.get("changed", 0)
+                            manifest_counters.get("new", 0) + manifest_counters.get("changed", 0)
                         ),
-                        "manifest_last_deleted_count": str(
-                            manifest_counters.get("deleted", 0)
-                        ),
-                        "manifest_last_reused_count": str(
-                            manifest_counters.get("unchanged", 0)
-                        ),
+                        "manifest_last_deleted_count": str(manifest_counters.get("deleted", 0)),
+                        "manifest_last_reused_count": str(manifest_counters.get("unchanged", 0)),
                         "card_count": str(final_counts["cards"]),
                         "external_id_count": str(final_counts["external_ids"]),
                         "duplicate_uid_row_count": str(len(duplicate_uid_rows)),
@@ -1106,9 +1022,7 @@ class LoaderMixin:
                         "duplicate_uid_count": str(duplicate_uid_count),
                         "rebuild_scan_seconds": str(round(scan_seconds, 6)),
                         "rebuild_map_seconds": str(round(map_seconds, 6)),
-                        "rebuild_materialize_seconds": str(
-                            round(materialize_seconds, 6)
-                        ),
+                        "rebuild_materialize_seconds": str(round(materialize_seconds, 6)),
                         "rebuild_load_seconds": str(round(load_seconds, 6)),
                         "rebuild_total_seconds": str(total_seconds),
                         "rebuild_workers": str(workers),
@@ -1142,9 +1056,7 @@ class LoaderMixin:
                     "batch_size": batch_size,
                     "commit_interval": commit_interval,
                     "rebuild_mode": "incremental",
-                    "rows_per_second": round(
-                        len(rows_to_process) / max(total_seconds, 0.001), 3
-                    ),
+                    "rows_per_second": round(len(rows_to_process) / max(total_seconds, 0.001), 3),
                 }
                 return RebuildRunResult(counts=final_counts, metrics=metrics)
 
@@ -1244,26 +1156,24 @@ class LoaderMixin:
                     f"flush_max_bytes={flush_caps.max_bytes}"
                 ),
             )
-            counts, materialize_seconds, load_seconds, _committed = (
-                self._run_projection_materialize_loop(
-                    conn,
-                    rows_to_process=rows,
-                    slug_map=slug_map,
-                    path_to_uid=path_to_uid,
-                    person_lookup=person_lookup,
-                    workers=workers,
-                    batch_size=batch_size,
-                    commit_interval=commit_interval,
-                    flush_caps=flush_caps,
-                    executor_kind=executor_kind,
-                    progress_every=progress_every,
-                    dest_suffix=dest_suffix,
-                    run_id=run_id,
-                    vault_fp=vault_fingerprint,
-                    versions=versions,
-                    write_checkpoint=True,
-                    rebuild_mode="full",
-                )
+            counts, materialize_seconds, load_seconds, _committed = self._run_projection_materialize_loop(
+                conn,
+                rows_to_process=rows,
+                slug_map=slug_map,
+                path_to_uid=path_to_uid,
+                person_lookup=person_lookup,
+                workers=workers,
+                batch_size=batch_size,
+                commit_interval=commit_interval,
+                flush_caps=flush_caps,
+                executor_kind=executor_kind,
+                progress_every=progress_every,
+                dest_suffix=dest_suffix,
+                run_id=run_id,
+                vault_fp=vault_fingerprint,
+                versions=versions,
+                write_checkpoint=True,
+                rebuild_mode="full",
             )
             counts["duplicate_uid_rows"] = len(duplicate_uid_rows)
             counts["duplicate_uids"] = duplicate_uid_count
@@ -1279,9 +1189,7 @@ class LoaderMixin:
                     f"elapsed={round(time.time() - promote_started, 3)}s",
                 )
             ensure_indexes_started_at = time.time()
-            _log_rebuild_step(
-                6, 6, "ensure indexes", "ensure_indexes=1 recreate_typed=0"
-            )
+            _log_rebuild_step(6, 6, "ensure indexes", "ensure_indexes=1 recreate_typed=0")
             self._create_schema(conn, recreate_typed=False, ensure_indexes=True)
             conn.commit()
             _log_rebuild_step(
@@ -1291,9 +1199,7 @@ class LoaderMixin:
                 f"elapsed={round(time.time() - ensure_indexes_started_at, 3)}s",
             )
             total_seconds = round(time.time() - started_at, 6)
-            manifest_entries = _build_manifest_rows_from_canonical(
-                rows, self.vault, file_stats, versions
-            )
+            manifest_entries = _build_manifest_rows_from_canonical(rows, self.vault, file_stats, versions)
             self._replace_note_manifest(conn, manifest_entries)
             conn.commit()
             _log_rebuild_step(
@@ -1367,9 +1273,7 @@ class LoaderMixin:
             "batch_size": batch_size,
             "commit_interval": commit_interval,
             "rebuild_mode": "full",
-            "rows_per_second": round(
-                counts["cards"] / max(time.time() - started_at, 0.001), 3
-            ),
+            "rows_per_second": round(counts["cards"] / max(time.time() - started_at, 0.001), 3),
         }
         return RebuildRunResult(counts=counts, metrics=metrics)
 

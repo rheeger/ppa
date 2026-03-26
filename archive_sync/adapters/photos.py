@@ -184,7 +184,12 @@ def _render_body(item: dict[str, Any]) -> str:
         lines.append(f"Album paths: {', '.join(item['album_paths'])}")
     if item.get("folders"):
         lines.append(f"Folders: {', '.join(item['folders'])}")
-    place_bits = [item.get("place_name", ""), item.get("place_city", ""), item.get("place_state", ""), item.get("place_country", "")]
+    place_bits = [
+        item.get("place_name", ""),
+        item.get("place_city", ""),
+        item.get("place_state", ""),
+        item.get("place_country", ""),
+    ]
     place_value = ", ".join(bit for bit in place_bits if bit)
     if place_value:
         lines.append(f"Place: {place_value}")
@@ -309,7 +314,9 @@ class PhotosAdapter(BaseAdapter):
         )
         media_type = "video" if _bool_value(getattr(photo, "ismovie", False)) else "photo"
         source_id = f"{source_label}:{asset_id}"
-        title_place = _clean(getattr(getattr(photo, "place", None), "name", "")) or _clean(getattr(photo, "place_name", ""))
+        title_place = _clean(getattr(getattr(photo, "place", None), "name", "")) or _clean(
+            getattr(photo, "place_name", "")
+        )
         payload = {
             "kind": "asset",
             "source": [

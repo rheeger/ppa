@@ -1,6 +1,5 @@
 from hfa.identity import upsert_identity_map
-from hfa.identity_resolver import (merge_into_existing, names_match,
-                                   resolve_person)
+from hfa.identity_resolver import merge_into_existing, names_match, resolve_person
 from hfa.provenance import ProvenanceEntry
 from hfa.schema import PersonCard, validate_card_permissive
 from hfa.vault import read_note, write_card
@@ -194,7 +193,9 @@ def test_resolve_person_same_name_without_support_creates(tmp_vault):
     assert result.wikilink is None
 
 
-def test_merge_into_existing_derives_alias_provenance_from_summary(tmp_vault, sample_person_card, sample_person_provenance):
+def test_merge_into_existing_derives_alias_provenance_from_summary(
+    tmp_vault, sample_person_card, sample_person_provenance
+):
     write_card(tmp_vault, "People/jane-smith.md", sample_person_card, provenance=sample_person_provenance)
     merge_into_existing(
         tmp_vault,

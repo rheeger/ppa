@@ -7,7 +7,6 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from .base import BaseAdapter, IngestResult, deterministic_provenance
 from hfa.config import load_config
 from hfa.identity import IdentityCache
 from hfa.schema import PersonCard
@@ -15,6 +14,8 @@ from hfa.sync_state import load_sync_state, update_cursor
 from hfa.uid import generate_uid
 from hfa.vault import write_card
 from hfa.yaml_parser import parse_frontmatter
+
+from .base import BaseAdapter, IngestResult, deterministic_provenance
 
 DEFAULT_SOURCE_DIR = Path.home() / "Archive" / "seed" / "hf-archives-seed-20260307-235127" / "People"
 SOURCE_MAP = {
@@ -179,10 +180,14 @@ class SeedPeopleAdapter(BaseAdapter):
         if bool(frontmatter.get("family")) and "family" not in tags:
             tags.append("family")
 
-        relationship_type = _as_string(frontmatter.get("relationship_type")) or _as_string(frontmatter.get("relationship"))
+        relationship_type = _as_string(frontmatter.get("relationship_type")) or _as_string(
+            frontmatter.get("relationship")
+        )
         emails = _as_list(frontmatter.get("emails")) or _as_list(frontmatter.get("email"))
         phones = _as_list(frontmatter.get("phones")) or _as_list(frontmatter.get("phone"))
-        summary = _as_string(frontmatter.get("summary")) or (emails[0] if emails else Path(item["path"]).stem.replace("-", " ").title())
+        summary = _as_string(frontmatter.get("summary")) or (
+            emails[0] if emails else Path(item["path"]).stem.replace("-", " ").title()
+        )
         source_id = _as_string(frontmatter.get("source_id")) or (emails[0] if emails else summary)
         uid = _as_string(frontmatter.get("uid")) or generate_uid("person", primary_source, source_id)
         created = _as_string(frontmatter.get("created")) or date.today().isoformat()

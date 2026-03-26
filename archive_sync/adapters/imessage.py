@@ -12,15 +12,20 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from .base import BaseAdapter, deterministic_provenance
 from hfa.identity import IdentityCache
 from hfa.provenance import ProvenanceEntry, merge_provenance
-from hfa.schema import (IMessageAttachmentCard, IMessageMessageCard,
-                        IMessageThreadCard, validate_card_permissive,
-                        validate_card_strict)
+from hfa.schema import (
+    IMessageAttachmentCard,
+    IMessageMessageCard,
+    IMessageThreadCard,
+    validate_card_permissive,
+    validate_card_strict,
+)
 from hfa.thread_hash import compute_imessage_thread_body_sha_from_payload
 from hfa.uid import generate_uid
 from hfa.vault import read_note, write_card
+
+from .base import BaseAdapter, deterministic_provenance
 
 THREAD_SOURCE = "imessage.thread"
 MESSAGE_SOURCE = "imessage.message"
@@ -47,9 +52,7 @@ ATTRIBUTED_BODY_STOP_TOKENS = {
     "NSData",
     "NSURL",
 }
-OPAQUE_PAYLOAD_PREFIXES = (
-    "divvy://import/",
-)
+OPAQUE_PAYLOAD_PREFIXES = ("divvy://import/",)
 CONTROL_CHAR_RE = re.compile(r"[\x00-\x1F\x7F-\x9F]+")
 
 
@@ -391,11 +394,7 @@ class MessageSnapshot:
             """,
             (chat_rowid,),
         ).fetchall()
-        return [
-            normalized
-            for row in rows
-            if (normalized := _normalize_handle(_string(row[0])))
-        ]
+        return [normalized for row in rows if (normalized := _normalize_handle(_string(row[0])))]
 
     def participants_for_chats(self, chat_rowids: list[int]) -> dict[int, list[str]]:
         if not chat_rowids or not self._table_exists("chat_handle_join") or not self._table_exists("handle"):
@@ -465,8 +464,11 @@ class MessageSnapshot:
             exported_path = self._attachment_rel_by_original.get(self._normalize_path_key(original_path), "")
             attachments.append(
                 {
-                    "attachment_id": _clean(_string(data.get("guid", ""))) or f"attachment-rowid:{data.get('attachment_rowid')}",
-                    "filename": Path(original_path).name if original_path else _clean(_string(data.get("transfer_name", ""))),
+                    "attachment_id": _clean(_string(data.get("guid", "")))
+                    or f"attachment-rowid:{data.get('attachment_rowid')}",
+                    "filename": Path(original_path).name
+                    if original_path
+                    else _clean(_string(data.get("transfer_name", ""))),
                     "transfer_name": _clean(_string(data.get("transfer_name", ""))),
                     "mime_type": _clean(_string(data.get("mime_type", ""))),
                     "uti": _clean(_string(data.get("uti", ""))),
@@ -478,7 +480,11 @@ class MessageSnapshot:
         return attachments
 
     def attachments_for_messages(self, message_rowids: list[int]) -> dict[int, list[dict[str, Any]]]:
-        if not message_rowids or not self._table_exists("message_attachment_join") or not self._table_exists("attachment"):
+        if (
+            not message_rowids
+            or not self._table_exists("message_attachment_join")
+            or not self._table_exists("attachment")
+        ):
             return {}
         mapping: dict[int, list[dict[str, Any]]] = {}
         for batch in _chunked(message_rowids):
@@ -502,7 +508,9 @@ class MessageSnapshot:
                     {
                         "attachment_id": _clean(_string(data.get("guid", "")))
                         or f"attachment-rowid:{data.get('attachment_rowid')}",
-                        "filename": Path(original_path).name if original_path else _clean(_string(data.get("transfer_name", ""))),
+                        "filename": Path(original_path).name
+                        if original_path
+                        else _clean(_string(data.get("transfer_name", ""))),
                         "transfer_name": _clean(_string(data.get("transfer_name", ""))),
                         "mime_type": _clean(_string(data.get("mime_type", ""))),
                         "uti": _clean(_string(data.get("uti", ""))),
@@ -517,7 +525,9 @@ class MessageSnapshot:
         counts = {
             "message_count": int(self._scalar("SELECT COUNT(*) FROM message") or 0),
             "chat_count": int(self._scalar("SELECT COUNT(*) FROM chat") or 0) if self._table_exists("chat") else 0,
-            "handle_count": int(self._scalar("SELECT COUNT(*) FROM handle") or 0) if self._table_exists("handle") else 0,
+            "handle_count": int(self._scalar("SELECT COUNT(*) FROM handle") or 0)
+            if self._table_exists("handle")
+            else 0,
             "attachment_count": int(self._scalar("SELECT COUNT(*) FROM attachment") or 0)
             if self._table_exists("attachment")
             else 0,
@@ -659,8 +669,12 @@ class IMessageAdapter(BaseAdapter):
         if incoming.get("display_name") and not existing.get("display_name"):
             existing["display_name"] = incoming["display_name"]
 
-        first_values = [value for value in [existing.get("first_message_at", ""), incoming.get("first_message_at", "")] if value]
-        last_values = [value for value in [existing.get("last_message_at", ""), incoming.get("last_message_at", "")] if value]
+        first_values = [
+            value for value in [existing.get("first_message_at", ""), incoming.get("first_message_at", "")] if value
+        ]
+        last_values = [
+            value for value in [existing.get("last_message_at", ""), incoming.get("last_message_at", "")] if value
+        ]
         if first_values:
             existing["first_message_at"] = min(first_values)
         if last_values:
@@ -770,11 +784,7 @@ class IMessageAdapter(BaseAdapter):
             chat_rowids = sorted({int(chat.get("chat_rowid", 0) or 0) for chat in chat_by_message.values() if chat})
             participants_by_chat = snapshot.participants_for_chats(chat_rowids)
             handle_ids = sorted(
-                {
-                    int(row.get("handle_id", 0) or 0)
-                    for row in rows
-                    if row.get("handle_id") not in (None, "", 0)
-                }
+                {int(row.get("handle_id", 0) or 0) for row in rows if row.get("handle_id") not in (None, "", 0)}
             )
             handles_by_rowid = snapshot.handles_for_rowids(handle_ids)
             attachments_by_message = snapshot.attachments_for_messages(message_rowids)
@@ -1024,14 +1034,22 @@ class IMessageAdapter(BaseAdapter):
                     merged_data[field_name] = incoming_value
                     changed = True
 
-            first_values = [value for value in [merged_data.get("first_message_at", ""), incoming.get("first_message_at", "")] if value]
+            first_values = [
+                value
+                for value in [merged_data.get("first_message_at", ""), incoming.get("first_message_at", "")]
+                if value
+            ]
             if first_values:
                 first_message_at = min(first_values)
                 if merged_data.get("first_message_at") != first_message_at:
                     merged_data["first_message_at"] = first_message_at
                     changed = True
 
-            last_values = [value for value in [merged_data.get("last_message_at", ""), incoming.get("last_message_at", "")] if value]
+            last_values = [
+                value
+                for value in [merged_data.get("last_message_at", ""), incoming.get("last_message_at", "")]
+                if value
+            ]
             if last_values:
                 last_message_at = max(last_values)
                 if merged_data.get("last_message_at") != last_message_at:
@@ -1056,7 +1074,9 @@ class IMessageAdapter(BaseAdapter):
                 merged_data["attachment_count"] = attachment_count
                 changed = True
 
-            has_attachments = bool(merged_data.get("attachments")) or bool(incoming.get("has_attachments")) or attachment_count > 0
+            has_attachments = (
+                bool(merged_data.get("attachments")) or bool(incoming.get("has_attachments")) or attachment_count > 0
+            )
             if merged_data.get("has_attachments") != has_attachments:
                 merged_data["has_attachments"] = has_attachments
                 changed = True

@@ -6,24 +6,45 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 import archive_mcp.__main__ as archive_main
 import archive_mcp.server as archive_server
-import pytest
-from archive_mcp.embedding_provider import (HashEmbeddingProvider,
-                                            OpenAIEmbeddingProvider,
-                                            _resolve_openai_api_key,
-                                            _resolve_service_account_token,
-                                            get_embedding_provider)
+from archive_mcp.embedding_provider import (
+    HashEmbeddingProvider,
+    OpenAIEmbeddingProvider,
+    _resolve_openai_api_key,
+    _resolve_service_account_token,
+    get_embedding_provider,
+)
 from archive_mcp.index_store import PostgresArchiveIndex
 from archive_mcp.server import (  # type: ignore[import-not-found]
-    archive_bootstrap_postgres, archive_duplicate_uids, archive_duplicates,
-    archive_embed_pending, archive_embedding_backlog, archive_embedding_status,
-    archive_graph, archive_hybrid_search, archive_index_status,
-    archive_link_candidate, archive_link_candidates, archive_link_quality_gate,
-    archive_person, archive_query, archive_read, archive_rebuild_indexes,
-    archive_review_link_candidate, archive_search, archive_seed_link_backfill,
-    archive_seed_link_refresh, archive_seed_link_surface, archive_stats,
-    archive_timeline, archive_validate, archive_vector_search, get_index)
+    archive_bootstrap_postgres,
+    archive_duplicate_uids,
+    archive_duplicates,
+    archive_embed_pending,
+    archive_embedding_backlog,
+    archive_embedding_status,
+    archive_graph,
+    archive_hybrid_search,
+    archive_index_status,
+    archive_link_candidate,
+    archive_link_candidates,
+    archive_link_quality_gate,
+    archive_person,
+    archive_query,
+    archive_read,
+    archive_rebuild_indexes,
+    archive_review_link_candidate,
+    archive_search,
+    archive_seed_link_backfill,
+    archive_seed_link_surface,
+    archive_stats,
+    archive_timeline,
+    archive_validate,
+    archive_vector_search,
+    get_index,
+)
 from hfa.provenance import ProvenanceEntry
 from hfa.schema import FinanceCard, PersonCard
 from hfa.vault import write_card
@@ -41,7 +62,9 @@ class FakeIndex:
         return None
 
     def query_cards(self, **_kwargs):
-        return [{"rel_path": "People/jane-smith.md", "summary": "Jane Smith", "type": "person", "activity_at": "2026-03-06"}]
+        return [
+            {"rel_path": "People/jane-smith.md", "summary": "Jane Smith", "type": "person", "activity_at": "2026-03-06"}
+        ]
 
     def graph(self, note_path: str, hops: int = 2):
         if note_path == "People/jane-smith.md":
@@ -131,7 +154,9 @@ class FakeIndex:
             }
         ][:limit]
 
-    def hybrid_search(self, *, query: str, query_vector, embedding_model: str, embedding_version: int, limit: int = 20, **_kwargs):
+    def hybrid_search(
+        self, *, query: str, query_vector, embedding_model: str, embedding_version: int, limit: int = 20, **_kwargs
+    ):
         return [
             {
                 "card_uid": "hfa-person-aaaabbbbcccc",
@@ -443,7 +468,9 @@ def test_seed_link_commands_dispatch(monkeypatch: pytest.MonkeyPatch, capsys: py
     archive_main.main()
     assert capsys.readouterr().out.strip() == "promote:2"
 
-    monkeypatch.setattr(archive_main, "archive_seed_link_report", lambda **kwargs: f"report:{kwargs['rebuild_if_dirty']}")
+    monkeypatch.setattr(
+        archive_main, "archive_seed_link_report", lambda **kwargs: f"report:{kwargs['rebuild_if_dirty']}"
+    )
     monkeypatch.setattr(sys, "argv", ["archive_mcp", "seed-link-report"])
     archive_main.main()
     assert capsys.readouterr().out.strip() == "report:True"
@@ -459,7 +486,9 @@ def test_seed_link_commands_dispatch(monkeypatch: pytest.MonkeyPatch, capsys: py
     assert capsys.readouterr().out.strip() == "gate"
 
 
-def test_benchmark_seed_links_command_dispatches(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path):
+def test_benchmark_seed_links_command_dispatches(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+):
     monkeypatch.setenv("PPA_SEED_LINKS_ENABLED", "1")
     monkeypatch.setattr(
         archive_main,
@@ -602,7 +631,11 @@ def test_archive_seed_link_wrappers(tmp_vault, monkeypatch: pytest.MonkeyPatch, 
             "llm_judged": 0,
             "module_metrics": {},
         },
-        "run_seed_link_promotion_workers": lambda index, **kwargs: {"derived_edge": 2, "canonical_field": 1, "blocked": 0},
+        "run_seed_link_promotion_workers": lambda index, **kwargs: {
+            "derived_edge": 2,
+            "canonical_field": 1,
+            "blocked": 0,
+        },
         "run_seed_link_report": lambda index, **kwargs: {
             "rebuilt": True,
             "passes": True,
@@ -659,7 +692,11 @@ def test_archive_seed_link_wrappers(tmp_vault, monkeypatch: pytest.MonkeyPatch, 
             ],
             "reviews": [],
         },
-        "review_link_candidate": lambda index, **kwargs: {"status": "approved", "decision": "auto_promote", "final_confidence": 0.77},
+        "review_link_candidate": lambda index, **kwargs: {
+            "status": "approved",
+            "decision": "auto_promote",
+            "final_confidence": 0.77,
+        },
         "compute_link_quality_gate": lambda index: {
             "passes": True,
             "seed_card_count": 100,
@@ -673,8 +710,12 @@ def test_archive_seed_link_wrappers(tmp_vault, monkeypatch: pytest.MonkeyPatch, 
             "max_high_priority_review_backlog": 50,
             "high_risk_precision": 1.0,
             "required_high_risk_precision": 0.95,
-            "candidate_counts": [{"module_name": "communicationLinker", "proposed_link_type": "thread_has_message", "count": 2}],
-            "auto_promoted_counts": [{"module_name": "communicationLinker", "proposed_link_type": "thread_has_message", "count": 1}],
+            "candidate_counts": [
+                {"module_name": "communicationLinker", "proposed_link_type": "thread_has_message", "count": 2}
+            ],
+            "auto_promoted_counts": [
+                {"module_name": "communicationLinker", "proposed_link_type": "thread_has_message", "count": 1}
+            ],
         },
         "get_seed_scope_rows": lambda: [],
         "get_surface_policy_rows": lambda: [],
@@ -762,14 +803,19 @@ def test_resolve_openai_api_key_from_arnold_vault_toggle(monkeypatch: pytest.Mon
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setenv("PPA_USE_ARNOLD_OPENAI_KEY", "1")
     monkeypatch.setenv("PPA_OPENAI_API_KEY_OP_REF", "op://Arnold/OPENAI_API_KEY/credential")
-    monkeypatch.setattr("archive_mcp.embedding_provider._read_1password_secret", lambda ref: "vault-key" if ref else None)
+    monkeypatch.setattr(
+        "archive_mcp.embedding_provider._read_1password_secret", lambda ref: "vault-key" if ref else None
+    )
     assert _resolve_openai_api_key() == "vault-key"
 
 
 def test_resolve_openai_api_key_supports_op_reference_env(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("OPENAI_API_KEY", "op://Arnold/OPENAI_API_KEY/credential")
     monkeypatch.setenv("PPA_USE_ARNOLD_OPENAI_KEY", "1")
-    monkeypatch.setattr("archive_mcp.embedding_provider._read_1password_secret", lambda ref: "resolved-from-op" if ref.startswith("op://") else None)
+    monkeypatch.setattr(
+        "archive_mcp.embedding_provider._read_1password_secret",
+        lambda ref: "resolved-from-op" if ref.startswith("op://") else None,
+    )
     assert _resolve_openai_api_key() == "resolved-from-op"
 
 

@@ -15,16 +15,20 @@ from typing import Any
 
 from hfa.config import PPAConfig, load_config
 from hfa.identity import IdentityCache
-from hfa.identity_resolver import (PersonIndex, ResolveResult, load_nicknames,
-                                   log_conflict, merge_into_existing,
-                                   resolve_person, resolve_person_snapshot)
-from hfa.provenance import (PROVENANCE_EXEMPT_FIELDS, ProvenanceEntry,
-                            merge_provenance)
-from hfa.schema import (BaseCard, PersonCard, card_to_frontmatter,
-                        validate_card_permissive, validate_card_strict)
+from hfa.identity_resolver import (
+    PersonIndex,
+    ResolveResult,
+    load_nicknames,
+    log_conflict,
+    merge_into_existing,
+    resolve_person,
+    resolve_person_snapshot,
+)
+from hfa.provenance import PROVENANCE_EXEMPT_FIELDS, ProvenanceEntry, merge_provenance
+from hfa.schema import BaseCard, PersonCard, card_to_frontmatter, validate_card_permissive, validate_card_strict
 from hfa.slugger import normalize_for_slug, unique_slug
 from hfa.sync_state import load_sync_state, update_cursor
-from hfa.vault import iter_notes, iter_parsed_notes, read_note, write_card
+from hfa.vault import iter_parsed_notes, read_note, write_card
 
 
 def deterministic_provenance(
@@ -303,11 +307,7 @@ class BaseAdapter(ABC):
             owner_login = normalize_for_slug(getattr(card, "owner_login", "") or "unknown-owner")
             return f"GitRepos/{owner_login}/{card.uid}.md"
         if card.type == "git_commit":
-            month_source = (
-                getattr(card, "committed_at", "")
-                or getattr(card, "authored_at", "")
-                or card.created
-            )
+            month_source = getattr(card, "committed_at", "") or getattr(card, "authored_at", "") or card.created
             year_month = month_source[:7] if len(month_source) >= 7 else card.created[:7]
             return f"GitCommits/{year_month}/{card.uid}.md"
         if card.type == "git_thread":
@@ -399,7 +399,11 @@ class BaseAdapter(ABC):
                     changed = True
                 continue
             existing_entry = existing_provenance.get(field_name)
-            if incoming_value in ("", [], None, 0, False) and existing_entry is not None and existing_entry.method == "llm":
+            if (
+                incoming_value in ("", [], None, 0, False)
+                and existing_entry is not None
+                and existing_entry.method == "llm"
+            ):
                 continue
             if merged_data.get(field_name) != incoming_value:
                 merged_data[field_name] = incoming_value
@@ -472,14 +476,14 @@ class BaseAdapter(ABC):
             cursor = {}
         enable_person_resolution = bool(self.should_enable_person_resolution(**kwargs))
         identity_cache = (
-            _run_logged("load identity cache", lambda: IdentityCache(vault))
-            if enable_person_resolution
-            else None
+            _run_logged("load identity cache", lambda: IdentityCache(vault)) if enable_person_resolution else None
         )
         _log("ingest start")
         preload_started_at = perf_counter()
         if enable_person_resolution:
-            people_index = _run_logged("load person index", lambda: PersonIndex(vault, log=_log, progress_every=progress_every))
+            people_index = _run_logged(
+                "load person index", lambda: PersonIndex(vault, log=_log, progress_every=progress_every)
+            )
             person_uid_index = _run_logged(
                 "build person uid index",
                 lambda: {
@@ -508,7 +512,9 @@ class BaseAdapter(ABC):
                     loaded_uid_count += 1
                     if progress_every and loaded_uid_count % progress_every == 0:
                         _log(f"existing uid preload progress: loaded={loaded_uid_count}")
-            _log(f"existing uid preload done: loaded={loaded_uid_count} elapsed_s={perf_counter() - existing_uid_started_at:.2f}")
+            _log(
+                f"existing uid preload done: loaded={loaded_uid_count} elapsed_s={perf_counter() - existing_uid_started_at:.2f}"
+            )
         else:
             _log("existing uid preload skipped")
         nicknames = _run_logged("load nicknames", lambda: load_nicknames(vault)) if enable_person_resolution else {}
@@ -644,7 +650,9 @@ class BaseAdapter(ABC):
             wikilink = person_uid_index.get(card.uid)
             if wikilink is not None:
                 if not dry_run:
-                    merged_path = merge_into_existing(vault, wikilink, card.model_dump(mode="python"), prepared.provenance, prepared.body)
+                    merged_path = merge_into_existing(
+                        vault, wikilink, card.model_dump(mode="python"), prepared.provenance, prepared.body
+                    )
                     identity_cache.upsert(wikilink, self._person_identity_aliases(card))
                     if merged_path is not None:
                         _refresh_person_indexes(wikilink, Path(merged_path).relative_to(vault), delta_people_index)
@@ -729,7 +737,11 @@ class BaseAdapter(ABC):
         for batch_index, raw_batch in enumerate(self.fetch_batches(str(vault), cursor, config=config, **kwargs)):
             materialize_started_at = perf_counter()
             _log(f"batch {batch_index} materialize start")
-            batch = raw_batch if isinstance(raw_batch, FetchedBatch) else FetchedBatch(items=list(raw_batch), sequence=batch_index)
+            batch = (
+                raw_batch
+                if isinstance(raw_batch, FetchedBatch)
+                else FetchedBatch(items=list(raw_batch), sequence=batch_index)
+            )
             batch_items = list(batch.items)
             _log(f"batch {batch_index} materialize done: elapsed_s={perf_counter() - materialize_started_at:.2f}")
             _log(f"batch {batch.sequence} start: items={len(batch_items)} skipped={batch.skipped_count}")
@@ -763,7 +775,9 @@ class BaseAdapter(ABC):
                     except Exception as exc:
                         batch_error_count += 1
                         result.errors.append(f"item {item_index}: {exc}")
-                        _log(f"batch {batch.sequence} chunk {chunk_start}:{chunk_end} item {item_index} to_card error: {exc}")
+                        _log(
+                            f"batch {batch.sequence} chunk {chunk_start}:{chunk_end} item {item_index} to_card error: {exc}"
+                        )
                         continue
 
                     prepared = PreparedIngestItem(
@@ -834,9 +848,13 @@ class BaseAdapter(ABC):
                             config=config,
                         )
 
-                    with ThreadPoolExecutor(max_workers=max(1, min(person_match_workers, len(prepared_people)))) as executor:
+                    with ThreadPoolExecutor(
+                        max_workers=max(1, min(person_match_workers, len(prepared_people)))
+                    ) as executor:
                         resolution_hints = list(executor.map(_resolve_prepared, prepared_people))
-                    action_counts = Counter((hint.action if hint is not None else "unknown") for hint in resolution_hints)
+                    action_counts = Counter(
+                        (hint.action if hint is not None else "unknown") for hint in resolution_hints
+                    )
                     _log(
                         f"batch {batch.sequence} chunk {chunk_start}:{chunk_end} "
                         f"parallel resolve done: people={len(prepared_people)} "
@@ -853,7 +871,9 @@ class BaseAdapter(ABC):
                     f"batch {batch.sequence} chunk {chunk_start}:{chunk_end} "
                     f"serial commit start: people={len(prepared_people)}"
                 )
-                for commit_index, (prepared, resolve_hint) in enumerate(zip(prepared_people, resolution_hints), start=1):
+                for commit_index, (prepared, resolve_hint) in enumerate(
+                    zip(prepared_people, resolution_hints), start=1
+                ):
                     try:
                         action = _commit_person(prepared, resolve_hint, delta_people_index)
                         _log(

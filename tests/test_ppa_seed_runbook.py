@@ -138,7 +138,9 @@ def test_print_status_renders_phase_and_sync_state(tmp_path, capsys):
     (log_dir / "run-state.json").write_text(json.dumps(state), encoding="utf-8")
     vault = Path(manifest.vault_path)
     (vault / "_meta" / "sync-state.json").write_text(
-        json.dumps({"imessage:local-messages": {"last_completed_message_rowid": 42, "snapshot_max_message_rowid": 100}}),
+        json.dumps(
+            {"imessage:local-messages": {"last_completed_message_rowid": 42, "snapshot_max_message_rowid": 100}}
+        ),
         encoding="utf-8",
     )
     exit_code = module._print_status(manifest)
@@ -179,6 +181,7 @@ def test_runbook_retries_retryable_phase_failure_then_completes(tmp_path, monkey
     for phase_id in module.PHASE_ORDER:
         method_name = f"_phase_{phase_id.replace('-', '_')}"
         if phase_id == "prep-readonly":
+
             def flaky_phase(phase_id=phase_id):
                 attempts[phase_id] += 1
                 if attempts[phase_id] == 1:

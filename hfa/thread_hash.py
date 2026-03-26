@@ -6,8 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from hfa.provenance import compute_input_hash
-from hfa.schema import (EmailThreadCard, IMessageThreadCard,
-                        validate_card_permissive)
+from hfa.schema import EmailThreadCard, IMessageThreadCard, validate_card_permissive
 from hfa.vault import find_note_by_slug, read_note
 
 

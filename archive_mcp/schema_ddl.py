@@ -7,12 +7,11 @@ from typing import Any
 
 from .index_config import (
     CHUNK_SCHEMA_VERSION,
-    MANIFEST_SCHEMA_VERSION,
     get_seed_links_enabled,
 )
 from .loader import PROJECTION_NAMES
 from .migrate import MigrationRunner
-from .projections.registry import PROJECTION_REGISTRY, TYPED_PROJECTIONS
+from .projections.registry import TYPED_PROJECTIONS
 
 # Use ppa.* namespace for consistent log filtering across all modules
 log = logging.getLogger("ppa.schema_ddl")
@@ -50,9 +49,7 @@ class SchemaDDLMixin:
             parts.append(self._projection_default_sql(column.default, column.sql_type))
             lines.append(" ".join(part for part in parts if part))
         if recreate:
-            conn.execute(
-                f"DROP TABLE IF EXISTS {self.schema}.{projection.table_name} CASCADE"
-            )
+            conn.execute(f"DROP TABLE IF EXISTS {self.schema}.{projection.table_name} CASCADE")
         conn.execute(
             f"""
             CREATE TABLE IF NOT EXISTS {self.schema}.{projection.table_name} (
@@ -69,9 +66,7 @@ class SchemaDDLMixin:
                     f"ON {self.schema}.{projection.table_name}({column.name})"
                 )
 
-    def _create_schema(
-        self, conn, *, recreate_typed: bool = False, ensure_indexes: bool = True
-    ) -> None:
+    def _create_schema(self, conn, *, recreate_typed: bool = False, ensure_indexes: bool = True) -> None:
         conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
         conn.execute(f"CREATE SCHEMA IF NOT EXISTS {self.schema}")
         conn.execute(
@@ -107,18 +102,10 @@ class SchemaDDLMixin:
             """
         )
         if ensure_indexes:
-            conn.execute(
-                f"CREATE INDEX IF NOT EXISTS idx_cards_slug ON {self.schema}.cards(slug)"
-            )
-            conn.execute(
-                f"CREATE INDEX IF NOT EXISTS idx_cards_type ON {self.schema}.cards(type)"
-            )
-            conn.execute(
-                f"CREATE INDEX IF NOT EXISTS idx_cards_created ON {self.schema}.cards(created)"
-            )
-            conn.execute(
-                f"CREATE INDEX IF NOT EXISTS idx_cards_activity_at ON {self.schema}.cards(activity_at)"
-            )
+            conn.execute(f"CREATE INDEX IF NOT EXISTS idx_cards_slug ON {self.schema}.cards(slug)")
+            conn.execute(f"CREATE INDEX IF NOT EXISTS idx_cards_type ON {self.schema}.cards(type)")
+            conn.execute(f"CREATE INDEX IF NOT EXISTS idx_cards_created ON {self.schema}.cards(created)")
+            conn.execute(f"CREATE INDEX IF NOT EXISTS idx_cards_activity_at ON {self.schema}.cards(activity_at)")
             conn.execute(
                 f"CREATE INDEX IF NOT EXISTS idx_cards_search_document ON {self.schema}.cards USING GIN(search_document)"
             )
@@ -132,9 +119,7 @@ class SchemaDDLMixin:
             """
         )
         if ensure_indexes:
-            conn.execute(
-                f"CREATE INDEX IF NOT EXISTS idx_card_sources_source ON {self.schema}.card_sources(source)"
-            )
+            conn.execute(f"CREATE INDEX IF NOT EXISTS idx_card_sources_source ON {self.schema}.card_sources(source)")
             conn.execute(
                 f"CREATE INDEX IF NOT EXISTS idx_card_sources_card_uid ON {self.schema}.card_sources(card_uid)"
             )
@@ -148,12 +133,8 @@ class SchemaDDLMixin:
             """
         )
         if ensure_indexes:
-            conn.execute(
-                f"CREATE INDEX IF NOT EXISTS idx_card_people_person ON {self.schema}.card_people(person)"
-            )
-            conn.execute(
-                f"CREATE INDEX IF NOT EXISTS idx_card_people_card_uid ON {self.schema}.card_people(card_uid)"
-            )
+            conn.execute(f"CREATE INDEX IF NOT EXISTS idx_card_people_person ON {self.schema}.card_people(person)")
+            conn.execute(f"CREATE INDEX IF NOT EXISTS idx_card_people_card_uid ON {self.schema}.card_people(card_uid)")
         conn.execute(
             f"""
             CREATE TABLE IF NOT EXISTS {self.schema}.card_orgs (
@@ -164,16 +145,10 @@ class SchemaDDLMixin:
             """
         )
         if ensure_indexes:
-            conn.execute(
-                f"CREATE INDEX IF NOT EXISTS idx_card_orgs_org ON {self.schema}.card_orgs(org)"
-            )
-            conn.execute(
-                f"CREATE INDEX IF NOT EXISTS idx_card_orgs_card_uid ON {self.schema}.card_orgs(card_uid)"
-            )
+            conn.execute(f"CREATE INDEX IF NOT EXISTS idx_card_orgs_org ON {self.schema}.card_orgs(org)")
+            conn.execute(f"CREATE INDEX IF NOT EXISTS idx_card_orgs_card_uid ON {self.schema}.card_orgs(card_uid)")
         for projection in TYPED_PROJECTIONS:
-            self._create_projection_table(
-                conn, projection, recreate=recreate_typed, ensure_indexes=ensure_indexes
-            )
+            self._create_projection_table(conn, projection, recreate=recreate_typed, ensure_indexes=ensure_indexes)
         conn.execute(
             f"""
             CREATE TABLE IF NOT EXISTS {self.schema}.external_ids (
@@ -229,18 +204,10 @@ class SchemaDDLMixin:
             """
         )
         if ensure_indexes:
-            conn.execute(
-                f"CREATE INDEX IF NOT EXISTS idx_edges_source_path ON {self.schema}.edges(source_path)"
-            )
-            conn.execute(
-                f"CREATE INDEX IF NOT EXISTS idx_edges_source_uid ON {self.schema}.edges(source_uid)"
-            )
-            conn.execute(
-                f"CREATE INDEX IF NOT EXISTS idx_edges_target_path ON {self.schema}.edges(target_path)"
-            )
-            conn.execute(
-                f"CREATE INDEX IF NOT EXISTS idx_edges_target_uid ON {self.schema}.edges(target_uid)"
-            )
+            conn.execute(f"CREATE INDEX IF NOT EXISTS idx_edges_source_path ON {self.schema}.edges(source_path)")
+            conn.execute(f"CREATE INDEX IF NOT EXISTS idx_edges_source_uid ON {self.schema}.edges(source_uid)")
+            conn.execute(f"CREATE INDEX IF NOT EXISTS idx_edges_target_path ON {self.schema}.edges(target_path)")
+            conn.execute(f"CREATE INDEX IF NOT EXISTS idx_edges_target_uid ON {self.schema}.edges(target_uid)")
         conn.execute(
             f"""
             CREATE TABLE IF NOT EXISTS {self.schema}.chunks (
@@ -261,9 +228,7 @@ class SchemaDDLMixin:
             """
         )
         if ensure_indexes:
-            conn.execute(
-                f"CREATE INDEX IF NOT EXISTS idx_chunks_card_uid ON {self.schema}.chunks(card_uid)"
-            )
+            conn.execute(f"CREATE INDEX IF NOT EXISTS idx_chunks_card_uid ON {self.schema}.chunks(card_uid)")
         conn.execute(
             f"""
             CREATE TABLE IF NOT EXISTS {self.schema}.embeddings (
@@ -477,9 +442,7 @@ class SchemaDDLMixin:
         conn.execute(
             f"ALTER TABLE {self.schema}.promotion_queue ADD COLUMN IF NOT EXISTS claimed_by TEXT NOT NULL DEFAULT ''"
         )
-        conn.execute(
-            f"ALTER TABLE {self.schema}.promotion_queue ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ"
-        )
+        conn.execute(f"ALTER TABLE {self.schema}.promotion_queue ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ")
         if ensure_indexes:
             conn.execute(
                 f"CREATE INDEX IF NOT EXISTS idx_promotion_queue_status ON {self.schema}.promotion_queue(promotion_status, promotion_target)"
@@ -578,7 +541,5 @@ class SchemaDDLMixin:
 
     def _clear(self, conn) -> None:
         table_names = ["embeddings", *PROJECTION_NAMES, "meta"]
-        qualified = ", ".join(
-            f"{self.schema}.{table_name}" for table_name in table_names
-        )
+        qualified = ", ".join(f"{self.schema}.{table_name}" for table_name in table_names)
         conn.execute(f"TRUNCATE TABLE {qualified} RESTART IDENTITY CASCADE")

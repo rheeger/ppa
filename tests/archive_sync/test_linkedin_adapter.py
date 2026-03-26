@@ -21,7 +21,7 @@ def test_fetch_skips_linkedin_export_notes_preamble(tmp_path):
     csv_path = tmp_path / "linkedin.csv"
     csv_path.write_text(
         "Notes:\n"
-        "\"When exporting your connection data...\"\n\n"
+        '"When exporting your connection data..."\n\n'
         "First Name,Last Name,URL,Email Address,Company,Position,Connected On\n"
         "Jane,Smith,https://www.linkedin.com/in/janesmith,,Endaoment,VP,08 Dec 2023\n",
         encoding="utf-8",
@@ -39,22 +39,19 @@ def test_fetch_from_export_directory_includes_profile_enrichment(tmp_path):
     )
     (tmp_path / "Profile.csv").write_text(
         "First Name,Last Name,Maiden Name,Address,Birth Date,Headline,Summary,Industry,Zip Code,Geo Location,Twitter Handles,Websites,Instant Messengers\n"
-        "Robbie,Heeger,,,\"Nov 5, 1990\",President & CEO at Endaoment,,Philanthropic Fundraising Services,11205,\"Brooklyn, New York, United States\",[RobbieHeeger],[https://endaoment.org],[GTALK:rheeger]\n",
+        'Robbie,Heeger,,,"Nov 5, 1990",President & CEO at Endaoment,,Philanthropic Fundraising Services,11205,"Brooklyn, New York, United States",[RobbieHeeger],[https://endaoment.org],[GTALK:rheeger]\n',
         encoding="utf-8",
     )
     (tmp_path / "Email Addresses.csv").write_text(
-        "Email Address,Confirmed,Primary,Updated On\n"
-        "rheeger@gmail.com,Yes,Yes,Not Available\n",
+        "Email Address,Confirmed,Primary,Updated On\nrheeger@gmail.com,Yes,Yes,Not Available\n",
         encoding="utf-8",
     )
     (tmp_path / "PhoneNumbers.csv").write_text(
-        "Extension,Number,Type\n"
-        ",6507992364,Mobile\n",
+        "Extension,Number,Type\n,6507992364,Mobile\n",
         encoding="utf-8",
     )
     (tmp_path / "Whatsapp Phone Numbers.csv").write_text(
-        "Number,Extension,Is_WhatsApp_Number\n"
-        "16507992364,,false\n",
+        "Number,Extension,Is_WhatsApp_Number\n16507992364,,false\n",
         encoding="utf-8",
     )
     (tmp_path / "Positions.csv").write_text(
@@ -70,7 +67,7 @@ def test_fetch_from_export_directory_includes_profile_enrichment(tmp_path):
     )
     (tmp_path / "Invitations.csv").write_text(
         "From,To,Sent At,Message,Direction,inviterProfileUrl,inviteeProfileUrl\n"
-        "Robbie Heeger,Tira Grey,\"2/10/26, 9:23 AM\",,OUTGOING,https://www.linkedin.com/in/rheeger,https://www.linkedin.com/in/tira-grey-5179ab3\n",
+        'Robbie Heeger,Tira Grey,"2/10/26, 9:23 AM",,OUTGOING,https://www.linkedin.com/in/rheeger,https://www.linkedin.com/in/tira-grey-5179ab3\n',
         encoding="utf-8",
     )
     verification_dir = tmp_path / "Verifications"

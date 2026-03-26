@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import base64
 import json
-import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -126,7 +125,9 @@ def main() -> int:
         if args.query.strip():
             params["q"] = args.query.strip()
         list_data = adapter._gws_with_retry(["gmail", "users", "threads", "list", "--params", json.dumps(params)])
-        thread_ids = [str(thread.get("id", "")).strip() for thread in list_data.get("threads", []) or [] if thread.get("id")]
+        thread_ids = [
+            str(thread.get("id", "")).strip() for thread in list_data.get("threads", []) or [] if thread.get("id")
+        ]
         page_token = list_data.get("nextPageToken")
         if not thread_ids:
             break
@@ -137,7 +138,14 @@ def main() -> int:
 
         def _fetch(thread_id: str) -> tuple[str, dict, int]:
             thread_data = adapter._gws_with_retry(
-                ["gmail", "users", "threads", "get", "--params", json.dumps({"userId": "me", "id": thread_id, "format": "full"})]
+                [
+                    "gmail",
+                    "users",
+                    "threads",
+                    "get",
+                    "--params",
+                    json.dumps({"userId": "me", "id": thread_id, "format": "full"}),
+                ]
             )
             attachment_fetch_count = _inline_calendar_attachment_bodies(adapter, thread_data)
             return thread_id, thread_data, attachment_fetch_count

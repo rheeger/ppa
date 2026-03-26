@@ -7,7 +7,6 @@ from archive_sync.adapters.gmail_correspondents import GmailCorrespondentsAdapte
 from archive_sync.adapters.linkedin import LinkedInAdapter
 from archive_sync.adapters.notion_people import NotionStaffAdapter
 from hfa.vault import read_note
-from hfa.vault import read_note
 
 
 def test_contacts_ingest_indexes_all_aliases(tmp_vault):

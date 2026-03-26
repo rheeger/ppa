@@ -36,9 +36,7 @@ def configure_logging(verbose: bool = False) -> None:
     if _CONFIGURED:
         return
     handler = logging.StreamHandler(sys.stderr)
-    handler.setFormatter(
-        logging.Formatter("%(asctime)s [%(name)s] %(levelname)s %(message)s")
-    )
+    handler.setFormatter(logging.Formatter("%(asctime)s [%(name)s] %(levelname)s %(message)s"))
     root_ppa.addHandler(handler)
     root_ppa.propagate = False
     _CONFIGURED = True

@@ -11,9 +11,10 @@ import urllib.request
 from datetime import date, datetime
 from typing import Any
 
-from .base import BaseAdapter, deterministic_provenance
 from hfa.schema import PersonCard
 from hfa.uid import generate_uid
+
+from .base import BaseAdapter, deterministic_provenance
 
 
 def _vcf_unescape(value: str) -> str:
@@ -60,7 +61,9 @@ class ContactsAdapter(BaseAdapter):
     def get_cursor_key(self, **kwargs) -> str:
         raw_sources = kwargs.get("sources") or []
         normalized = {
-            "contacts.apple" if str(source).strip().lower() in {"apple", "vcf"} else f"contacts.{str(source).strip().lower()}"
+            "contacts.apple"
+            if str(source).strip().lower() in {"apple", "vcf"}
+            else f"contacts.{str(source).strip().lower()}"
             for source in raw_sources
             if str(source).strip()
         }
@@ -96,9 +99,7 @@ class ContactsAdapter(BaseAdapter):
 
     def _selected_google_accounts(self, available_accounts: dict[str, Any]) -> list[str]:
         explicit_names = [
-            value.strip()
-            for value in os.environ.get("HFA_GOOGLE_CONTACTS_ACCOUNTS", "").split(",")
-            if value.strip()
+            value.strip() for value in os.environ.get("HFA_GOOGLE_CONTACTS_ACCOUNTS", "").split(",") if value.strip()
         ]
         if explicit_names:
             return [name for name in explicit_names if name in available_accounts]
@@ -189,6 +190,7 @@ class ContactsAdapter(BaseAdapter):
             _has_arnoldlib = True
             try:
                 from arnoldlib.bootstrap import bootstrap
+
                 bootstrap()
             except ImportError:
                 _has_arnoldlib = False
@@ -200,11 +202,15 @@ class ContactsAdapter(BaseAdapter):
                     try:
                         if _has_arnoldlib:
                             try:
-                                response = self._fetch_google_page_via_proxy(account, fields=fields, page_token=page_token)
+                                response = self._fetch_google_page_via_proxy(
+                                    account, fields=fields, page_token=page_token
+                                )
                             except Exception as exc:
                                 if not self._should_fallback_to_direct_google(exc):
                                     raise
-                                response = self._fetch_google_page_via_direct(account, fields=fields, page_token=page_token)
+                                response = self._fetch_google_page_via_direct(
+                                    account, fields=fields, page_token=page_token
+                                )
                         else:
                             response = self._fetch_google_page_via_direct(account, fields=fields, page_token=page_token)
                     except Exception:
@@ -227,7 +233,9 @@ class ContactsAdapter(BaseAdapter):
             candidates = [
                 os.path.join(home, "Downloads", "apple-contacts-export.vcf"),
                 os.path.join(home, "Downloads", "vcard-jenny-souza.vcf"),
-                os.path.join(home, "Documents", "Health & Personal", "01_Documents", "06_Wedding", "Steven B_ Goldfarb.vcf"),
+                os.path.join(
+                    home, "Documents", "Health & Personal", "01_Documents", "06_Wedding", "Steven B_ Goldfarb.vcf"
+                ),
             ]
             candidates.extend(glob.glob(os.path.join(home, "Downloads", "*contacts*.vcf")))
         rows: list[dict[str, Any]] = []
