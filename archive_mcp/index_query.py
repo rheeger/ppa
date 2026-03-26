@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from .explain import (projection_explain_payload, projection_inventory_payload,
@@ -173,9 +175,38 @@ class QueryMixin:
             params.append(end_date)
         return clauses, params
 
+    @staticmethod
+    def _merge_lexical_uid_rows(
+        a: list[dict[str, Any]], b: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Keep best lexical_score per card_uid (same rule as retrieval_pipeline.merge_lexical_rows)."""
+        by_uid: dict[str, dict[str, Any]] = {str(r["card_uid"]): dict(r) for r in a}
+        for row in b:
+            uid = str(row["card_uid"])
+            prev = by_uid.get(uid)
+            if prev is None or float(row.get("lexical_score", 0.0)) > float(
+                prev.get("lexical_score", 0.0)
+            ):
+                by_uid[uid] = dict(row)
+        return list(by_uid.values())
+
+    @staticmethod
+    def _lexical_row_sort_key(row: dict[str, Any]) -> tuple:
+        exact = (
+            int(row.get("slug_exact", 0))
+            + int(row.get("summary_exact", 0))
+            + int(row.get("external_id_exact", 0))
+            + int(row.get("person_exact", 0))
+        )
+        return (
+            -exact,
+            -float(row.get("lexical_score", 0.0)),
+            str(row.get("activity_at", "")),
+            str(row.get("rel_path", "")),
+        )
+
     def _lexical_candidates(
         self,
-        conn,
         *,
         query: str,
         type_filter: str = "",
@@ -185,6 +216,13 @@ class QueryMixin:
         end_date: str = "",
         limit: int,
     ) -> list[dict[str, Any]]:
+        """Lexical candidates via two branches on one connection: FTS then exact-match, merged.
+
+        Split into two queries to avoid a single OR that forces Postgres into a
+        slow plan (bitmap OR across GIN + btree). Sorting uses a wrapped subquery
+        so ORDER BY references real columns (PG does not allow output aliases
+        inside expressions in ORDER BY at the same SELECT level).
+        """
         normalized_query = _normalize_exact_text(query)
         clauses, params = self._filter_clauses(
             alias="c",
@@ -194,7 +232,9 @@ class QueryMixin:
             start_date=start_date,
             end_date=end_date,
         )
-        sql = f"""
+        branch_limit = max(limit * 2, limit)
+
+        select_sql = f"""
             SELECT c.uid AS card_uid, c.rel_path, c.summary, c.type, c.activity_at,
                    ts_rank_cd(c.search_document, plainto_tsquery('english', %s)) AS lexical_score,
                    CASE WHEN lower(c.slug) = %s THEN 1 ELSE 0 END AS slug_exact,
@@ -208,55 +248,72 @@ class QueryMixin:
                        WHERE cp.card_uid = c.uid AND lower(cp.person) = %s
                    ) THEN 1 ELSE 0 END AS person_exact
             FROM {self.schema}.cards c
-            WHERE {' AND '.join(clauses)}
-              AND (
-                  c.search_document @@ plainto_tsquery('english', %s)
-                  OR lower(c.slug) = %s
-                  OR lower(c.summary) = %s
-                  OR EXISTS (
-                      SELECT 1 FROM {self.schema}.external_ids ei
-                      WHERE ei.card_uid = c.uid AND lower(ei.external_id) = %s
-                  )
-                  OR EXISTS (
-                      SELECT 1 FROM {self.schema}.card_people cp
-                      WHERE cp.card_uid = c.uid AND lower(cp.person) = %s
-                  )
-              )
-            ORDER BY
-                (CASE WHEN lower(c.slug) = %s THEN 1 ELSE 0 END
-                + CASE WHEN lower(c.summary) = %s THEN 1 ELSE 0 END
-                + CASE WHEN EXISTS (
-                      SELECT 1 FROM {self.schema}.external_ids ei
-                      WHERE ei.card_uid = c.uid AND lower(ei.external_id) = %s
-                  ) THEN 1 ELSE 0 END
-                + CASE WHEN EXISTS (
-                      SELECT 1 FROM {self.schema}.card_people cp
-                      WHERE cp.card_uid = c.uid AND lower(cp.person) = %s
-                  ) THEN 1 ELSE 0 END) DESC,
-                lexical_score DESC,
-                c.activity_at DESC,
-                c.rel_path ASC
-            LIMIT %s
         """
-        query_params = [
-            query,
-            normalized_query,
-            normalized_query,
-            normalized_query,
-            normalized_query,
-            *params,
-            query,
-            normalized_query,
-            normalized_query,
-            normalized_query,
-            normalized_query,
-            normalized_query,
-            normalized_query,
-            normalized_query,
-            normalized_query,
-            limit,
-        ]
-        return [dict(row) for row in conn.execute(sql, query_params).fetchall()]
+
+        # Postgres allows ORDER BY output aliases only as bare identifiers, not inside
+        # expressions—wrap so sort keys reference subquery columns (see PG ORDER BY rules).
+        def _wrap_lexical_order(inner_sql: str) -> str:
+            return f"""
+                SELECT * FROM ({inner_sql}) AS _lex
+                ORDER BY (_lex.slug_exact + _lex.summary_exact + _lex.external_id_exact + _lex.person_exact) DESC,
+                         _lex.lexical_score DESC,
+                         _lex.activity_at DESC,
+                         _lex.rel_path ASC
+                LIMIT %s
+            """
+
+        with self._connect() as conn:
+            inner_fts = f"""
+                {select_sql}
+                WHERE {' AND '.join(clauses)}
+                  AND c.search_document @@ plainto_tsquery('english', %s)
+            """
+            fts_sql = _wrap_lexical_order(inner_fts)
+            fts_params = [
+                query,
+                normalized_query,
+                normalized_query,
+                normalized_query,
+                normalized_query,
+                *params,
+                query,
+                branch_limit,
+            ]
+            fts_rows = [dict(r) for r in conn.execute(fts_sql, fts_params).fetchall()]
+
+            inner_exact = f"""
+                {select_sql}
+                WHERE {' AND '.join(clauses)}
+                  AND (
+                      c.slug = %s
+                      OR EXISTS (
+                          SELECT 1 FROM {self.schema}.external_ids ei
+                          WHERE ei.card_uid = c.uid AND lower(ei.external_id) = %s
+                      )
+                      OR EXISTS (
+                          SELECT 1 FROM {self.schema}.card_people cp
+                          WHERE cp.card_uid = c.uid AND lower(cp.person) = %s
+                      )
+                  )
+            """
+            exact_sql = _wrap_lexical_order(inner_exact)
+            exact_params = [
+                query,
+                normalized_query,
+                normalized_query,
+                normalized_query,
+                normalized_query,
+                *params,
+                normalized_query,
+                normalized_query,
+                normalized_query,
+                branch_limit,
+            ]
+            exact_rows = [dict(r) for r in conn.execute(exact_sql, exact_params).fetchall()]
+
+        merged = self._merge_lexical_uid_rows(fts_rows, exact_rows)
+        merged.sort(key=self._lexical_row_sort_key)
+        return merged[:limit]
 
     def _vector_candidate_rows(
         self,
@@ -299,7 +356,16 @@ class QueryMixin:
         rows = conn.execute(sql, [vector_value, embedding_model, embedding_version, *params, vector_value, limit]).fetchall()
         return [dict(row) for row in rows]
 
-    def _aggregate_vector_candidates(self, rows: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
+    def _aggregate_vector_candidates(
+        self, rows: list[dict[str, Any]], *, limit: int
+    ) -> list[dict[str, Any]]:
+        """Collapse chunk-level vector rows to card-level, keeping best similarity.
+
+        Returns rows sorted by similarity desc with provenance metadata but no
+        composite score. Callers that need a scored ranking (vector_search) apply
+        _score_and_rank_vector separately; hybrid callers pass these rows directly
+        to fuse_lexical_vector_rows which computes its own unified score.
+        """
         grouped: dict[str, dict[str, Any]] = {}
         for row in rows:
             card_uid = str(row["card_uid"])
@@ -335,21 +401,42 @@ class QueryMixin:
                 entry["source_fields"] = source_fields
                 entry["provenance_bias"] = _field_provenance_label(source_fields)
                 entry["provenance_score"] = _field_provenance_bonus(source_fields)
-        ranked = list(grouped.values())
-        _apply_recency_boost(ranked, key_name="recency_score")
-        for entry in ranked:
-            similarity = float(entry["similarity"])
-            chunk_match_boost = min(max(int(entry["matched_chunk_count"]) - 1, 0) * 0.025, 0.1)
+        ranked = sorted(
+            grouped.values(),
+            key=lambda e: (-float(e["similarity"]), str(e["rel_path"])),
+        )
+        return ranked[:limit]
+
+    def _score_and_rank_vector(
+        self, rows: list[dict[str, Any]], *, limit: int
+    ) -> list[dict[str, Any]]:
+        """Apply composite scoring to card-level vector candidates.
+
+        Scores combine similarity, type priors, recency, provenance, and a
+        multi-chunk match boost. Used only by vector_search; hybrid retrieval
+        computes its own unified score in the fusion stage.
+        """
+        _apply_recency_boost(rows, key_name="recency_score")
+        for entry in rows:
+            chunk_match_boost = min(
+                max(int(entry["matched_chunk_count"]) - 1, 0) * 0.025, 0.1
+            )
             entry["score"] = round(
-                (similarity * 1.35)
+                (float(entry["similarity"]) * 1.35)
                 + _card_type_prior(str(entry["type"]))
                 + float(entry.get("recency_score", 0.0))
                 + float(entry.get("provenance_score", 0.0))
                 + chunk_match_boost,
                 6,
             )
-        ranked.sort(key=lambda entry: (-float(entry["score"]), -float(entry["similarity"]), str(entry["rel_path"])))
-        return ranked[:limit]
+        rows.sort(
+            key=lambda e: (
+                -float(e["score"]),
+                -float(e["similarity"]),
+                str(e["rel_path"]),
+            )
+        )
+        return rows[:limit]
 
     def _graph_neighbor_uids(self, conn, anchor_uids: list[str]) -> set[str]:
         if not anchor_uids:
@@ -413,7 +500,8 @@ class QueryMixin:
                 end_date=end_date,
                 limit=max(limit * VECTOR_CANDIDATE_MULTIPLIER, limit),
             )
-        return self._aggregate_vector_candidates(candidate_rows, limit=limit)
+        grouped = self._aggregate_vector_candidates(candidate_rows, limit=limit)
+        return self._score_and_rank_vector(grouped, limit=limit)
 
     def fetch_hybrid_lexical_vector(
         self,
@@ -429,15 +517,22 @@ class QueryMixin:
         end_date: str = "",
         candidate_limit: int = 20,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        """Lexical SQL rows + aggregated vector card rows (same limits as legacy hybrid_search fetch)."""
+        """Fetch lexical and vector candidates in parallel on separate connections.
+
+        Lexical and vector retrieval are genuinely independent (different SQL,
+        different indexes) so they run in a two-thread pool. Each branch opens
+        its own connection; peak concurrency is two connections per call.
+        Errors from either branch are logged to stderr before re-raising so
+        they are visible in MCP output even if the other branch is still running.
+        """
         self.ensure_ready()
         cleaned = query.strip()
         if not cleaned:
             return [], []
         cap = max(candidate_limit, 1)
-        with self._connect() as conn:
-            lexical_rows = self._lexical_candidates(
-                conn,
+
+        def _lexical_job() -> list[dict[str, Any]]:
+            return self._lexical_candidates(
                 query=cleaned,
                 type_filter=type_filter,
                 source_filter=source_filter,
@@ -446,21 +541,46 @@ class QueryMixin:
                 end_date=end_date,
                 limit=cap,
             )
-            vector_rows = self._aggregate_vector_candidates(
-                self._vector_candidate_rows(
-                    conn,
-                    query_vector=query_vector,
-                    embedding_model=embedding_model,
-                    embedding_version=embedding_version,
-                    type_filter=type_filter,
-                    source_filter=source_filter,
-                    people_filter=people_filter,
-                    start_date=start_date,
-                    end_date=end_date,
+
+        def _vector_job() -> list[dict[str, Any]]:
+            with self._connect() as conn:
+                return self._aggregate_vector_candidates(
+                    self._vector_candidate_rows(
+                        conn,
+                        query_vector=query_vector,
+                        embedding_model=embedding_model,
+                        embedding_version=embedding_version,
+                        type_filter=type_filter,
+                        source_filter=source_filter,
+                        people_filter=people_filter,
+                        start_date=start_date,
+                        end_date=end_date,
+                        limit=cap,
+                    ),
                     limit=cap,
-                ),
-                limit=cap,
-            )
+                )
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            fut_lex = pool.submit(_lexical_job)
+            fut_vec = pool.submit(_vector_job)
+            try:
+                lexical_rows = fut_lex.result()
+            except Exception as exc:
+                print(
+                    f"[ppa] lexical retrieval failed: {exc!r}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                raise
+            try:
+                vector_rows = fut_vec.result()
+            except Exception as exc:
+                print(
+                    f"[ppa] vector retrieval failed: {exc!r}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                raise
         return lexical_rows, vector_rows
 
     def fetch_graph_neighbors_for_uids(self, anchor_uids: list[str]) -> set[str]:
@@ -661,17 +781,15 @@ class QueryMixin:
         cleaned = query.strip()
         if not cleaned:
             return []
-        with self._connect() as conn:
-            rows = self._lexical_candidates(
-                conn,
-                query=cleaned,
-                type_filter=type_filter,
-                source_filter=source_filter,
-                people_filter=people_filter,
-                start_date=start_date,
-                end_date=end_date,
-                limit=limit,
-            )
+        rows = self._lexical_candidates(
+            query=cleaned,
+            type_filter=type_filter,
+            source_filter=source_filter,
+            people_filter=people_filter,
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
+        )
         for row in rows:
             row["matched_by"] = "lexical"
             row["exact_match"] = bool(

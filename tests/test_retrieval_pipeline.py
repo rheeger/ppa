@@ -104,3 +104,99 @@ def test_reranker_does_not_bury_exact_match_hits():
     rr = {"a": RerankResult(card_uid="a", score=0.0), "b": RerankResult(card_uid="b", score=1.0)}
     out = blend_rerank_scores(rows, rr, preserve_exact_match_floor=True)
     assert out[0]["card_uid"] == "a"
+
+
+def test_lexical_sql_contains_no_literal_brace_schema():
+    """The SQL built by _lexical_candidates must not contain un-interpolated {self.schema}."""
+    from unittest.mock import MagicMock
+
+    from archive_mcp.index_query import QueryMixin
+
+    captured_sql: list[str] = []
+
+    class FakeCursor:
+        def fetchall(self):
+            return []
+
+    class FakeConn:
+        def execute(self, sql, params=None):
+            captured_sql.append(sql)
+            return FakeCursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+
+    mixin = MagicMock(spec=QueryMixin)
+    mixin.schema = "test_schema"
+    mixin._connect = MagicMock(return_value=FakeConn())
+    mixin._filter_clauses = QueryMixin._filter_clauses.__get__(mixin)
+    mixin._merge_lexical_uid_rows = QueryMixin._merge_lexical_uid_rows
+    mixin._lexical_row_sort_key = QueryMixin._lexical_row_sort_key
+
+    QueryMixin._lexical_candidates(mixin, query="hello", limit=10)
+
+    assert captured_sql, "No SQL was captured"
+    for sql in captured_sql:
+        assert "{self.schema}" not in sql, f"Literal '{{self.schema}}' found in SQL: {sql[:200]}"
+        assert "{self" not in sql, f"Literal '{{self' found in SQL: {sql[:200]}"
+        assert "test_schema" in sql, f"Schema not interpolated in SQL: {sql[:200]}"
+
+
+def test_fetch_hybrid_propagates_lexical_error():
+    """A lexical retrieval error must propagate out of fetch_hybrid_lexical_vector."""
+    from unittest.mock import MagicMock
+
+    from archive_mcp.index_query import QueryMixin
+
+    mixin = MagicMock(spec=QueryMixin)
+    mixin.schema = "test_schema"
+    mixin.ensure_ready = MagicMock()
+    mixin._lexical_candidates = MagicMock(side_effect=RuntimeError("lexical boom"))
+    mixin._aggregate_vector_candidates = MagicMock(return_value=[])
+    mixin._vector_candidate_rows = MagicMock(return_value=[])
+
+    try:
+        QueryMixin.fetch_hybrid_lexical_vector(
+            mixin,
+            query="test",
+            query_vector=[0.1] * 8,
+            embedding_model="m",
+            embedding_version=1,
+            candidate_limit=5,
+        )
+        raise AssertionError("Should have raised")
+    except RuntimeError as exc:
+        assert "lexical boom" in str(exc)
+
+
+def test_fetch_hybrid_propagates_vector_error():
+    """A vector retrieval error must propagate out of fetch_hybrid_lexical_vector."""
+    from unittest.mock import MagicMock
+
+    from archive_mcp.index_query import QueryMixin
+
+    mixin = MagicMock(spec=QueryMixin)
+    mixin.schema = "test_schema"
+    mixin.ensure_ready = MagicMock()
+    mixin._lexical_candidates = MagicMock(return_value=[])
+
+    def _bad_connect():
+        raise RuntimeError("vector boom")
+
+    mixin._connect = _bad_connect
+
+    try:
+        QueryMixin.fetch_hybrid_lexical_vector(
+            mixin,
+            query="test",
+            query_vector=[0.1] * 8,
+            embedding_model="m",
+            embedding_version=1,
+            candidate_limit=5,
+        )
+        raise AssertionError("Should have raised")
+    except RuntimeError as exc:
+        assert "vector boom" in str(exc)
