@@ -19,6 +19,7 @@ def _ppa_env(canonical: str, default: str = "") -> str:
     value = os.environ.get(canonical, "").strip()
     return value if value else default
 
+
 from hfa.schema import DETERMINISTIC_ONLY, LLM_ELIGIBLE
 
 from .projections.registry import EDGE_RULE_SPECS, PROJECTION_REGISTRY
@@ -76,7 +77,9 @@ CARD_TYPE_PRIORS = {
     "beeper_attachment": 0.03,
 }
 
-PROJECTIONS_BY_LOAD_ORDER = tuple(sorted(PROJECTION_REGISTRY, key=lambda projection: projection.load_order))
+PROJECTIONS_BY_LOAD_ORDER = tuple(
+    sorted(PROJECTION_REGISTRY, key=lambda projection: projection.load_order)
+)
 EDGE_RULE_BY_CARD_TYPE = {spec.card_type: spec for spec in EDGE_RULE_SPECS}
 
 
@@ -108,6 +111,18 @@ def get_index_schema() -> str:
 def get_vector_dimension() -> int:
     v = _ppa_env_int("PPA_VECTOR_DIMENSION", default=DEFAULT_VECTOR_DIMENSION)
     return v if v > 0 else DEFAULT_VECTOR_DIMENSION
+
+
+def get_statement_timeout_ms() -> int:
+    """Postgres ``statement_timeout`` in milliseconds. Prevents runaway queries."""
+    v = _ppa_env_int("PPA_STATEMENT_TIMEOUT_MS", default=30000)
+    return max(v, 1000)
+
+
+def get_connect_timeout() -> int:
+    """Postgres ``connect_timeout`` in seconds. Prevents indefinite connection hangs."""
+    v = _ppa_env_int("PPA_CONNECT_TIMEOUT", default=5)
+    return max(v, 1)
 
 
 def get_chunk_char_limit() -> int:
@@ -169,18 +184,24 @@ def get_rebuild_batch_size() -> int:
 
 
 def get_rebuild_commit_interval() -> int:
-    v = _ppa_env_int("PPA_REBUILD_COMMIT_INTERVAL", default=DEFAULT_REBUILD_COMMIT_INTERVAL)
+    v = _ppa_env_int(
+        "PPA_REBUILD_COMMIT_INTERVAL", default=DEFAULT_REBUILD_COMMIT_INTERVAL
+    )
     return max(v, 1)
 
 
 def get_rebuild_progress_every() -> int:
-    v = _ppa_env_int("PPA_REBUILD_PROGRESS_EVERY", default=DEFAULT_REBUILD_PROGRESS_EVERY)
+    v = _ppa_env_int(
+        "PPA_REBUILD_PROGRESS_EVERY", default=DEFAULT_REBUILD_PROGRESS_EVERY
+    )
     return max(v, 0)
 
 
 def get_rebuild_executor() -> str:
     value = _ppa_env("PPA_REBUILD_EXECUTOR", default=DEFAULT_REBUILD_EXECUTOR).lower()
-    return value if value in {"thread", "process", "serial"} else DEFAULT_REBUILD_EXECUTOR
+    return (
+        value if value in {"thread", "process", "serial"} else DEFAULT_REBUILD_EXECUTOR
+    )
 
 
 def get_rebuild_staging_mode() -> str:
@@ -270,7 +291,11 @@ def _apply_recency_boost(rows: list[dict[str, Any]], *, key_name: str) -> None:
     dated = [row for row in rows if str(row.get("activity_at", "")).strip()]
     if not dated:
         return
-    ordered = sorted(dated, key=lambda row: (str(row.get("activity_at", "")), str(row.get("rel_path", ""))), reverse=True)
+    ordered = sorted(
+        dated,
+        key=lambda row: (str(row.get("activity_at", "")), str(row.get("rel_path", ""))),
+        reverse=True,
+    )
     total = max(len(ordered) - 1, 1)
     for index, row in enumerate(ordered):
         row[key_name] = round((1.0 - (index / total)) * 0.06, 6)

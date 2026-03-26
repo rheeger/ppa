@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import time
 from pathlib import Path
 
 try:
     from mcp.server.fastmcp import FastMCP
 except ImportError:  # pragma: no cover
+
     class FastMCP:  # type: ignore[override]
         def __init__(self, *_args, **_kwargs):
             pass
@@ -25,28 +28,64 @@ except ImportError:  # pragma: no cover
 
 from hfa.provenance import validate_provenance
 from hfa.schema import BaseCard, validate_card_permissive, validate_card_strict
-from hfa.vault import (find_note_by_slug, iter_notes, iter_parsed_notes,
-                       read_note)
+from hfa.vault import find_note_by_slug, iter_notes, iter_parsed_notes, read_note
 
 from .embedding_provider import get_embedding_provider
 from .index_config import get_seed_links_enabled
-from .index_store import (BaseArchiveIndex, PostgresArchiveIndex,
-                          get_archive_index, get_default_embedding_model,
-                          get_default_embedding_version, get_index_dsn)
+from .index_store import (
+    BaseArchiveIndex,
+    PostgresArchiveIndex,
+    get_archive_index,
+    get_default_embedding_model,
+    get_default_embedding_version,
+    get_index_dsn,
+)
 from .store import get_archive_store
 
-_SEED_LINKS_DISABLED_MSG = "Seed links are not enabled. Set PPA_SEED_LINKS_ENABLED=1 to enable."
+_SEED_LINKS_DISABLED_MSG = (
+    "Seed links are not enabled. Set PPA_SEED_LINKS_ENABLED=1 to enable."
+)
+
+_log = logging.getLogger("ppa.server")
+
+
+def _log_tool_call(tool_name: str, **params: object) -> float:
+    """Log tool invocation at INFO. Returns monotonic start time for elapsed calculation."""
+    parts = " ".join(f"{k}={v!r}" for k, v in params.items())
+    _log.info("tool_start tool=%s %s", tool_name, parts)
+    return time.monotonic()
+
+
+def _log_tool_done(tool_name: str, t0: float, **extra: object) -> None:
+    elapsed_ms = int((time.monotonic() - t0) * 1000)
+    extras = " ".join(f"{k}={v!r}" for k, v in extra.items())
+    if extras:
+        _log.info("tool_done tool=%s elapsed_ms=%d %s", tool_name, elapsed_ms, extras)
+    else:
+        _log.info("tool_done tool=%s elapsed_ms=%d", tool_name, elapsed_ms)
+
+
+def _log_tool_return_error(tool_name: str, message: str) -> str:
+    _log.error("tool=%s error=%s", tool_name, message)
+    return message
 
 
 def _import_seed_links():
-    from .seed_links import (compute_link_quality_gate,
-                             get_link_candidate_details, get_seed_scope_rows,
-                             get_surface_policy_rows, list_link_candidates,
-                             review_link_candidate,
-                             run_incremental_link_refresh,
-                             run_seed_link_backfill, run_seed_link_enqueue,
-                             run_seed_link_promotion_workers,
-                             run_seed_link_report, run_seed_link_workers)
+    from .seed_links import (
+        compute_link_quality_gate,
+        get_link_candidate_details,
+        get_seed_scope_rows,
+        get_surface_policy_rows,
+        list_link_candidates,
+        review_link_candidate,
+        run_incremental_link_refresh,
+        run_seed_link_backfill,
+        run_seed_link_enqueue,
+        run_seed_link_promotion_workers,
+        run_seed_link_report,
+        run_seed_link_workers,
+    )
+
     return {
         "compute_link_quality_gate": compute_link_quality_gate,
         "get_link_candidate_details": get_link_candidate_details,
@@ -62,7 +101,10 @@ def _import_seed_links():
         "run_seed_link_workers": run_seed_link_workers,
     }
 
-_instance_name = os.environ.get("PPA_INSTANCE_NAME", "Personal Private Archives").strip()
+
+_instance_name = os.environ.get(
+    "PPA_INSTANCE_NAME", "Personal Private Archives"
+).strip()
 mcp = FastMCP("ppa", _instance_name)
 
 _TOOL_PROFILES: dict[str, set[str] | None] = {
@@ -146,6 +188,7 @@ def _load_store(vault: Path):
 
 def _tool_profile_error(tool_name: str) -> str | None:
     from .index_config import _ppa_env
+
     profile = _ppa_env("PPA_MCP_TOOL_PROFILE", default="full").lower() or "full"
     allowed = _TOOL_PROFILES.get(profile)
     if allowed is None:
@@ -199,39 +242,53 @@ def _all_cards(vault: Path) -> list[tuple[Path, BaseCard, str, dict]]:
 def archive_search(query: str, limit: int = 20) -> str:
     """Full-text search across all notes."""
 
-    profile_error = _tool_profile_error("archive_search")
-    if profile_error:
-        return profile_error
-    vault = get_vault()
-    if not vault.is_dir():
-        return "Vault not found"
-    store, error = _load_store(vault)
-    if error:
-        return error
-    assert store is not None
-    rows = store.search(query, limit=limit)["rows"]
-    results = [_format_search_line(row) for row in rows]
-    return "\n".join(results) if results else "No matches"
+    t0 = _log_tool_call("archive_search", query=query, limit=limit)
+    try:
+        profile_error = _tool_profile_error("archive_search")
+        if profile_error:
+            return _log_tool_return_error("archive_search", profile_error)
+        vault = get_vault()
+        if not vault.is_dir():
+            return _log_tool_return_error("archive_search", "Vault not found")
+        store, error = _load_store(vault)
+        if error:
+            return _log_tool_return_error("archive_search", error)
+        assert store is not None
+        rows = store.search(query, limit=limit)["rows"]
+        results = [_format_search_line(row) for row in rows]
+        out = "\n".join(results) if results else "No matches"
+        _log_tool_done("archive_search", t0, result_count=len(rows))
+        return out
+    except Exception as exc:
+        _log.error("tool=archive_search error=%s", str(exc))
+        raise
 
 
 @mcp.tool()
 def archive_read(path_or_uid: str) -> str:
     """Read note by relative path or UID."""
 
-    profile_error = _tool_profile_error("archive_read")
-    if profile_error:
-        return profile_error
-    vault = get_vault()
-    if not vault.is_dir():
-        return "Vault not found"
-    store, error = _load_store(vault)
-    if error:
-        return error
-    assert store is not None
-    payload = store.read(path_or_uid)
-    if not payload.get("found"):
-        return "Not found"
-    return str(payload.get("content", ""))
+    t0 = _log_tool_call("archive_read", path_or_uid=path_or_uid)
+    try:
+        profile_error = _tool_profile_error("archive_read")
+        if profile_error:
+            return _log_tool_return_error("archive_read", profile_error)
+        vault = get_vault()
+        if not vault.is_dir():
+            return _log_tool_return_error("archive_read", "Vault not found")
+        store, error = _load_store(vault)
+        if error:
+            return _log_tool_return_error("archive_read", error)
+        assert store is not None
+        payload = store.read(path_or_uid)
+        if not payload.get("found"):
+            _log_tool_done("archive_read", t0, found=False)
+            return "Not found"
+        _log_tool_done("archive_read", t0, found=True)
+        return str(payload.get("content", ""))
+    except Exception as exc:
+        _log.error("tool=archive_read error=%s", str(exc))
+        raise
 
 
 @mcp.tool()
@@ -244,25 +301,39 @@ def archive_query(
 ) -> str:
     """Structured query by frontmatter fields."""
 
-    profile_error = _tool_profile_error("archive_query")
-    if profile_error:
-        return profile_error
-    vault = get_vault()
-    if not vault.is_dir():
-        return "Vault not found"
-    store, error = _load_store(vault)
-    if error:
-        return error
-    assert store is not None
-    rows = store.query(
+    t0 = _log_tool_call(
+        "archive_query",
         type_filter=type_filter,
         source_filter=source_filter,
         people_filter=people_filter,
         org_filter=org_filter,
         limit=limit,
-    )["rows"]
-    results = [_format_search_line(row) for row in rows]
-    return "\n".join(results) if results else "No matches"
+    )
+    try:
+        profile_error = _tool_profile_error("archive_query")
+        if profile_error:
+            return _log_tool_return_error("archive_query", profile_error)
+        vault = get_vault()
+        if not vault.is_dir():
+            return _log_tool_return_error("archive_query", "Vault not found")
+        store, error = _load_store(vault)
+        if error:
+            return _log_tool_return_error("archive_query", error)
+        assert store is not None
+        rows = store.query(
+            type_filter=type_filter,
+            source_filter=source_filter,
+            people_filter=people_filter,
+            org_filter=org_filter,
+            limit=limit,
+        )["rows"]
+        results = [_format_search_line(row) for row in rows]
+        out = "\n".join(results) if results else "No matches"
+        _log_tool_done("archive_query", t0, result_count=len(rows))
+        return out
+    except Exception as exc:
+        _log.error("tool=archive_query error=%s", str(exc))
+        raise
 
 
 @mcp.tool()
@@ -334,7 +405,10 @@ def archive_timeline(start_date: str = "", end_date: str = "", limit: int = 20) 
         return error
     assert store is not None
     rows = store.timeline(start_date=start_date, end_date=end_date, limit=limit)["rows"]
-    results = [f"- {str(row['created'])[:10]} {row['rel_path']}: {str(row['summary'])[:160]}" for row in rows]
+    results = [
+        f"- {str(row['created'])[:10]} {row['rel_path']}: {str(row['summary'])[:160]}"
+        for row in rows
+    ]
     return "\n".join(results) if results else "No matches"
 
 
@@ -380,7 +454,9 @@ def archive_validate() -> str:
         try:
             frontmatter, _, provenance = read_note(vault, str(rel_path))
             card = validate_card_strict(frontmatter)
-            provenance_errors = validate_provenance(card.model_dump(mode="python"), provenance)
+            provenance_errors = validate_provenance(
+                card.model_dump(mode="python"), provenance
+            )
             if provenance_errors:
                 raise ValueError("; ".join(provenance_errors))
             valid += 1
@@ -423,7 +499,9 @@ def archive_duplicates() -> str:
         existing = str(candidate.get("existing", ""))
         confidence = candidate.get("confidence", "")
         incoming = candidate.get("incoming", {})
-        incoming_summary = incoming.get("summary", "") if isinstance(incoming, dict) else ""
+        incoming_summary = (
+            incoming.get("summary", "") if isinstance(incoming, dict) else ""
+        )
         lines.append(f"- {incoming_summary} -> {existing} ({confidence})")
     return "\n".join(lines) if lines else "No pending duplicate candidates"
 
@@ -595,7 +673,9 @@ def archive_projection_explain(card_uid: str) -> str:
 
 
 @mcp.tool()
-def archive_embedding_status(embedding_model: str = "", embedding_version: int = 0) -> str:
+def archive_embedding_status(
+    embedding_model: str = "", embedding_version: int = 0
+) -> str:
     """Report embedding backlog status for a given model/version."""
 
     profile_error = _tool_profile_error("archive_embedding_status")
@@ -613,13 +693,22 @@ def archive_embedding_status(embedding_model: str = "", embedding_version: int =
         embedding_version=embedding_version,
     )
     lines = ["Archive embedding status:"]
-    for key in ("embedding_model", "embedding_version", "chunk_schema_version", "chunk_count", "embedded_chunk_count", "pending_chunk_count"):
+    for key in (
+        "embedding_model",
+        "embedding_version",
+        "chunk_schema_version",
+        "chunk_count",
+        "embedded_chunk_count",
+        "pending_chunk_count",
+    ):
         lines.append(f"- {key}: {status[key]}")
     return "\n".join(lines)
 
 
 @mcp.tool()
-def archive_embedding_backlog(limit: int = 20, embedding_model: str = "", embedding_version: int = 0) -> str:
+def archive_embedding_backlog(
+    limit: int = 20, embedding_model: str = "", embedding_version: int = 0
+) -> str:
     """List chunks that are still pending embeddings for a given model/version."""
 
     profile_error = _tool_profile_error("archive_embedding_backlog")
@@ -652,7 +741,9 @@ def archive_embedding_backlog(limit: int = 20, embedding_model: str = "", embedd
 
 
 @mcp.tool()
-def archive_embed_pending(limit: int = 20, embedding_model: str = "", embedding_version: int = 0) -> str:
+def archive_embed_pending(
+    limit: int = 20, embedding_model: str = "", embedding_version: int = 0
+) -> str:
     """Generate embeddings for pending chunks using the configured embedding provider."""
 
     profile_error = _tool_profile_error("archive_embed_pending")
@@ -702,10 +793,16 @@ def archive_seed_link_surface() -> str:
     lines = ["Archive seed link surface:", "", "Scope:"]
     for row in scope_rows:
         modules = ",".join(row["modules"])
-        lines.append(f"- priority={row['priority']} type={row['card_type']} modules={modules}")
+        lines.append(
+            f"- priority={row['priority']} type={row['card_type']} modules={modules}"
+        )
     lines.extend(["", "Policies:"])
     for row in policy_rows:
-        target_field = f" field={row['canonical_field_name']}" if row["canonical_field_name"] else ""
+        target_field = (
+            f" field={row['canonical_field_name']}"
+            if row["canonical_field_name"]
+            else ""
+        )
         lines.append(
             f"- {row['link_type']} module={row['module_name']} surface={row['surface']} "
             f"promotion={row['promotion_target']}{target_field} auto={row['auto_promote_floor']:.2f} "
@@ -715,7 +812,12 @@ def archive_seed_link_surface() -> str:
 
 
 @mcp.tool()
-def archive_seed_link_enqueue(modules: str = "", source_uids: str = "", job_type: str = "seed_backfill", reset_existing: bool = False) -> str:
+def archive_seed_link_enqueue(
+    modules: str = "",
+    source_uids: str = "",
+    job_type: str = "seed_backfill",
+    reset_existing: bool = False,
+) -> str:
     """Enqueue seed link jobs without processing them."""
 
     if not get_seed_links_enabled():
@@ -855,7 +957,9 @@ def archive_seed_link_refresh(
 
 
 @mcp.tool()
-def archive_seed_link_worker(limit: int = 0, modules: str = "", workers: int = 0, include_llm: bool = True) -> str:
+def archive_seed_link_worker(
+    limit: int = 0, modules: str = "", workers: int = 0, include_llm: bool = True
+) -> str:
     """Process pending seed link jobs from the shared queue."""
 
     if not get_seed_links_enabled():
@@ -880,7 +984,16 @@ def archive_seed_link_worker(limit: int = 0, modules: str = "", workers: int = 0
         include_llm=bool(include_llm),
     )
     lines = ["Archive seed link worker:"]
-    for key in ("workers", "jobs_completed", "jobs_failed", "candidates", "needs_review", "auto_promoted", "canonical_safe", "llm_judged"):
+    for key in (
+        "workers",
+        "jobs_completed",
+        "jobs_failed",
+        "candidates",
+        "needs_review",
+        "auto_promoted",
+        "canonical_safe",
+        "llm_judged",
+    ):
         lines.append(f"- {key}: {result[key]}")
     return "\n".join(lines)
 
@@ -902,7 +1015,9 @@ def archive_seed_link_promote(limit: int = 0, workers: int = 1) -> str:
         return error
     assert index is not None
     sl = _import_seed_links()
-    result = sl["run_seed_link_promotion_workers"](index, limit=limit, max_workers=max(1, workers))
+    result = sl["run_seed_link_promotion_workers"](
+        index, limit=limit, max_workers=max(1, workers)
+    )
     return (
         "Archive seed link promote:\n"
         f"- derived_edge: {result['derived_edge']}\n"
@@ -947,7 +1062,12 @@ def archive_seed_link_report(rebuild_if_dirty: bool = True) -> str:
 
 
 @mcp.tool()
-def archive_link_candidates(status: str = "", module_name: str = "", min_confidence: float = 0.0, limit: int = 20) -> str:
+def archive_link_candidates(
+    status: str = "",
+    module_name: str = "",
+    min_confidence: float = 0.0,
+    limit: int = 20,
+) -> str:
     """List seed link candidates and review queue items."""
 
     if not get_seed_links_enabled():
@@ -974,7 +1094,11 @@ def archive_link_candidates(status: str = "", module_name: str = "", min_confide
         return "No link candidates"
     lines = ["Archive link candidates:"]
     for row in rows:
-        promotion_status = f" promotion={row['promotion_status']}" if row.get("promotion_status") else ""
+        promotion_status = (
+            f" promotion={row['promotion_status']}"
+            if row.get("promotion_status")
+            else ""
+        )
         lines.append(
             f"- id={row['candidate_id']} module={row['module_name']} score={float(row['final_confidence']):.4f} "
             f"status={row['status']} decision={row['decision']} type={row['proposed_link_type']}{promotion_status}: "
@@ -1041,7 +1165,9 @@ def archive_link_candidate(candidate_id: int) -> str:
 
 
 @mcp.tool()
-def archive_review_link_candidate(candidate_id: int, reviewer: str, action: str, notes: str = "") -> str:
+def archive_review_link_candidate(
+    candidate_id: int, reviewer: str, action: str, notes: str = ""
+) -> str:
     """Approve, reject, or override a seed link candidate."""
 
     if not get_seed_links_enabled():
@@ -1057,7 +1183,9 @@ def archive_review_link_candidate(candidate_id: int, reviewer: str, action: str,
         return error
     assert index is not None
     sl = _import_seed_links()
-    payload = sl["review_link_candidate"](index, candidate_id=candidate_id, reviewer=reviewer, action=action, notes=notes)
+    payload = sl["review_link_candidate"](
+        index, candidate_id=candidate_id, reviewer=reviewer, action=action, notes=notes
+    )
     return (
         f"Reviewed candidate {candidate_id}\n"
         f"- action: {action}\n"
@@ -1104,11 +1232,15 @@ def archive_link_quality_gate() -> str:
     if gate.get("candidate_counts"):
         lines.append("Candidate counts:")
         for row in gate["candidate_counts"][:20]:
-            lines.append(f"  - {row['module_name']} {row['proposed_link_type']}: {row['count']}")
+            lines.append(
+                f"  - {row['module_name']} {row['proposed_link_type']}: {row['count']}"
+            )
     if gate.get("auto_promoted_counts"):
         lines.append("Auto promoted counts:")
         for row in gate["auto_promoted_counts"][:20]:
-            lines.append(f"  - {row['module_name']} {row['proposed_link_type']}: {row['count']}")
+            lines.append(
+                f"  - {row['module_name']} {row['proposed_link_type']}: {row['count']}"
+            )
     return "\n".join(lines)
 
 
@@ -1126,46 +1258,59 @@ def archive_vector_search(
 ) -> str:
     """Run semantic search over embedded chunks."""
 
-    profile_error = _tool_profile_error("archive_vector_search")
-    if profile_error:
-        return profile_error
-    vault = get_vault()
-    if not vault.is_dir():
-        return "Vault not found"
-    model = embedding_model.strip() or get_default_embedding_model()
-    version = embedding_version or get_default_embedding_version()
-    provider = get_embedding_provider(model=model)
-    query_vector = provider.embed_texts([query.strip() or ""])[0]
-    index, error = _load_index(vault)
-    if error:
-        return error
-    assert index is not None
-    rows = index.vector_search(
-        query_vector=query_vector,
-        embedding_model=model,
-        embedding_version=version,
-        type_filter=type_filter,
-        source_filter=source_filter,
-        people_filter=people_filter,
-        start_date=start_date,
-        end_date=end_date,
+    t0 = _log_tool_call(
+        "archive_vector_search",
+        query=query,
         limit=limit,
+        embedding_model=embedding_model,
+        embedding_version=embedding_version,
     )
-    if not rows:
-        return f"No vector matches for {model} v{version}"
-    lines = [f"Vector matches for {model} v{version}:"]
-    for row in rows:
-        card_type = str(row.get("type", ""))
-        date = str(row.get("activity_at", ""))[:10]
-        summary = str(row.get("summary", ""))[:200]
-        lines.append(
-            f"- {row['rel_path']} [{card_type}, {date}] matched_by={row['matched_by']} score={float(row['score']):.4f} "
-            f"sim={float(row['similarity']):.4f} chunk={row['chunk_type']}#{row['chunk_index']} "
-            f"provenance_bias={row['provenance_bias']} matched_chunks={row['matched_chunk_count']}\n"
-            f"  summary: {summary}\n"
-            f"  preview: {row['preview']}"
+    try:
+        profile_error = _tool_profile_error("archive_vector_search")
+        if profile_error:
+            return _log_tool_return_error("archive_vector_search", profile_error)
+        vault = get_vault()
+        if not vault.is_dir():
+            return _log_tool_return_error("archive_vector_search", "Vault not found")
+        model = embedding_model.strip() or get_default_embedding_model()
+        version = embedding_version or get_default_embedding_version()
+        provider = get_embedding_provider(model=model)
+        query_vector = provider.embed_texts([query.strip() or ""])[0]
+        index, error = _load_index(vault)
+        if error:
+            return _log_tool_return_error("archive_vector_search", error)
+        assert index is not None
+        rows = index.vector_search(
+            query_vector=query_vector,
+            embedding_model=model,
+            embedding_version=version,
+            type_filter=type_filter,
+            source_filter=source_filter,
+            people_filter=people_filter,
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
         )
-    return "\n".join(lines)
+        if not rows:
+            _log_tool_done("archive_vector_search", t0, result_count=0)
+            return f"No vector matches for {model} v{version}"
+        lines = [f"Vector matches for {model} v{version}:"]
+        for row in rows:
+            card_type = str(row.get("type", ""))
+            date = str(row.get("activity_at", ""))[:10]
+            summary = str(row.get("summary", ""))[:200]
+            lines.append(
+                f"- {row['rel_path']} [{card_type}, {date}] matched_by={row['matched_by']} score={float(row['score']):.4f} "
+                f"sim={float(row['similarity']):.4f} chunk={row['chunk_type']}#{row['chunk_index']} "
+                f"provenance_bias={row['provenance_bias']} matched_chunks={row['matched_chunk_count']}\n"
+                f"  summary: {summary}\n"
+                f"  preview: {row['preview']}"
+            )
+        _log_tool_done("archive_vector_search", t0, result_count=len(rows))
+        return "\n".join(lines)
+    except Exception as exc:
+        _log.error("tool=archive_vector_search error=%s", str(exc))
+        raise
 
 
 @mcp.tool()
@@ -1210,51 +1355,66 @@ def archive_hybrid_search(
 ) -> str:
     """Combine lexical and semantic retrieval into a ranked card-level result set."""
 
-    profile_error = _tool_profile_error("archive_hybrid_search")
-    if profile_error:
-        return profile_error
-    vault = get_vault()
-    if not vault.is_dir():
-        return "Vault not found"
-    store, error = _load_store(vault)
-    if error:
-        return error
-    assert store is not None
-    model = embedding_model.strip() or get_default_embedding_model()
-    version = embedding_version or get_default_embedding_version()
-    payload = store.hybrid_search(
-        query,
+    t0 = _log_tool_call(
+        "archive_hybrid_search",
+        query=query,
         limit=limit,
-        embedding_model=model,
-        embedding_version=version,
-        type_filter=type_filter,
-        source_filter=source_filter,
-        people_filter=people_filter,
-        start_date=start_date,
-        end_date=end_date,
+        embedding_model=embedding_model,
+        embedding_version=embedding_version,
     )
-    rows = payload["rows"]
-    if not rows:
-        return f"No hybrid matches for '{query}'"
-    lines = [f"Hybrid matches for '{query}':"]
-    for row in rows:
-        card_type = str(row.get("type", ""))
-        date = str(row.get("activity_at", ""))[:10]
-        graph_hops = f" graph_hops={row['graph_hops']}" if row.get("graph_hops") else ""
-        chunk = ""
-        if int(row.get("chunk_index", -1)) >= 0 and str(row.get("chunk_type", "")):
-            chunk = f" chunk={row['chunk_type']}#{row['chunk_index']}"
-        summary = str(row.get("summary", ""))[:200]
-        preview = str(row.get("preview", ""))
-        lines.append(
-            f"- {row['rel_path']} [{card_type}, {date}] matched_by={row['matched_by']} score={float(row['score']):.4f} "
-            f"lexical={float(row['lexical_score']):.4f} vector={float(row['vector_similarity']):.4f} "
-            f"exact_match={str(bool(row['exact_match'])).lower()}{graph_hops}{chunk} "
-            f"provenance_bias={row['provenance_bias']}\n"
-            f"  summary: {summary}\n"
-            f"  preview: {preview}"
+    try:
+        profile_error = _tool_profile_error("archive_hybrid_search")
+        if profile_error:
+            return _log_tool_return_error("archive_hybrid_search", profile_error)
+        vault = get_vault()
+        if not vault.is_dir():
+            return _log_tool_return_error("archive_hybrid_search", "Vault not found")
+        store, error = _load_store(vault)
+        if error:
+            return _log_tool_return_error("archive_hybrid_search", error)
+        assert store is not None
+        model = embedding_model.strip() or get_default_embedding_model()
+        version = embedding_version or get_default_embedding_version()
+        payload = store.hybrid_search(
+            query,
+            limit=limit,
+            embedding_model=model,
+            embedding_version=version,
+            type_filter=type_filter,
+            source_filter=source_filter,
+            people_filter=people_filter,
+            start_date=start_date,
+            end_date=end_date,
         )
-    return "\n".join(lines)
+        rows = payload["rows"]
+        if not rows:
+            _log_tool_done("archive_hybrid_search", t0, result_count=0)
+            return f"No hybrid matches for '{query}'"
+        lines = [f"Hybrid matches for '{query}':"]
+        for row in rows:
+            card_type = str(row.get("type", ""))
+            date = str(row.get("activity_at", ""))[:10]
+            graph_hops = (
+                f" graph_hops={row['graph_hops']}" if row.get("graph_hops") else ""
+            )
+            chunk = ""
+            if int(row.get("chunk_index", -1)) >= 0 and str(row.get("chunk_type", "")):
+                chunk = f" chunk={row['chunk_type']}#{row['chunk_index']}"
+            summary = str(row.get("summary", ""))[:200]
+            preview = str(row.get("preview", ""))
+            lines.append(
+                f"- {row['rel_path']} [{card_type}, {date}] matched_by={row['matched_by']} score={float(row['score']):.4f} "
+                f"lexical={float(row['lexical_score']):.4f} vector={float(row['vector_similarity']):.4f} "
+                f"exact_match={str(bool(row['exact_match'])).lower()}{graph_hops}{chunk} "
+                f"provenance_bias={row['provenance_bias']}\n"
+                f"  summary: {summary}\n"
+                f"  preview: {preview}"
+            )
+        _log_tool_done("archive_hybrid_search", t0, result_count=len(rows))
+        return "\n".join(lines)
+    except Exception as exc:
+        _log.error("tool=archive_hybrid_search error=%s", str(exc))
+        raise
 
 
 @mcp.tool()

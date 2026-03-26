@@ -2,20 +2,35 @@
 
 from __future__ import annotations
 
-import sys
+import logging
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from .explain import (projection_explain_payload, projection_inventory_payload,
-                      projection_status_payload)
-from .index_config import (VECTOR_CANDIDATE_MULTIPLIER, _apply_recency_boost,
-                           _card_type_prior, _coerce_source_fields,
-                           _field_provenance_bonus, _field_provenance_label,
-                           _format_row, _vector_literal,
-                           get_seed_links_enabled)
+from .explain import (
+    projection_explain_payload,
+    projection_inventory_payload,
+    projection_status_payload,
+)
+from .index_config import (
+    VECTOR_CANDIDATE_MULTIPLIER,
+    _apply_recency_boost,
+    _card_type_prior,
+    _coerce_source_fields,
+    _field_provenance_bonus,
+    _field_provenance_label,
+    _format_row,
+    _vector_literal,
+    get_seed_links_enabled,
+)
 from .materializer import _normalize_exact_text, _normalize_slug
-from .projections.registry import (PROJECTION_REGISTRY, TYPED_PROJECTIONS,
-                                   projection_for_card_type)
+from .projections.registry import (
+    PROJECTION_REGISTRY,
+    TYPED_PROJECTIONS,
+    projection_for_card_type,
+)
+
+logger = logging.getLogger("ppa.index_query")
 
 
 class QueryMixin:
@@ -26,7 +41,9 @@ class QueryMixin:
             rows = conn.execute(f"SELECT key, value FROM {self.schema}.meta").fetchall()
             payload = {str(row["key"]): str(row["value"]) for row in rows}
             try:
-                mc = conn.execute(f"SELECT COUNT(*) AS c FROM {self.schema}.note_manifest").fetchone()
+                mc = conn.execute(
+                    f"SELECT COUNT(*) AS c FROM {self.schema}.note_manifest"
+                ).fetchone()
                 payload["manifest_row_count"] = str(int(mc["c"] or 0))
             except Exception:
                 payload["manifest_row_count"] = "0"
@@ -38,16 +55,28 @@ class QueryMixin:
                 if chk:
                     payload["rebuild_checkpoint_status"] = str(chk.get("status") or "")
                     payload["rebuild_checkpoint_mode"] = str(chk.get("mode") or "")
-                    payload["rebuild_checkpoint_loaded_cards"] = str(int(chk.get("loaded_card_count") or 0))
-                    payload["rebuild_checkpoint_vault_fp"] = str(chk.get("vault_manifest_hash") or "")
-                    payload["rebuild_checkpoint_updated_at"] = str(chk.get("updated_at") or "")
+                    payload["rebuild_checkpoint_loaded_cards"] = str(
+                        int(chk.get("loaded_card_count") or 0)
+                    )
+                    payload["rebuild_checkpoint_vault_fp"] = str(
+                        chk.get("vault_manifest_hash") or ""
+                    )
+                    payload["rebuild_checkpoint_updated_at"] = str(
+                        chk.get("updated_at") or ""
+                    )
             except Exception:
                 pass
             try:
                 mig_status = self._migration_status(conn)
-                payload["migration_applied_count"] = str(mig_status.get("applied_count", 0))
-                payload["migration_pending_count"] = str(mig_status.get("pending_count", 0))
-                payload["migration_latest_applied"] = str(mig_status.get("latest_applied", "none"))
+                payload["migration_applied_count"] = str(
+                    mig_status.get("applied_count", 0)
+                )
+                payload["migration_pending_count"] = str(
+                    mig_status.get("pending_count", 0)
+                )
+                payload["migration_latest_applied"] = str(
+                    mig_status.get("latest_applied", "none")
+                )
             except Exception:
                 pass
         return payload
@@ -78,8 +107,12 @@ class QueryMixin:
                         "typed_projection": projection.table_name,
                         "registered": True,
                         "materialized_row_count": int(stats["row_count"] or 0),
-                        "canonical_ready_ratio": float(stats["canonical_ready_ratio"] or 0.0),
-                        "migration_blockers": [note for note in stats["migration_notes"] or [] if note],
+                        "canonical_ready_ratio": float(
+                            stats["canonical_ready_ratio"] or 0.0
+                        ),
+                        "migration_blockers": [
+                            note for note in stats["migration_notes"] or [] if note
+                        ],
                     }
                 )
         return projection_status_payload(rows)
@@ -119,16 +152,24 @@ class QueryMixin:
                 """,
                 (card_uid,),
             ).fetchone()
-            migration_notes = [str(row["migration_notes"])] if row and str(row["migration_notes"] or "").strip() else []
+            migration_notes = (
+                [str(row["migration_notes"])]
+                if row and str(row["migration_notes"] or "").strip()
+                else []
+            )
             return projection_explain_payload(
                 card_uid=card_uid,
                 card_type=card_type,
                 typed_projection=projection.table_name,
-                canonical_ready=bool(row["canonical_ready"]) if row is not None else False,
+                canonical_ready=(
+                    bool(row["canonical_ready"]) if row is not None else False
+                ),
                 field_mappings=[
                     {
                         "typed_column": column.name,
-                        "canonical_fields": [column.source_field] if column.source_field else [],
+                        "canonical_fields": (
+                            [column.source_field] if column.source_field else []
+                        ),
                         "status": "materialized" if row is not None else "missing",
                     }
                     for column in projection.columns
@@ -309,7 +350,9 @@ class QueryMixin:
                 normalized_query,
                 branch_limit,
             ]
-            exact_rows = [dict(r) for r in conn.execute(exact_sql, exact_params).fetchall()]
+            exact_rows = [
+                dict(r) for r in conn.execute(exact_sql, exact_params).fetchall()
+            ]
 
         merged = self._merge_lexical_uid_rows(fts_rows, exact_rows)
         merged.sort(key=self._lexical_row_sort_key)
@@ -353,7 +396,17 @@ class QueryMixin:
             ORDER BY embedding.embedding <=> %s::vector ASC, card.activity_at DESC, chunk.chunk_index ASC
             LIMIT %s
         """
-        rows = conn.execute(sql, [vector_value, embedding_model, embedding_version, *params, vector_value, limit]).fetchall()
+        rows = conn.execute(
+            sql,
+            [
+                vector_value,
+                embedding_model,
+                embedding_version,
+                *params,
+                vector_value,
+                limit,
+            ],
+        ).fetchall()
         return [dict(row) for row in rows]
 
     def _aggregate_vector_candidates(
@@ -471,7 +524,9 @@ class QueryMixin:
             """,
             (anchor_uids, anchor_uids, anchor_uids),
         ).fetchall()
-        return {str(row["neighbor_uid"]) for row in rows if str(row["neighbor_uid"]).strip()}
+        return {
+            str(row["neighbor_uid"]) for row in rows if str(row["neighbor_uid"]).strip()
+        }
 
     def vector_search(
         self,
@@ -560,26 +615,31 @@ class QueryMixin:
                     limit=cap,
                 )
 
+        # See archive_mcp/log.py — stderr-only logging; never print to stdout in MCP mode.
         with ThreadPoolExecutor(max_workers=2) as pool:
             fut_lex = pool.submit(_lexical_job)
             fut_vec = pool.submit(_vector_job)
             try:
+                t_lex = time.monotonic()
                 lexical_rows = fut_lex.result()
-            except Exception as exc:
-                print(
-                    f"[ppa] lexical retrieval failed: {exc!r}",
-                    file=sys.stderr,
-                    flush=True,
+                logger.info(
+                    "lexical_candidates done rows=%d elapsed_ms=%d",
+                    len(lexical_rows),
+                    int((time.monotonic() - t_lex) * 1000),
                 )
+            except Exception as exc:
+                logger.error("lexical retrieval failed: %r", exc)
                 raise
             try:
+                t_vec = time.monotonic()
                 vector_rows = fut_vec.result()
-            except Exception as exc:
-                print(
-                    f"[ppa] vector retrieval failed: {exc!r}",
-                    file=sys.stderr,
-                    flush=True,
+                logger.info(
+                    "vector_candidates done rows=%d elapsed_ms=%d",
+                    len(vector_rows),
+                    int((time.monotonic() - t_vec) * 1000),
                 )
+            except Exception as exc:
+                logger.error("vector retrieval failed: %r", exc)
                 raise
         return lexical_rows, vector_rows
 
@@ -624,7 +684,10 @@ class QueryMixin:
         anchor_uids = [
             str(row["card_uid"])
             for row in lexical_rows
-            if int(row["slug_exact"]) or int(row["summary_exact"]) or int(row["external_id_exact"]) or int(row["person_exact"])
+            if int(row["slug_exact"])
+            or int(row["summary_exact"])
+            or int(row["external_id_exact"])
+            or int(row["person_exact"])
         ]
         neighbor_uids = self.fetch_graph_neighbors_for_uids(anchor_uids)
         from .retrieval_pipeline import HybridFetchInputs, fuse_and_rank_hybrid
@@ -687,9 +750,13 @@ class QueryMixin:
         with self._connect() as conn:
             return [dict(row) for row in conn.execute(sql, params).fetchall()]
 
-    def timeline(self, *, start_date: str = "", end_date: str = "", limit: int = 20) -> list[dict[str, Any]]:
+    def timeline(
+        self, *, start_date: str = "", end_date: str = "", limit: int = 20
+    ) -> list[dict[str, Any]]:
         self.ensure_ready()
-        clauses, params = self._filter_clauses(alias="c", start_date=start_date, end_date=end_date)
+        clauses, params = self._filter_clauses(
+            alias="c", start_date=start_date, end_date=end_date
+        )
         params.append(limit)
         sql = f"""
             SELECT c.activity_at AS created, c.rel_path, c.summary, c.type
@@ -704,14 +771,20 @@ class QueryMixin:
     def stats(self) -> tuple[int, list[dict[str, Any]], list[dict[str, Any]]]:
         self.ensure_ready()
         with self._connect() as conn:
-            total_row = conn.execute(f"SELECT COUNT(*) AS count FROM {self.schema}.cards").fetchone()
+            total_row = conn.execute(
+                f"SELECT COUNT(*) AS count FROM {self.schema}.cards"
+            ).fetchone()
             by_type = conn.execute(
                 f"SELECT type, COUNT(*) AS count FROM {self.schema}.cards GROUP BY type ORDER BY count DESC, type ASC"
             ).fetchall()
             by_source = conn.execute(
                 f"SELECT source, COUNT(*) AS count FROM {self.schema}.card_sources GROUP BY source ORDER BY count DESC, source ASC"
             ).fetchall()
-        return int(total_row["count"]), [dict(row) for row in by_type], [dict(row) for row in by_source]
+        return (
+            int(total_row["count"]),
+            [dict(row) for row in by_type],
+            [dict(row) for row in by_source],
+        )
 
     def graph(self, note_path: str, hops: int = 2) -> dict[str, list[str]] | None:
         self.ensure_ready()

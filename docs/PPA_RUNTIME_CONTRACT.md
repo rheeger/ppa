@@ -27,6 +27,7 @@ This starts the MCP server using stdio transport. When no subcommand is given, `
 | `embed-pending`            | Process embedding backlog                           | Safe                 |
 | `migrate`                  | Apply pending SQL schema migrations                 | Safe                 |
 | `migration-status`         | Report migration history and pending count          | Safe                 |
+| `health`                   | Check vault, DB, embeddings, migrations             | Safe                 |
 | `projection-inventory`     | List registered typed projections                   | Safe                 |
 | `projection-status`        | Show projection coverage                            | Safe                 |
 | `projection-explain <uid>` | Explain projection for a card                       | Safe                 |
@@ -97,6 +98,8 @@ These control rebuild, embedding, and flush behavior.
 | `PPA_OPENAI_TIMEOUT_SECONDS`       | `60`           |
 | `PPA_OPENAI_MAX_RETRIES`           | `3`            |
 | `PPA_OPENAI_BASE_URL`              | OpenAI default |
+| `PPA_STATEMENT_TIMEOUT_MS`         | `30000`        |
+| `PPA_CONNECT_TIMEOUT`              | `5`            |
 
 ### 2.4 Arnold integration environment variables
 

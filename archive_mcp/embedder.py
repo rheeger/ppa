@@ -2,18 +2,27 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from threading import Lock
 from typing import Any
 
 from .features import build_context_prefix_for_embed_row
-from .index_config import (CHUNK_SCHEMA_VERSION, EmbeddingBatchResult,
-                           _vector_literal, embed_defer_vector_index,
-                           get_embed_batch_size, get_embed_concurrency,
-                           get_embed_max_retries, get_embed_progress_every,
-                           get_embed_write_batch_size)
+from .index_config import (
+    CHUNK_SCHEMA_VERSION,
+    EmbeddingBatchResult,
+    _vector_literal,
+    embed_defer_vector_index,
+    get_embed_batch_size,
+    get_embed_concurrency,
+    get_embed_max_retries,
+    get_embed_progress_every,
+    get_embed_write_batch_size,
+)
 from .loader import _chunked, _log_rebuild_step, _RebuildProgressReporter
+
+logger = logging.getLogger("ppa.embedder")
 
 
 class EmbedderMixin:
@@ -28,10 +37,14 @@ class EmbedderMixin:
     - self._ensure_embeddings_vector_index(conn)
     """
 
-    def embedding_status(self, *, embedding_model: str, embedding_version: int) -> dict[str, int | str]:
+    def embedding_status(
+        self, *, embedding_model: str, embedding_version: int
+    ) -> dict[str, int | str]:
         self.ensure_ready()
         with self._connect() as conn:
-            total_row = conn.execute(f"SELECT COUNT(*) AS count FROM {self.schema}.chunks").fetchone()
+            total_row = conn.execute(
+                f"SELECT COUNT(*) AS count FROM {self.schema}.chunks"
+            ).fetchone()
             embedded_row = conn.execute(
                 f"""
                 SELECT COUNT(*) AS count
@@ -78,7 +91,8 @@ class EmbedderMixin:
 
     def _materialize_embed_context(self, conn) -> int:
         """Pre-aggregate card context (type, summary, sources, people, orgs) into a
-        lookup table so the embedding claim query avoids per-batch correlated subqueries."""
+        lookup table so the embedding claim query avoids per-batch correlated subqueries.
+        """
         conn.execute(f"DROP TABLE IF EXISTS {self.schema}.card_embed_context")
         conn.execute(
             f"""
@@ -120,14 +134,19 @@ class EmbedderMixin:
             ) org ON true
             """
         )
-        row = conn.execute(f"SELECT count(*) AS cnt FROM {self.schema}.card_embed_context").fetchone()
+        row = conn.execute(
+            f"SELECT count(*) AS cnt FROM {self.schema}.card_embed_context"
+        ).fetchone()
         count = int(row["cnt"]) if row else 0
         conn.commit()
         return count
 
-    def _materialize_embed_queue(self, conn, *, embedding_model: str, embedding_version: int) -> int:
+    def _materialize_embed_queue(
+        self, conn, *, embedding_model: str, embedding_version: int
+    ) -> int:
         """Build a work queue of chunk_keys that need embedding. Workers pop from this
-        queue instead of scanning the full chunks table with LEFT JOIN on every batch."""
+        queue instead of scanning the full chunks table with LEFT JOIN on every batch.
+        """
         conn.execute(f"DROP TABLE IF EXISTS {self.schema}.embed_queue")
         conn.execute(
             f"""
@@ -151,7 +170,9 @@ class EmbedderMixin:
             """,
             (embedding_model, embedding_version),
         )
-        row = conn.execute(f"SELECT count(*) AS cnt FROM {self.schema}.embed_queue").fetchone()
+        row = conn.execute(
+            f"SELECT count(*) AS cnt FROM {self.schema}.embed_queue"
+        ).fetchone()
         count = int(row["cnt"]) if row else 0
         conn.commit()
         return count
@@ -227,7 +248,9 @@ class EmbedderMixin:
         values_sql = ",".join(["(%s, %s, %s, %s::vector)"] * len(rows))
         params: list[Any] = []
         for chunk_key, vector_literal in rows:
-            params.extend([chunk_key, embedding_model, embedding_version, vector_literal])
+            params.extend(
+                [chunk_key, embedding_model, embedding_version, vector_literal]
+            )
         conn.execute(
             f"""
             INSERT INTO {self.schema}.embeddings(chunk_key, embedding_model, embedding_version, embedding)
@@ -299,7 +322,9 @@ class EmbedderMixin:
             if len(vectors) != len(batch):
                 conn.rollback()
                 result.failed = len(batch)
-                result.last_error = "Embedding provider returned mismatched vector count"
+                result.last_error = (
+                    "Embedding provider returned mismatched vector count"
+                )
                 return result
 
             payload: list[tuple[str, str]] = []
@@ -337,8 +362,12 @@ class EmbedderMixin:
         total_steps = 6
         provider_name = str(getattr(provider, "name", "unknown"))
 
-        _log_rebuild_step(1, total_steps, "validate embedding provider",
-                          f"provider={provider_name} model={embedding_model} version={embedding_version}")
+        _log_rebuild_step(
+            1,
+            total_steps,
+            "validate embedding provider",
+            f"provider={provider_name} model={embedding_model} version={embedding_version}",
+        )
         self.ensure_ready()
         provider_model = str(getattr(provider, "model", "") or "").strip()
         if provider_model and provider_model != embedding_model:
@@ -355,16 +384,26 @@ class EmbedderMixin:
         write_batch_size = min(get_embed_write_batch_size(), batch_size)
         concurrency = get_embed_concurrency()
         progress_every = get_embed_progress_every()
-        _log_rebuild_step(1, total_steps, "validate embedding provider complete",
-                          f"dimension={provider_dimension} batch_size={batch_size} concurrency={concurrency} context_prefix={include_context_prefix}")
+        _log_rebuild_step(
+            1,
+            total_steps,
+            "validate embedding provider complete",
+            f"dimension={provider_dimension} batch_size={batch_size} concurrency={concurrency} context_prefix={include_context_prefix}",
+        )
 
         _log_rebuild_step(2, total_steps, "count embedding backlog")
-        backlog_status = self.embedding_status(embedding_model=embedding_model, embedding_version=embedding_version)
+        backlog_status = self.embedding_status(
+            embedding_model=embedding_model, embedding_version=embedding_version
+        )
         pending_chunks = int(backlog_status["pending_chunk_count"])
         total_chunks = int(backlog_status["chunk_count"])
         already_embedded = int(backlog_status["embedded_chunk_count"])
-        _log_rebuild_step(2, total_steps, "count embedding backlog complete",
-                          f"total_chunks={total_chunks} already_embedded={already_embedded} pending={pending_chunks}")
+        _log_rebuild_step(
+            2,
+            total_steps,
+            "count embedding backlog complete",
+            f"total_chunks={total_chunks} already_embedded={already_embedded} pending={pending_chunks}",
+        )
         if pending_chunks <= 0:
             _log_rebuild_step(6, total_steps, "nothing to embed")
             return {
@@ -411,22 +450,39 @@ class EmbedderMixin:
                 conn.commit()
             _log_rebuild_step(3, total_steps, "drop vector index complete")
         else:
-            _log_rebuild_step(3, total_steps, "skip vector index drop (incremental mode)")
+            _log_rebuild_step(
+                3, total_steps, "skip vector index drop (incremental mode)"
+            )
 
         _log_rebuild_step(4, total_steps, "materialize embed work queue and context")
         t0 = time.time()
         with self._connect() as conn:
             queue_count = self._materialize_embed_queue(
-                conn, embedding_model=embedding_model, embedding_version=embedding_version)
-            print(f"[ppa] step 4/{total_steps} materialize embed work queue complete "
-                  f"pending_chunks={queue_count} elapsed={time.time() - t0:.1f}s", flush=True)
+                conn,
+                embedding_model=embedding_model,
+                embedding_version=embedding_version,
+            )
+            logger.info(
+                "step 4/%d materialize embed work queue complete pending_chunks=%d elapsed=%.1fs",
+                total_steps,
+                queue_count,
+                time.time() - t0,
+            )
             if include_context_prefix:
                 t1 = time.time()
                 ctx_count = self._materialize_embed_context(conn)
-                print(f"[ppa] step 4/{total_steps} materialize embed context lookup complete "
-                      f"cards={ctx_count} elapsed={time.time() - t1:.1f}s", flush=True)
-        _log_rebuild_step(4, total_steps, "materialize complete",
-                          f"queue={queue_count} context={'yes' if include_context_prefix else 'no'} total_elapsed={time.time() - t0:.1f}s")
+                logger.info(
+                    "step 4/%d materialize embed context lookup complete cards=%d elapsed=%.1fs",
+                    total_steps,
+                    ctx_count,
+                    time.time() - t1,
+                )
+        _log_rebuild_step(
+            4,
+            total_steps,
+            "materialize complete",
+            f"queue={queue_count} context={'yes' if include_context_prefix else 'no'} total_elapsed={time.time() - t0:.1f}s",
+        )
 
         progress = _RebuildProgressReporter(
             step_number=5,
@@ -437,8 +493,12 @@ class EmbedderMixin:
             started_at=time.time(),
             min_interval_seconds=5.0,
         )
-        _log_rebuild_step(5, total_steps, "embed chunks",
-                          f"target={target_total} workers={concurrency} batch_size={batch_size}")
+        _log_rebuild_step(
+            5,
+            total_steps,
+            "embed chunks",
+            f"target={target_total} workers={concurrency} batch_size={batch_size}",
+        )
 
         def run_worker() -> EmbeddingBatchResult:
             worker_result = EmbeddingBatchResult()
@@ -472,12 +532,16 @@ class EmbedderMixin:
                         last_error = batch_result.last_error
                     fail_suffix = f" failed={failed}" if failed else ""
                     err_suffix = f" last_error={last_error}" if last_error else ""
-                    progress.update(embedded, extra=f"embedded={embedded}{fail_suffix}{err_suffix}")
+                    progress.update(
+                        embedded, extra=f"embedded={embedded}{fail_suffix}{err_suffix}"
+                    )
             return worker_result
 
         try:
             with ThreadPoolExecutor(max_workers=max(1, concurrency)) as executor:
-                futures = {executor.submit(run_worker) for _ in range(max(1, concurrency))}
+                futures = {
+                    executor.submit(run_worker) for _ in range(max(1, concurrency))
+                }
                 while futures:
                     done, futures = wait(futures, return_when=FIRST_COMPLETED)
                     for future in done:
@@ -496,7 +560,9 @@ class EmbedderMixin:
                     conn.commit()
                 _log_rebuild_step(6, total_steps, "rebuild vector index complete")
             else:
-                _log_rebuild_step(6, total_steps, "skip vector index rebuild (incremental mode)")
+                _log_rebuild_step(
+                    6, total_steps, "skip vector index rebuild (incremental mode)"
+                )
         result: dict[str, int | str] = {
             "provider": provider_name,
             "embedding_model": embedding_model,

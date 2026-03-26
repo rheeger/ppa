@@ -6,34 +6,68 @@ import argparse
 import json
 from pathlib import Path
 
-from .benchmark import (BENCHMARK_PROFILES, DEFAULT_BENCHMARK_SOURCE_VAULT,
-                        benchmark_rebuild, benchmark_seed_links,
-                        build_benchmark_sample)
+from .benchmark import (
+    BENCHMARK_PROFILES,
+    DEFAULT_BENCHMARK_SOURCE_VAULT,
+    benchmark_rebuild,
+    benchmark_seed_links,
+    build_benchmark_sample,
+)
 from .index_config import get_seed_links_enabled
-from .server import (archive_bootstrap_postgres, archive_duplicate_uids,
-                     archive_embed_pending, archive_index_status,
-                     archive_link_candidate, archive_link_candidates,
-                     archive_link_quality_gate, archive_projection_explain,
-                     archive_projection_inventory, archive_projection_status,
-                     archive_rebuild_indexes, archive_review_link_candidate,
-                     archive_seed_link_backfill, archive_seed_link_enqueue,
-                     archive_seed_link_promote, archive_seed_link_refresh,
-                     archive_seed_link_report, archive_seed_link_surface,
-                     archive_seed_link_worker, mcp)
+from .log import configure_logging
+from .server import (
+    archive_bootstrap_postgres,
+    archive_duplicate_uids,
+    archive_embed_pending,
+    archive_index_status,
+    archive_link_candidate,
+    archive_link_candidates,
+    archive_link_quality_gate,
+    archive_projection_explain,
+    archive_projection_inventory,
+    archive_projection_status,
+    archive_rebuild_indexes,
+    archive_review_link_candidate,
+    archive_seed_link_backfill,
+    archive_seed_link_enqueue,
+    archive_seed_link_promote,
+    archive_seed_link_refresh,
+    archive_seed_link_report,
+    archive_seed_link_surface,
+    archive_seed_link_worker,
+    mcp,
+)
 from .store import get_archive_store
 
-_SEED_LINKS_DISABLED_MSG = "Seed links are not enabled. Set PPA_SEED_LINKS_ENABLED=1 to enable."
+_SEED_LINKS_DISABLED_MSG = (
+    "Seed links are not enabled. Set PPA_SEED_LINKS_ENABLED=1 to enable."
+)
 
-_SEED_LINK_COMMANDS = frozenset({
-    "seed-link-surface", "seed-link-enqueue", "seed-link-backfill",
-    "seed-link-refresh", "seed-link-worker", "seed-link-promote",
-    "seed-link-report", "link-candidates", "link-candidate",
-    "review-link-candidate", "link-quality-gate", "benchmark-seed-links",
-})
+_SEED_LINK_COMMANDS = frozenset(
+    {
+        "seed-link-surface",
+        "seed-link-enqueue",
+        "seed-link-backfill",
+        "seed-link-refresh",
+        "seed-link-worker",
+        "seed-link-promote",
+        "seed-link-report",
+        "link-candidates",
+        "link-candidate",
+        "review-link-candidate",
+        "link-quality-gate",
+        "benchmark-seed-links",
+    }
+)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Archive MCP server and index maintenance")
+    parser = argparse.ArgumentParser(
+        description="Archive MCP server and index maintenance"
+    )
+    parser.add_argument(
+        "-v", "--verbose", action="store_true", help="DEBUG logging on stderr"
+    )
     subparsers = parser.add_subparsers(dest="command")
 
     subparsers.add_parser("serve")
@@ -42,7 +76,9 @@ def main() -> None:
     rebuild_parser.add_argument("--batch-size", type=int)
     rebuild_parser.add_argument("--commit-interval", type=int)
     rebuild_parser.add_argument("--progress-every", type=int)
-    rebuild_parser.add_argument("--executor", dest="executor_kind", choices=["serial", "thread", "process"])
+    rebuild_parser.add_argument(
+        "--executor", dest="executor_kind", choices=["serial", "thread", "process"]
+    )
     rebuild_parser.add_argument("--force-full-rebuild", action="store_true")
     rebuild_parser.add_argument("--disable-manifest-cache", action="store_true")
     subparsers.add_parser("index-status")
@@ -100,7 +136,9 @@ def main() -> None:
     subparsers.add_parser("link-quality-gate")
 
     sample_parser = subparsers.add_parser("build-benchmark-sample")
-    sample_parser.add_argument("--source-vault", default=str(DEFAULT_BENCHMARK_SOURCE_VAULT))
+    sample_parser.add_argument(
+        "--source-vault", default=str(DEFAULT_BENCHMARK_SOURCE_VAULT)
+    )
     sample_parser.add_argument("--output-vault", required=True)
     sample_parser.add_argument("--per-group-limit", type=int, default=200)
     sample_parser.add_argument("--max-notes", type=int, default=5000)
@@ -111,33 +149,54 @@ def main() -> None:
     bench_parser = subparsers.add_parser("benchmark-rebuild")
     bench_parser.add_argument("--vault", required=True)
     bench_parser.add_argument("--schema", default="archive_benchmark")
-    bench_parser.add_argument("--profile", choices=sorted(BENCHMARK_PROFILES), default="local-laptop")
+    bench_parser.add_argument(
+        "--profile", choices=sorted(BENCHMARK_PROFILES), default="local-laptop"
+    )
     bench_parser.add_argument("--workers", type=int)
     bench_parser.add_argument("--batch-size", type=int)
     bench_parser.add_argument("--commit-interval", type=int)
     bench_parser.add_argument("--progress-every", type=int)
-    bench_parser.add_argument("--executor", dest="executor_kind", choices=["serial", "thread", "process"])
+    bench_parser.add_argument(
+        "--executor", dest="executor_kind", choices=["serial", "thread", "process"]
+    )
 
     seed_bench_parser = subparsers.add_parser("benchmark-seed-links")
     seed_bench_parser.add_argument("--vault", required=True)
     seed_bench_parser.add_argument("--schema", default="archive_seed_links_benchmark")
-    seed_bench_parser.add_argument("--profile", choices=sorted(BENCHMARK_PROFILES), default="local-laptop")
+    seed_bench_parser.add_argument(
+        "--profile", choices=sorted(BENCHMARK_PROFILES), default="local-laptop"
+    )
     seed_bench_parser.add_argument("--workers", type=int)
     seed_bench_parser.add_argument("--batch-size", type=int)
     seed_bench_parser.add_argument("--commit-interval", type=int)
     seed_bench_parser.add_argument("--progress-every", type=int)
-    seed_bench_parser.add_argument("--executor", dest="executor_kind", choices=["serial", "thread", "process"])
+    seed_bench_parser.add_argument(
+        "--executor", dest="executor_kind", choices=["serial", "thread", "process"]
+    )
     seed_bench_parser.add_argument("--include-llm", action="store_true")
     seed_bench_parser.add_argument("--apply-promotions", action="store_true")
     seed_bench_parser.add_argument("--modules", default="")
     seed_bench_parser.add_argument("--no-rebuild-first", action="store_true")
 
     migrate_parser = subparsers.add_parser("migrate")
-    migrate_parser.add_argument("--dry-run", action="store_true", help="Show pending migrations without applying")
+    migrate_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show pending migrations without applying",
+    )
     subparsers.add_parser("migration-status")
+    subparsers.add_parser("health")
 
     parser.set_defaults(command="serve")
     args = parser.parse_args()
+    # Stderr-only logging for all subcommands; keep stdout for MCP JSON-RPC / CLI JSON. See archive_mcp/log.py.
+    configure_logging(verbose=args.verbose)
+    if args.command == "health":
+        from .health import run_health_checks
+
+        result = run_health_checks()
+        print(json.dumps(result, indent=2))
+        raise SystemExit(0 if result["ok"] else 1)
     if args.command in _SEED_LINK_COMMANDS and not get_seed_links_enabled():
         print(_SEED_LINKS_DISABLED_MSG)
         return
@@ -164,7 +223,9 @@ def main() -> None:
                     progress_every=args.progress_every,
                     executor_kind=args.executor_kind,
                     force_full=bool(getattr(args, "force_full_rebuild", False)),
-                    disable_manifest_cache=bool(getattr(args, "disable_manifest_cache", False)),
+                    disable_manifest_cache=bool(
+                        getattr(args, "disable_manifest_cache", False)
+                    ),
                 ),
                 indent=2,
             )
@@ -305,7 +366,9 @@ def main() -> None:
         )
         return
     if args.command == "benchmark-seed-links":
-        selected_modules = [item.strip() for item in args.modules.split(",") if item.strip()]
+        selected_modules = [
+            item.strip() for item in args.modules.split(",") if item.strip()
+        ]
         print(
             json.dumps(
                 benchmark_seed_links(
@@ -329,21 +392,28 @@ def main() -> None:
     if args.command == "migrate":
         store = get_archive_store()
         from .migrate import MigrationRunner
+
         with store.index._connect() as conn:
             runner = MigrationRunner(conn, store.index.schema)
             result = runner.run(dry_run=bool(args.dry_run))
-            print(json.dumps({
-                "dry_run": bool(args.dry_run),
-                "applied": result.applied,
-                "already_applied": result.already_applied,
-                "failed": result.failed,
-                "error": result.error,
-                "elapsed_ms": result.elapsed_ms,
-            }, indent=2))
+            print(
+                json.dumps(
+                    {
+                        "dry_run": bool(args.dry_run),
+                        "applied": result.applied,
+                        "already_applied": result.already_applied,
+                        "failed": result.failed,
+                        "error": result.error,
+                        "elapsed_ms": result.elapsed_ms,
+                    },
+                    indent=2,
+                )
+            )
         return
     if args.command == "migration-status":
         store = get_archive_store()
         from .migrate import MigrationRunner
+
         with store.index._connect() as conn:
             runner = MigrationRunner(conn, store.index.schema)
             print(json.dumps(runner.status(), indent=2, default=str))
