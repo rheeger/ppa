@@ -9,7 +9,10 @@ from pathlib import Path
 import pytest
 
 import archive_mcp.__main__ as archive_main
+import archive_mcp.commands._resolve as resolve_mod
+import archive_mcp.commands.seed_links as seed_links_cmd
 import archive_mcp.server as archive_server
+from archive_mcp.commands._resolve import get_index
 from archive_mcp.embedding_provider import (
     HashEmbeddingProvider,
     OpenAIEmbeddingProvider,
@@ -43,7 +46,6 @@ from archive_mcp.server import (  # type: ignore[import-not-found]
     archive_timeline,
     archive_validate,
     archive_vector_search,
-    get_index,
 )
 from hfa.provenance import ProvenanceEntry
 from hfa.schema import FinanceCard, PersonCard
@@ -340,7 +342,7 @@ def _seed_vault(vault: Path) -> PersonCard:
 @pytest.fixture
 def fake_index(monkeypatch: pytest.MonkeyPatch) -> FakeIndex:
     fake = FakeIndex()
-    monkeypatch.setattr(archive_server, "get_index", lambda vault=None: fake)
+    monkeypatch.setattr(resolve_mod, "get_index", lambda vault=None: fake)
     return fake
 
 
@@ -422,65 +424,92 @@ def test_archive_bootstrap_postgres_uses_postgres_backend(tmp_vault, monkeypatch
     assert calls == ["postgresql://archive:archive@localhost:5432/archive"]
 
 
-def test_postgres_bootstrap_command_dispatches(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
-    monkeypatch.setattr(archive_main, "archive_bootstrap_postgres", lambda: "bootstrapped")
+def test_postgres_bootstrap_command_dispatches(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    from archive_mcp.commands import admin as admin_cmd
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    monkeypatch.setattr(archive_main, "resolve_store", lambda: type("S", (), {"vault": vault})())
+    monkeypatch.setattr(admin_cmd, "bootstrap_postgres", lambda **kwargs: "bootstrapped")
     monkeypatch.setattr(sys, "argv", ["archive_mcp", "bootstrap-postgres"])
     archive_main.main()
     assert capsys.readouterr().out.strip() == "bootstrapped"
 
 
-def test_postgres_embed_pending_command_dispatches(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
-    monkeypatch.setattr(archive_main, "archive_embed_pending", lambda **kwargs: "embedded")
+def test_postgres_embed_pending_command_dispatches(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    from archive_mcp.commands import admin as admin_cmd
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    monkeypatch.setattr(archive_main, "resolve_store", lambda: type("S", (), {"vault": vault})())
+    monkeypatch.setattr(admin_cmd, "embed_pending", lambda **kwargs: "embedded")
     monkeypatch.setattr(sys, "argv", ["archive_mcp", "embed-pending"])
     archive_main.main()
     assert capsys.readouterr().out.strip() == "embedded"
 
 
-def test_seed_link_commands_dispatch(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
+def test_seed_link_commands_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    from archive_mcp.commands import seed_links as seed_cmd
+    from archive_mcp.commands import status as status_cmd
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    monkeypatch.setattr(archive_main, "resolve_store", lambda: type("S", (), {"vault": vault})())
+    monkeypatch.setattr(archive_main, "resolve_index", lambda vault=None: object())
     monkeypatch.setenv("PPA_SEED_LINKS_ENABLED", "1")
-    monkeypatch.setattr(archive_main, "archive_seed_link_surface", lambda: "surface")
+    monkeypatch.setattr(seed_cmd, "seed_link_surface", lambda **kwargs: "surface")
     monkeypatch.setattr(sys, "argv", ["archive_mcp", "seed-link-surface"])
     archive_main.main()
     assert capsys.readouterr().out.strip() == "surface"
 
-    monkeypatch.setattr(archive_main, "archive_seed_link_enqueue", lambda **kwargs: f"enqueue:{kwargs['job_type']}")
+    monkeypatch.setattr(seed_cmd, "seed_link_enqueue", lambda **kwargs: f"enqueue:{kwargs['job_type']}")
     monkeypatch.setattr(sys, "argv", ["archive_mcp", "seed-link-enqueue", "--job-type", "seed_backfill"])
     archive_main.main()
     assert capsys.readouterr().out.strip() == "enqueue:seed_backfill"
 
-    monkeypatch.setattr(archive_main, "archive_seed_link_backfill", lambda **kwargs: f"backfill:{kwargs['workers']}")
+    monkeypatch.setattr(seed_cmd, "seed_link_backfill", lambda **kwargs: f"backfill:{kwargs['workers']}")
     monkeypatch.setattr(sys, "argv", ["archive_mcp", "seed-link-backfill", "--workers", "3"])
     archive_main.main()
     assert capsys.readouterr().out.strip() == "backfill:3"
 
-    monkeypatch.setattr(archive_main, "archive_seed_link_refresh", lambda **kwargs: f"refresh:{kwargs['source_uids']}")
+    monkeypatch.setattr(seed_cmd, "seed_link_refresh", lambda **kwargs: f"refresh:{kwargs['source_uids']}")
     monkeypatch.setattr(sys, "argv", ["archive_mcp", "seed-link-refresh", "--source-uids", "hfa-person-1"])
     archive_main.main()
     assert capsys.readouterr().out.strip() == "refresh:hfa-person-1"
 
-    monkeypatch.setattr(archive_main, "archive_seed_link_worker", lambda **kwargs: f"worker:{kwargs['workers']}")
+    monkeypatch.setattr(seed_cmd, "seed_link_worker", lambda **kwargs: f"worker:{kwargs['workers']}")
     monkeypatch.setattr(sys, "argv", ["archive_mcp", "seed-link-worker", "--workers", "2"])
     archive_main.main()
     assert capsys.readouterr().out.strip() == "worker:2"
 
-    monkeypatch.setattr(archive_main, "archive_seed_link_promote", lambda **kwargs: f"promote:{kwargs['workers']}")
+    monkeypatch.setattr(seed_cmd, "seed_link_promote", lambda **kwargs: f"promote:{kwargs['workers']}")
     monkeypatch.setattr(sys, "argv", ["archive_mcp", "seed-link-promote", "--workers", "2"])
     archive_main.main()
     assert capsys.readouterr().out.strip() == "promote:2"
 
-    monkeypatch.setattr(
-        archive_main, "archive_seed_link_report", lambda **kwargs: f"report:{kwargs['rebuild_if_dirty']}"
-    )
+    monkeypatch.setattr(seed_cmd, "seed_link_report", lambda **kwargs: f"report:{kwargs['rebuild_if_dirty']}")
     monkeypatch.setattr(sys, "argv", ["archive_mcp", "seed-link-report"])
     archive_main.main()
     assert capsys.readouterr().out.strip() == "report:True"
 
-    monkeypatch.setattr(archive_main, "archive_duplicate_uids", lambda **kwargs: "duplicate-uids")
+    monkeypatch.setattr(status_cmd, "duplicate_uids", lambda **kwargs: "duplicate-uids")
     monkeypatch.setattr(sys, "argv", ["archive_mcp", "duplicate-uids"])
     archive_main.main()
     assert capsys.readouterr().out.strip() == "duplicate-uids"
 
-    monkeypatch.setattr(archive_main, "archive_link_quality_gate", lambda: "gate")
+    monkeypatch.setattr(seed_cmd, "link_quality_gate", lambda **kwargs: "gate")
     monkeypatch.setattr(sys, "argv", ["archive_mcp", "link-quality-gate"])
     archive_main.main()
     assert capsys.readouterr().out.strip() == "gate"
@@ -720,7 +749,7 @@ def test_archive_seed_link_wrappers(tmp_vault, monkeypatch: pytest.MonkeyPatch, 
         "get_seed_scope_rows": lambda: [],
         "get_surface_policy_rows": lambda: [],
     }
-    monkeypatch.setattr(archive_server, "_import_seed_links", lambda: mock_sl)
+    monkeypatch.setattr(seed_links_cmd, "default_seed_link_imports", lambda: mock_sl)
 
     enqueue = archive_server.archive_seed_link_enqueue(job_type="seed_backfill")
     assert "prepared: 8" in enqueue

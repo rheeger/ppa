@@ -14,7 +14,6 @@ from pathlib import Path
 import pytest
 from psycopg import connect
 
-import archive_mcp.server as archive_server
 from archive_mcp.benchmark import (
     BENCHMARK_PROFILES,
     benchmark_rebuild,
@@ -494,7 +493,12 @@ def live_archive(
     index = PostgresArchiveIndex(vault, dsn=pgvector_dsn)
     index.schema = schema_name
     provider = SemanticFixtureProvider(model="fixture-semantic-v1", dimension=8)
-    monkeypatch.setattr(archive_server, "get_embedding_provider", lambda model="": provider)
+
+    def _fixture_embedding_provider(model: str = "") -> SemanticFixtureProvider:
+        return provider
+
+    monkeypatch.setattr("archive_mcp.store.get_embedding_provider", _fixture_embedding_provider)
+    monkeypatch.setattr("archive_mcp.commands._resolve.get_embedding_provider", _fixture_embedding_provider)
     return vault, index, provider
 
 

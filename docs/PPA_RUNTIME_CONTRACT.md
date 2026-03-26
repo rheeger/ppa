@@ -82,7 +82,7 @@ their own variable names to `PPA_*` when invoking PPA subprocesses.
 | ------------------------ | -------------------------- | ---------------------------------- |
 | `PPA_INDEX_DSN`          | Postgres connection string | _(required)_                       |
 | `PPA_INDEX_SCHEMA`       | Postgres schema name       | `archive_mcp`                      |
-| `PPA_PATH`               | Vault root directory       | `~/Archive/production/hf-archives` |
+| `PPA_PATH`               | Vault root directory       | `~/Archive/vault`                  |
 | `PPA_EMBEDDING_PROVIDER` | Embedding provider         | `hash`                             |
 | `PPA_EMBEDDING_MODEL`    | Embedding model            | `default-embedding-model`          |
 | `PPA_EMBEDDING_VERSION`  | Embedding schema version   | `1`                                |

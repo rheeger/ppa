@@ -23,7 +23,12 @@ def test_mcp_config_emits_json_without_secret_named_env(monkeypatch: pytest.Monk
     out = subprocess.check_output(
         [sys.executable, "-m", "archive_mcp", "mcp-config"],
         cwd=str(PPA_ROOT),
-        env={**os.environ, "PPA_INDEX_SCHEMA": "archive_seed", "PPA_PATH": str(tmp_path), "PPA_EMBEDDING_PROVIDER": "hash"},
+        env={
+            **os.environ,
+            "PPA_INDEX_SCHEMA": "archive_seed",
+            "PPA_PATH": str(tmp_path),
+            "PPA_EMBEDDING_PROVIDER": "hash",
+        },
         text=True,
     )
     data = json.loads(out)

@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 from test_server import FakeIndex, _seed_vault
 
-import archive_mcp.server as server_mod
+import archive_mcp.commands._resolve as resolve_mod
 from archive_mcp.commands import read as read_cmd
 from archive_mcp.commands import search as search_cmd
 from archive_mcp.commands import status as status_cmd
@@ -51,7 +51,7 @@ def tmp_vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 @pytest.fixture
 def fake_index(monkeypatch: pytest.MonkeyPatch) -> FakeIndex:
     fake = FakeIndex()
-    monkeypatch.setattr(server_mod, "get_index", lambda vault=None: fake)
+    monkeypatch.setattr(resolve_mod, "get_index", lambda vault=None: fake)
     return fake
 
 
@@ -94,7 +94,7 @@ def test_parse_paths_json_wrong_type_raises() -> None:
 
 
 def test_resolve_store_raises_vault_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(server_mod, "get_vault", lambda: Path("/nonexistent/ppa/vault"))
+    monkeypatch.setattr(resolve_mod, "get_vault", lambda: Path("/nonexistent/ppa/vault"))
     with pytest.raises(VaultNotFoundError):
         resolve_store()
 
@@ -103,12 +103,12 @@ def test_resolve_store_raises_index_unavailable(monkeypatch: pytest.MonkeyPatch,
     vault = tmp_path / "vault"
     vault.mkdir()
     (vault / "People").mkdir()
-    monkeypatch.setattr(server_mod, "get_vault", lambda: vault)
+    monkeypatch.setattr(resolve_mod, "get_vault", lambda: vault)
 
     def _boom(vault=None):
         raise RuntimeError("index down")
 
-    monkeypatch.setattr(server_mod, "get_store", _boom)
+    monkeypatch.setattr(resolve_mod, "get_store", _boom)
     with pytest.raises(IndexUnavailableError):
         resolve_store()
 

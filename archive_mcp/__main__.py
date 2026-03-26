@@ -17,44 +17,33 @@ from .benchmark import (
     benchmark_seed_links,
     build_benchmark_sample,
 )
+from .commands import admin as admin_cmd
 from .commands import explain
 from .commands import graph as graph_cmd
 from .commands import query as query_cmd
 from .commands import read as read_cmd
 from .commands import search as search_cmd
+from .commands import seed_links as seed_cmd
 from .commands import status as status_cmd
 from .commands._resolve import resolve_index, resolve_store
 from .errors import PpaError
 from .index_config import get_seed_links_enabled
 from .log import configure_logging
-from .server import (
-    archive_bootstrap_postgres,
-    archive_duplicate_uids,
-    archive_embed_pending,
-    archive_index_status,
-    archive_link_candidate,
-    archive_link_candidates,
-    archive_link_quality_gate,
-    archive_projection_explain,
-    archive_projection_inventory,
-    archive_projection_status,
-    archive_review_link_candidate,
-    archive_seed_link_backfill,
-    archive_seed_link_enqueue,
-    archive_seed_link_promote,
-    archive_seed_link_refresh,
-    archive_seed_link_report,
-    archive_seed_link_surface,
-    archive_seed_link_worker,
-    mcp,
-)
-from .store import get_archive_store
+from .server import mcp
 
 _cli_log = logging.getLogger("ppa.cli")
 
 
 def _print_json(data: object) -> None:
     print(json.dumps(data, indent=2, default=str))
+
+
+def _print_cli_result(data: object) -> None:
+    """Print dict/list as JSON; pass through str for mocks and human one-liners."""
+    if isinstance(data, str):
+        print(data)
+    else:
+        _print_json(data)
 
 
 def _cli_fail(exc: PpaError) -> None:
@@ -505,134 +494,223 @@ def main() -> None:
         print(_SEED_LINKS_DISABLED_MSG)
         return
     if args.command == "embed-pending":
-        kwargs: dict[str, object] = {}
-        kwargs["limit"] = args.limit
+        kwargs: dict[str, object] = {"limit": args.limit}
         if args.embedding_model:
             kwargs["embedding_model"] = args.embedding_model
         if args.embedding_version:
             kwargs["embedding_version"] = args.embedding_version
-        print(archive_embed_pending(**kwargs))
+        try:
+            store = resolve_store()
+            result = admin_cmd.embed_pending(store=store, logger=_cli_log, **kwargs)
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "bootstrap-postgres":
-        print(archive_bootstrap_postgres())
+        try:
+            vault = resolve_store().vault
+            result = admin_cmd.bootstrap_postgres(vault=vault, logger=_cli_log)
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "rebuild-indexes":
-        store = get_archive_store()
-        print(
-            json.dumps(
-                store.rebuild(
-                    workers=args.workers,
-                    batch_size=args.batch_size,
-                    commit_interval=args.commit_interval,
-                    progress_every=args.progress_every,
-                    executor_kind=args.executor_kind,
-                    force_full=bool(getattr(args, "force_full_rebuild", False)),
-                    disable_manifest_cache=bool(getattr(args, "disable_manifest_cache", False)),
-                ),
-                indent=2,
+        try:
+            store = resolve_store()
+            result = admin_cmd.rebuild_indexes(
+                store=store,
+                logger=_cli_log,
+                workers=args.workers,
+                batch_size=args.batch_size,
+                commit_interval=args.commit_interval,
+                progress_every=args.progress_every,
+                executor_kind=args.executor_kind,
+                force_full=bool(getattr(args, "force_full_rebuild", False)),
+                disable_manifest_cache=bool(getattr(args, "disable_manifest_cache", False)),
             )
-        )
+            _print_json(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "index-status":
-        print(archive_index_status())
+        try:
+            store = resolve_store()
+            result = status_cmd.index_status(store=store, logger=_cli_log)
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "projection-inventory":
-        print(archive_projection_inventory())
+        try:
+            store = resolve_store()
+            result = admin_cmd.projection_inventory(store=store, logger=_cli_log)
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "projection-status":
-        print(archive_projection_status())
+        try:
+            store = resolve_store()
+            result = admin_cmd.projection_status(store=store, logger=_cli_log)
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "projection-explain":
-        print(archive_projection_explain(args.card_uid))
+        try:
+            store = resolve_store()
+            result = admin_cmd.projection_explain(args.card_uid, store=store, logger=_cli_log)
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "seed-link-surface":
-        print(archive_seed_link_surface())
+        try:
+            result = seed_cmd.seed_link_surface(logger=_cli_log)
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "seed-link-enqueue":
-        print(
-            archive_seed_link_enqueue(
+        try:
+            index = resolve_index()
+            result = seed_cmd.seed_link_enqueue(
+                index=index,
+                logger=_cli_log,
                 modules=args.modules,
                 source_uids=args.source_uids,
                 job_type=args.job_type,
                 reset_existing=bool(args.reset_existing),
             )
-        )
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "seed-link-backfill":
-        print(
-            archive_seed_link_backfill(
+        try:
+            index = resolve_index()
+            result = seed_cmd.seed_link_backfill(
+                index=index,
+                logger=_cli_log,
                 limit=args.limit,
                 modules=args.modules,
                 workers=args.workers,
                 include_llm=bool(args.include_llm),
                 apply_promotions=not bool(args.no_apply_promotions),
             )
-        )
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "seed-link-refresh":
-        print(
-            archive_seed_link_refresh(
+        try:
+            index = resolve_index()
+            result = seed_cmd.seed_link_refresh(
+                index=index,
+                logger=_cli_log,
                 source_uids=args.source_uids,
                 modules=args.modules,
                 workers=args.workers,
                 include_llm=bool(args.include_llm),
                 apply_promotions=not bool(args.no_apply_promotions),
             )
-        )
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "seed-link-worker":
-        print(
-            archive_seed_link_worker(
+        try:
+            index = resolve_index()
+            result = seed_cmd.seed_link_worker(
+                index=index,
+                logger=_cli_log,
                 limit=args.limit,
                 modules=args.modules,
                 workers=args.workers,
                 include_llm=bool(args.include_llm),
             )
-        )
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "seed-link-promote":
-        print(
-            archive_seed_link_promote(
+        try:
+            index = resolve_index()
+            result = seed_cmd.seed_link_promote(
+                index=index,
+                logger=_cli_log,
                 limit=args.limit,
                 workers=args.workers,
             )
-        )
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "seed-link-report":
-        print(
-            archive_seed_link_report(
+        try:
+            index = resolve_index()
+            result = seed_cmd.seed_link_report(
+                index=index,
+                logger=_cli_log,
                 rebuild_if_dirty=not bool(args.no_rebuild_if_dirty),
             )
-        )
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "link-candidates":
-        print(
-            archive_link_candidates(
+        try:
+            index = resolve_index()
+            result = seed_cmd.link_candidates(
+                index=index,
+                logger=_cli_log,
                 status=args.status,
                 module_name=args.module_name,
                 min_confidence=args.min_confidence,
                 limit=args.limit,
             )
-        )
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "link-candidate":
-        print(archive_link_candidate(args.candidate_id))
+        try:
+            index = resolve_index()
+            result = seed_cmd.link_candidate(args.candidate_id, index=index, logger=_cli_log)
+            _print_cli_result(result if result is not None else "Candidate not found")
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "review-link-candidate":
-        print(
-            archive_review_link_candidate(
+        try:
+            index = resolve_index()
+            result = seed_cmd.review_link_candidate(
+                index=index,
+                logger=_cli_log,
                 candidate_id=args.candidate_id,
                 reviewer=args.reviewer,
                 action=args.action,
                 notes=args.notes,
             )
-        )
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "duplicate-uids":
-        print(archive_duplicate_uids(limit=args.limit))
+        try:
+            index = resolve_index()
+            result = status_cmd.duplicate_uids(limit=args.limit, index=index, logger=_cli_log)
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "link-quality-gate":
-        print(archive_link_quality_gate())
+        try:
+            index = resolve_index()
+            result = seed_cmd.link_quality_gate(index=index, logger=_cli_log)
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "build-benchmark-sample":
         print(
@@ -690,7 +768,7 @@ def main() -> None:
         )
         return
     if args.command == "migrate":
-        store = get_archive_store()
+        store = resolve_store()
         from .migrate import MigrationRunner
 
         with store.index._connect() as conn:
@@ -711,7 +789,7 @@ def main() -> None:
             )
         return
     if args.command == "migration-status":
-        store = get_archive_store()
+        store = resolve_store()
         from .migrate import MigrationRunner
 
         with store.index._connect() as conn:

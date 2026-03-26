@@ -15,7 +15,7 @@ from ..index_store import BaseArchiveIndex
 
 
 def default_seed_link_imports() -> dict[str, Any]:
-    """Default lazy import map for seed link operations (used by ``server._import_seed_links``)."""
+    """Default lazy import map for seed link operations."""
     from ..seed_links import (
         compute_link_quality_gate,
         get_link_candidate_details,
@@ -48,10 +48,8 @@ def default_seed_link_imports() -> dict[str, Any]:
 
 
 def _sl() -> dict[str, Any]:
-    """Resolve seed link callables (monkeypatch seam on ``server._import_seed_links``)."""
-    from archive_mcp import server as server_mod
-
-    return server_mod._import_seed_links()
+    """Resolve seed link callables (monkeypatch ``default_seed_link_imports`` in tests)."""
+    return default_seed_link_imports()
 
 
 def _require_seed_links(logger: logging.Logger) -> None:
