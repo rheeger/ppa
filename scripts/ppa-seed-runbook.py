@@ -208,9 +208,7 @@ def _imessage_complete(cursor: dict[str, Any]) -> bool:
     return target > 0 and current >= target
 
 
-def _progress_changed(
-    before: dict[str, Any], after: dict[str, Any], fields: list[str]
-) -> bool:
+def _progress_changed(before: dict[str, Any], after: dict[str, Any], fields: list[str]) -> bool:
     return any(before.get(field) != after.get(field) for field in fields)
 
 
@@ -232,9 +230,7 @@ def _sample_summaries(vault: Path, limit: int = 3) -> list[str]:
 
 
 def _is_vault_initialized(vault: Path) -> bool:
-    return (vault / "_meta" / "identity-map.json").exists() and (
-        vault / "_meta" / "sync-state.json"
-    ).exists()
+    return (vault / "_meta" / "identity-map.json").exists() and (vault / "_meta" / "sync-state.json").exists()
 
 
 def _vault_has_content(vault: Path) -> bool:
@@ -376,14 +372,10 @@ class SeedRunbook:
         stamped = f"[{_now()}] {message}"
         print(stamped, flush=True)
         if self.current_phase is not None:
-            with self._phase_log_path(self.current_phase).open(
-                "a", encoding="utf-8"
-            ) as handle:
+            with self._phase_log_path(self.current_phase).open("a", encoding="utf-8") as handle:
                 handle.write(stamped + "\n")
 
-    def _update_phase(
-        self, phase_id: str, *, status: str, metrics: dict[str, Any] | None = None
-    ) -> None:
+    def _update_phase(self, phase_id: str, *, status: str, metrics: dict[str, Any] | None = None) -> None:
         phase = self.state["phases"][phase_id]
         phase["status"] = status
         if status == "in_progress" and not phase["started_at"]:
@@ -393,18 +385,14 @@ class SeedRunbook:
         if metrics:
             phase["metrics"] = {**phase.get("metrics", {}), **metrics}
         self.state["current_phase"] = phase_id if status == "in_progress" else ""
-        if status == "completed" and all(
-            self.state["phases"][item]["status"] == "completed" for item in PHASE_ORDER
-        ):
+        if status == "completed" and all(self.state["phases"][item]["status"] == "completed" for item in PHASE_ORDER):
             self.state["status"] = "completed"
             self.state["completed_at"] = _now()
         elif status == "in_progress":
             self.state["status"] = "running"
         self._save_state()
 
-    def _checkpoint(
-        self, phase_id: str, *, metrics: dict[str, Any], full: bool = False
-    ) -> Path:
+    def _checkpoint(self, phase_id: str, *, metrics: dict[str, Any], full: bool = False) -> Path:
         checkpoint_path = self.checkpoint_dir / phase_id
         checkpoint_path.mkdir(parents=True, exist_ok=True)
         meta_dir = checkpoint_path / "_meta"
@@ -464,17 +452,13 @@ class SeedRunbook:
         assert process.stdout is not None
         for line in process.stdout:
             sys.stdout.write(line)
-            with self._phase_log_path(self.current_phase).open(
-                "a", encoding="utf-8"
-            ) as handle:
+            with self._phase_log_path(self.current_phase).open("a", encoding="utf-8") as handle:
                 handle.write(line)
             lines.append(line)
         exit_code = process.wait()
         output = "".join(lines)
         if exit_code != 0:
-            raise PhaseFailure(
-                f"Command failed with exit code {exit_code}", retryable=retryable
-            )
+            raise PhaseFailure(f"Command failed with exit code {exit_code}", retryable=retryable)
         return output
 
     @contextmanager
@@ -519,9 +503,7 @@ class SeedRunbook:
             ]
         )
 
-    def _ingest(
-        self, label: str, adapter: Any, *, dry_run: bool = False, **kwargs
-    ) -> dict[str, Any]:
+    def _ingest(self, label: str, adapter: Any, *, dry_run: bool = False, **kwargs) -> dict[str, Any]:
         self._log(f"Starting {label}")
         result = adapter.ingest(str(self.vault), dry_run=dry_run, **kwargs)
         metrics = {
@@ -588,9 +570,7 @@ class SeedRunbook:
                     )
                     self._log(f"{phase_id} failed: {exc}")
                     if exc.retryable and phase["attempts"] <= self.config.retry_limit:
-                        self._log(
-                            f"Retrying {phase_id} after failure ({phase['attempts']}/{self.config.retry_limit})"
-                        )
+                        self._log(f"Retrying {phase_id} after failure ({phase['attempts']}/{self.config.retry_limit})")
                         time.sleep(2)
                         continue
                     self.state["status"] = "failed"
@@ -624,9 +604,7 @@ class SeedRunbook:
         }
         missing = [key for key, value in required.items() if not str(value).strip()]
         if missing:
-            raise PhaseFailure(
-                f"Missing required manifest values: {', '.join(sorted(missing))}"
-            )
+            raise PhaseFailure(f"Missing required manifest values: {', '.join(sorted(missing))}")
         _write_json(self.manifest_path, asdict(self.manifest))
         return {"manifest_path": str(self.manifest_path)}
 
@@ -670,9 +648,7 @@ class SeedRunbook:
             and not _is_vault_initialized(self.vault)
             and not self.config.allow_nonempty_vault
         ):
-            raise PhaseFailure(
-                "Vault has unexpected content but is not initialized for a resumable run"
-            )
+            raise PhaseFailure("Vault has unexpected content but is not initialized for a resumable run")
         return {
             "python_bin": str(python_bin),
             "free_gb_log_dir": round(self._disk_free_gb(self.log_dir), 2),
@@ -700,9 +676,7 @@ class SeedRunbook:
         ]
         missing = [str(path) for path in expected if not path.exists()]
         if missing:
-            raise PhaseFailure(
-                f"Snapshot bundle missing expected files: {', '.join(missing)}"
-            )
+            raise PhaseFailure(f"Snapshot bundle missing expected files: {', '.join(missing)}")
         contacts_metrics = self._ingest(
             "google-auth-warmup.contacts",
             ContactsAdapter(),
@@ -729,9 +703,7 @@ class SeedRunbook:
         return {
             "snapshot_dir": str(snapshot_dir),
             "snapshot_messages": _coerce_int(inspection.get("message_count")),
-            "snapshot_latest_rowid": _coerce_int(
-                inspection.get("latest_message_rowid")
-            ),
+            "snapshot_latest_rowid": _coerce_int(inspection.get("latest_message_rowid")),
             "google_contacts": contacts_metrics,
             "gmail": gmail_metrics,
             "calendar": calendar_metrics,
@@ -743,9 +715,7 @@ class SeedRunbook:
             and not self.config.allow_nonempty_vault
             and not _is_vault_initialized(self.vault)
         ):
-            raise PhaseFailure(
-                "Refusing to initialize a non-empty vault without --allow-nonempty-vault"
-            )
+            raise PhaseFailure("Refusing to initialize a non-empty vault without --allow-nonempty-vault")
         self._run_command(
             ["bash", str(REPO_ROOT / "scripts" / "ppa-init-vault.sh"), str(self.vault)],
             env={"PYTHON": self.manifest.python_bin},
@@ -776,20 +746,14 @@ class SeedRunbook:
     def _phase_verify_apple_contacts(self) -> dict[str, Any]:
         cursor = _sync_cursor(self.vault, "contacts.apple")
         if not cursor:
-            raise PhaseFailure(
-                "Missing contacts.apple sync-state entry after Apple contacts seed"
-            )
+            raise PhaseFailure("Missing contacts.apple sync-state entry after Apple contacts seed")
         validate = self._doctor_validate()
         stats_output = self._doctor_stats()
         metrics = {
             "cursor_present": True,
             "people_count": _people_count(self.vault),
             "dedup_candidates": _dedup_candidate_count(self.vault),
-            "validate_total": (
-                validate["report"].get("total_cards", 0)
-                if isinstance(validate["report"], dict)
-                else 0
-            ),
+            "validate_total": (validate["report"].get("total_cards", 0) if isinstance(validate["report"], dict) else 0),
             "stats_preview": stats_output.splitlines()[:10],
         }
         self._checkpoint(
@@ -808,20 +772,14 @@ class SeedRunbook:
     def _phase_verify_google_contacts(self) -> dict[str, Any]:
         cursor = _sync_cursor(self.vault, "contacts.google")
         if not cursor:
-            raise PhaseFailure(
-                "Missing contacts.google sync-state entry after Google contacts seed"
-            )
+            raise PhaseFailure("Missing contacts.google sync-state entry after Google contacts seed")
         validate = self._doctor_validate()
         stats_output = self._doctor_stats()
         metrics = {
             "cursor_present": True,
             "people_count": _people_count(self.vault),
             "dedup_candidates": _dedup_candidate_count(self.vault),
-            "validate_total": (
-                validate["report"].get("total_cards", 0)
-                if isinstance(validate["report"], dict)
-                else 0
-            ),
+            "validate_total": (validate["report"].get("total_cards", 0) if isinstance(validate["report"], dict) else 0),
             "stats_preview": stats_output.splitlines()[:10],
         }
         self._checkpoint(
@@ -857,15 +815,11 @@ class SeedRunbook:
     def _phase_verify_medical_records(self) -> dict[str, Any]:
         cursor = _sync_cursor(self.vault, "medical-records:onemedical")
         if not cursor:
-            raise PhaseFailure(
-                "Missing medical-records:onemedical sync-state entry after One Medical import"
-            )
+            raise PhaseFailure("Missing medical-records:onemedical sync-state entry after One Medical import")
         medical_count = _card_count(self.vault, "Medical")
         vaccination_count = _card_count(self.vault, "Vaccinations")
         medical_people = _cards_with_exact_people_count(self.vault, "Medical", 1)
-        vaccination_people = _cards_with_exact_people_count(
-            self.vault, "Vaccinations", 1
-        )
+        vaccination_people = _cards_with_exact_people_count(self.vault, "Vaccinations", 1)
         if medical_count and medical_people != medical_count:
             raise PhaseFailure("Not all Medical cards have exactly one person link")
         if vaccination_count and vaccination_people != vaccination_count:
@@ -893,15 +847,11 @@ class SeedRunbook:
     def _phase_verify_apple_health(self) -> dict[str, Any]:
         cursor = _sync_cursor(self.vault, "apple-health")
         if not cursor:
-            raise PhaseFailure(
-                "Missing apple-health sync-state entry after Apple Health import"
-            )
+            raise PhaseFailure("Missing apple-health sync-state entry after Apple Health import")
         medical_count = _card_count(self.vault, "Medical")
         medical_people = _cards_with_exact_people_count(self.vault, "Medical", 1)
         if medical_count and medical_people != medical_count:
-            raise PhaseFailure(
-                "Not all Medical cards have exactly one person link after Apple Health import"
-            )
+            raise PhaseFailure("Not all Medical cards have exactly one person link after Apple Health import")
         metrics = {
             "cursor_present": True,
             "medical_records": medical_count,
@@ -951,20 +901,12 @@ class SeedRunbook:
         if not _imessage_complete(cursor):
             raise PhaseFailure("iMessage sync-state is not complete")
         metrics = {
-            "last_completed_message_rowid": _coerce_int(
-                cursor.get("last_completed_message_rowid")
-            ),
-            "snapshot_max_message_rowid": _coerce_int(
-                cursor.get("snapshot_max_message_rowid")
-            ),
+            "last_completed_message_rowid": _coerce_int(cursor.get("last_completed_message_rowid")),
+            "snapshot_max_message_rowid": _coerce_int(cursor.get("snapshot_max_message_rowid")),
             "imessage_threads": _card_count(self.vault, "IMessageThreads"),
             "imessage_messages": _card_count(self.vault, "IMessage"),
-            "threads_with_people_links": _cards_with_field(
-                self.vault, "IMessageThreads", "people"
-            ),
-            "messages_with_attachments": _cards_with_field(
-                self.vault, "IMessage", "attachments"
-            ),
+            "threads_with_people_links": _cards_with_field(self.vault, "IMessageThreads", "people"),
+            "messages_with_attachments": _cards_with_field(self.vault, "IMessage", "attachments"),
         }
         self._checkpoint(
             "verify-imessage",
@@ -988,21 +930,15 @@ class SeedRunbook:
         return {**metrics, "photos_before": before, "photos_after": after}
 
     def _phase_verify_photos(self) -> dict[str, Any]:
-        cursor = _sync_cursor(
-            self.vault, f"photos:{self.manifest.photos_source_label.strip().lower()}"
-        )
+        cursor = _sync_cursor(self.vault, f"photos:{self.manifest.photos_source_label.strip().lower()}")
         if not cursor:
             raise PhaseFailure("Missing photos sync-state entry after Photos import")
         metrics = {
             "scanned_assets": _coerce_int(cursor.get("scanned_assets")),
             "emitted_assets": _coerce_int(cursor.get("emitted_assets")),
-            "skipped_unchanged_assets": _coerce_int(
-                cursor.get("skipped_unchanged_assets")
-            ),
+            "skipped_unchanged_assets": _coerce_int(cursor.get("skipped_unchanged_assets")),
             "photos_cards": _card_count(self.vault, "Photos"),
-            "photos_with_people_links": _cards_with_field(
-                self.vault, "Photos", "people"
-            ),
+            "photos_with_people_links": _cards_with_field(self.vault, "Photos", "people"),
         }
         self._checkpoint("verify-photos", metrics=metrics, full=False)
         return metrics
@@ -1045,9 +981,7 @@ class SeedRunbook:
             if _gmail_complete(after):
                 return {"iterations": iterations, "cursor": after, **metrics}
             if not _progress_changed(before, after, tracked_fields):
-                raise PhaseFailure(
-                    "Gmail messages cursor did not advance", retryable=True
-                )
+                raise PhaseFailure("Gmail messages cursor did not advance", retryable=True)
 
     def _phase_verify_gmail_messages(self) -> dict[str, Any]:
         key = f"gmail-messages:{self.manifest.google_account.strip().lower()}"
@@ -1061,12 +995,8 @@ class SeedRunbook:
             "emitted_attachments": _coerce_int(cursor.get("emitted_attachments")),
             "email_threads": _card_count(self.vault, "EmailThreads"),
             "email_messages": _card_count(self.vault, "Email"),
-            "threads_with_calendar_links": _cards_with_field(
-                self.vault, "EmailThreads", "calendar_events"
-            ),
-            "messages_with_people_links": _cards_with_field(
-                self.vault, "Email", "people"
-            ),
+            "threads_with_calendar_links": _cards_with_field(self.vault, "EmailThreads", "calendar_events"),
+            "messages_with_people_links": _cards_with_field(self.vault, "Email", "people"),
         }
         self._checkpoint("verify-gmail-messages", metrics=metrics, full=False)
         return metrics
@@ -1106,12 +1036,8 @@ class SeedRunbook:
         metrics = {
             "emitted_events": _coerce_int(cursor.get("emitted_events")),
             "calendar_events": _card_count(self.vault, "Calendar"),
-            "events_with_source_messages": _cards_with_field(
-                self.vault, "Calendar", "source_messages"
-            ),
-            "events_with_people_links": _cards_with_field(
-                self.vault, "Calendar", "people"
-            ),
+            "events_with_source_messages": _cards_with_field(self.vault, "Calendar", "source_messages"),
+            "events_with_people_links": _cards_with_field(self.vault, "Calendar", "people"),
         }
         self._checkpoint("verify-calendar-events", metrics=metrics, full=False)
         return metrics
@@ -1145,9 +1071,7 @@ class SeedRunbook:
             if _correspondents_complete(after):
                 return {"iterations": iterations, "cursor": after, **metrics}
             if not _progress_changed(before, after, tracked_fields):
-                raise PhaseFailure(
-                    "Gmail correspondents cursor did not advance", retryable=True
-                )
+                raise PhaseFailure("Gmail correspondents cursor did not advance", retryable=True)
 
     def _phase_seed_file_libraries(self) -> dict[str, Any]:
         before = _card_count(self.vault, "Documents")
@@ -1162,16 +1086,12 @@ class SeedRunbook:
     def _phase_verify_file_libraries(self) -> dict[str, Any]:
         cursor = _sync_cursor(self.vault, "file-libraries")
         if not cursor:
-            raise PhaseFailure(
-                "Missing file-libraries sync-state entry after document import"
-            )
+            raise PhaseFailure("Missing file-libraries sync-state entry after document import")
         metrics = {
             "scanned_candidates": _coerce_int(cursor.get("scanned_candidates")),
             "emitted_documents": _coerce_int(cursor.get("emitted_documents")),
             "documents": _card_count(self.vault, "Documents"),
-            "documents_with_people_links": _cards_with_field(
-                self.vault, "Documents", "people"
-            ),
+            "documents_with_people_links": _cards_with_field(self.vault, "Documents", "people"),
             "documents_with_orgs": _cards_with_field(self.vault, "Documents", "orgs"),
         }
         self._checkpoint("verify-file-libraries", metrics=metrics, full=False)
@@ -1220,9 +1140,7 @@ class SeedRunbook:
 
     def _phase_rebuild_derived_index(self) -> dict[str, Any]:
         _, archive_index_store, _, _ = self._archive_modules()
-        index = archive_index_store.PostgresArchiveIndex(
-            self.vault, dsn=self.manifest.archive_index_dsn
-        )
+        index = archive_index_store.PostgresArchiveIndex(self.vault, dsn=self.manifest.archive_index_dsn)
         bootstrap = index.bootstrap()
         counts = index.rebuild()
         status = index.status()
@@ -1230,20 +1148,14 @@ class SeedRunbook:
         if _coerce_int(status.get("duplicate_uid_count")) != 0:
             raise PhaseFailure("Derived index rebuild reported duplicate UIDs")
         if _coerce_int(status.get("medical_record_count")) <= 0:
-            raise PhaseFailure(
-                "Derived index rebuild did not materialize medical_records rows"
-            )
+            raise PhaseFailure("Derived index rebuild did not materialize medical_records rows")
         if _coerce_int(status.get("vaccination_count")) <= 0:
-            raise PhaseFailure(
-                "Derived index rebuild did not materialize vaccinations rows"
-            )
+            raise PhaseFailure("Derived index rebuild did not materialize vaccinations rows")
         return metrics
 
     def _phase_seed_link_review(self) -> dict[str, Any]:
         _, archive_index_store, _, archive_seed_links = self._archive_modules()
-        index = archive_index_store.PostgresArchiveIndex(
-            self.vault, dsn=self.manifest.archive_index_dsn
-        )
+        index = archive_index_store.PostgresArchiveIndex(self.vault, dsn=self.manifest.archive_index_dsn)
         metrics = archive_seed_links.run_seed_link_backfill(
             index,
             max_workers=max(4, os.cpu_count() or 4),
@@ -1256,9 +1168,7 @@ class SeedRunbook:
 
     def _phase_link_quality_gate(self) -> dict[str, Any]:
         _, archive_index_store, _, archive_seed_links = self._archive_modules()
-        index = archive_index_store.PostgresArchiveIndex(
-            self.vault, dsn=self.manifest.archive_index_dsn
-        )
+        index = archive_index_store.PostgresArchiveIndex(self.vault, dsn=self.manifest.archive_index_dsn)
         metrics = archive_seed_links.compute_link_quality_gate(index)
         if not bool(metrics.get("passes")):
             raise PhaseFailure("Seed link quality gate did not pass")
@@ -1273,9 +1183,7 @@ class SeedRunbook:
         card_count = _coerce_int(status.get("card_count"))
         chunk_count = _coerce_int(status.get("chunk_count"))
         if duplicate_uid_count != 0:
-            raise PhaseFailure(
-                "Graph gate blocked by duplicate UIDs in the derived index"
-            )
+            raise PhaseFailure("Graph gate blocked by duplicate UIDs in the derived index")
         if edge_count <= 0 or card_count <= 0 or chunk_count <= 0:
             raise PhaseFailure("Derived index looks incomplete for graph verification")
         people_paths = _sample_people_paths(self.vault, limit=3)
@@ -1290,9 +1198,7 @@ class SeedRunbook:
             if "->" in result:
                 graph_hits += 1
         if graph_hits == 0:
-            raise PhaseFailure(
-                "Graph verification found no linked notes for sampled people"
-            )
+            raise PhaseFailure("Graph verification found no linked notes for sampled people")
         summaries = _sample_summaries(self.vault, limit=1)
         query_term = summaries[0] if summaries else "archive"
         query_output = archive_server.archive_query(type_filter="person", limit=5)
@@ -1309,13 +1215,9 @@ class SeedRunbook:
         return metrics
 
     def _phase_embed_final_archive(self) -> dict[str, Any]:
-        archive_server, archive_index_store, archive_embedding, _ = (
-            self._archive_modules()
-        )
+        archive_server, archive_index_store, archive_embedding, _ = self._archive_modules()
         index = archive_index_store.get_archive_index(self.vault)
-        provider = archive_embedding.get_embedding_provider(
-            model=self.manifest.embedding_model
-        )
+        provider = archive_embedding.get_embedding_provider(model=self.manifest.embedding_model)
         iterations = 0
         while True:
             status = index.embedding_status(
@@ -1339,13 +1241,9 @@ class SeedRunbook:
                 limit=max(20, pending),
             )
             if _coerce_int(result.get("failed")) > 0:
-                raise PhaseFailure(
-                    "Embedding run reported failed chunks", retryable=True
-                )
+                raise PhaseFailure("Embedding run reported failed chunks", retryable=True)
             if _coerce_int(result.get("embedded")) <= 0:
-                raise PhaseFailure(
-                    "Embedding run did not make progress", retryable=True
-                )
+                raise PhaseFailure("Embedding run did not make progress", retryable=True)
         summaries = _sample_summaries(self.vault, limit=1)
         query_term = summaries[0] if summaries else "archive"
         vector_output = archive_server.archive_vector_search(
@@ -1365,9 +1263,7 @@ class SeedRunbook:
             embedding_version=self.manifest.embedding_version,
         )
         if _coerce_int(final_status.get("pending_chunk_count")) != 0:
-            raise PhaseFailure(
-                "Embedding backlog is not empty after embed loop", retryable=True
-            )
+            raise PhaseFailure("Embedding backlog is not empty after embed loop", retryable=True)
         return {
             "iterations": iterations,
             "status": final_status,
@@ -1391,36 +1287,16 @@ class SeedRunbook:
             "embedding_status": embedding_status,
             "archive_stats": archive_server.archive_stats().splitlines()[:15],
             "connectivity": {
-                "photos_with_people_links": _cards_with_field(
-                    self.vault, "Photos", "people"
-                ),
-                "imessage_threads_with_people_links": _cards_with_field(
-                    self.vault, "IMessageThreads", "people"
-                ),
-                "gmail_messages_with_people_links": _cards_with_field(
-                    self.vault, "Email", "people"
-                ),
-                "documents_with_people_links": _cards_with_field(
-                    self.vault, "Documents", "people"
-                ),
-                "documents_with_orgs": _cards_with_field(
-                    self.vault, "Documents", "orgs"
-                ),
-                "medical_with_people_links": _cards_with_field(
-                    self.vault, "Medical", "people"
-                ),
-                "vaccinations_with_people_links": _cards_with_field(
-                    self.vault, "Vaccinations", "people"
-                ),
-                "email_threads_with_calendar_links": _cards_with_field(
-                    self.vault, "EmailThreads", "calendar_events"
-                ),
-                "calendar_events_with_source_messages": _cards_with_field(
-                    self.vault, "Calendar", "source_messages"
-                ),
-                "calendar_events_with_people_links": _cards_with_field(
-                    self.vault, "Calendar", "people"
-                ),
+                "photos_with_people_links": _cards_with_field(self.vault, "Photos", "people"),
+                "imessage_threads_with_people_links": _cards_with_field(self.vault, "IMessageThreads", "people"),
+                "gmail_messages_with_people_links": _cards_with_field(self.vault, "Email", "people"),
+                "documents_with_people_links": _cards_with_field(self.vault, "Documents", "people"),
+                "documents_with_orgs": _cards_with_field(self.vault, "Documents", "orgs"),
+                "medical_with_people_links": _cards_with_field(self.vault, "Medical", "people"),
+                "vaccinations_with_people_links": _cards_with_field(self.vault, "Vaccinations", "people"),
+                "email_threads_with_calendar_links": _cards_with_field(self.vault, "EmailThreads", "calendar_events"),
+                "calendar_events_with_source_messages": _cards_with_field(self.vault, "Calendar", "source_messages"),
+                "calendar_events_with_people_links": _cards_with_field(self.vault, "Calendar", "people"),
             },
         }
         if metrics["validation_errors"] != 0:
@@ -1438,53 +1314,33 @@ class SeedRunbook:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Supervise the initial PPA seeding runbook"
-    )
+    parser = argparse.ArgumentParser(description="Supervise the initial PPA seeding runbook")
     sub = parser.add_subparsers(dest="command", required=True)
 
     def add_shared_arguments(target: argparse.ArgumentParser) -> None:
         target.add_argument(
             "--run-id",
-            default=os.environ.get(
-                "RUN_ID", f"ppa-seed-{datetime.now():%Y%m%d-%H%M%S}"
-            ),
+            default=os.environ.get("RUN_ID", f"ppa-seed-{datetime.now():%Y%m%d-%H%M%S}"),
         )
         target.add_argument(
             "--vault",
-            default=os.environ.get(
-                "PPA_PATH", str(Path.home() / "Archive" / "production" / "hf-archives")
-            ),
+            default=os.environ.get("PPA_PATH", str(Path.home() / "Archive" / "production" / "hf-archives")),
         )
         target.add_argument(
             "--log-dir",
             default=os.environ.get(
                 "LOG_DIR",
-                str(
-                    Path.home()
-                    / "Archive"
-                    / "ops"
-                    / "ppa-seed-logs"
-                    / os.environ.get("RUN_ID", "latest")
-                ),
+                str(Path.home() / "Archive" / "ops" / "ppa-seed-logs" / os.environ.get("RUN_ID", "latest")),
             ),
         )
         target.add_argument(
             "--checkpoint-dir",
             default=os.environ.get(
                 "CHECKPOINT_DIR",
-                str(
-                    Path.home()
-                    / "Archive"
-                    / "ops"
-                    / "ppa-seed-checkpoints"
-                    / os.environ.get("RUN_ID", "latest")
-                ),
+                str(Path.home() / "Archive" / "ops" / "ppa-seed-checkpoints" / os.environ.get("RUN_ID", "latest")),
             ),
         )
-        target.add_argument(
-            "--apple-contacts-vcf", default=os.environ.get("APPLE_CONTACTS_VCF", "")
-        )
+        target.add_argument("--apple-contacts-vcf", default=os.environ.get("APPLE_CONTACTS_VCF", ""))
         target.add_argument(
             "--google-account",
             default=os.environ.get("GOOGLE_ACCOUNT", "rheeger@gmail.com"),
@@ -1519,20 +1375,14 @@ def _build_parser() -> argparse.ArgumentParser:
             "--one-medical-fhir-json",
             default=os.environ.get("ONE_MEDICAL_FHIR_JSON", ""),
         )
-        target.add_argument(
-            "--one-medical-ccd-xml", default=os.environ.get("ONE_MEDICAL_CCD_XML", "")
-        )
+        target.add_argument("--one-medical-ccd-xml", default=os.environ.get("ONE_MEDICAL_CCD_XML", ""))
         target.add_argument("--vaccine-pdf", default=os.environ.get("VACCINE_PDF", ""))
         target.add_argument(
             "--apple-health-export-xml",
             default=os.environ.get("APPLE_HEALTH_EXPORT_XML", ""),
         )
-        target.add_argument(
-            "--person-wikilink", default=os.environ.get("PERSON_WIKILINK", "")
-        )
-        target.add_argument(
-            "--archive-index-dsn", default=os.environ.get("ARCHIVE_INDEX_DSN", "")
-        )
+        target.add_argument("--person-wikilink", default=os.environ.get("PERSON_WIKILINK", ""))
+        target.add_argument("--archive-index-dsn", default=os.environ.get("ARCHIVE_INDEX_DSN", ""))
         target.add_argument(
             "--embedding-provider",
             default=os.environ.get("ARCHIVE_EMBEDDING_PROVIDER", "hash"),
@@ -1546,9 +1396,7 @@ def _build_parser() -> argparse.ArgumentParser:
             type=int,
             default=int(os.environ.get("ARCHIVE_EMBEDDING_VERSION", "1")),
         )
-        target.add_argument(
-            "--python-bin", default=os.environ.get("PYTHON", sys.executable)
-        )
+        target.add_argument("--python-bin", default=os.environ.get("PYTHON", sys.executable))
 
     run = sub.add_parser("run")
     add_shared_arguments(run)
@@ -1580,9 +1428,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _manifest_from_args(args: argparse.Namespace) -> RunManifest:
     full_checkpoint_phases = [
-        item.strip()
-        for item in getattr(args, "full_checkpoint_phases", "").split(",")
-        if item.strip()
+        item.strip() for item in getattr(args, "full_checkpoint_phases", "").split(",") if item.strip()
     ]
     return RunManifest(
         run_id=args.run_id,
@@ -1621,9 +1467,7 @@ def _print_status(manifest: RunManifest) -> int:
     print(f"current_phase: {state.get('current_phase', '')}")
     for phase_id in PHASE_ORDER:
         phase = state.get("phases", {}).get(phase_id, {})
-        print(
-            f"- {phase_id}: {phase.get('status', 'unknown')} attempts={phase.get('attempts', 0)}"
-        )
+        print(f"- {phase_id}: {phase.get('status', 'unknown')} attempts={phase.get('attempts', 0)}")
     vault = Path(manifest.vault_path).expanduser().resolve()
     if vault.exists():
         for key, value in _vault_metrics(vault).items():

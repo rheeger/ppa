@@ -77,9 +77,7 @@ CARD_TYPE_PRIORS = {
     "beeper_attachment": 0.03,
 }
 
-PROJECTIONS_BY_LOAD_ORDER = tuple(
-    sorted(PROJECTION_REGISTRY, key=lambda projection: projection.load_order)
-)
+PROJECTIONS_BY_LOAD_ORDER = tuple(sorted(PROJECTION_REGISTRY, key=lambda projection: projection.load_order))
 EDGE_RULE_BY_CARD_TYPE = {spec.card_type: spec for spec in EDGE_RULE_SPECS}
 
 
@@ -184,24 +182,18 @@ def get_rebuild_batch_size() -> int:
 
 
 def get_rebuild_commit_interval() -> int:
-    v = _ppa_env_int(
-        "PPA_REBUILD_COMMIT_INTERVAL", default=DEFAULT_REBUILD_COMMIT_INTERVAL
-    )
+    v = _ppa_env_int("PPA_REBUILD_COMMIT_INTERVAL", default=DEFAULT_REBUILD_COMMIT_INTERVAL)
     return max(v, 1)
 
 
 def get_rebuild_progress_every() -> int:
-    v = _ppa_env_int(
-        "PPA_REBUILD_PROGRESS_EVERY", default=DEFAULT_REBUILD_PROGRESS_EVERY
-    )
+    v = _ppa_env_int("PPA_REBUILD_PROGRESS_EVERY", default=DEFAULT_REBUILD_PROGRESS_EVERY)
     return max(v, 0)
 
 
 def get_rebuild_executor() -> str:
     value = _ppa_env("PPA_REBUILD_EXECUTOR", default=DEFAULT_REBUILD_EXECUTOR).lower()
-    return (
-        value if value in {"thread", "process", "serial"} else DEFAULT_REBUILD_EXECUTOR
-    )
+    return value if value in {"thread", "process", "serial"} else DEFAULT_REBUILD_EXECUTOR
 
 
 def get_rebuild_staging_mode() -> str:
