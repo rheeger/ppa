@@ -1419,7 +1419,11 @@ def archive_search_json(query: str, limit: int = 20) -> str:
         store = resolve_store()
         result = search_cmd.search(query, limit=limit, store=store, logger=_log)
         rows = result.get("rows", [])
-        _log_tool_done("archive_search_json", t0, result_count=len(rows) if isinstance(rows, list) else 0)
+        _log_tool_done(
+            "archive_search_json",
+            t0,
+            result_count=len(rows) if isinstance(rows, list) else 0,
+        )
         return json.dumps(result, indent=2)
     except PpaError as exc:
         return str(exc)
@@ -1467,7 +1471,11 @@ def archive_hybrid_search_json(
             end_date=end_date,
         )
         rows = payload.get("rows", [])
-        _log_tool_done("archive_hybrid_search_json", t0, result_count=len(rows) if isinstance(rows, list) else 0)
+        _log_tool_done(
+            "archive_hybrid_search_json",
+            t0,
+            result_count=len(rows) if isinstance(rows, list) else 0,
+        )
         return json.dumps(payload, indent=2)
     except PpaError as exc:
         return str(exc)

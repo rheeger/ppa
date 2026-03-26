@@ -56,7 +56,13 @@ class FakeIndex:
     location = "postgresql://archive:archive@localhost:5432/archive"
 
     def search(self, query: str, limit: int = 20, **_kwargs):
-        return [{"rel_path": "People/jane-smith.md", "summary": "Jane Smith", "matched_by": "lexical"}]
+        return [
+            {
+                "rel_path": "People/jane-smith.md",
+                "summary": "Jane Smith",
+                "matched_by": "lexical",
+            }
+        ]
 
     def read_path_for_uid(self, uid: str):
         if uid == "hfa-person-aaaabbbbcccc":
@@ -65,7 +71,12 @@ class FakeIndex:
 
     def query_cards(self, **_kwargs):
         return [
-            {"rel_path": "People/jane-smith.md", "summary": "Jane Smith", "type": "person", "activity_at": "2026-03-06"}
+            {
+                "rel_path": "People/jane-smith.md",
+                "summary": "Jane Smith",
+                "type": "person",
+                "activity_at": "2026-03-06",
+            }
         ]
 
     def graph(self, note_path: str, hops: int = 2):
@@ -79,16 +90,33 @@ class FakeIndex:
         return None
 
     def timeline(self, **_kwargs):
-        return [{"created": "2026-03-06", "rel_path": "People/jane-smith.md", "summary": "Jane Smith"}]
+        return [
+            {
+                "created": "2026-03-06",
+                "rel_path": "People/jane-smith.md",
+                "summary": "Jane Smith",
+            }
+        ]
 
     def stats(self):
         return 2, [{"type": "person", "count": 2}], [{"source": "linkedin", "count": 1}]
 
     def rebuild(self):
-        return {"cards": 3, "external_ids": 3, "edges": 1, "chunks": 4, "duplicate_uids": 0}
+        return {
+            "cards": 3,
+            "external_ids": 3,
+            "edges": 1,
+            "chunks": 4,
+            "duplicate_uids": 0,
+        }
 
     def status(self):
-        return {"card_count": "3", "external_id_count": "3", "chunk_count": "4", "schema_version": "3"}
+        return {
+            "card_count": "3",
+            "external_id_count": "3",
+            "chunk_count": "4",
+            "schema_version": "3",
+        }
 
     def duplicate_uid_rows(self, *, limit: int = 20):
         return [
@@ -127,7 +155,15 @@ class FakeIndex:
             }
         ][:limit]
 
-    def embed_pending(self, *, provider, embedding_model: str, embedding_version: int, limit: int = 20, **kwargs):
+    def embed_pending(
+        self,
+        *,
+        provider,
+        embedding_model: str,
+        embedding_version: int,
+        limit: int = 20,
+        **kwargs,
+    ):
         return {
             "provider": getattr(provider, "name", "unknown"),
             "embedding_model": embedding_model,
@@ -138,7 +174,15 @@ class FakeIndex:
             "embedded": min(limit, 2),
         }
 
-    def vector_search(self, *, query_vector, embedding_model: str, embedding_version: int, limit: int = 20, **_kwargs):
+    def vector_search(
+        self,
+        *,
+        query_vector,
+        embedding_model: str,
+        embedding_version: int,
+        limit: int = 20,
+        **_kwargs,
+    ):
         return [
             {
                 "card_uid": "hfa-person-aaaabbbbcccc",
@@ -157,7 +201,14 @@ class FakeIndex:
         ][:limit]
 
     def hybrid_search(
-        self, *, query: str, query_vector, embedding_model: str, embedding_version: int, limit: int = 20, **_kwargs
+        self,
+        *,
+        query: str,
+        query_vector,
+        embedding_model: str,
+        embedding_version: int,
+        limit: int = 20,
+        **_kwargs,
     ):
         return [
             {
@@ -335,7 +386,12 @@ def _seed_vault(vault: Path) -> PersonCard:
         provenance=_person_provenance("contacts.apple"),
     )
     write_card(vault, "People/mary-jones.md", mary, provenance=_person_provenance("notion"))
-    write_card(vault, "Finance/2026-03/hfa-finance-111122223333.md", finance, provenance=_finance_provenance("copilot"))
+    write_card(
+        vault,
+        "Finance/2026-03/hfa-finance-111122223333.md",
+        finance,
+        provenance=_finance_provenance("copilot"),
+    )
     return jane
 
 
@@ -484,8 +540,16 @@ def test_seed_link_commands_dispatch(
     archive_main.main()
     assert capsys.readouterr().out.strip() == "backfill:3"
 
-    monkeypatch.setattr(seed_cmd, "seed_link_refresh", lambda **kwargs: f"refresh:{kwargs['source_uids']}")
-    monkeypatch.setattr(sys, "argv", ["archive_mcp", "seed-link-refresh", "--source-uids", "hfa-person-1"])
+    monkeypatch.setattr(
+        seed_cmd,
+        "seed_link_refresh",
+        lambda **kwargs: f"refresh:{kwargs['source_uids']}",
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["archive_mcp", "seed-link-refresh", "--source-uids", "hfa-person-1"],
+    )
     archive_main.main()
     assert capsys.readouterr().out.strip() == "refresh:hfa-person-1"
 
@@ -499,7 +563,11 @@ def test_seed_link_commands_dispatch(
     archive_main.main()
     assert capsys.readouterr().out.strip() == "promote:2"
 
-    monkeypatch.setattr(seed_cmd, "seed_link_report", lambda **kwargs: f"report:{kwargs['rebuild_if_dirty']}")
+    monkeypatch.setattr(
+        seed_cmd,
+        "seed_link_report",
+        lambda **kwargs: f"report:{kwargs['rebuild_if_dirty']}",
+    )
     monkeypatch.setattr(sys, "argv", ["archive_mcp", "seed-link-report"])
     archive_main.main()
     assert capsys.readouterr().out.strip() == "report:True"
@@ -524,7 +592,11 @@ def test_benchmark_seed_links_command_dispatches(
         "benchmark_seed_links",
         lambda **kwargs: {"vault": str(kwargs["vault"]), "profile": kwargs["profile"]},
     )
-    monkeypatch.setattr(sys, "argv", ["archive_mcp", "benchmark-seed-links", "--vault", str(tmp_path / "vault")])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["archive_mcp", "benchmark-seed-links", "--vault", str(tmp_path / "vault")],
+    )
     archive_main.main()
     output = capsys.readouterr().out.strip()
     assert '"profile": "local-laptop"' in output
@@ -618,7 +690,11 @@ def test_archive_seed_link_wrappers(tmp_vault, monkeypatch: pytest.MonkeyPatch, 
     monkeypatch.setenv("PPA_SEED_LINKS_ENABLED", "1")
 
     mock_sl = {
-        "run_seed_link_enqueue": lambda index, **kwargs: {"prepared": 8, "enqueued": 5, "existing": 3},
+        "run_seed_link_enqueue": lambda index, **kwargs: {
+            "prepared": 8,
+            "enqueued": 5,
+            "existing": 3,
+        },
         "run_seed_link_backfill": lambda index, **kwargs: {
             "workers": kwargs.get("max_workers", 0) or 4,
             "jobs_prepared": 8,
@@ -740,10 +816,18 @@ def test_archive_seed_link_wrappers(tmp_vault, monkeypatch: pytest.MonkeyPatch, 
             "high_risk_precision": 1.0,
             "required_high_risk_precision": 0.95,
             "candidate_counts": [
-                {"module_name": "communicationLinker", "proposed_link_type": "thread_has_message", "count": 2}
+                {
+                    "module_name": "communicationLinker",
+                    "proposed_link_type": "thread_has_message",
+                    "count": 2,
+                }
             ],
             "auto_promoted_counts": [
-                {"module_name": "communicationLinker", "proposed_link_type": "thread_has_message", "count": 1}
+                {
+                    "module_name": "communicationLinker",
+                    "proposed_link_type": "thread_has_message",
+                    "count": 1,
+                }
             ],
         },
         "get_seed_scope_rows": lambda: [],
@@ -806,7 +890,9 @@ def test_get_embedding_provider_supports_openai(monkeypatch: pytest.MonkeyPatch)
     assert provider.model == "text-embedding-3-small"
 
 
-def test_openai_embedding_provider_parses_embedding_response(monkeypatch: pytest.MonkeyPatch):
+def test_openai_embedding_provider_parses_embedding_response(
+    monkeypatch: pytest.MonkeyPatch,
+):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     captured: dict[str, object] = {}
 
@@ -828,17 +914,22 @@ def test_openai_embedding_provider_parses_embedding_response(monkeypatch: pytest
     }
 
 
-def test_resolve_openai_api_key_from_arnold_vault_toggle(monkeypatch: pytest.MonkeyPatch):
+def test_resolve_openai_api_key_from_arnold_vault_toggle(
+    monkeypatch: pytest.MonkeyPatch,
+):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setenv("PPA_USE_ARNOLD_OPENAI_KEY", "1")
     monkeypatch.setenv("PPA_OPENAI_API_KEY_OP_REF", "op://Arnold/OPENAI_API_KEY/credential")
     monkeypatch.setattr(
-        "archive_mcp.embedding_provider._read_1password_secret", lambda ref: "vault-key" if ref else None
+        "archive_mcp.embedding_provider._read_1password_secret",
+        lambda ref: "vault-key" if ref else None,
     )
     assert _resolve_openai_api_key() == "vault-key"
 
 
-def test_resolve_openai_api_key_supports_op_reference_env(monkeypatch: pytest.MonkeyPatch):
+def test_resolve_openai_api_key_supports_op_reference_env(
+    monkeypatch: pytest.MonkeyPatch,
+):
     monkeypatch.setenv("OPENAI_API_KEY", "op://Arnold/OPENAI_API_KEY/credential")
     monkeypatch.setenv("PPA_USE_ARNOLD_OPENAI_KEY", "1")
     monkeypatch.setattr(
@@ -848,14 +939,18 @@ def test_resolve_openai_api_key_supports_op_reference_env(monkeypatch: pytest.Mo
     assert _resolve_openai_api_key() == "resolved-from-op"
 
 
-def test_resolve_openai_api_key_requires_toggle_for_op_reference(monkeypatch: pytest.MonkeyPatch):
+def test_resolve_openai_api_key_requires_toggle_for_op_reference(
+    monkeypatch: pytest.MonkeyPatch,
+):
     monkeypatch.setenv("OPENAI_API_KEY", "op://Arnold/OPENAI_API_KEY/credential")
     monkeypatch.delenv("PPA_USE_ARNOLD_OPENAI_KEY", raising=False)
     with pytest.raises(RuntimeError, match="PPA_USE_ARNOLD_OPENAI_KEY=1"):
         _resolve_openai_api_key()
 
 
-def test_resolve_service_account_token_prefers_passkey_gate_op_ref(monkeypatch: pytest.MonkeyPatch):
+def test_resolve_service_account_token_prefers_passkey_gate_op_ref(
+    monkeypatch: pytest.MonkeyPatch,
+):
     monkeypatch.delenv("OP_SERVICE_ACCOUNT_TOKEN", raising=False)
     monkeypatch.delenv("PPA_OP_SERVICE_ACCOUNT_TOKEN_FILE", raising=False)
     monkeypatch.setenv(
