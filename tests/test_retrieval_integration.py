@@ -726,6 +726,30 @@ def test_live_postgres_rebuild_graph_and_lexical_search(live_archive):
     assert "MeetingTranscripts/board-dinner-transcript.md" in event_graph
 
 
+def test_live_postgres_lexical_candidates_fts_and_exact(live_archive):
+    """Exercise _lexical_candidates SQL directly against real Postgres.
+
+    Catches schema interpolation bugs (un-interpolated f-strings) that
+    only surface at query execution time.
+    """
+    _vault, index, _provider = live_archive
+    index.rebuild()
+
+    # FTS path: "Jane Smith" should match via search_document
+    fts_rows = index._lexical_candidates(query="Jane Smith", limit=5)
+    assert fts_rows, "FTS branch returned no rows for seeded person card"
+    jane_row = next((r for r in fts_rows if "jane-smith" in str(r["rel_path"])), None)
+    assert jane_row is not None, "Jane Smith card not in FTS results"
+    assert float(jane_row["lexical_score"]) > 0
+
+    # Exact path: slug match
+    exact_rows = index._lexical_candidates(query="jane-smith", limit=5)
+    assert exact_rows, "Exact branch returned no rows for slug match"
+    exact_jane = next((r for r in exact_rows if "jane-smith" in str(r["rel_path"])), None)
+    assert exact_jane is not None
+    assert int(exact_jane["slug_exact"]) == 1 or int(exact_jane["person_exact"]) == 1
+
+
 def test_live_postgres_vector_search_groups_to_card_level_and_supports_filters(live_archive):
     _vault, index, provider = live_archive
     index.rebuild()
