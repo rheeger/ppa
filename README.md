@@ -1,83 +1,54 @@
 # PPA — Personal Private Archives
 
-A semantic memory engine that indexes a personal digital life and turns data exhaust (emails, texts, calendar, photos, medical records, documents, code history) into a searchable, interconnected private knowledge base.
+Mail, messages, calendar, photos, health portals, bank exports, git history, meeting transcripts — each one sits in a different product with its own UI, export format, and retention rules. There is **no single system** that is “your archive.” If you need something that might be in any of those places, you open several apps or dig through old downloads. Nothing gives you one definitive view.
 
-PPA is the **engine**. Each deployment is an **instance** — one person's or family's private data running on the PPA engine.
+PPA pulls from the services and files you choose into **one vault of markdown** (with metadata so you know the source), builds a **search index** in Postgres with pgvector, and exposes an **MCP server** so editors and agents can query that index. **The vault is what you keep.** The database is derived and can be rebuilt from the vault. A running deployment is one **instance** (for example, one person or one household).
 
-## Architecture
+| Without | With |
+| ------- | ---- |
+| Search each product separately | One search stack over everything you imported |
+| Model only sees what you paste | MCP tools over your own indexed material |
+| No portable copy of “all of it” | Files you own + DB you can regenerate |
+
+Typical uses: piecing together who said what and when, using agents in-editor against your corpus (**[docs/AGENT_USAGE.md](docs/AGENT_USAGE.md)**), or keeping a long-term record where each item still traces back to its origin.
+
+---
+
+## How it works
 
 ```
-Vault (markdown)  →  Derived Index (Postgres + pgvector)  →  MCP Server (query interface)
-     ↑ canonical          ↑ disposable, rebuildable              ↑ tools for agents
+Markdown vault  →  Postgres + pgvector  →  MCP server (stdio)
 ```
 
-- **Vault**: canonical truth as markdown files with YAML frontmatter and provenance metadata.
-- **Index**: Postgres with pgvector — cards, typed edges, chunks, embeddings, typed projection tables, external IDs.
-- **MCP**: stdio-transport MCP server exposing search, read, query, graph, and admin tools.
+| Layer | Role |
+| ----- | ---- |
+| **Vault** | Markdown, YAML frontmatter, provenance — the thing you back up |
+| **Index** | Cards, edges, chunks, embeddings. Derived. Rebuildable. |
+| **MCP** | Search, read, query, graph, admin — gated by tool profile |
 
-The vault outlasts any database or query layer. If Postgres dies, re-derive it. If the MCP protocol evolves, swap the server.
+MCP clients come and go. The vault is forever.
 
-## Packages
+---
 
-| Package          | Description                                                    |
-| ---------------- | -------------------------------------------------------------- |
-| `archive_mcp`    | MCP server, index pipeline, retrieval, embeddings (31 modules) |
-| `hfa`            | Schema library, vault I/O, provenance, identity resolution     |
-| `archive_sync`   | Source adapters for 18 data sources                            |
-| `archive_doctor` | Vault validation, dedup sweep, stats, purge                    |
+## Requirements
 
-All four ship as one installable package (`pip install -e .`). Python import names are transitional — the repo is `ppa/` but imports remain `archive_mcp`, `hfa`, `archive_sync`, `archive_doctor` until the canonical rename in a future phase.
+- Python **3.10+**
+- Postgres with **pgvector** (repo ships `Makefile` + Docker for a sane local loop)
+- Embeddings: **`hash`** when you’re iterating; **`openai`** (or API-compatible) when you want vectors that mean something
 
-## Supported Sources
+---
 
-PPA ships adapters for 18 data sources across six categories:
-
-**Communication**
-
-- Gmail messages (full thread import with incremental sync)
-- Gmail correspondents (contact graph from message history)
-- iMessage (local `chat.db` snapshot)
-- Beeper (unified messaging bridge)
-- Otter.ai transcripts (meeting recordings)
-
-**Calendar & Scheduling**
-
-- Google Calendar events
-
-**People & Identity**
-
-- Google Contacts
-- LinkedIn (export-driven)
-- Notion people directories
-- Seed people (manual/curated entries)
-
-**Files & Media**
-
-- File libraries (local directory scan)
-- Google Photos (metadata + private annotations)
-- GitHub history (commits, PRs, issues)
-
-**Health & Medical**
-
-- Apple Health (export-driven)
-- Medical records (structured clinical data)
-- Epic EHI (electronic health information export)
-
-**Finance**
-
-- Copilot finance (transaction and account data)
-
-Each adapter produces vault-format markdown cards with typed frontmatter and provenance metadata. Adapters are incremental where the source supports it.
-
-## Quickstart
+## Quick start
 
 ```bash
+git clone https://github.com/rheeger/ppa.git
 cd ppa
 python3 -m venv .venv
-.venv/bin/pip install -e .
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -e .
 ```
 
-### Local Postgres
+DB up, schema, index from vault, then embeddings:
 
 ```bash
 cp .env.pgvector.example .env.pgvector
@@ -87,174 +58,170 @@ make rebuild-indexes
 make embed-pending
 ```
 
-### Run the MCP server
+MCP (adjust paths):
 
 ```bash
-# Local development (Docker Postgres)
 ./run-local-seed-mcp.sh
-
-# Remote instance (via SSH tunnel)
-./scripts/ppa-tunnel.sh &   # forward port 5433
-./run-arnold-mcp.sh
+# Remote: ./scripts/ppa-tunnel.sh & ./run-arnold-mcp.sh
 ```
 
-### Cursor integration
+Underlying entrypoint:
 
-`~/.cursor/mcp.json`:
+```bash
+python -m archive_mcp serve
+```
+
+Everything else the binary can do lives in **[docs/PPA_RUNTIME_CONTRACT.md](docs/PPA_RUNTIME_CONTRACT.md)**.
+
+---
+
+## MCP host config
+
+`~/.cursor/mcp.json` (tack on more servers the same way):
 
 ```json
 {
   "mcpServers": {
     "archive-local": {
-      "command": "/path/to/ppa/run-local-seed-mcp.sh"
+      "command": "/absolute/path/to/ppa/run-local-seed-mcp.sh"
     },
     "archive-remote": {
-      "command": "/path/to/ppa/run-arnold-mcp.sh"
+      "command": "/absolute/path/to/ppa/run-arnold-mcp.sh"
     }
   }
 }
 ```
 
-## Environment Variables
+---
 
-All env vars use the `PPA_` prefix.
+## Packages
 
-### Core
+Single editable install; import names are legacy until someone finishes the rename:
 
-| Variable               | Description                                                    | Default                     |
-| ---------------------- | -------------------------------------------------------------- | --------------------------- |
-| `PPA_PATH`             | Vault directory path                                           | `~/Archive/vault`           |
-| `PPA_INDEX_DSN`        | Postgres connection string                                     | (required)                  |
-| `PPA_INDEX_SCHEMA`     | Postgres schema name                                           | `archive_mcp`               |
-| `PPA_INSTANCE_NAME`    | Human-readable instance name for the MCP server                | `Personal Private Archives` |
-| `PPA_MCP_TOOL_PROFILE` | Tool profile: `full`, `read-only`, `remote-read`, `admin-only` | `full`                      |
-| `PPA_CONFIG_PATH`      | Explicit config file path                                      | (auto-discover `ppa.yml`)   |
+| Module | Role |
+| ------ | ---- |
+| `archive_mcp` | MCP server, index, retrieval, embeddings |
+| `hfa` | Schema, vault I/O, provenance |
+| `archive_sync` | Sources → vault cards |
+| `archive_doctor` | Validate, dedupe, stats |
 
-### Embeddings
+---
 
-| Variable                            | Description                                   | Default                       |
-| ----------------------------------- | --------------------------------------------- | ----------------------------- |
-| `PPA_EMBEDDING_PROVIDER`            | `hash` (dev/test) or `openai` (production)    | `hash`                        |
-| `PPA_EMBEDDING_MODEL`               | Model label for lifecycle tracking            | `default-embedding-model`     |
-| `PPA_EMBEDDING_VERSION`             | Version number for lifecycle tracking         | `1`                           |
-| `PPA_EMBED_BATCH_SIZE`              | Chunks per embedding batch                    | `32`                          |
-| `PPA_EMBED_CONCURRENCY`             | Concurrent embedding workers                  | `4`                           |
-| `PPA_EMBED_PROGRESS_EVERY`          | Print progress every N chunks                 | `0`                           |
-| `PPA_EMBED_DEFER_VECTOR_INDEX`      | Drop/rebuild ANN index around large backfills | unset                         |
-| `PPA_USE_ARNOLD_OPENAI_KEY`         | Resolve OpenAI key from 1Password             | unset                         |
-| `PPA_OPENAI_API_KEY_OP_REF`         | 1Password reference for OpenAI key            | (required if using 1Password) |
-| `PPA_OP_SERVICE_ACCOUNT_TOKEN_FILE` | Path to 1Password SA token file               | (required if using 1Password) |
+## Connections (17 adapters)
 
-### Rebuild tuning
+If it’s listed here, there’s code that already knows how to turn it into cards. Canonical IDs: **`archive_sync/adapter_contracts.py`**. Messy details: **`archive_sync/adapters/`**.
 
-| Variable                      | Description                                        | Default   |
-| ----------------------------- | -------------------------------------------------- | --------- |
-| `PPA_REBUILD_WORKERS`         | Parallel scan workers                              | CPU count |
-| `PPA_REBUILD_BATCH_SIZE`      | Rows per materialization batch                     | `1000`    |
-| `PPA_REBUILD_COMMIT_INTERVAL` | Cards per load commit                              | `5000`    |
-| `PPA_REBUILD_EXECUTOR`        | `serial`, `thread`, or `process`                   | `thread`  |
-| `PPA_FORCE_FULL_REBUILD`      | Force full rebuild even if incremental is possible | unset     |
-| `PPA_FORBID_REBUILD`          | Block all rebuilds (production safety)             | unset     |
+### Communication & meetings
 
-### Feature flags
+| Service | Ingests | Connection |
+| ------- | ------- | ---------- |
+| **Gmail** | Threads, messages | Google API; incremental |
+| **Gmail correspondents** | People graph from mail | From Gmail |
+| **iMessage** | Chats, messages | Local `chat.db` |
+| **Beeper** | Threads, DMs, attachments | Local BeeperTexts SQLite (`index.db`, macOS default) |
+| **Otter.ai** | Transcripts | Otter HTTP API |
 
-| Variable                 | Description                                                     | Default  |
-| ------------------------ | --------------------------------------------------------------- | -------- |
-| `PPA_SEED_LINKS_ENABLED` | Enable the seed-links enrichment subsystem (8 tables, 11 tools) | disabled |
-| `PPA_SEED_FROZEN`        | Skip vault scan when manifest hash matches                      | unset    |
+### Calendar & contacts
 
-## MCP Tools
+| Service | Ingests | Connection |
+| ------- | ------- | ---------- |
+| **Google Calendar** | Events | API |
+| **Google Contacts** | People | People API |
 
-### Read & Search
+### People & directories
 
-| Tool                         | Description                                   | Profiles        |
-| ---------------------------- | --------------------------------------------- | --------------- |
-| `archive_search`             | Full-text lexical search                      | all             |
-| `archive_read`               | Read note by path or UID                      | all             |
-| `archive_read_many`          | Batch read by paths/UIDs                      | full, read-only |
-| `archive_query`              | Structured query by type, source, people, org | all             |
-| `archive_vector_search`      | Semantic search over embedded chunks          | full, read-only |
-| `archive_hybrid_search`      | Combined lexical + semantic + graph retrieval | full, read-only |
-| `archive_search_json`        | Lexical search as JSON                        | all             |
-| `archive_hybrid_search_json` | Hybrid search as JSON                         | full, read-only |
+| Service | Ingests | Connection |
+| ------- | ------- | ---------- |
+| **LinkedIn** | Network CSV | Export file |
+| **Notion** | People / staff rows | CSV (`notion-people`, `notion-staff`) |
+| **Seed people** | Hand-curated | Local seeds |
 
-### Graph & People
+### Files, photos, code
 
-| Tool               | Description                               |
-| ------------------ | ----------------------------------------- |
-| `archive_graph`    | Linked notes from materialized edge graph |
-| `archive_person`   | Person profile + linked notes             |
-| `archive_timeline` | Notes in date range                       |
+| Service | Ingests | Connection |
+| ------- | ------- | ---------- |
+| **File libraries** | Trees of files | Directory scan |
+| **Apple Photos** | Assets, albums, faces/labels (macOS) | [osxphotos](https://github.com/RhetTbull/osxphotos) on local library |
+| **GitHub** | Commits, PRs, issues | GitHub API |
 
-### Status & Admin
+### Health & medical
 
-| Tool                         | Description                            |
-| ---------------------------- | -------------------------------------- |
-| `archive_stats`              | Vault health metrics                   |
-| `archive_validate`           | Schema + provenance validation         |
-| `archive_duplicates`         | Pending dedup candidates               |
-| `archive_index_status`       | Derived index metadata                 |
-| `archive_embedding_status`   | Chunk coverage and pending embeddings  |
-| `archive_embed_pending`      | Generate embeddings for pending chunks |
-| `archive_bootstrap_postgres` | Bootstrap Postgres schema              |
-| `archive_rebuild_indexes`    | Rebuild derived index from vault       |
+| Service | Ingests | Connection |
+| ------- | ------- | ---------- |
+| **Apple Health** | Vitals, activity rollups | Health export XML |
+| **Clinical / EHR** | Encounters, labs, meds, immunizations, docs | **`medical-records`**: FHIR JSON, CCD/XML, PDFs, Epic EHI TSV, etc. (whatever your provider actually gives you) |
 
-## Agent Query Guidance
+### Finance
 
-Use tools in this order:
+| Service | Ingests | Connection |
+| ------- | ------- | ---------- |
+| **Copilot** | Transactions | CSV (default `~/Downloads/copilot-transactions.csv`) |
 
-1. `archive_read` for exact UID/path reads.
-2. `archive_query` for type/source/people filters.
-3. `archive_search` for keyword and phrase recall.
-4. `archive_vector_search` for semantic recall when the question is vague.
-5. `archive_hybrid_search` for exact anchors + semantic + graph expansion.
-6. `archive_graph` to expand neighboring evidence.
-7. Read the canonical card before giving a final answer.
+---
 
-Search hits are retrieval aids, not canonical truth. The vault is truth.
+## Config (minimum)
 
-## Testing
+Prefix everything **`PPA_*`**. The exhaustive list is **[docs/PPA_RUNTIME_CONTRACT.md](docs/PPA_RUNTIME_CONTRACT.md)** §2 — this is the “just let me run it” subset:
+
+| Var | Purpose |
+| --- | ------- |
+| `PPA_PATH` | Vault root (default `~/Archive/vault`; override in `ppa.yml`) |
+| `PPA_INDEX_DSN` | Postgres DSN (required) |
+| `PPA_INDEX_SCHEMA` | Schema (default `archive_mcp`) |
+| `PPA_MCP_TOOL_PROFILE` | `full` / `read-only` / `remote-read` / `admin-only` |
+| `PPA_EMBEDDING_PROVIDER` | `hash` or `openai` |
+
+Optional: **`PPA_CONFIG_PATH`** forces a specific `ppa.yml`.
+
+---
+
+## MCP tools (shape)
+
+Lexical + structured query + vector + hybrid, graph/peek at neighbors, people, timelines, then the admin/rebuild knobs (behind profiles). **Exact names + “don’t shoot yourself in prod”:** runtime contract + **[docs/AGENT_USAGE.md](docs/AGENT_USAGE.md)**.
+
+---
+
+## Production
+
+- **`PPA_FORBID_REBUILD=1`** on anything facing a real database. Cheap insurance.
+- Treat `rebuild-indexes` / `bootstrap-postgres` on prod like `rm -rf` — default stance is local build → dump → restore (or your written playbook).
+- Sanity checks: **`psql` over SSH**. Not “run a random Python command and accidentally walk the vault.”
+
+More: **[docs/SECURITY_MODEL.md](docs/SECURITY_MODEL.md)**, **[docs/PPA_BACKUP_AND_RESTORE.md](docs/PPA_BACKUP_AND_RESTORE.md)**, **`docs/runbooks/`**.
+
+---
+
+## Scripts
+
+- **`scripts/ppa-*.sh`** — vault init, encrypted backup/restore, volumes, post-import, pg dump, tunnels  
+- **`scripts/ppa-*.py`** — Gmail / Calendar / iMessage / Photos / GitHub extract + import glue
+
+---
+
+## Tests
 
 ```bash
 .venv/bin/python -m pytest tests/
 ```
 
-275 tests covering:
+~275 tests. Integration kicks up Dockerized pgvector when it can; otherwise it skips without drama.
 
-- Schema library and vault I/O (64 tests)
-- Source adapters for all 18 data sources (121 tests)
-- Vault doctor operations (7 tests)
-- MCP server behavior and command dispatch (28 tests)
-- Live Postgres integration: rebuild, search, vector search, hybrid ranking, graph expansion
-- Script behavior for backup, init-vault, post-import, spool imports
+---
 
-Live retrieval tests start a disposable pgvector Docker container automatically. If Docker is unavailable, they skip cleanly.
+## Docs
 
-## Production Safety
+| Doc | About |
+| --- | ----- |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System layout |
+| [docs/INDEXING.md](docs/INDEXING.md) | Index pipeline |
+| [docs/AGENT_USAGE.md](docs/AGENT_USAGE.md) | Agent / tool usage |
+| [docs/PPA_RUNTIME_CONTRACT.md](docs/PPA_RUNTIME_CONTRACT.md) | CLI, env (frozen) |
+| [docs/PLAYBOOK.md](docs/PLAYBOOK.md) | Ops |
+| [docs/CARD_TYPE_CONTRACTS.md](docs/CARD_TYPE_CONTRACTS.md) | Card types |
+| [docs/RETRIEVAL_CONTRACT.md](docs/RETRIEVAL_CONTRACT.md) | Retrieval |
 
-Production MCP launchers should set `PPA_FORBID_REBUILD=1` to block rebuild operations and prevent accidental data loss on the production database.
+---
 
-**Never run** `rebuild-indexes` or `bootstrap-postgres` against a production instance. The index should be built locally and transferred via dump-restore. If a rebuild is ever needed, build locally, dump, and restore.
+## Contributing
 
-**Verify via psql, not Python.** For production verification, use direct SSH + psql commands to avoid triggering vault scans.
-
-## Scripts
-
-Shell scripts (`scripts/ppa-*.sh`) for vault operations:
-
-- `ppa-init-vault.sh` — scaffold a new vault
-- `ppa-backup.sh` / `ppa-backup-encrypt.sh` / `ppa-backup-restore.sh` — encrypted vault backup and restore
-- `ppa-backup-upload.sh` / `ppa-backup-upload-icloud.sh` / `ppa-backup-upload-gdrive.sh` — backup upload to cloud storage
-- `ppa-provision-storage.sh` / `ppa-unlock.sh` / `ppa-mount.sh` / `ppa-lock.sh` — encrypted volume management
-- `ppa-post-import.sh` — run sync + doctor after vault imports
-- `ppa-pg-backup.sh` — stream Postgres dump to backup location
-- `ppa-tunnel.sh` — SSH tunnel to remote Postgres instance
-
-Python scripts (`scripts/ppa-*.py`) for source extraction and import:
-
-- Gmail, Calendar, iMessage, Photos, GitHub extraction and parallel import
-- Google workspace backfill and account scope migration
-
-## Documentation
-
-See `docs/` for architecture, playbook, card type contracts, retrieval contracts, security model, and operational runbooks.
+PRs genuinely welcome. Run **`pytest`** when you touch index / adapters / MCP surfaces. If CLI, env, or MCP semantics move, **update** **[docs/PPA_RUNTIME_CONTRACT.md](docs/PPA_RUNTIME_CONTRACT.md)** — that file is the handshake with anyone automating this.
