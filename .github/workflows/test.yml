@@ -8,6 +8,8 @@ on:
 
 jobs:
   # Style gate — runs before tests so obvious issues fail fast.
+  # Use the same editable install + [dev] as unit/integration so `ruff` matches pyproject.toml
+  # (avoids `ruff format --check` drift from `pip install ruff` pulling latest).
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -15,7 +17,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install ruff
+      - run: pip install -e ".[dev]"
       - run: ruff check .
       - run: ruff format --check .
 
