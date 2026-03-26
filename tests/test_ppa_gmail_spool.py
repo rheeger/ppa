@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -20,7 +21,7 @@ def test_gmail_spool_import_rejects_manifest_account_mismatch(tmp_path):
 
     result = subprocess.run(
         [
-            str(repo_root / ".venv" / "bin" / "python"),
+            sys.executable,
             str(repo_root / "scripts" / "ppa-gmail-import-spool.py"),
             "--vault",
             str(vault),

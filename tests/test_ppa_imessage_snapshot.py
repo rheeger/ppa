@@ -6,6 +6,7 @@ import json
 import os
 import sqlite3
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -67,7 +68,7 @@ def test_hfa_imessage_snapshot_builds_bundle(tmp_path):
 
     result = subprocess.run(
         [
-            str(repo_root / ".venv" / "bin" / "python"),
+            sys.executable,
             str(script_path),
             "--messages-dir",
             str(messages_dir),

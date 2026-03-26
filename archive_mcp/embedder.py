@@ -345,211 +345,212 @@ class EmbedderMixin:
         limit: int = 20,
         include_context_prefix: bool = False,
     ) -> dict[str, int | str]:
-        total_steps = 6
-        provider_name = str(getattr(provider, "name", "unknown"))
+        with self._embed_pending_lock:
+            total_steps = 6
+            provider_name = str(getattr(provider, "name", "unknown"))
 
-        _log_rebuild_step(
-            1,
-            total_steps,
-            "validate embedding provider",
-            f"provider={provider_name} model={embedding_model} version={embedding_version}",
-        )
-        self.ensure_ready()
-        provider_model = str(getattr(provider, "model", "") or "").strip()
-        if provider_model and provider_model != embedding_model:
-            raise RuntimeError(
-                f"Embedding provider model mismatch: provider={provider_model} requested={embedding_model}"
+            _log_rebuild_step(
+                1,
+                total_steps,
+                "validate embedding provider",
+                f"provider={provider_name} model={embedding_model} version={embedding_version}",
             )
-        provider_dimension = int(getattr(provider, "dimension", self.vector_dimension))
-        if provider_dimension != self.vector_dimension:
-            raise RuntimeError(
-                f"Embedding provider dimension mismatch: provider={provider_dimension} index={self.vector_dimension}"
+            self.ensure_ready()
+            provider_model = str(getattr(provider, "model", "") or "").strip()
+            if provider_model and provider_model != embedding_model:
+                raise RuntimeError(
+                    f"Embedding provider model mismatch: provider={provider_model} requested={embedding_model}"
+                )
+            provider_dimension = int(getattr(provider, "dimension", self.vector_dimension))
+            if provider_dimension != self.vector_dimension:
+                raise RuntimeError(
+                    f"Embedding provider dimension mismatch: provider={provider_dimension} index={self.vector_dimension}"
+                )
+            batch_size = get_embed_batch_size()
+            max_retries = get_embed_max_retries()
+            write_batch_size = min(get_embed_write_batch_size(), batch_size)
+            concurrency = get_embed_concurrency()
+            progress_every = get_embed_progress_every()
+            _log_rebuild_step(
+                1,
+                total_steps,
+                "validate embedding provider complete",
+                f"dimension={provider_dimension} batch_size={batch_size} concurrency={concurrency} context_prefix={include_context_prefix}",
             )
-        batch_size = get_embed_batch_size()
-        max_retries = get_embed_max_retries()
-        write_batch_size = min(get_embed_write_batch_size(), batch_size)
-        concurrency = get_embed_concurrency()
-        progress_every = get_embed_progress_every()
-        _log_rebuild_step(
-            1,
-            total_steps,
-            "validate embedding provider complete",
-            f"dimension={provider_dimension} batch_size={batch_size} concurrency={concurrency} context_prefix={include_context_prefix}",
-        )
 
-        _log_rebuild_step(2, total_steps, "count embedding backlog")
-        backlog_status = self.embedding_status(embedding_model=embedding_model, embedding_version=embedding_version)
-        pending_chunks = int(backlog_status["pending_chunk_count"])
-        total_chunks = int(backlog_status["chunk_count"])
-        already_embedded = int(backlog_status["embedded_chunk_count"])
-        _log_rebuild_step(
-            2,
-            total_steps,
-            "count embedding backlog complete",
-            f"total_chunks={total_chunks} already_embedded={already_embedded} pending={pending_chunks}",
-        )
-        if pending_chunks <= 0:
-            _log_rebuild_step(6, total_steps, "nothing to embed")
-            return {
+            _log_rebuild_step(2, total_steps, "count embedding backlog")
+            backlog_status = self.embedding_status(embedding_model=embedding_model, embedding_version=embedding_version)
+            pending_chunks = int(backlog_status["pending_chunk_count"])
+            total_chunks = int(backlog_status["chunk_count"])
+            already_embedded = int(backlog_status["embedded_chunk_count"])
+            _log_rebuild_step(
+                2,
+                total_steps,
+                "count embedding backlog complete",
+                f"total_chunks={total_chunks} already_embedded={already_embedded} pending={pending_chunks}",
+            )
+            if pending_chunks <= 0:
+                _log_rebuild_step(6, total_steps, "nothing to embed")
+                return {
+                    "provider": provider_name,
+                    "embedding_model": embedding_model,
+                    "embedding_version": embedding_version,
+                    "batch_size": batch_size,
+                    "write_batch_size": write_batch_size,
+                    "concurrency": concurrency,
+                    "failed": 0,
+                    "chunk_schema_version": CHUNK_SCHEMA_VERSION,
+                    "embedded": 0,
+                }
+
+            remaining_limit = pending_chunks if limit <= 0 else min(limit, pending_chunks)
+            target_total = remaining_limit
+            embedded = 0
+            failed = 0
+            last_error = ""
+            reserve_lock = Lock()
+            progress_lock = Lock()
+            should_rebuild_vector_index = embed_defer_vector_index()
+
+            def reserve_claim_size() -> int:
+                nonlocal remaining_limit
+                with reserve_lock:
+                    if remaining_limit <= 0:
+                        return 0
+                    claim = min(batch_size, remaining_limit)
+                    remaining_limit -= claim
+                    return claim
+
+            def refund_claim_size(amount: int) -> None:
+                nonlocal remaining_limit
+                if amount <= 0:
+                    return
+                with reserve_lock:
+                    remaining_limit += amount
+
+            if should_rebuild_vector_index:
+                _log_rebuild_step(3, total_steps, "drop vector index for bulk load")
+                with self._connect() as conn:
+                    self._drop_embeddings_vector_index(conn)
+                    conn.commit()
+                _log_rebuild_step(3, total_steps, "drop vector index complete")
+            else:
+                _log_rebuild_step(3, total_steps, "skip vector index drop (incremental mode)")
+
+            _log_rebuild_step(4, total_steps, "materialize embed work queue and context")
+            t0 = time.time()
+            with self._connect() as conn:
+                queue_count = self._materialize_embed_queue(
+                    conn,
+                    embedding_model=embedding_model,
+                    embedding_version=embedding_version,
+                )
+                logger.info(
+                    "step 4/%d materialize embed work queue complete pending_chunks=%d elapsed=%.1fs",
+                    total_steps,
+                    queue_count,
+                    time.time() - t0,
+                )
+                if include_context_prefix:
+                    t1 = time.time()
+                    ctx_count = self._materialize_embed_context(conn)
+                    logger.info(
+                        "step 4/%d materialize embed context lookup complete cards=%d elapsed=%.1fs",
+                        total_steps,
+                        ctx_count,
+                        time.time() - t1,
+                    )
+            _log_rebuild_step(
+                4,
+                total_steps,
+                "materialize complete",
+                f"queue={queue_count} context={'yes' if include_context_prefix else 'no'} total_elapsed={time.time() - t0:.1f}s",
+            )
+
+            progress = _RebuildProgressReporter(
+                step_number=5,
+                total_steps=total_steps,
+                stage="embed",
+                total_items=target_total,
+                progress_every=progress_every,
+                started_at=time.time(),
+                min_interval_seconds=5.0,
+            )
+            _log_rebuild_step(
+                5,
+                total_steps,
+                "embed chunks",
+                f"target={target_total} workers={concurrency} batch_size={batch_size}",
+            )
+
+            def run_worker() -> EmbeddingBatchResult:
+                worker_result = EmbeddingBatchResult()
+                nonlocal embedded, failed, last_error
+                while True:
+                    claim_size = reserve_claim_size()
+                    if claim_size <= 0:
+                        return worker_result
+                    batch_result = self._process_embedding_claim(
+                        provider=provider,
+                        embedding_model=embedding_model,
+                        embedding_version=embedding_version,
+                        claim_size=claim_size,
+                        max_retries=max_retries,
+                        write_batch_size=write_batch_size,
+                        include_context_prefix=include_context_prefix,
+                    )
+                    if batch_result.claimed < claim_size:
+                        refund_claim_size(claim_size - batch_result.claimed)
+                    if batch_result.claimed == 0:
+                        return worker_result
+                    worker_result.claimed += batch_result.claimed
+                    worker_result.embedded += batch_result.embedded
+                    worker_result.failed += batch_result.failed
+                    if batch_result.last_error:
+                        worker_result.last_error = batch_result.last_error
+                    with progress_lock:
+                        embedded += batch_result.embedded
+                        failed += batch_result.failed
+                        if batch_result.last_error:
+                            last_error = batch_result.last_error
+                        fail_suffix = f" failed={failed}" if failed else ""
+                        err_suffix = f" last_error={last_error}" if last_error else ""
+                        progress.update(embedded, extra=f"embedded={embedded}{fail_suffix}{err_suffix}")
+                return worker_result
+
+            try:
+                with ThreadPoolExecutor(max_workers=max(1, concurrency)) as executor:
+                    futures = {executor.submit(run_worker) for _ in range(max(1, concurrency))}
+                    while futures:
+                        done, futures = wait(futures, return_when=FIRST_COMPLETED)
+                        for future in done:
+                            batch_result = future.result()
+                            if batch_result.last_error:
+                                last_error = batch_result.last_error
+            finally:
+                fail_suffix = f" failed={failed}" if failed else ""
+                progress.complete(embedded, extra=f"embedded={embedded}{fail_suffix}")
+                with self._connect() as conn:
+                    self._drop_embed_work_tables(conn)
+                if should_rebuild_vector_index:
+                    _log_rebuild_step(6, total_steps, "rebuild vector index")
+                    with self._connect() as conn:
+                        self._ensure_embeddings_vector_index(conn)
+                        conn.commit()
+                    _log_rebuild_step(6, total_steps, "rebuild vector index complete")
+                else:
+                    _log_rebuild_step(6, total_steps, "skip vector index rebuild (incremental mode)")
+            result: dict[str, int | str] = {
                 "provider": provider_name,
                 "embedding_model": embedding_model,
                 "embedding_version": embedding_version,
+                "chunk_schema_version": CHUNK_SCHEMA_VERSION,
                 "batch_size": batch_size,
                 "write_batch_size": write_batch_size,
                 "concurrency": concurrency,
-                "failed": 0,
-                "chunk_schema_version": CHUNK_SCHEMA_VERSION,
-                "embedded": 0,
+                "embedded": embedded,
+                "failed": failed,
             }
-
-        remaining_limit = pending_chunks if limit <= 0 else min(limit, pending_chunks)
-        target_total = remaining_limit
-        embedded = 0
-        failed = 0
-        last_error = ""
-        reserve_lock = Lock()
-        progress_lock = Lock()
-        should_rebuild_vector_index = embed_defer_vector_index()
-
-        def reserve_claim_size() -> int:
-            nonlocal remaining_limit
-            with reserve_lock:
-                if remaining_limit <= 0:
-                    return 0
-                claim = min(batch_size, remaining_limit)
-                remaining_limit -= claim
-                return claim
-
-        def refund_claim_size(amount: int) -> None:
-            nonlocal remaining_limit
-            if amount <= 0:
-                return
-            with reserve_lock:
-                remaining_limit += amount
-
-        if should_rebuild_vector_index:
-            _log_rebuild_step(3, total_steps, "drop vector index for bulk load")
-            with self._connect() as conn:
-                self._drop_embeddings_vector_index(conn)
-                conn.commit()
-            _log_rebuild_step(3, total_steps, "drop vector index complete")
-        else:
-            _log_rebuild_step(3, total_steps, "skip vector index drop (incremental mode)")
-
-        _log_rebuild_step(4, total_steps, "materialize embed work queue and context")
-        t0 = time.time()
-        with self._connect() as conn:
-            queue_count = self._materialize_embed_queue(
-                conn,
-                embedding_model=embedding_model,
-                embedding_version=embedding_version,
-            )
-            logger.info(
-                "step 4/%d materialize embed work queue complete pending_chunks=%d elapsed=%.1fs",
-                total_steps,
-                queue_count,
-                time.time() - t0,
-            )
-            if include_context_prefix:
-                t1 = time.time()
-                ctx_count = self._materialize_embed_context(conn)
-                logger.info(
-                    "step 4/%d materialize embed context lookup complete cards=%d elapsed=%.1fs",
-                    total_steps,
-                    ctx_count,
-                    time.time() - t1,
-                )
-        _log_rebuild_step(
-            4,
-            total_steps,
-            "materialize complete",
-            f"queue={queue_count} context={'yes' if include_context_prefix else 'no'} total_elapsed={time.time() - t0:.1f}s",
-        )
-
-        progress = _RebuildProgressReporter(
-            step_number=5,
-            total_steps=total_steps,
-            stage="embed",
-            total_items=target_total,
-            progress_every=progress_every,
-            started_at=time.time(),
-            min_interval_seconds=5.0,
-        )
-        _log_rebuild_step(
-            5,
-            total_steps,
-            "embed chunks",
-            f"target={target_total} workers={concurrency} batch_size={batch_size}",
-        )
-
-        def run_worker() -> EmbeddingBatchResult:
-            worker_result = EmbeddingBatchResult()
-            nonlocal embedded, failed, last_error
-            while True:
-                claim_size = reserve_claim_size()
-                if claim_size <= 0:
-                    return worker_result
-                batch_result = self._process_embedding_claim(
-                    provider=provider,
-                    embedding_model=embedding_model,
-                    embedding_version=embedding_version,
-                    claim_size=claim_size,
-                    max_retries=max_retries,
-                    write_batch_size=write_batch_size,
-                    include_context_prefix=include_context_prefix,
-                )
-                if batch_result.claimed < claim_size:
-                    refund_claim_size(claim_size - batch_result.claimed)
-                if batch_result.claimed == 0:
-                    return worker_result
-                worker_result.claimed += batch_result.claimed
-                worker_result.embedded += batch_result.embedded
-                worker_result.failed += batch_result.failed
-                if batch_result.last_error:
-                    worker_result.last_error = batch_result.last_error
-                with progress_lock:
-                    embedded += batch_result.embedded
-                    failed += batch_result.failed
-                    if batch_result.last_error:
-                        last_error = batch_result.last_error
-                    fail_suffix = f" failed={failed}" if failed else ""
-                    err_suffix = f" last_error={last_error}" if last_error else ""
-                    progress.update(embedded, extra=f"embedded={embedded}{fail_suffix}{err_suffix}")
-            return worker_result
-
-        try:
-            with ThreadPoolExecutor(max_workers=max(1, concurrency)) as executor:
-                futures = {executor.submit(run_worker) for _ in range(max(1, concurrency))}
-                while futures:
-                    done, futures = wait(futures, return_when=FIRST_COMPLETED)
-                    for future in done:
-                        batch_result = future.result()
-                        if batch_result.last_error:
-                            last_error = batch_result.last_error
-        finally:
-            fail_suffix = f" failed={failed}" if failed else ""
-            progress.complete(embedded, extra=f"embedded={embedded}{fail_suffix}")
-            with self._connect() as conn:
-                self._drop_embed_work_tables(conn)
-            if should_rebuild_vector_index:
-                _log_rebuild_step(6, total_steps, "rebuild vector index")
-                with self._connect() as conn:
-                    self._ensure_embeddings_vector_index(conn)
-                    conn.commit()
-                _log_rebuild_step(6, total_steps, "rebuild vector index complete")
-            else:
-                _log_rebuild_step(6, total_steps, "skip vector index rebuild (incremental mode)")
-        result: dict[str, int | str] = {
-            "provider": provider_name,
-            "embedding_model": embedding_model,
-            "embedding_version": embedding_version,
-            "chunk_schema_version": CHUNK_SCHEMA_VERSION,
-            "batch_size": batch_size,
-            "write_batch_size": write_batch_size,
-            "concurrency": concurrency,
-            "embedded": embedded,
-            "failed": failed,
-        }
-        if last_error:
-            result["last_error"] = last_error
-        return result
+            if last_error:
+                result["last_error"] = last_error
+            return result

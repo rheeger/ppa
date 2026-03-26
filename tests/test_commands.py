@@ -14,8 +14,10 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-import archive_mcp.server as server_mod
 import pytest
+from test_server import FakeIndex, _seed_vault
+
+import archive_mcp.server as server_mod
 from archive_mcp.commands import read as read_cmd
 from archive_mcp.commands import search as search_cmd
 from archive_mcp.commands import status as status_cmd
@@ -27,7 +29,6 @@ from archive_mcp.errors import (
 )
 from archive_mcp.health import run_health_checks
 from archive_mcp.store import DefaultArchiveStore
-from test_server import FakeIndex, _seed_vault
 
 
 @pytest.fixture
@@ -43,9 +44,7 @@ def tmp_vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (meta / "identity-map.json").write_text("{}", encoding="utf-8")
     (meta / "sync-state.json").write_text("{}", encoding="utf-8")
     monkeypatch.setenv("PPA_PATH", str(vault))
-    monkeypatch.setenv(
-        "PPA_INDEX_DSN", "postgresql://archive:archive@localhost:5432/archive"
-    )
+    monkeypatch.setenv("PPA_INDEX_DSN", "postgresql://archive:archive@localhost:5432/archive")
     return vault
 
 
@@ -69,9 +68,7 @@ def test_search_command_returns_dict(command_store: DefaultArchiveStore) -> None
     assert len(result["rows"]) >= 1
 
 
-def test_read_command_returns_dict(
-    tmp_vault: Path, command_store: DefaultArchiveStore
-) -> None:
+def test_read_command_returns_dict(tmp_vault: Path, command_store: DefaultArchiveStore) -> None:
     _seed_vault(tmp_vault)
     log = logging.getLogger("test.commands")
     result = read_cmd.read("hfa-person-aaaabbbbcccc", store=command_store, logger=log)
@@ -102,9 +99,7 @@ def test_resolve_store_raises_vault_not_found(monkeypatch: pytest.MonkeyPatch) -
         resolve_store()
 
 
-def test_resolve_store_raises_index_unavailable(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_resolve_store_raises_index_unavailable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     vault = tmp_path / "vault"
     vault.mkdir()
     (vault / "People").mkdir()
@@ -164,7 +159,5 @@ def test_read_logs_not_found_without_error(
 ) -> None:
     log = logging.getLogger("test.commands.read")
     with caplog.at_level(logging.INFO):
-        result = read_cmd.read(
-            "hfa-person-does-not-exist", store=command_store, logger=log
-        )
+        result = read_cmd.read("hfa-person-does-not-exist", store=command_store, logger=log)
     assert result.get("found") is False

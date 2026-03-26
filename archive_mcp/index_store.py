@@ -18,6 +18,7 @@ are re-exported for backward compatibility.
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -310,6 +311,8 @@ class PostgresArchiveIndex(SchemaDDLMixin, EmbedderMixin, QueryMixin, LoaderMixi
         self.dsn = (dsn or get_index_dsn()).strip()
         self.schema = get_index_schema()
         self.vector_dimension = get_vector_dimension()
+        # Serialize embed_pending: concurrent calls share DDL (DROP/CREATE embed_queue).
+        self._embed_pending_lock = threading.Lock()
 
     @property
     def location(self) -> str:

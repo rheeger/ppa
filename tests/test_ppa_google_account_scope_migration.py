@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 from archive_sync.adapters.base import deterministic_provenance
@@ -126,7 +127,7 @@ def test_google_account_scope_migration_rewrites_ids_paths_and_links(tmp_path):
 
     result = subprocess.run(
         [
-            str(repo_root / ".venv" / "bin" / "python"),
+            sys.executable,
             str(repo_root / "scripts" / "ppa-migrate-google-account-scope.py"),
             "--vault",
             str(vault),
