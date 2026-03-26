@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-VAULT="${PPA_PATH:-/home/arnold/archive/hf-archives}"
+VAULT="${PPA_PATH:-/srv/hfa-secure/vault}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON="${PYTHON:-python3}"
 TIMESTAMP="$(date -Iseconds)"

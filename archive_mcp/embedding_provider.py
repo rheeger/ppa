@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import subprocess
 import time
@@ -16,6 +17,8 @@ from typing import Protocol
 from urllib import error, request
 
 from .index_store import get_default_embedding_model, get_vector_dimension
+
+logger = logging.getLogger("ppa.embedding_provider")
 
 DEFAULT_EMBEDDING_PROVIDER = "hash"
 DEFAULT_OPENAI_EMBEDDING_BASE_URL = "https://api.openai.com/v1"
@@ -113,6 +116,7 @@ def _post_json(url: str, headers: dict[str, str], payload: dict[str, object]) ->
     data = json.dumps(payload).encode("utf-8")
     req = request.Request(url, data=data, headers=headers, method="POST")
     from .index_config import _ppa_env
+
     timeout_seconds = float(_ppa_env("PPA_OPENAI_TIMEOUT_SECONDS", default=str(DEFAULT_OPENAI_TIMEOUT_SECONDS)))
     max_retries = int(_ppa_env("PPA_OPENAI_MAX_RETRIES", default=str(DEFAULT_OPENAI_MAX_RETRIES)))
     for attempt in range(max_retries + 1):
@@ -163,18 +167,43 @@ class OpenAIEmbeddingProvider:
 
     name = "openai"
 
-    def __init__(self, *, model: str | None = None, dimension: int | None = None, base_url: str | None = None):
+    def __init__(
+        self,
+        *,
+        model: str | None = None,
+        dimension: int | None = None,
+        base_url: str | None = None,
+    ):
         self.model = (model or get_default_embedding_model()).strip() or get_default_embedding_model()
         self.dimension = int(dimension or get_vector_dimension())
         from .index_config import _ppa_env
+
         self.base_url = (
-            (base_url or _ppa_env("PPA_OPENAI_BASE_URL") or os.environ.get("OPENAI_BASE_URL") or DEFAULT_OPENAI_EMBEDDING_BASE_URL)
-            .rstrip("/")
+            base_url
+            or _ppa_env("PPA_OPENAI_BASE_URL")
+            or os.environ.get("OPENAI_BASE_URL")
+            or DEFAULT_OPENAI_EMBEDDING_BASE_URL
+        ).rstrip("/")
+        self.timeout = int(
+            float(
+                _ppa_env(
+                    "PPA_OPENAI_TIMEOUT_SECONDS",
+                    default=str(DEFAULT_OPENAI_TIMEOUT_SECONDS),
+                )
+            )
+        )
+        logger.info(
+            "openai provider initialized model=%s dimension=%d timeout=%ds",
+            self.model,
+            self.dimension,
+            self.timeout,
         )
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
+        logger.debug("embed_request texts=%d model=%s", len(texts), self.model)
+        t_embed = time.monotonic()
         api_key = _resolve_openai_api_key()
         response = _post_json(
             f"{self.base_url}/embeddings",
@@ -202,17 +231,17 @@ class OpenAIEmbeddingProvider:
                 raise RuntimeError("OpenAI embedding response missing embedding")
             vector = [float(value) for value in embedding]
             if len(vector) != self.dimension:
-                raise RuntimeError(
-                    f"OpenAI embedding dimension mismatch: got {len(vector)} expected {self.dimension}"
-                )
+                raise RuntimeError(f"OpenAI embedding dimension mismatch: got {len(vector)} expected {self.dimension}")
             vectors.append(vector)
         if len(vectors) != len(texts):
             raise RuntimeError("OpenAI embedding response count mismatch")
+        logger.debug("embed_response elapsed_ms=%d", int((time.monotonic() - t_embed) * 1000))
         return vectors
 
 
 def get_embedding_provider(model: str = "") -> EmbeddingProvider:
     from .index_config import _ppa_env
+
     provider_name = _ppa_env("PPA_EMBEDDING_PROVIDER", default=DEFAULT_EMBEDDING_PROVIDER).lower()
     resolved_model = model.strip() or get_default_embedding_model()
     if provider_name == "hash":

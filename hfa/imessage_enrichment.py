@@ -9,12 +9,10 @@ from typing import Any
 
 from hfa.config import load_config
 from hfa.enrichment import EnrichmentStep
-from hfa.llm_provider import (GROUNDING_INSTRUCTION, get_provider_chain,
-                              load_llm_config)
+from hfa.llm_provider import GROUNDING_INSTRUCTION, get_provider_chain, load_llm_config
 from hfa.provenance import ProvenanceEntry
 from hfa.schema import BaseCard, IMessageThreadCard
-from hfa.thread_hash import (compute_imessage_thread_body_sha,
-                             imessage_thread_messages_payload)
+from hfa.thread_hash import compute_imessage_thread_body_sha, imessage_thread_messages_payload
 
 
 @dataclass

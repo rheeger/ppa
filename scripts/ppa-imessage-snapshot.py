@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -28,7 +27,9 @@ def _scan_attachment_manifest(attachments_root: Path) -> dict[str, object]:
                     "original_path": str(path),
                     "exported_path": relative_path,
                     "size_bytes": stat.st_size,
-                    "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat().replace("+00:00", "Z"),
+                    "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+                    .isoformat()
+                    .replace("+00:00", "Z"),
                 }
             )
     return {
@@ -39,7 +40,9 @@ def _scan_attachment_manifest(attachments_root: Path) -> dict[str, object]:
     }
 
 
-def build_snapshot(messages_dir: Path, output_dir: Path, *, source_label: str, top_chat_limit: int) -> dict[str, object]:
+def build_snapshot(
+    messages_dir: Path, output_dir: Path, *, source_label: str, top_chat_limit: int
+) -> dict[str, object]:
     output_dir.mkdir(parents=True, exist_ok=True)
     chat_db = messages_dir / "chat.db"
     if not chat_db.exists():
@@ -94,7 +97,9 @@ def main() -> int:
     parser.add_argument("--messages-dir", default=str(Path.home() / "Library" / "Messages"))
     parser.add_argument("--output-dir", required=True, help="Destination directory for the snapshot bundle")
     parser.add_argument("--source-label", default="local-messages", help="Stable source label used by PPA sync-state")
-    parser.add_argument("--top-chat-limit", type=int, default=20, help="How many top chats to include in inspection.json")
+    parser.add_argument(
+        "--top-chat-limit", type=int, default=20, help="How many top chats to include in inspection.json"
+    )
     args = parser.parse_args()
 
     inspection = build_snapshot(

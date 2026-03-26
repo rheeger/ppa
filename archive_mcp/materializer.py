@@ -284,6 +284,7 @@ def _materialize_row(
     person_lookup: dict[str, str],
 ) -> ProjectionRowBuffer:
     from .index_config import CHUNK_SCHEMA_VERSION
+
     frontmatter = dict(row.frontmatter)
     card = row.card
     rel_path = row.rel_path
@@ -312,7 +313,7 @@ def _materialize_row(
             timeline_values["last_message_at"],
             content_hash_val,
             search_text,
-        )
+        ),
     )
     for source in card.source:
         batch.add("card_sources", (card.uid, source))
@@ -332,14 +333,14 @@ def _materialize_row(
     for field_name, provider, external_id in iter_external_ids(frontmatter):
         batch.add("external_ids", (card.uid, field_name, provider, external_id))
     for edge in _build_edges(
-            rel_path=rel_path,
-            frontmatter=frontmatter,
-            card=card,
-            body=body,
-            slug_map=slug_map,
-            path_to_uid=path_to_uid,
-            person_lookup=person_lookup,
-        ):
+        rel_path=rel_path,
+        frontmatter=frontmatter,
+        card=card,
+        body=body,
+        slug_map=slug_map,
+        path_to_uid=path_to_uid,
+        person_lookup=person_lookup,
+    ):
         batch.add(
             "edges",
             (
@@ -373,7 +374,7 @@ def _materialize_row(
                 str(chunk["content"]),
                 str(chunk["content_hash"]),
                 int(chunk["token_count"]),
-            )
+            ),
         )
     for table_name, rows_list in list(batch.rows_by_table.items()):
         batch.rows_by_table[table_name] = _dedupe_rows(rows_list)

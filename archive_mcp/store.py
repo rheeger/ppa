@@ -13,28 +13,39 @@ from .embedding_provider import get_embedding_provider
 from .explain import retrieval_explain_payload, retrieval_explain_payload_v2
 from .features import archive_context, build_context_json, build_context_text
 from .index_config import get_seed_links_enabled
-from .index_store import (PostgresArchiveIndex, get_default_embedding_model,
-                          get_default_embedding_version)
+from .index_store import PostgresArchiveIndex, get_default_embedding_model, get_default_embedding_version
 from .projections.registry import projection_for_card_type
 from .query_planner import build_query_plan, effective_filters_from_plan
 from .reranker import blend_rerank_scores, reranker_for_config
-from .retrieval_pipeline import (PIPELINE_VERSION, HybridFetchInputs,
-                                 anchor_uids_from_lexical,
-                                 fuse_and_rank_hybrid, merge_lexical_rows,
-                                 merge_vector_rows, score_breakdown_for_row)
+from .retrieval_pipeline import (
+    PIPELINE_VERSION,
+    HybridFetchInputs,
+    anchor_uids_from_lexical,
+    fuse_and_rank_hybrid,
+    merge_lexical_rows,
+    merge_vector_rows,
+    score_breakdown_for_row,
+)
 
 _SEED_LINKS_DISABLED = {"error": "Seed links are not enabled. Set PPA_SEED_LINKS_ENABLED=1 to enable."}
 
 
 def _import_seed_links():
-    from .seed_links import (compute_link_quality_gate,
-                             get_link_candidate_details, get_seed_scope_rows,
-                             get_surface_policy_rows, list_link_candidates,
-                             review_link_candidate,
-                             run_incremental_link_refresh,
-                             run_seed_link_backfill, run_seed_link_enqueue,
-                             run_seed_link_promotion_workers,
-                             run_seed_link_report, run_seed_link_workers)
+    from .seed_links import (
+        compute_link_quality_gate,
+        get_link_candidate_details,
+        get_seed_scope_rows,
+        get_surface_policy_rows,
+        list_link_candidates,
+        review_link_candidate,
+        run_incremental_link_refresh,
+        run_seed_link_backfill,
+        run_seed_link_enqueue,
+        run_seed_link_promotion_workers,
+        run_seed_link_report,
+        run_seed_link_workers,
+    )
+
     return {
         "compute_link_quality_gate": compute_link_quality_gate,
         "get_link_candidate_details": get_link_candidate_details,
@@ -93,13 +104,30 @@ class DefaultArchiveStore(ArchiveStore):
     def read(self, path_or_uid: str) -> dict[str, Any]:
         if path_or_uid.endswith(".md"):
             path = (self.vault / path_or_uid).resolve()
-            return {"path_or_uid": path_or_uid, "content": path.read_text(encoding="utf-8") if path.exists() else "", "found": path.exists()}
+            return {
+                "path_or_uid": path_or_uid,
+                "content": path.read_text(encoding="utf-8") if path.exists() else "",
+                "found": path.exists(),
+            }
         rel_path = self.index.read_path_for_uid(path_or_uid)
         if rel_path is None:
             return {"path_or_uid": path_or_uid, "content": "", "found": False}
-        return {"path_or_uid": path_or_uid, "content": (self.vault / rel_path).read_text(encoding="utf-8"), "found": True, "rel_path": rel_path}
+        return {
+            "path_or_uid": path_or_uid,
+            "content": (self.vault / rel_path).read_text(encoding="utf-8"),
+            "found": True,
+            "rel_path": rel_path,
+        }
 
-    def query(self, *, type_filter: str = "", source_filter: str = "", people_filter: str = "", org_filter: str = "", limit: int = 20) -> dict[str, Any]:
+    def query(
+        self,
+        *,
+        type_filter: str = "",
+        source_filter: str = "",
+        people_filter: str = "",
+        org_filter: str = "",
+        limit: int = 20,
+    ) -> dict[str, Any]:
         return {
             "rows": self.index.query_cards(
                 type_filter=type_filter,
@@ -271,7 +299,9 @@ class DefaultArchiveStore(ArchiveStore):
         version = embedding_version or get_default_embedding_version()
         return self.index.embedding_status(embedding_model=model, embedding_version=version)
 
-    def embedding_backlog(self, *, limit: int = 20, embedding_model: str = "", embedding_version: int = 0) -> dict[str, Any]:
+    def embedding_backlog(
+        self, *, limit: int = 20, embedding_model: str = "", embedding_version: int = 0
+    ) -> dict[str, Any]:
         model = embedding_model or get_default_embedding_model()
         version = embedding_version or get_default_embedding_version()
         return {
@@ -365,7 +395,10 @@ class DefaultArchiveStore(ArchiveStore):
                             "lexical": float(row.get("lexical_score", 0.0) or 0.0),
                             "vector": float(row.get("vector_similarity", row.get("similarity", 0.0)) or 0.0),
                         },
-                        "context": {"card_type": context.card_type, "typed_projection_names": list(context.typed_projection_names)},
+                        "context": {
+                            "card_type": context.card_type,
+                            "typed_projection_names": list(context.typed_projection_names),
+                        },
                     }
                 )
             return retrieval_explain_payload(query, mode, slim)
@@ -411,7 +444,11 @@ class DefaultArchiveStore(ArchiveStore):
 
         plan_obj = trace["plan"]
         pipeline_meta = trace.get("pipeline_meta", {})
-        fusion_strategy = str(pipeline_meta.get("fusion_strategy", "vector" if mode == "vector" else "lexical_vector_union_with_graph_boost"))
+        fusion_strategy = str(
+            pipeline_meta.get(
+                "fusion_strategy", "vector" if mode == "vector" else "lexical_vector_union_with_graph_boost"
+            )
+        )
         include_ctx = bool(rc.get("context", {}).get("include_in_result_payloads", True))
         explain_rows: list[dict[str, Any]] = []
         for row in rows:
@@ -433,21 +470,29 @@ class DefaultArchiveStore(ArchiveStore):
                 provenance_bias=context.provenance_bias,
                 typed_projection_names=context.typed_projection_names,
             )
-            breakdown = score_breakdown_for_row(row) if mode == "hybrid" else {
-                "lexical_component": float(row.get("lexical_score", 0.0) or 0.0),
-                "vector_component": float(row.get("vector_similarity", row.get("similarity", 0.0)) or 0.0),
-                "type_prior": 0.0,
-                "recency": float(row.get("recency_score", 0.0) or 0.0),
-                "provenance": float(row.get("provenance_score", 0.0) or 0.0),
-                "exact_boost": 0.0,
-                "multi_signal_boost": 0.0,
-                "graph_boost": 0.0,
-                "rerank_contribution": float(row.get("rerank_contribution", 0.0) or 0.0),
-            }
+            breakdown = (
+                score_breakdown_for_row(row)
+                if mode == "hybrid"
+                else {
+                    "lexical_component": float(row.get("lexical_score", 0.0) or 0.0),
+                    "vector_component": float(row.get("vector_similarity", row.get("similarity", 0.0)) or 0.0),
+                    "type_prior": 0.0,
+                    "recency": float(row.get("recency_score", 0.0) or 0.0),
+                    "provenance": float(row.get("provenance_score", 0.0) or 0.0),
+                    "exact_boost": 0.0,
+                    "multi_signal_boost": 0.0,
+                    "graph_boost": 0.0,
+                    "rerank_contribution": float(row.get("rerank_contribution", 0.0) or 0.0),
+                }
+            )
             matched = str(row.get("matched_by", ""))
             winning_chunk = None
             if int(row.get("chunk_index", -1) or -1) >= 0 and row.get("chunk_type"):
-                winning_chunk = {"chunk_type": row.get("chunk_type"), "chunk_index": row.get("chunk_index"), "preview": row.get("preview")}
+                winning_chunk = {
+                    "chunk_type": row.get("chunk_type"),
+                    "chunk_index": row.get("chunk_index"),
+                    "preview": row.get("preview"),
+                }
             explain_rows.append(
                 {
                     "card_uid": str(row.get("card_uid", "")),
@@ -571,5 +616,7 @@ class DefaultArchiveStore(ArchiveStore):
         return {"found": bool(match), "content": match.read_text(encoding="utf-8") if match else ""}
 
 
-def get_archive_store(vault: Path | None = None, index: Any | None = None, provider_factory=None) -> DefaultArchiveStore:
+def get_archive_store(
+    vault: Path | None = None, index: Any | None = None, provider_factory=None
+) -> DefaultArchiveStore:
     return DefaultArchiveStore(vault=vault, index=index, provider_factory=provider_factory)

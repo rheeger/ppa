@@ -13,14 +13,20 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .base import BaseAdapter, FetchedBatch, deterministic_provenance
 from hfa.identity import IdentityCache
 from hfa.identity_resolver import merge_into_existing
 from hfa.provenance import ProvenanceEntry
-from hfa.schema import (GitCommitCard, GitMessageCard, GitRepositoryCard,
-                        GitThreadCard, validate_card_permissive)
+from hfa.schema import (
+    GitCommitCard,
+    GitMessageCard,
+    GitRepositoryCard,
+    GitThreadCard,
+    validate_card_permissive,
+)
 from hfa.uid import generate_uid
 from hfa.vault import read_note
+
+from .base import BaseAdapter, FetchedBatch, deterministic_provenance
 
 REPO_SOURCE = "github.repo"
 COMMIT_SOURCE = "github.commit"
@@ -333,7 +339,11 @@ def _thread_uid(name_with_owner: str, thread_type: str, number: str) -> str:
 
 
 def _message_uid(name_with_owner: str, message_type: str, message_id: str) -> str:
-    return generate_uid("git-message", MESSAGE_SOURCE, f"{name_with_owner.lower()}:{message_type}:{message_id}")
+    return generate_uid(
+        "git-message",
+        MESSAGE_SOURCE,
+        f"{name_with_owner.lower()}:{message_type}:{message_id}",
+    )
 
 
 def _wikilink(uid: str) -> str:
@@ -380,7 +390,9 @@ class GitHubHistoryAdapter(BaseAdapter):
             command.extend(["-f", f"{key}={value}"])
         return self._run_gh_json(command, max_retries=max_retries)
 
-    def _gh_graphql_page(self, query: str, variables: dict[str, Any], *, max_retries: int | None = None) -> dict[str, Any]:
+    def _gh_graphql_page(
+        self, query: str, variables: dict[str, Any], *, max_retries: int | None = None
+    ) -> dict[str, Any]:
         command = ["gh", "api", "graphql", "-f", f"query={query}"]
         for key, value in variables.items():
             if value in (None, ""):
@@ -405,7 +417,7 @@ class GitHubHistoryAdapter(BaseAdapter):
             return min(90, 10 * max(1, attempt))
         if "429" in message or "rate limit exceeded" in message:
             return min(180, 30 * max(1, attempt))
-        return min(60, 2 ** attempt)
+        return min(60, 2**attempt)
 
     def _run_gh_json(self, command: list[str], *, max_retries: int | None = None) -> Any:
         last_error: RuntimeError | None = None
@@ -639,7 +651,9 @@ class GitHubHistoryAdapter(BaseAdapter):
             target = ref_payload.get("target", {}) or {}
             history = target.get("history", {}) if isinstance(target, dict) else {}
             if not history and isinstance(target, dict):
-                history = ((target.get("target") or {}).get("history", {})) if isinstance(target.get("target"), dict) else {}
+                history = (
+                    ((target.get("target") or {}).get("history", {})) if isinstance(target.get("target"), dict) else {}
+                )
             nodes = history.get("nodes") or []
             page_new_count = 0
             if isinstance(nodes, list):
@@ -744,9 +758,19 @@ class GitHubHistoryAdapter(BaseAdapter):
                     "created_at": _clean(row.get("createdAt", "")),
                     "updated_at": _clean(row.get("updatedAt", "")),
                     "closed_at": _clean(row.get("closedAt", "")),
-                    "labels": [{"name": _clean((label or {}).get("name", ""))} for label in ((row.get("labels") or {}).get("nodes") or [])],
-                    "assignees": [{"login": _clean((assignee or {}).get("login", ""))} for assignee in ((row.get("assignees") or {}).get("nodes") or [])],
-                    "milestone": {"title": _clean(((row.get("milestone") or {}).get("title", "")))} if row.get("milestone") else None,
+                    "labels": [
+                        {"name": _clean((label or {}).get("name", ""))}
+                        for label in ((row.get("labels") or {}).get("nodes") or [])
+                    ],
+                    "assignees": [
+                        {"login": _clean((assignee or {}).get("login", ""))}
+                        for assignee in ((row.get("assignees") or {}).get("nodes") or [])
+                    ],
+                    "milestone": (
+                        {"title": _clean(((row.get("milestone") or {}).get("title", "")))}
+                        if row.get("milestone")
+                        else None
+                    ),
                 }
             )
         return normalized
@@ -774,16 +798,28 @@ class GitHubHistoryAdapter(BaseAdapter):
                     "updated_at": _clean(row.get("updatedAt", "")),
                     "closed_at": _clean(row.get("closedAt", "")),
                     "merged_at": _clean(row.get("mergedAt", "")),
-                    "labels": [{"name": _clean((label or {}).get("name", ""))} for label in ((row.get("labels") or {}).get("nodes") or [])],
-                    "assignees": [{"login": _clean((assignee or {}).get("login", ""))} for assignee in ((row.get("assignees") or {}).get("nodes") or [])],
-                    "milestone": {"title": _clean(((row.get("milestone") or {}).get("title", "")))} if row.get("milestone") else None,
+                    "labels": [
+                        {"name": _clean((label or {}).get("name", ""))}
+                        for label in ((row.get("labels") or {}).get("nodes") or [])
+                    ],
+                    "assignees": [
+                        {"login": _clean((assignee or {}).get("login", ""))}
+                        for assignee in ((row.get("assignees") or {}).get("nodes") or [])
+                    ],
+                    "milestone": (
+                        {"title": _clean(((row.get("milestone") or {}).get("title", "")))}
+                        if row.get("milestone")
+                        else None
+                    ),
                     "base": {"ref": _clean(row.get("baseRefName", ""))},
                     "head": {"ref": _clean(row.get("headRefName", ""))},
                 }
             )
         return normalized
 
-    def _repo_issue_comments(self, owner: str, repo: str, *, issue_numbers: list[str] | None = None) -> list[dict[str, Any]]:
+    def _repo_issue_comments(
+        self, owner: str, repo: str, *, issue_numbers: list[str] | None = None
+    ) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         for issue_number in issue_numbers or []:
             rows.extend(
@@ -794,7 +830,9 @@ class GitHubHistoryAdapter(BaseAdapter):
             )
         return rows
 
-    def _repo_review_comments(self, owner: str, repo: str, *, pull_numbers: list[str] | None = None) -> list[dict[str, Any]]:
+    def _repo_review_comments(
+        self, owner: str, repo: str, *, pull_numbers: list[str] | None = None
+    ) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         for pull_number in pull_numbers or []:
             rows.extend(
@@ -854,7 +892,7 @@ class GitHubHistoryAdapter(BaseAdapter):
         slug = wikilink.removeprefix("[[").removesuffix("]]")
         note = read_note(vault_path, f"People/{slug}.md")
         frontmatter = note[0]
-        person = validate_card_permissive(frontmatter)
+        validate_card_permissive(frontmatter)
         existing_github = _normalize_login(frontmatter.get("github", ""))
         existing_emails = {_normalize_email(item) for item in frontmatter.get("emails", []) if _normalize_email(item)}
         incoming_data: dict[str, Any] = {"source": [source]}
@@ -913,7 +951,12 @@ class GitHubHistoryAdapter(BaseAdapter):
         selected_pulls = [item for kind, item in selected if kind == "pull_request"]
         return selected_issues, selected_pulls
 
-    def _build_repo_item(self, repo_detail: dict[str, Any], repo_meta: dict[str, Any], identity_cache: IdentityCache) -> dict[str, Any]:
+    def _build_repo_item(
+        self,
+        repo_detail: dict[str, Any],
+        repo_meta: dict[str, Any],
+        identity_cache: IdentityCache,
+    ) -> dict[str, Any]:
         owner = repo_detail.get("owner") or repo_meta.get("owner") or {}
         owner_login = _normalize_login(owner.get("login", ""))
         owner_type = _clean(owner.get("type") or owner.get("__typename", ""))
@@ -928,7 +971,9 @@ class GitHubHistoryAdapter(BaseAdapter):
             ]
         languages = repo_detail.get("languages")
         if isinstance(languages, list):
-            language_names = [((item or {}).get("name", "") if isinstance(item, dict) else str(item)) for item in languages]
+            language_names = [
+                ((item or {}).get("name", "") if isinstance(item, dict) else str(item)) for item in languages
+            ]
         else:
             language_names = [
                 (node or {}).get("name", "")
@@ -954,28 +999,54 @@ class GitHubHistoryAdapter(BaseAdapter):
             "html_url": _clean(repo_detail.get("html_url") or repo_meta.get("url")),
             "api_url": _clean(repo_detail.get("url", "")),
             "ssh_url": _clean(repo_detail.get("ssh_url") or repo_meta.get("sshUrl")),
-            "default_branch": _clean(repo_detail.get("default_branch") or ((repo_meta.get("defaultBranchRef") or {}).get("name", ""))),
+            "default_branch": _clean(
+                repo_detail.get("default_branch") or ((repo_meta.get("defaultBranchRef") or {}).get("name", ""))
+            ),
             "homepage_url": _clean(repo_detail.get("homepage") or repo_meta.get("homepageUrl")),
             "description": _clean(repo_detail.get("description") or repo_meta.get("description")),
             "visibility": _clean(repo_detail.get("visibility") or repo_meta.get("visibility")),
-            "is_private": bool(repo_detail.get("private") if "private" in repo_detail else repo_meta.get("isPrivate", False)),
-            "is_fork": bool(repo_detail.get("fork") if "fork" in repo_detail else repo_meta.get("isFork", False)),
-            "is_archived": bool(repo_detail.get("archived") if "archived" in repo_detail else repo_meta.get("isArchived", False)),
-            "parent_name_with_owner": _clean(
-                ((repo_detail.get("parent") or {}).get("full_name", "")) or ((repo_meta.get("parent") or {}).get("nameWithOwner", ""))
+            "is_private": bool(
+                repo_detail.get("private") if "private" in repo_detail else repo_meta.get("isPrivate", False)
             ),
-            "primary_language": _clean(((repo_detail.get("language") or "") if not isinstance(repo_detail.get("language"), dict) else repo_detail["language"].get("name", ""))),
+            "is_fork": bool(repo_detail.get("fork") if "fork" in repo_detail else repo_meta.get("isFork", False)),
+            "is_archived": bool(
+                repo_detail.get("archived") if "archived" in repo_detail else repo_meta.get("isArchived", False)
+            ),
+            "parent_name_with_owner": _clean(
+                ((repo_detail.get("parent") or {}).get("full_name", ""))
+                or ((repo_meta.get("parent") or {}).get("nameWithOwner", ""))
+            ),
+            "primary_language": _clean(
+                (
+                    (repo_detail.get("language") or "")
+                    if not isinstance(repo_detail.get("language"), dict)
+                    else repo_detail["language"].get("name", "")
+                )
+            ),
             "languages": _clean_list(language_names),
             "topics": _clean_list(topics or [], lower=True),
-            "license_name": _clean(((repo_detail.get("license") or {}).get("name", "")) or ((repo_meta.get("licenseInfo") or {}).get("name", ""))),
+            "license_name": _clean(
+                ((repo_detail.get("license") or {}).get("name", ""))
+                or ((repo_meta.get("licenseInfo") or {}).get("name", ""))
+            ),
             "created_at": _clean(repo_detail.get("created_at") or repo_meta.get("createdAt")),
             "pushed_at": _clean(repo_detail.get("pushed_at") or repo_meta.get("pushedAt")),
             "created": _date_only(repo_detail.get("created_at") or repo_meta.get("createdAt")),
-            "updated": _date_only(repo_detail.get("updated_at") or repo_meta.get("updatedAt") or repo_detail.get("pushed_at") or repo_meta.get("pushedAt")),
+            "updated": _date_only(
+                repo_detail.get("updated_at")
+                or repo_meta.get("updatedAt")
+                or repo_detail.get("pushed_at")
+                or repo_meta.get("pushedAt")
+            ),
             "body": "",
         }
 
-    def _build_commit_item(self, name_with_owner: str, commit: dict[str, Any], identity_cache: IdentityCache) -> dict[str, Any]:
+    def _build_commit_item(
+        self,
+        name_with_owner: str,
+        commit: dict[str, Any],
+        identity_cache: IdentityCache,
+    ) -> dict[str, Any]:
         sha = _clean(commit.get("oid", "")).lower()
         author = commit.get("author") or {}
         committer = commit.get("committer") or {}
@@ -1004,7 +1075,10 @@ class GitHubHistoryAdapter(BaseAdapter):
             "commit_sha": sha,
             "repository_name_with_owner": name_with_owner,
             "repository": _wikilink(_repo_uid(name_with_owner)),
-            "parent_shas": _clean_list([((node or {}).get("oid", "")) for node in ((commit.get("parents") or {}).get("nodes") or [])], lower=True),
+            "parent_shas": _clean_list(
+                [((node or {}).get("oid", "")) for node in ((commit.get("parents") or {}).get("nodes") or [])],
+                lower=True,
+            ),
             "html_url": _clean(commit.get("url", "")),
             "api_url": "",
             "authored_at": _clean(commit.get("authoredDate", "")),
@@ -1121,7 +1195,9 @@ class GitHubHistoryAdapter(BaseAdapter):
             else []
         )
         thread_uid = _thread_uid(name_with_owner, thread_type, thread_number)
-        summary_fallback = f"{message_type} on {path}" if path else f"{message_type} by {actor_login or actor_name or 'unknown'}"
+        summary_fallback = (
+            f"{message_type} on {path}" if path else f"{message_type} by {actor_login or actor_name or 'unknown'}"
+        )
         return {
             "kind": "message",
             "source": [MESSAGE_SOURCE, f"{MESSAGE_SOURCE}.{message_type}"],
@@ -1193,8 +1269,14 @@ class GitHubHistoryAdapter(BaseAdapter):
                 is_draft=False,
                 merged_at="",
                 closed_at=_clean(issue.get("closed_at", "")),
-                labels=_clean_list([((label or {}).get("name", "")) for label in issue.get("labels", []) or []], lower=True),
-                assignees=_clean_list([((assignee or {}).get("login", "")) for assignee in issue.get("assignees", []) or []], lower=True),
+                labels=_clean_list(
+                    [((label or {}).get("name", "")) for label in issue.get("labels", []) or []],
+                    lower=True,
+                ),
+                assignees=_clean_list(
+                    [((assignee or {}).get("login", "")) for assignee in issue.get("assignees", []) or []],
+                    lower=True,
+                ),
                 milestone=_clean(((issue.get("milestone") or {}).get("title", ""))),
                 base_ref="",
                 head_ref="",
@@ -1220,8 +1302,14 @@ class GitHubHistoryAdapter(BaseAdapter):
                 is_draft=bool(pull.get("draft", False)),
                 merged_at=_clean(pull.get("merged_at", "")),
                 closed_at=_clean(pull.get("closed_at", "")),
-                labels=_clean_list([((label or {}).get("name", "")) for label in pull.get("labels", []) or []], lower=True),
-                assignees=_clean_list([((assignee or {}).get("login", "")) for assignee in pull.get("assignees", []) or []], lower=True),
+                labels=_clean_list(
+                    [((label or {}).get("name", "")) for label in pull.get("labels", []) or []],
+                    lower=True,
+                ),
+                assignees=_clean_list(
+                    [((assignee or {}).get("login", "")) for assignee in pull.get("assignees", []) or []],
+                    lower=True,
+                ),
                 milestone=_clean(((pull.get("milestone") or {}).get("title", ""))),
                 base_ref=_clean(((pull.get("base") or {}).get("ref", ""))),
                 head_ref=_clean(((pull.get("head") or {}).get("ref", ""))),
@@ -1231,18 +1319,17 @@ class GitHubHistoryAdapter(BaseAdapter):
 
         ordered_threads = sorted(
             thread_items.values(),
-            key=lambda item: (_clean(item.get("updated", "")), _clean(item.get("number", ""))),
+            key=lambda item: (
+                _clean(item.get("updated", "")),
+                _clean(item.get("number", "")),
+            ),
             reverse=True,
         )
         if max_threads is not None:
             ordered_threads = ordered_threads[: max(0, int(max_threads))]
-        allowed_thread_keys = {
-            (item["thread_type"], item["number"])
-            for item in ordered_threads
-        }
+        allowed_thread_keys = {(item["thread_type"], item["number"]) for item in ordered_threads}
         thread_items = {
-            _thread_uid(name_with_owner, item["thread_type"], item["number"]): item
-            for item in ordered_threads
+            _thread_uid(name_with_owner, item["thread_type"], item["number"]): item for item in ordered_threads
         }
 
         def _append_message(item: dict[str, Any], thread_type: str, thread_number: str) -> None:
@@ -1349,7 +1436,10 @@ class GitHubHistoryAdapter(BaseAdapter):
             thread_ref = _wikilink(_thread_uid(name_with_owner, thread["thread_type"], thread["number"]))
             thread_messages = sorted(
                 messages_by_thread.get(thread_ref, []),
-                key=lambda item: (_clean(item.get("sent_at", "")), _clean(item.get("github_message_id", ""))),
+                key=lambda item: (
+                    _clean(item.get("sent_at", "")),
+                    _clean(item.get("github_message_id", "")),
+                ),
             )
             if max_messages_per_thread is not None:
                 thread_messages = thread_messages[: max(0, int(max_messages_per_thread))]
@@ -1358,7 +1448,11 @@ class GitHubHistoryAdapter(BaseAdapter):
             message_refs: list[str] = []
             timestamps: list[str] = []
             for message in thread_messages:
-                message_uid = _message_uid(name_with_owner, message["message_type"], message["github_message_id"])
+                message_uid = _message_uid(
+                    name_with_owner,
+                    message["message_type"],
+                    message["github_message_id"],
+                )
                 message_refs.append(_wikilink(message_uid))
                 if _clean(message.get("sent_at", "")):
                     timestamps.append(_clean(message.get("sent_at", "")))
@@ -1375,16 +1469,22 @@ class GitHubHistoryAdapter(BaseAdapter):
             if timestamps:
                 thread["first_message_at"] = min(timestamps)
                 thread["last_message_at"] = max(timestamps)
-            created_hint = _clean(thread.get("first_message_at", "")) or _clean(thread.get("merged_at", "")) or _clean(thread.get("closed_at", ""))
-            updated_hint = _clean(thread.get("last_message_at", "")) or _clean(thread.get("merged_at", "")) or _clean(thread.get("closed_at", ""))
+            created_hint = (
+                _clean(thread.get("first_message_at", ""))
+                or _clean(thread.get("merged_at", ""))
+                or _clean(thread.get("closed_at", ""))
+            )
+            updated_hint = (
+                _clean(thread.get("last_message_at", ""))
+                or _clean(thread.get("merged_at", ""))
+                or _clean(thread.get("closed_at", ""))
+            )
             thread["created"] = _date_only(created_hint or thread.get("created", ""))
             thread["updated"] = _date_only(updated_hint or thread.get("updated", ""))
             finalized_threads.append(thread)
 
         allowed_message_refs = {
-            message_ref
-            for thread in finalized_threads
-            for message_ref in thread.get("messages", [])
+            message_ref for thread in finalized_threads for message_ref in thread.get("messages", [])
         }
         filtered_messages: list[dict[str, Any]] = []
         for message in message_items:
@@ -1426,9 +1526,15 @@ class GitHubHistoryAdapter(BaseAdapter):
             pulls=pulls,
             max_threads=max_threads_per_repo,
         )
-        selected_issue_numbers = [str(item.get("number", "")).strip() for item in selected_issues if str(item.get("number", "")).strip()]
-        selected_pull_numbers = [str(item.get("number", "")).strip() for item in selected_pulls if str(item.get("number", "")).strip()]
-        issue_comment_numbers = selected_issue_numbers + [number for number in selected_pull_numbers if number not in selected_issue_numbers]
+        selected_issue_numbers = [
+            str(item.get("number", "")).strip() for item in selected_issues if str(item.get("number", "")).strip()
+        ]
+        selected_pull_numbers = [
+            str(item.get("number", "")).strip() for item in selected_pulls if str(item.get("number", "")).strip()
+        ]
+        issue_comment_numbers = selected_issue_numbers + [
+            number for number in selected_pull_numbers if number not in selected_issue_numbers
+        ]
         issue_comments = self._repo_issue_comments(owner, repo, issue_numbers=issue_comment_numbers)
         review_comments = self._repo_review_comments(owner, repo, pull_numbers=selected_pull_numbers)
         reviews_by_pull: dict[str, list[dict[str, Any]]] = {}
@@ -1497,7 +1603,10 @@ class GitHubHistoryAdapter(BaseAdapter):
         started_at = time.perf_counter()
         repos = self._list_visible_repositories(max_repos=max_repos)
         pending_repos = [repo for repo in repos if _clean(repo.get("full_name", "")) not in completed_repos]
-        worker_count = max(1, int(workers or os.environ.get("HFA_GITHUB_STAGE_WORKERS") or DEFAULT_STAGE_WORKERS))
+        worker_count = max(
+            1,
+            int(workers or os.environ.get("HFA_GITHUB_STAGE_WORKERS") or DEFAULT_STAGE_WORKERS),
+        )
 
         handles = {name: path.open("a", encoding="utf-8") for name, path in stage_files.items()}
 
@@ -1624,7 +1733,10 @@ class GitHubHistoryAdapter(BaseAdapter):
         stage_dir = kwargs.get("stage_dir")
         if not stage_dir:
             raise ValueError("github-history imports require --stage-dir")
-        batch_size = max(1, int(kwargs.get("batch_size") or os.environ.get("HFA_GITHUB_IMPORT_BATCH_SIZE") or DEFAULT_BATCH_SIZE))
+        batch_size = max(
+            1,
+            int(kwargs.get("batch_size") or os.environ.get("HFA_GITHUB_IMPORT_BATCH_SIZE") or DEFAULT_BATCH_SIZE),
+        )
         yield from self._iter_staged_batches(stage_dir, batch_size=batch_size, max_items=kwargs.get("max_items"))
 
     def fetch(
@@ -1681,7 +1793,10 @@ class GitHubHistoryAdapter(BaseAdapter):
 
         if kind == "commit":
             card = GitCommitCard(
-                uid=_commit_uid(_clean(item.get("repository_name_with_owner", "")), _clean(item.get("commit_sha", ""))),
+                uid=_commit_uid(
+                    _clean(item.get("repository_name_with_owner", "")),
+                    _clean(item.get("commit_sha", "")),
+                ),
                 type="git_commit",
                 source=list(item.get("source", [])) or [COMMIT_SOURCE],
                 source_id=_clean(item.get("source_id", "")),

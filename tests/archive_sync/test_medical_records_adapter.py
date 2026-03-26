@@ -6,10 +6,10 @@ import json
 from pathlib import Path
 
 import pytest
+
 from archive_sync.adapters.base import deterministic_provenance
 from archive_sync.adapters.epic_ehi import collect_epic_ehi_items
-from archive_sync.adapters.medical_records import (MedicalRecordsAdapter,
-                                      _parse_vaccine_pdf_text)
+from archive_sync.adapters.medical_records import MedicalRecordsAdapter, _parse_vaccine_pdf_text
 from hfa.schema import PersonCard
 from hfa.vault import read_note, write_card
 
@@ -183,7 +183,9 @@ Lot No:
     ]
 
 
-def test_ingest_creates_medical_and_vaccination_cards_and_overlays_pdf(tmp_vault: Path, tmp_path: Path, monkeypatch) -> None:
+def test_ingest_creates_medical_and_vaccination_cards_and_overlays_pdf(
+    tmp_vault: Path, tmp_path: Path, monkeypatch
+) -> None:
     _seed_person(tmp_vault)
     fhir_path = tmp_path / "fhir.json"
     ccd_path = tmp_path / "ccd.xml"
@@ -346,7 +348,9 @@ def test_ingest_supports_epic_ehi_tables_for_structured_medications(tmp_vault: P
     assert len(vaccination_paths) == 1
     assert len(medical_paths) == 1
 
-    vaccination_frontmatter, vaccination_body, _ = read_note(tmp_vault, str(vaccination_paths[0].relative_to(tmp_vault)))
+    vaccination_frontmatter, vaccination_body, _ = read_note(
+        tmp_vault, str(vaccination_paths[0].relative_to(tmp_vault))
+    )
     assert vaccination_frontmatter["type"] == "vaccination"
     assert vaccination_frontmatter["source_system"] == "epic"
     assert vaccination_frontmatter["source_format"] == "ehi_tsv"
@@ -385,7 +389,9 @@ def test_epic_ehi_selects_epic_pat_id_when_multiple_patients(tmp_path: Path) -> 
         "PAT_ID\tPAT_NAME\nA1\tONE\nB2\tTWO\n",
         encoding="utf-8",
     )
-    (ehi_dir / "CLARITY_MEDICATION.tsv").write_text("MEDICATION_ID\tNAME\tGENERIC_NAME\n1\tMed\tMed\n", encoding="utf-8")
+    (ehi_dir / "CLARITY_MEDICATION.tsv").write_text(
+        "MEDICATION_ID\tNAME\tGENERIC_NAME\n1\tMed\tMed\n", encoding="utf-8"
+    )
     (ehi_dir / "ORDER_MED.tsv").write_text(
         "\n".join(
             [
@@ -531,7 +537,9 @@ def test_epic_ehi_emits_encounter_problem_observation(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     (ehi_dir / "PAT_PROBLEM_LIST.tsv").write_text("PAT_ID\tLINE\tPROBLEM_LIST_ID\nP1\t1\tPL1\n", encoding="utf-8")
-    (ehi_dir / "PROBLEM_LIST.tsv").write_text("PROBLEM_LIST_ID\tDIAG_START_DATE\tDIAG_END_DATE\nPL1\t1/1/2026\t\n", encoding="utf-8")
+    (ehi_dir / "PROBLEM_LIST.tsv").write_text(
+        "PROBLEM_LIST_ID\tDIAG_START_DATE\tDIAG_END_DATE\nPL1\t1/1/2026\t\n", encoding="utf-8"
+    )
     (ehi_dir / "PAT_ENC_DX.tsv").write_text(
         "PAT_ENC_DATE_REAL\tLINE\tCONTACT_DATE\tPAT_ENC_CSN_ID\tDX_ID\tANNOTATION\tDX_QUALIFIER_C_NAME\tPRIMARY_DX_YN\tCOMMENTS\tDX_CHRONIC_YN\tDX_STAGE_ID\tDX_UNIQUE\tDX_ED_YN\tDX_LINK_PROB_ID\n"
         "1\t1\t1/2/2026 12:00:00 AM\tCSN1\t9\t\t\tY\t\tN\t\t1\tN\tPL1\n",

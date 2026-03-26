@@ -14,13 +14,14 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree
 
-from .base import BaseAdapter, deterministic_provenance
-from .epic_ehi import collect_epic_ehi_items
-from ..cli_logging import CliProgressReporter, log_cli_step
 from hfa.identity_resolver import resolve_person
 from hfa.schema import MedicalRecordCard, VaccinationCard
 from hfa.uid import generate_uid
 from hfa.vault import find_note_by_slug
+
+from ..cli_logging import CliProgressReporter, log_cli_step
+from .base import BaseAdapter, deterministic_provenance
+from .epic_ehi import collect_epic_ehi_items
 
 try:
     from pypdf import PdfReader
@@ -364,7 +365,9 @@ def _ccd_document_item(
     code = _clean(code_match.group(1) if code_match else "")
     code_system = _clean(code_match.group(2) if code_match else "")
     code_display = _clean(code_match.group(3) if code_match else title)
-    effective_time = _parse_date_like(_clean((CCD_EFFECTIVE_TIME_RE.search(text) or ["", ""])[1] if CCD_EFFECTIVE_TIME_RE.search(text) else ""))
+    effective_time = _parse_date_like(
+        _clean((CCD_EFFECTIVE_TIME_RE.search(text) or ["", ""])[1] if CCD_EFFECTIVE_TIME_RE.search(text) else "")
+    )
     document_id = _clean((CCD_ID_RE.search(text) or ["", ""])[1] if CCD_ID_RE.search(text) else path.stem)
     sections = _extract_ccd_sections(str(path))
     section_titles = list(sections)
@@ -445,7 +448,9 @@ def _patient_identifiers(resource: dict[str, Any]) -> dict[str, Any]:
     telecom = resource.get("telecom") or []
     emails = [entry.get("value") for entry in telecom if entry.get("system") == "email"]
     phones = [entry.get("value") for entry in telecom if entry.get("system") == "phone"]
-    summary = " ".join(part for part in [_clean(given_names[0] if given_names else ""), _clean(primary_name.get("family"))] if part)
+    summary = " ".join(
+        part for part in [_clean(given_names[0] if given_names else ""), _clean(primary_name.get("family"))] if part
+    )
     return {
         "summary": summary,
         "first_name": _clean(given_names[0] if given_names else ""),
@@ -517,11 +522,19 @@ def _parse_vaccine_pdf_text(text: str) -> list[dict[str, str]]:
     current: dict[str, str] = {}
     for line in lines:
         lowered = line.lower()
-        if lowered.startswith("immunization record") or lowered.startswith("as of ") or lowered.startswith("patient name:"):
+        if (
+            lowered.startswith("immunization record")
+            or lowered.startswith("as of ")
+            or lowered.startswith("patient name:")
+        ):
             continue
         if line.startswith("-- ") or line == "●" or any(token in lowered for token in PDF_SKIP_TOKENS):
             continue
-        if lowered.startswith("vaccine ") or lowered.startswith("brand:") is False and lowered == "date administered at":
+        if (
+            lowered.startswith("vaccine ")
+            or lowered.startswith("brand:") is False
+            and lowered == "date administered at"
+        ):
             continue
         if line.startswith("Brand:"):
             current["brand_name"] = _clean(line.split("Brand:", 1)[1].split("Lot No:", 1)[0])
@@ -623,26 +636,42 @@ def _medical_item_from_resource(
 
     if resource_type == "Condition":
         code_system, code, code_display = _coding_parts(resource.get("code"))
-        record_subtype = _first_nonempty(((resource.get("category") or [{}])[0].get("text")), ((resource.get("category") or [{}])[0].get("coding") or [{}])[0].get("code"))
+        record_subtype = _first_nonempty(
+            ((resource.get("category") or [{}])[0].get("text")),
+            ((resource.get("category") or [{}])[0].get("coding") or [{}])[0].get("code"),
+        )
         occurred_at = _parse_date_like(_first_nonempty(resource.get("onsetDateTime"), resource.get("recordedDate")))
         recorded_at = _parse_date_like(resource.get("recordedDate"))
         value_text = _clean(resource.get("abatementString"))
         provider_name = _display_from_reference(resource.get("recorder"))
     elif resource_type == "Observation":
         code_system, code, code_display = _coding_parts(resource.get("code"))
-        record_subtype = _first_nonempty(((resource.get("category") or [{}])[0].get("text")), ((resource.get("category") or [{}])[0].get("coding") or [{}])[0].get("code"))
+        record_subtype = _first_nonempty(
+            ((resource.get("category") or [{}])[0].get("text")),
+            ((resource.get("category") or [{}])[0].get("coding") or [{}])[0].get("code"),
+        )
         occurred_at = _parse_date_like(resource.get("effectiveDateTime"))
         recorded_at = _parse_date_like(_first_nonempty(resource.get("issued"), resource.get("effectiveDateTime")))
         value_text, value_numeric, unit = _observation_value_parts(resource)
     elif resource_type == "DiagnosticReport":
         code_system, code, code_display = _coding_parts(resource.get("code"))
-        record_subtype = _first_nonempty(((resource.get("category") or [{}])[0].get("coding") or [{}])[0].get("code"), ((resource.get("category") or [{}])[0].get("text")))
+        record_subtype = _first_nonempty(
+            ((resource.get("category") or [{}])[0].get("coding") or [{}])[0].get("code"),
+            ((resource.get("category") or [{}])[0].get("text")),
+        )
         occurred_at = _parse_date_like(resource.get("effectiveDateTime"))
         recorded_at = _parse_date_like(_first_nonempty(resource.get("issued"), resource.get("effectiveDateTime")))
-        value_text = "; ".join(_clean(result.get("reference")) for result in resource.get("result") or [] if _clean(result.get("reference")))
+        value_text = "; ".join(
+            _clean(result.get("reference"))
+            for result in resource.get("result") or []
+            if _clean(result.get("reference"))
+        )
     elif resource_type == "DocumentReference":
         code_system, code, code_display = _coding_parts(resource.get("type"))
-        record_subtype = _first_nonempty(((resource.get("category") or [{}])[0].get("coding") or [{}])[0].get("code"), ((resource.get("category") or [{}])[0].get("text")))
+        record_subtype = _first_nonempty(
+            ((resource.get("category") or [{}])[0].get("coding") or [{}])[0].get("code"),
+            ((resource.get("category") or [{}])[0].get("text")),
+        )
         occurred_at = _parse_date_like(resource.get("date"))
         recorded_at = occurred_at
         value_text = _first_nonempty(resource.get("description"), _decode_document_reference(resource))
@@ -656,18 +685,29 @@ def _medical_item_from_resource(
     elif resource_type == "MedicationStatement":
         medication = resource.get("medicationCodeableConcept") or {}
         code_system, code, code_display = _coding_parts(medication)
-        occurred_at = _parse_date_like(_first_nonempty(resource.get("effectiveDateTime"), ((resource.get("effectivePeriod") or {}).get("start"))))
+        occurred_at = _parse_date_like(
+            _first_nonempty(resource.get("effectiveDateTime"), ((resource.get("effectivePeriod") or {}).get("start")))
+        )
         recorded_at = _parse_date_like(resource.get("dateAsserted"))
     elif resource_type == "Encounter":
-        record_subtype = _first_nonempty(((resource.get("class") or {}).get("code")), ((resource.get("type") or [{}])[0].get("coding") or [{}])[0].get("code"))
-        occurred_at = _parse_date_like(_first_nonempty(((resource.get("period") or {}).get("start")), ((resource.get("period") or {}).get("end"))))
+        record_subtype = _first_nonempty(
+            ((resource.get("class") or {}).get("code")),
+            ((resource.get("type") or [{}])[0].get("coding") or [{}])[0].get("code"),
+        )
+        occurred_at = _parse_date_like(
+            _first_nonempty(((resource.get("period") or {}).get("start")), ((resource.get("period") or {}).get("end")))
+        )
         recorded_at = occurred_at
         provider_name = _display_from_reference(resource.get("serviceProvider"))
-        value_text = _clean((((resource.get("reasonCode") or [{}])[0].get("text")))
-                            or (((resource.get("reasonCode") or [{}])[0].get("coding") or [{}])[0].get("display")))
+        value_text = _clean(
+            ((resource.get("reasonCode") or [{}])[0].get("text"))
+            or (((resource.get("reasonCode") or [{}])[0].get("coding") or [{}])[0].get("display"))
+        )
     elif resource_type == "Procedure":
         code_system, code, code_display = _coding_parts(resource.get("code"))
-        occurred_at = _parse_date_like(_first_nonempty(resource.get("performedDateTime"), ((resource.get("performedPeriod") or {}).get("start"))))
+        occurred_at = _parse_date_like(
+            _first_nonempty(resource.get("performedDateTime"), ((resource.get("performedPeriod") or {}).get("start")))
+        )
         recorded_at = occurred_at
     elif resource_type == "Communication":
         occurred_at = _parse_date_like(_first_nonempty(resource.get("sent"), resource.get("received")))
@@ -678,7 +718,9 @@ def _medical_item_from_resource(
         occurred_at = _parse_date_like(_first_nonempty(resource.get("occurrenceDateTime"), resource.get("authoredOn")))
         recorded_at = _parse_date_like(resource.get("authoredOn"))
     elif resource_type == "Appointment":
-        record_subtype = _first_nonempty(resource.get("appointmentType", {}).get("text"), resource.get("serviceCategory", [{}])[0].get("text"))
+        record_subtype = _first_nonempty(
+            resource.get("appointmentType", {}).get("text"), resource.get("serviceCategory", [{}])[0].get("text")
+        )
         occurred_at = _parse_date_like(resource.get("start"))
         recorded_at = _parse_date_like(resource.get("created"))
         value_text = _clean(resource.get("description"))
@@ -688,8 +730,13 @@ def _medical_item_from_resource(
         recorded_at = _parse_date_like(resource.get("lastModified"))
         value_text = _clean(resource.get("description"))
     elif resource_type == "CarePlan":
-        record_subtype = _first_nonempty(((resource.get("category") or [{}])[0].get("text")), ((resource.get("category") or [{}])[0].get("coding") or [{}])[0].get("code"))
-        occurred_at = _parse_date_like(_first_nonempty(((resource.get("period") or {}).get("start")), resource.get("created")))
+        record_subtype = _first_nonempty(
+            ((resource.get("category") or [{}])[0].get("text")),
+            ((resource.get("category") or [{}])[0].get("coding") or [{}])[0].get("code"),
+        )
+        occurred_at = _parse_date_like(
+            _first_nonempty(((resource.get("period") or {}).get("start")), resource.get("created"))
+        )
         recorded_at = _parse_date_like(resource.get("created"))
         value_text = _clean(resource.get("description"))
     elif resource_type == "QuestionnaireResponse":
@@ -710,20 +757,34 @@ def _medical_item_from_resource(
         recorded_at = occurred_at
         value_text = _clean(resource.get("scope", {}).get("text"))
     elif resource_type == "CareTeam":
-        occurred_at = _parse_date_like(_first_nonempty(((resource.get("period") or {}).get("start")), resource.get("status")))
+        occurred_at = _parse_date_like(
+            _first_nonempty(((resource.get("period") or {}).get("start")), resource.get("status"))
+        )
         recorded_at = occurred_at
-        value_text = "; ".join(_display_from_reference(participant.get("member")) for participant in resource.get("participant") or [])
+        value_text = "; ".join(
+            _display_from_reference(participant.get("member")) for participant in resource.get("participant") or []
+        )
     elif resource_type == "Provenance":
         occurred_at = _parse_date_like(resource.get("recorded"))
         recorded_at = occurred_at
-        value_text = "; ".join(_clean(target.get("reference")) for target in resource.get("target") or [] if _clean(target.get("reference")))
+        value_text = "; ".join(
+            _clean(target.get("reference"))
+            for target in resource.get("target") or []
+            if _clean(target.get("reference"))
+        )
     elif resource_type == "ImmunizationRecommendation":
         occurred_at = _parse_date_like(resource.get("date"))
         recorded_at = occurred_at
-        recommendation = ((resource.get("recommendation") or [{}])[0]) if isinstance(resource.get("recommendation"), list) else {}
-        vaccine_code = ((recommendation.get("vaccineCode") or [{}])[0]) if isinstance(recommendation.get("vaccineCode"), list) else {}
+        recommendation = (
+            ((resource.get("recommendation") or [{}])[0]) if isinstance(resource.get("recommendation"), list) else {}
+        )
+        vaccine_code = (
+            ((recommendation.get("vaccineCode") or [{}])[0])
+            if isinstance(recommendation.get("vaccineCode"), list)
+            else {}
+        )
         code_system, code, code_display = _coding_parts(vaccine_code)
-        value_text = _clean((((recommendation.get("forecastStatus") or {}).get("text"))))
+        value_text = _clean(((recommendation.get("forecastStatus") or {}).get("text")))
 
     ccd_context = _ccd_context(record_type, ccd_sections)
     details_json: dict[str, Any] = {
@@ -910,7 +971,13 @@ class MedicalRecordsAdapter(BaseAdapter):
                 include_order_results=bool(ehi_include_order_results),
                 include_adt=bool(ehi_include_adt),
             )
-            log_cli_step(self.source_id, 2, 2, "emit structured Epic EHI cards complete", f"items={len(items)} meta={ehi_meta.get('counts')}")
+            log_cli_step(
+                self.source_id,
+                2,
+                2,
+                "emit structured Epic EHI cards complete",
+                f"items={len(items)} meta={ehi_meta.get('counts')}",
+            )
             cursor.update(
                 {
                     "ehi_tables_dir_path": str(Path(ehi_tables_dir_path).expanduser().resolve()),
@@ -922,7 +989,9 @@ class MedicalRecordsAdapter(BaseAdapter):
             )
             return items
         if not fhir_json_path:
-            log_cli_step(self.source_id, 1, 3, "prepare CCD-only medical import", f"ccd_dir={ccd_dir_path or ccd_xml_path}")
+            log_cli_step(
+                self.source_id, 1, 3, "prepare CCD-only medical import", f"ccd_dir={ccd_dir_path or ccd_xml_path}"
+            )
             ccd_paths: list[Path] = []
             if ccd_xml_path:
                 ccd_paths.append(Path(ccd_xml_path))
@@ -940,7 +1009,13 @@ class MedicalRecordsAdapter(BaseAdapter):
             if not unique_paths:
                 raise ValueError("No CCD XML files found for CCD-only medical import")
             target_person = _normalize_person_wikilink(vault_path, person_wikilink or "")
-            log_cli_step(self.source_id, 1, 3, "prepare CCD-only medical import complete", f"person={target_person} ccd_documents={len(unique_paths)}")
+            log_cli_step(
+                self.source_id,
+                1,
+                3,
+                "prepare CCD-only medical import complete",
+                f"person={target_person} ccd_documents={len(unique_paths)}",
+            )
             reporter = CliProgressReporter(
                 source_id=self.source_id,
                 step_number=2,
@@ -975,11 +1050,23 @@ class MedicalRecordsAdapter(BaseAdapter):
         resources = _extract_fhir_resources(fhir_json_path)
         patient = next((resource for resource in resources if resource.get("resourceType") == "Patient"), None)
         target_person = _resolve_target_person(vault_path, patient, person_wikilink)
-        log_cli_step(self.source_id, 1, 4, "prepare FHIR medical import complete", f"person={target_person} resources={len(resources)}")
+        log_cli_step(
+            self.source_id,
+            1,
+            4,
+            "prepare FHIR medical import complete",
+            f"person={target_person} resources={len(resources)}",
+        )
         log_cli_step(self.source_id, 2, 4, "load CCD and vaccine overlays")
         ccd_sections = _extract_ccd_sections(ccd_xml_path)
         pdf_entries = _read_vaccine_pdf_entries(vaccine_pdf_path)
-        log_cli_step(self.source_id, 2, 4, "load CCD and vaccine overlays complete", f"ccd_sections={len(ccd_sections)} pdf_entries={len(pdf_entries)}")
+        log_cli_step(
+            self.source_id,
+            2,
+            4,
+            "load CCD and vaccine overlays complete",
+            f"ccd_sections={len(ccd_sections)} pdf_entries={len(pdf_entries)}",
+        )
         source_hashes = {"fhir_json": _file_sha256(fhir_json_path)}
         if ccd_xml_path:
             source_hashes["ccd_xml"] = _file_sha256(ccd_xml_path)

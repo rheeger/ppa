@@ -1,0 +1,96 @@
+# PPA automated tests: lint for style, unit for fast feedback without a DB,
+# integration for real Postgres + pgvector + CLI smoke (matches production stack).
+name: test
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # Style gate — runs before tests so obvious issues fail fast.
+  # Use the same editable install + [dev] as unit/integration so `ruff` matches pyproject.toml
+  # (avoids `ruff format --check` drift from `pip install ruff` pulling latest).
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - run: ruff format --check .
+
+  # Fast job: all tests with a dummy DSN so imports that read PPA_INDEX_DSN at import time work.
+  # Docker-dependent tests (e.g. test_retrieval_integration.py) call pytest.skip when Docker is unavailable.
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - run: python -m pytest tests/ -v --tb=short
+        env:
+          PPA_INDEX_DSN: "postgresql://unused:unused@localhost/unused"
+
+  # Real Postgres + pgvector — same image family as docker-compose.pgvector.yml (pg17).
+  # hash embeddings: no OpenAI API key in repo secrets.
+  # PPA_INDEX_SCHEMA=archive_ci keeps CI objects out of any production schema name.
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_DB: archive
+          POSTGRES_USER: archive
+          POSTGRES_PASSWORD: archive
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U archive"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      # Minimal vault layout so health vault checks and bootstrap have a real PPA_PATH.
+      - name: Prepare CI vault
+        run: |
+          VAULT="${RUNNER_TEMP}/ppa-ci-vault"
+          mkdir -p "$VAULT/People" "$VAULT/Finance" "$VAULT/Attachments" "$VAULT/_templates" "$VAULT/.obsidian" "$VAULT/_meta"
+          echo '{}' > "$VAULT/_meta/identity-map.json"
+          echo '{}' > "$VAULT/_meta/sync-state.json"
+          echo "PPA_PATH=$VAULT" >> "$GITHUB_ENV"
+      - name: Bootstrap and validate
+        env:
+          PPA_INDEX_DSN: postgresql://archive:archive@localhost:5432/archive
+          PPA_INDEX_SCHEMA: archive_ci
+          PPA_EMBEDDING_PROVIDER: hash
+          PPA_EMBEDDING_MODEL: archive-hash-dev
+          PPA_EMBEDDING_VERSION: "1"
+        run: |
+          python -m archive_mcp bootstrap-postgres
+          python -m archive_mcp health
+      - name: Run tests
+        env:
+          PPA_INDEX_DSN: postgresql://archive:archive@localhost:5432/archive
+          PPA_INDEX_SCHEMA: archive_ci
+          PPA_EMBEDDING_PROVIDER: hash
+          PPA_EMBEDDING_MODEL: archive-hash-dev
+          PPA_EMBEDDING_VERSION: "1"
+        run: python -m pytest tests/ -v --tb=short
+      - name: CLI smoke test
+        env:
+          PPA_INDEX_DSN: postgresql://archive:archive@localhost:5432/archive
+          PPA_INDEX_SCHEMA: archive_ci
+          PPA_EMBEDDING_PROVIDER: hash
+          PPA_EMBEDDING_MODEL: archive-hash-dev
+          PPA_EMBEDDING_VERSION: "1"
+        run: chmod +x scripts/ppa-smoke-test.sh && ./scripts/ppa-smoke-test.sh

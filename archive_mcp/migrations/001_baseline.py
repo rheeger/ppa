@@ -16,7 +16,7 @@ def upgrade(conn, schema: str) -> None:
     """Verify core tables exist. No DDL changes — the schema is already at
     the level this baseline represents."""
     row = conn.execute(
-        f"""
+        """
         SELECT COUNT(*) AS cnt
         FROM information_schema.tables
         WHERE table_schema = %s

@@ -5,9 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from archive_mcp.index_store import (_build_person_lookup,
-                                     _collect_canonical_rows,
-                                     _materialize_row_batch)
+from archive_mcp.index_store import _build_person_lookup, _collect_canonical_rows, _materialize_row_batch
 from archive_mcp.projections.registry import projection_for_card_type
 from hfa.provenance import ProvenanceEntry
 from hfa.schema import MedicalRecordCard, PersonCard, VaccinationCard

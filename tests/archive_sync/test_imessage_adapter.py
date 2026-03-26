@@ -8,8 +8,7 @@ import time
 from pathlib import Path
 
 from archive_sync.adapters.imessage import IMessageAdapter
-from hfa.schema import (IMessageAttachmentCard, IMessageMessageCard,
-                        IMessageThreadCard)
+from hfa.schema import IMessageAttachmentCard, IMessageMessageCard, IMessageThreadCard
 from hfa.vault import read_note
 
 

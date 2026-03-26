@@ -8,9 +8,10 @@ import re
 from datetime import date, datetime
 from typing import Any
 
-from .base import BaseAdapter, deterministic_provenance
 from hfa.schema import PersonCard
 from hfa.uid import generate_uid
+
+from .base import BaseAdapter, deterministic_provenance
 
 
 def _clean(value: str | None) -> str:
@@ -209,7 +210,9 @@ def _item_to_card(item: dict[str, Any], source_name: str) -> tuple[PersonCard, d
     emails = list(item.get("emails", []))
     source = str(item.get("source", source_name))
     linkedin = _clean(str(item.get("linkedin", "")))
-    source_id = linkedin or (emails[0] if emails else "") or _clean(str(item.get("name", ""))) or f"{source_name}-unknown"
+    source_id = (
+        linkedin or (emails[0] if emails else "") or _clean(str(item.get("name", ""))) or f"{source_name}-unknown"
+    )
     card = PersonCard(
         uid=generate_uid("person", source, source_id),
         type="person",

@@ -6,24 +6,55 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from archive_mcp.contracts import ProjectionColumnSpec, ProjectionSpec
-from archive_mcp.features import (card_activity_at, external_ids_by_provider,
-                                  iter_string_values, json_text,
-                                  primary_person, relationship_payload)
+from archive_mcp.features import (
+    card_activity_at,
+    external_ids_by_provider,
+    iter_string_values,
+    json_text,
+    primary_person,
+    relationship_payload,
+)
 from hfa.schema import BaseCard
 
 SHARED_TYPED_COLUMNS: tuple[ProjectionColumnSpec, ...] = (
     ProjectionColumnSpec("card_uid", "TEXT", nullable=False, source_field="uid", value_mode="card_uid"),
-    ProjectionColumnSpec("rel_path", "TEXT", nullable=False, source_field="rel_path", indexed=True, value_mode="rel_path"),
-    ProjectionColumnSpec("card_type", "TEXT", nullable=False, source_field="type", indexed=True, value_mode="card_type"),
-    ProjectionColumnSpec("summary", "TEXT", nullable=False, source_field="summary", indexed=False, value_mode="summary"),
+    ProjectionColumnSpec(
+        "rel_path", "TEXT", nullable=False, source_field="rel_path", indexed=True, value_mode="rel_path"
+    ),
+    ProjectionColumnSpec(
+        "card_type", "TEXT", nullable=False, source_field="type", indexed=True, value_mode="card_type"
+    ),
+    ProjectionColumnSpec(
+        "summary", "TEXT", nullable=False, source_field="summary", indexed=False, value_mode="summary"
+    ),
     ProjectionColumnSpec("created", "TEXT", nullable=False, source_field="created"),
     ProjectionColumnSpec("updated", "TEXT", nullable=False, source_field="updated"),
-    ProjectionColumnSpec("primary_source", "TEXT", nullable=False, source_field="source", indexed=True, value_mode="primary_source"),
+    ProjectionColumnSpec(
+        "primary_source", "TEXT", nullable=False, source_field="source", indexed=True, value_mode="primary_source"
+    ),
     ProjectionColumnSpec("source_id", "TEXT", nullable=False, source_field="source_id", indexed=True),
-    ProjectionColumnSpec("activity_at", "TEXT", nullable=False, source_field="activity_at", indexed=True, value_mode="activity_at"),
-    ProjectionColumnSpec("external_ids_json", "JSONB", nullable=False, source_field="external_ids", value_mode="external_ids_json", default="{}"),
-    ProjectionColumnSpec("relationships_json", "JSONB", nullable=False, source_field="relationships", value_mode="relationships_json", default="{}"),
-    ProjectionColumnSpec("typed_projection_version", "INTEGER", nullable=False, value_mode="typed_projection_version", default=1),
+    ProjectionColumnSpec(
+        "activity_at", "TEXT", nullable=False, source_field="activity_at", indexed=True, value_mode="activity_at"
+    ),
+    ProjectionColumnSpec(
+        "external_ids_json",
+        "JSONB",
+        nullable=False,
+        source_field="external_ids",
+        value_mode="external_ids_json",
+        default="{}",
+    ),
+    ProjectionColumnSpec(
+        "relationships_json",
+        "JSONB",
+        nullable=False,
+        source_field="relationships",
+        value_mode="relationships_json",
+        default="{}",
+    ),
+    ProjectionColumnSpec(
+        "typed_projection_version", "INTEGER", nullable=False, value_mode="typed_projection_version", default=1
+    ),
     ProjectionColumnSpec("canonical_ready", "BOOLEAN", nullable=False, value_mode="canonical_ready", default=True),
     ProjectionColumnSpec("migration_notes", "TEXT", nullable=False, value_mode="migration_notes", default=""),
 )
@@ -91,7 +122,9 @@ def _column_value(
     source_field = column.source_field or column.name
     value = frontmatter.get(source_field, column.default)
     if column.value_mode == "json":
-        return json_text(value or ([] if isinstance(column.default, list) else {} if column.sql_type == "JSONB" else value))
+        return json_text(
+            value or ([] if isinstance(column.default, list) else {} if column.sql_type == "JSONB" else value)
+        )
     if column.value_mode == "bool":
         return bool(value)
     if column.value_mode == "float":

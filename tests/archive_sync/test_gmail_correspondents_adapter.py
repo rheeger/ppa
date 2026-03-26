@@ -1,7 +1,5 @@
 """Archive-sync gmail correspondent adapter tests."""
 
-import json
-
 from archive_sync.adapters.gmail_correspondents import (
     GmailCorrespondentsAdapter,
     _extract_addresses_from_headers,
@@ -14,7 +12,7 @@ def test_extract_addresses_from_headers_parses_multiple_fields():
     headers = [
         {"name": "From", "value": "Alice Example <alice@example.com>"},
         {"name": "To", "value": "Bob <bob@example.com>, carol@example.org"},
-        {"name": "Cc", "value": "\"Dan D\" <dan@example.net>"},
+        {"name": "Cc", "value": '"Dan D" <dan@example.net>'},
         {"name": "Subject", "value": "ignored"},
     ]
     pairs = _extract_addresses_from_headers(headers)
@@ -72,7 +70,9 @@ def test_fetch_max_messages_is_per_run_not_cumulative(tmp_vault):
         ]
     )
     adapter._gws = lambda args: next(responses)  # type: ignore[method-assign]
-    first = adapter.fetch(str(tmp_vault), {"page_token": None, "scanned_messages": 0}, account_email="me@example.com", max_messages=1)
+    first = adapter.fetch(
+        str(tmp_vault), {"page_token": None, "scanned_messages": 0}, account_email="me@example.com", max_messages=1
+    )
     second = adapter.fetch(
         str(tmp_vault),
         {"page_token": "page-2", "scanned_messages": 1},

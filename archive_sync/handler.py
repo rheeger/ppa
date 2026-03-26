@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import sys
 from datetime import datetime, timezone
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -35,6 +34,7 @@ def _load_repo_dotenv() -> None:
                 os.environ[key] = value
     except OSError:
         return
+
 
 from .adapters.apple_health import AppleHealthAdapter
 from .adapters.base import IngestResult
@@ -86,7 +86,13 @@ def _run(label: str, adapter, *, vault: str, dry_run: bool = False, **kwargs) ->
 
 def cmd_contacts(args):
     sources = [item.strip() for item in args.sources.split(",") if item.strip()] if args.sources else None
-    _run("contacts", ContactsAdapter(), vault=args.vault, dry_run=args.dry_run, sources=sources)
+    _run(
+        "contacts",
+        ContactsAdapter(),
+        vault=args.vault,
+        dry_run=args.dry_run,
+        sources=sources,
+    )
 
 
 def cmd_linkedin(args):
@@ -104,15 +110,33 @@ def cmd_linkedin(args):
 
 
 def cmd_notion_people(args):
-    _run("notion-people", NotionPeopleAdapter(), vault=args.vault, dry_run=args.dry_run, csv_path=args.csv_path)
+    _run(
+        "notion-people",
+        NotionPeopleAdapter(),
+        vault=args.vault,
+        dry_run=args.dry_run,
+        csv_path=args.csv_path,
+    )
 
 
 def cmd_notion_staff(args):
-    _run("notion-staff", NotionStaffAdapter(), vault=args.vault, dry_run=args.dry_run, csv_path=args.csv_path)
+    _run(
+        "notion-staff",
+        NotionStaffAdapter(),
+        vault=args.vault,
+        dry_run=args.dry_run,
+        csv_path=args.csv_path,
+    )
 
 
 def cmd_copilot(args):
-    _run("copilot-finance", CopilotFinanceAdapter(), vault=args.vault, dry_run=args.dry_run, csv_path=args.csv_path)
+    _run(
+        "copilot-finance",
+        CopilotFinanceAdapter(),
+        vault=args.vault,
+        dry_run=args.dry_run,
+        csv_path=args.csv_path,
+    )
 
 
 def cmd_contacts_import(args):
@@ -143,7 +167,13 @@ def cmd_contacts_import(args):
 
 
 def cmd_seed_people(args):
-    _run("seed-people", SeedPeopleAdapter(), vault=args.vault, dry_run=args.dry_run, source_dir=args.source_dir)
+    _run(
+        "seed-people",
+        SeedPeopleAdapter(),
+        vault=args.vault,
+        dry_run=args.dry_run,
+        source_dir=args.source_dir,
+    )
 
 
 def cmd_gmail_correspondents(args):
@@ -423,7 +453,9 @@ def cmd_apple_health(args):
 
 def cmd_beeper(args):
     account_ids = [item.strip() for item in args.account_ids.split(",") if item.strip()] if args.account_ids else None
-    thread_types = [item.strip() for item in args.thread_types.split(",") if item.strip()] if args.thread_types else None
+    thread_types = (
+        [item.strip() for item in args.thread_types.split(",") if item.strip()] if args.thread_types else None
+    )
     _run(
         "beeper",
         BeeperAdapter(),
@@ -453,11 +485,20 @@ def main():
     p_contacts.set_defaults(func=cmd_contacts)
 
     p_linkedin = sub.add_parser("linkedin")
-    p_linkedin.add_argument("--csv-path", default=None, help="Connections CSV path or LinkedIn export directory")
+    p_linkedin.add_argument(
+        "--csv-path",
+        default=None,
+        help="Connections CSV path or LinkedIn export directory",
+    )
     p_linkedin.add_argument("--workers", type=int, default=None, help="Parallel LinkedIn match workers")
     p_linkedin.add_argument("--chunk-size", type=int, default=None, help="People resolution chunk size")
     p_linkedin.add_argument("--verbose", action="store_true", help="Print ingest phase and chunk progress")
-    p_linkedin.add_argument("--progress-every", type=int, default=None, help="Progress log interval for preload loops")
+    p_linkedin.add_argument(
+        "--progress-every",
+        type=int,
+        default=None,
+        help="Progress log interval for preload loops",
+    )
     p_linkedin.add_argument("--dry-run", action="store_true")
     p_linkedin.set_defaults(func=cmd_linkedin)
 
@@ -486,7 +527,11 @@ def main():
     p_import.set_defaults(func=cmd_contacts_import)
 
     p_seed = sub.add_parser("seed-people")
-    p_seed.add_argument("--source-dir", default=None, help="Directory of canonical local People markdown notes")
+    p_seed.add_argument(
+        "--source-dir",
+        default=None,
+        help="Directory of canonical local People markdown notes",
+    )
     p_seed.add_argument("--dry-run", action="store_true")
     p_seed.set_defaults(func=cmd_seed_people)
 
@@ -502,10 +547,19 @@ def main():
     p_gmailm.add_argument("--query", default=None, help="Optional Gmail search query")
     p_gmailm.add_argument("--max-threads", type=int, default=100, help="Thread card cap for one run")
     p_gmailm.add_argument("--max-messages", type=int, default=100, help="Message card cap for one run")
-    p_gmailm.add_argument("--max-attachments", type=int, default=100, help="Attachment card cap for one run")
+    p_gmailm.add_argument(
+        "--max-attachments",
+        type=int,
+        default=100,
+        help="Attachment card cap for one run",
+    )
     p_gmailm.add_argument("--page-size", type=int, default=25, help="Gmail threads page size")
     p_gmailm.add_argument("--workers", type=int, default=32, help="Concurrent Gmail thread fetch workers")
-    p_gmailm.add_argument("--quick-update", action="store_true", help="Skip unchanged Gmail threads and records using cached hashes")
+    p_gmailm.add_argument(
+        "--quick-update",
+        action="store_true",
+        help="Skip unchanged Gmail threads and records using cached hashes",
+    )
     p_gmailm.add_argument("--dry-run", action="store_true")
     p_gmailm.set_defaults(func=cmd_gmail_messages)
 
@@ -516,53 +570,119 @@ def main():
     p_calendar.add_argument("--time-min", default=None, help="Optional ISO datetime lower bound")
     p_calendar.add_argument("--time-max", default=None, help="Optional ISO datetime upper bound")
     p_calendar.add_argument("--max-events", type=int, default=100, help="Event card cap for one run")
-    p_calendar.add_argument("--quick-update", action="store_true", help="Skip unchanged calendar events using cached hashes")
+    p_calendar.add_argument(
+        "--quick-update",
+        action="store_true",
+        help="Skip unchanged calendar events using cached hashes",
+    )
     p_calendar.add_argument("--dry-run", action="store_true")
     p_calendar.set_defaults(func=cmd_calendar_events)
 
     p_otter = sub.add_parser("otter-transcripts")
-    p_otter.add_argument("--account-email", default="", help="Optional account email label for Otter transcript cards")
+    p_otter.add_argument(
+        "--account-email",
+        default="",
+        help="Optional account email label for Otter transcript cards",
+    )
     p_otter.add_argument("--max-meetings", type=int, default=100, help="Transcript card cap for one run")
     p_otter.add_argument("--page-size", type=int, default=25, help="Otter meetings page size")
-    p_otter.add_argument("--workers", type=int, default=2, help="Concurrent Otter meeting hydration workers")
+    p_otter.add_argument(
+        "--workers",
+        type=int,
+        default=2,
+        help="Concurrent Otter meeting hydration workers",
+    )
     p_otter.add_argument("--updated-after", default=None, help="Optional API updated-after lower bound")
     p_otter.add_argument("--start-after", default=None, help="Optional meeting start lower bound")
     p_otter.add_argument("--end-before", default=None, help="Optional meeting start upper bound")
-    p_otter.add_argument("--quick-update", action="store_true", help="Skip unchanged meetings using cached Otter update markers")
+    p_otter.add_argument(
+        "--quick-update",
+        action="store_true",
+        help="Skip unchanged meetings using cached Otter update markers",
+    )
     p_otter.add_argument("--dry-run", action="store_true")
     p_otter.set_defaults(func=cmd_otter_transcripts)
 
     p_otter_stage = sub.add_parser("otter-transcripts-stage")
-    p_otter_stage.add_argument("--stage-dir", default=None, help="Directory for staged Otter transcript harvest output")
-    p_otter_stage.add_argument("--account-email", default="", help="Optional account email label for Otter transcript cards")
+    p_otter_stage.add_argument(
+        "--stage-dir",
+        default=None,
+        help="Directory for staged Otter transcript harvest output",
+    )
+    p_otter_stage.add_argument(
+        "--account-email",
+        default="",
+        help="Optional account email label for Otter transcript cards",
+    )
     p_otter_stage.add_argument("--max-meetings", type=int, default=100, help="Transcript stage cap for one run")
     p_otter_stage.add_argument("--page-size", type=int, default=25, help="Otter meetings page size")
-    p_otter_stage.add_argument("--workers", type=int, default=2, help="Concurrent Otter meeting hydration workers")
+    p_otter_stage.add_argument(
+        "--workers",
+        type=int,
+        default=2,
+        help="Concurrent Otter meeting hydration workers",
+    )
     p_otter_stage.add_argument("--updated-after", default=None, help="Optional API updated-after lower bound")
     p_otter_stage.add_argument("--start-after", default=None, help="Optional meeting start lower bound")
     p_otter_stage.add_argument("--end-before", default=None, help="Optional meeting start upper bound")
-    p_otter_stage.add_argument("--quick-update", action="store_true", help="Skip unchanged meetings using cached Otter update markers")
-    p_otter_stage.add_argument("--progress-every", type=int, default=25, help="Progress log interval during staged extraction")
+    p_otter_stage.add_argument(
+        "--quick-update",
+        action="store_true",
+        help="Skip unchanged meetings using cached Otter update markers",
+    )
+    p_otter_stage.add_argument(
+        "--progress-every",
+        type=int,
+        default=25,
+        help="Progress log interval during staged extraction",
+    )
     p_otter_stage.add_argument("--verbose", action="store_true", help="Print staged extraction progress")
     p_otter_stage.set_defaults(func=cmd_otter_transcripts_stage)
 
     p_otter_import = sub.add_parser("otter-transcripts-import-stage")
-    p_otter_import.add_argument("--stage-dir", required=True, help="Directory containing staged Otter transcript harvest output")
+    p_otter_import.add_argument(
+        "--stage-dir",
+        required=True,
+        help="Directory containing staged Otter transcript harvest output",
+    )
     p_otter_import.add_argument("--batch-size", type=int, default=100, help="Records to commit per ingest batch")
-    p_otter_import.add_argument("--max-items", type=int, default=None, help="Optional cap for staged records to import")
-    p_otter_import.add_argument("--progress-every", type=int, default=None, help="Progress log interval for staged import")
+    p_otter_import.add_argument(
+        "--max-items",
+        type=int,
+        default=None,
+        help="Optional cap for staged records to import",
+    )
+    p_otter_import.add_argument(
+        "--progress-every",
+        type=int,
+        default=None,
+        help="Progress log interval for staged import",
+    )
     p_otter_import.add_argument("--verbose", action="store_true", help="Print staged import progress")
     p_otter_import.add_argument("--dry-run", action="store_true")
     p_otter_import.set_defaults(func=cmd_otter_transcripts_import_stage)
 
     p_otter_relink = sub.add_parser("otter-transcripts-relink")
-    p_otter_relink.add_argument("--progress-every", type=int, default=100, help="Progress log interval for transcript relinking")
+    p_otter_relink.add_argument(
+        "--progress-every",
+        type=int,
+        default=100,
+        help="Progress log interval for transcript relinking",
+    )
     p_otter_relink.add_argument("--verbose", action="store_true", help="Print transcript relink progress")
     p_otter_relink.set_defaults(func=cmd_otter_transcripts_relink)
 
     p_imessage = sub.add_parser("imessage")
-    p_imessage.add_argument("--snapshot-dir", required=True, help="Path to an exported Apple Messages snapshot bundle")
-    p_imessage.add_argument("--source-label", default="local-messages", help="Stable source label for sync-state")
+    p_imessage.add_argument(
+        "--snapshot-dir",
+        required=True,
+        help="Path to an exported Apple Messages snapshot bundle",
+    )
+    p_imessage.add_argument(
+        "--source-label",
+        default="local-messages",
+        help="Stable source label for sync-state",
+    )
     p_imessage.add_argument("--max-messages", type=int, default=100, help="Message cap for one run")
     p_imessage.add_argument("--workers", type=int, default=4, help="Concurrent row-processing workers")
     p_imessage.add_argument("--dry-run", action="store_true")
@@ -570,11 +690,27 @@ def main():
 
     p_photos = sub.add_parser("photos")
     p_photos.add_argument("--library-path", default=None, help="Optional path to a Photos library bundle")
-    p_photos.add_argument("--source-label", default="apple-photos", help="Stable source label for sync-state and UIDs")
+    p_photos.add_argument(
+        "--source-label",
+        default="apple-photos",
+        help="Stable source label for sync-state and UIDs",
+    )
     p_photos.add_argument("--max-assets", type=int, default=None, help="Asset card cap for one run")
-    p_photos.add_argument("--quick-update", action="store_true", help="Skip unchanged assets using cached metadata hashes")
-    p_photos.add_argument("--no-private-people", action="store_true", help="Disable private people label extraction")
-    p_photos.add_argument("--no-private-labels", action="store_true", help="Disable private ML label extraction")
+    p_photos.add_argument(
+        "--quick-update",
+        action="store_true",
+        help="Skip unchanged assets using cached metadata hashes",
+    )
+    p_photos.add_argument(
+        "--no-private-people",
+        action="store_true",
+        help="Disable private people label extraction",
+    )
+    p_photos.add_argument(
+        "--no-private-labels",
+        action="store_true",
+        help="Disable private ML label extraction",
+    )
     p_photos.add_argument("--dry-run", action="store_true")
     p_photos.set_defaults(func=cmd_photos)
 
@@ -585,8 +721,17 @@ def main():
         help="comma list of root labels or absolute paths",
     )
     p_files.add_argument("--max-files", type=int, default=None, help="Document card cap for one run")
-    p_files.add_argument("--batch-size", type=int, default=None, help="Documents to commit per ingest batch")
-    p_files.add_argument("--quick-update", action="store_true", help="Skip unchanged document files using cached metadata hashes")
+    p_files.add_argument(
+        "--batch-size",
+        type=int,
+        default=None,
+        help="Documents to commit per ingest batch",
+    )
+    p_files.add_argument(
+        "--quick-update",
+        action="store_true",
+        help="Skip unchanged document files using cached metadata hashes",
+    )
     p_files.add_argument("--dry-run", action="store_true")
     p_files.set_defaults(func=cmd_file_libraries)
 
@@ -598,37 +743,104 @@ def main():
     )
     p_files_stage.add_argument("--stage-dir", required=True, help="Directory for staged analysis output")
     p_files_stage.add_argument("--max-files", type=int, default=None, help="Candidate cap for one stage run")
-    p_files_stage.add_argument("--quick-update", action="store_true", help="Skip unchanged documents during staged analysis")
+    p_files_stage.add_argument(
+        "--quick-update",
+        action="store_true",
+        help="Skip unchanged documents during staged analysis",
+    )
     p_files_stage.add_argument("--workers", type=int, default=None, help="Parallel analysis workers")
-    p_files_stage.add_argument("--progress-every", type=int, default=100, help="Progress log interval during staged analysis")
+    p_files_stage.add_argument(
+        "--progress-every",
+        type=int,
+        default=100,
+        help="Progress log interval during staged analysis",
+    )
     p_files_stage.add_argument("--verbose", action="store_true", help="Print staged analysis progress and ETA")
     p_files_stage.set_defaults(func=cmd_file_libraries_stage)
 
     p_files_import = sub.add_parser("file-libraries-import-stage")
     p_files_import.add_argument("--stage-dir", required=True, help="Directory containing staged analysis output")
     p_files_import.add_argument("--max-files", type=int, default=None, help="Document cap for one import run")
-    p_files_import.add_argument("--batch-size", type=int, default=None, help="Documents to commit per ingest batch")
-    p_files_import.add_argument("--progress-every", type=int, default=None, help="Progress log interval for staged import")
+    p_files_import.add_argument(
+        "--batch-size",
+        type=int,
+        default=None,
+        help="Documents to commit per ingest batch",
+    )
+    p_files_import.add_argument(
+        "--progress-every",
+        type=int,
+        default=None,
+        help="Progress log interval for staged import",
+    )
     p_files_import.add_argument("--verbose", action="store_true", help="Print staged import progress")
     p_files_import.add_argument("--dry-run", action="store_true")
     p_files_import.set_defaults(func=cmd_file_libraries_import_stage)
 
     p_github_stage = sub.add_parser("github-history-stage")
-    p_github_stage.add_argument("--stage-dir", required=True, help="Directory for staged GitHub extraction output")
+    p_github_stage.add_argument(
+        "--stage-dir",
+        required=True,
+        help="Directory for staged GitHub extraction output",
+    )
     p_github_stage.add_argument("--max-repos", type=int, default=None, help="Repository cap for one stage run")
-    p_github_stage.add_argument("--max-commits-per-repo", type=int, default=None, help="Commit cap per repository")
-    p_github_stage.add_argument("--max-threads-per-repo", type=int, default=None, help="Issue/PR thread cap per repository")
-    p_github_stage.add_argument("--max-messages-per-thread", type=int, default=None, help="Comment/review cap per thread")
-    p_github_stage.add_argument("--workers", type=int, default=None, help="Parallel GitHub repo extraction workers")
-    p_github_stage.add_argument("--progress-every", type=int, default=10, help="Progress log interval during staged extraction")
+    p_github_stage.add_argument(
+        "--max-commits-per-repo",
+        type=int,
+        default=None,
+        help="Commit cap per repository",
+    )
+    p_github_stage.add_argument(
+        "--max-threads-per-repo",
+        type=int,
+        default=None,
+        help="Issue/PR thread cap per repository",
+    )
+    p_github_stage.add_argument(
+        "--max-messages-per-thread",
+        type=int,
+        default=None,
+        help="Comment/review cap per thread",
+    )
+    p_github_stage.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Parallel GitHub repo extraction workers",
+    )
+    p_github_stage.add_argument(
+        "--progress-every",
+        type=int,
+        default=10,
+        help="Progress log interval during staged extraction",
+    )
     p_github_stage.add_argument("--verbose", action="store_true", help="Print staged extraction progress")
     p_github_stage.set_defaults(func=cmd_github_history_stage)
 
     p_github_import = sub.add_parser("github-history-import-stage")
-    p_github_import.add_argument("--stage-dir", required=True, help="Directory containing staged GitHub extraction output")
-    p_github_import.add_argument("--batch-size", type=int, default=None, help="Records to commit per ingest batch")
-    p_github_import.add_argument("--max-items", type=int, default=None, help="Optional cap for staged records to import")
-    p_github_import.add_argument("--progress-every", type=int, default=None, help="Progress log interval for staged import")
+    p_github_import.add_argument(
+        "--stage-dir",
+        required=True,
+        help="Directory containing staged GitHub extraction output",
+    )
+    p_github_import.add_argument(
+        "--batch-size",
+        type=int,
+        default=None,
+        help="Records to commit per ingest batch",
+    )
+    p_github_import.add_argument(
+        "--max-items",
+        type=int,
+        default=None,
+        help="Optional cap for staged records to import",
+    )
+    p_github_import.add_argument(
+        "--progress-every",
+        type=int,
+        default=None,
+        help="Progress log interval for staged import",
+    )
     p_github_import.add_argument("--verbose", action="store_true", help="Print staged import progress")
     p_github_import.add_argument("--dry-run", action="store_true")
     p_github_import.set_defaults(func=cmd_github_history_import_stage)
@@ -636,8 +848,16 @@ def main():
     p_medical = sub.add_parser("medical-records")
     p_medical.add_argument("--fhir-json-path", default=None, help="Path to FHIR export JSON")
     p_medical.add_argument("--ccd-xml-path", default=None, help="Path to One Medical CCD XML export")
-    p_medical.add_argument("--ccd-dir-path", default=None, help="Path to a directory of CCD XML exports, including Epic exports")
-    p_medical.add_argument("--ehi-tables-dir-path", default=None, help="Path to an Epic EHI tables directory of TSV exports")
+    p_medical.add_argument(
+        "--ccd-dir-path",
+        default=None,
+        help="Path to a directory of CCD XML exports, including Epic exports",
+    )
+    p_medical.add_argument(
+        "--ehi-tables-dir-path",
+        default=None,
+        help="Path to an Epic EHI tables directory of TSV exports",
+    )
     p_medical.add_argument(
         "--epic-pat-id",
         dest="epic_pat_id",
@@ -654,31 +874,75 @@ def main():
         action="store_true",
         help="Skip CLARITY_ADT timeline cards",
     )
-    p_medical.add_argument("--vaccine-pdf-path", default=None, help="Path to supplemental vaccine record PDF")
-    p_medical.add_argument("--person-wikilink", default=None, help="Explicit person wikilink or slug for imported records; required for CCD-only imports")
+    p_medical.add_argument(
+        "--vaccine-pdf-path",
+        default=None,
+        help="Path to supplemental vaccine record PDF",
+    )
+    p_medical.add_argument(
+        "--person-wikilink",
+        default=None,
+        help="Explicit person wikilink or slug for imported records; required for CCD-only imports",
+    )
     p_medical.add_argument("--verbose", action="store_true", help="Print import step and progress logging")
-    p_medical.add_argument("--progress-every", type=int, default=None, help="Progress log interval for large structured imports")
+    p_medical.add_argument(
+        "--progress-every",
+        type=int,
+        default=None,
+        help="Progress log interval for large structured imports",
+    )
     p_medical.add_argument("--dry-run", action="store_true")
     p_medical.set_defaults(func=cmd_medical_records)
 
     p_apple_health = sub.add_parser("apple-health")
     p_apple_health.add_argument("--export-xml-path", required=True, help="Path to Apple Health export XML")
-    p_apple_health.add_argument("--person-wikilink", required=True, help="Explicit person wikilink or slug for imported records")
+    p_apple_health.add_argument(
+        "--person-wikilink",
+        required=True,
+        help="Explicit person wikilink or slug for imported records",
+    )
     p_apple_health.add_argument("--verbose", action="store_true", help="Print import step and progress logging")
-    p_apple_health.add_argument("--progress-every", type=int, default=None, help="Progress log interval for large Apple Health imports")
+    p_apple_health.add_argument(
+        "--progress-every",
+        type=int,
+        default=None,
+        help="Progress log interval for large Apple Health imports",
+    )
     p_apple_health.add_argument("--dry-run", action="store_true")
     p_apple_health.set_defaults(func=cmd_apple_health)
 
     p_beeper = sub.add_parser("beeper")
     p_beeper.add_argument("--db-path", default=None, help="Optional path to BeeperTexts index.db")
-    p_beeper.add_argument("--media-root", default=None, help="Optional path to the BeeperTexts media cache root")
-    p_beeper.add_argument("--thread-types", default="single", help="comma list of Beeper thread types, e.g. single,group")
-    p_beeper.add_argument("--account-ids", default=None, help="optional comma list of Beeper account ids to include")
+    p_beeper.add_argument(
+        "--media-root",
+        default=None,
+        help="Optional path to the BeeperTexts media cache root",
+    )
+    p_beeper.add_argument(
+        "--thread-types",
+        default="single",
+        help="comma list of Beeper thread types, e.g. single,group",
+    )
+    p_beeper.add_argument(
+        "--account-ids",
+        default=None,
+        help="optional comma list of Beeper account ids to include",
+    )
     p_beeper.add_argument("--max-threads", type=int, default=None, help="Thread cap for one run")
     p_beeper.add_argument("--batch-size", type=int, default=10, help="Threads to commit per ingest batch")
-    p_beeper.add_argument("--workers", type=int, default=None, help="Concurrent Beeper thread hydration workers")
+    p_beeper.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Concurrent Beeper thread hydration workers",
+    )
     p_beeper.add_argument("--verbose", action="store_true", help="Print Beeper fetch and ingest progress")
-    p_beeper.add_argument("--progress-every", type=int, default=None, help="Progress log interval for Beeper thread counts")
+    p_beeper.add_argument(
+        "--progress-every",
+        type=int,
+        default=None,
+        help="Progress log interval for Beeper thread counts",
+    )
     p_beeper.add_argument("--dry-run", action="store_true")
     p_beeper.set_defaults(func=cmd_beeper)
 

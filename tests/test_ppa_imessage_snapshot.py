@@ -6,6 +6,7 @@ import json
 import os
 import sqlite3
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -40,7 +41,15 @@ def _build_messages_store(messages_dir: Path) -> Path:
     attachment_path.write_bytes(b"fake-jpeg")
     conn.execute(
         "INSERT INTO attachment(ROWID, guid, filename, transfer_name, mime_type, total_bytes, uti) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (1, "attachment-guid-1", str(attachment_path), "photo.jpg", "image/jpeg", attachment_path.stat().st_size, "public.jpeg"),
+        (
+            1,
+            "attachment-guid-1",
+            str(attachment_path),
+            "photo.jpg",
+            "image/jpeg",
+            attachment_path.stat().st_size,
+            "public.jpeg",
+        ),
     )
     conn.execute("INSERT INTO message_attachment_join(message_id, attachment_id) VALUES (1, 1)")
     conn.commit()
@@ -59,7 +68,7 @@ def test_hfa_imessage_snapshot_builds_bundle(tmp_path):
 
     result = subprocess.run(
         [
-            str(repo_root / ".venv" / "bin" / "python"),
+            sys.executable,
             str(script_path),
             "--messages-dir",
             str(messages_dir),

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -13,7 +14,7 @@ def test_hfa_init_vault_creates_expected_layout(tmp_path):
     script_path = repo_root / "scripts" / "ppa-init-vault.sh"
     vault = tmp_path / "hf-archives"
     env = os.environ.copy()
-    env["PYTHON"] = str(repo_root / ".venv" / "bin" / "python")
+    env["PYTHON"] = sys.executable
 
     result = subprocess.run(
         ["bash", str(script_path), str(vault)],

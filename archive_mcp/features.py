@@ -116,7 +116,17 @@ def json_text(value: Any) -> str:
 
 
 def card_activity_at(frontmatter: dict[str, Any]) -> str:
-    for field_name in ("last_message_at", "sent_at", "start_at", "captured_at", "committed_at", "occurred_at", "updated", "created", "first_message_at"):
+    for field_name in (
+        "last_message_at",
+        "sent_at",
+        "start_at",
+        "captured_at",
+        "committed_at",
+        "occurred_at",
+        "updated",
+        "created",
+        "first_message_at",
+    ):
         value = str(frontmatter.get(field_name, "") or "").strip()
         if value:
             return value

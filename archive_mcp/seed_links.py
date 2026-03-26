@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -15,9 +14,15 @@ from threading import Lock
 from typing import Any
 
 from hfa.provenance import ProvenanceEntry
-from hfa.schema import BaseCard, validate_card_permissive, validate_card_strict
-from hfa.vault import (extract_wikilinks, iter_note_paths, read_note,
-                       read_note_file, read_note_frontmatter_file, write_card)
+from hfa.schema import validate_card_permissive, validate_card_strict
+from hfa.vault import (
+    extract_wikilinks,
+    iter_note_paths,
+    read_note,
+    read_note_file,
+    read_note_frontmatter_file,
+    write_card,
+)
 
 from .features import card_activity_at, external_ids_by_provider
 
@@ -158,7 +163,15 @@ CARD_TYPE_MODULES = {
 
 LLM_REVIEW_MODULES = frozenset({MODULE_IDENTITY, MODULE_CALENDAR, MODULE_MEDIA, MODULE_ORPHAN})
 HIGH_PRIORITY_CARD_TYPES = frozenset(
-    {"person", "email_thread", "email_message", "imessage_thread", "imessage_message", "calendar_event", "meeting_transcript"}
+    {
+        "person",
+        "email_thread",
+        "email_message",
+        "imessage_thread",
+        "imessage_message",
+        "calendar_event",
+        "meeting_transcript",
+    }
 )
 LOW_PRIORITY_CARD_TYPES = frozenset({"finance"})
 WIKILINK_RE = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]*)?\]\]")
@@ -412,11 +425,17 @@ def _module_should_enqueue(sketch: SeedCardSketch, catalog: SeedLinkCatalog, mod
                 (_clean_text(frontmatter.get("gmail_thread_id", "")) and not _clean_text(frontmatter.get("thread", "")))
                 or (sketch.participant_emails and not _iter_string_values(frontmatter.get("people", [])))
                 or (sketch.event_hints and not _iter_string_values(frontmatter.get("calendar_events", [])))
-                or (bool(frontmatter.get("has_attachments")) and not _iter_string_values(frontmatter.get("attachments", [])))
+                or (
+                    bool(frontmatter.get("has_attachments"))
+                    and not _iter_string_values(frontmatter.get("attachments", []))
+                )
             )
         if sketch.card_type == "email_thread":
             return bool(
-                (_clean_text(frontmatter.get("gmail_thread_id", "")) and not _iter_string_values(frontmatter.get("messages", [])))
+                (
+                    _clean_text(frontmatter.get("gmail_thread_id", ""))
+                    and not _iter_string_values(frontmatter.get("messages", []))
+                )
                 or (sketch.participant_emails and not _iter_string_values(frontmatter.get("people", [])))
                 or (sketch.event_hints and not _iter_string_values(frontmatter.get("calendar_events", [])))
             )
@@ -424,12 +443,18 @@ def _module_should_enqueue(sketch: SeedCardSketch, catalog: SeedLinkCatalog, mod
             return False
         if sketch.card_type == "imessage_message":
             return bool(
-                (_clean_text(frontmatter.get("imessage_chat_id", "")) and not _clean_text(frontmatter.get("thread", "")))
+                (
+                    _clean_text(frontmatter.get("imessage_chat_id", ""))
+                    and not _clean_text(frontmatter.get("thread", ""))
+                )
                 or (sketch.participant_handles and not _iter_string_values(frontmatter.get("people", [])))
             )
         if sketch.card_type == "imessage_thread":
             return bool(
-                (_clean_text(frontmatter.get("imessage_chat_id", "")) and not _iter_string_values(frontmatter.get("messages", [])))
+                (
+                    _clean_text(frontmatter.get("imessage_chat_id", ""))
+                    and not _iter_string_values(frontmatter.get("messages", []))
+                )
                 or (sketch.participant_handles and not _iter_string_values(frontmatter.get("people", [])))
             )
         if sketch.card_type == "imessage_attachment":
@@ -482,11 +507,17 @@ def _module_should_enqueue_fast(
                 (_clean_text(frontmatter.get("gmail_thread_id", "")) and not _clean_text(frontmatter.get("thread", "")))
                 or (sketch.participant_emails and not _iter_string_values(frontmatter.get("people", [])))
                 or (sketch.event_hints and not _iter_string_values(frontmatter.get("calendar_events", [])))
-                or (bool(frontmatter.get("has_attachments")) and not _iter_string_values(frontmatter.get("attachments", [])))
+                or (
+                    bool(frontmatter.get("has_attachments"))
+                    and not _iter_string_values(frontmatter.get("attachments", []))
+                )
             )
         if sketch.card_type == "email_thread":
             return bool(
-                (_clean_text(frontmatter.get("gmail_thread_id", "")) and not _iter_string_values(frontmatter.get("messages", [])))
+                (
+                    _clean_text(frontmatter.get("gmail_thread_id", ""))
+                    and not _iter_string_values(frontmatter.get("messages", []))
+                )
                 or (sketch.participant_emails and not _iter_string_values(frontmatter.get("people", [])))
                 or (sketch.event_hints and not _iter_string_values(frontmatter.get("calendar_events", [])))
             )
@@ -494,12 +525,18 @@ def _module_should_enqueue_fast(
             return False
         if sketch.card_type == "imessage_message":
             return bool(
-                (_clean_text(frontmatter.get("imessage_chat_id", "")) and not _clean_text(frontmatter.get("thread", "")))
+                (
+                    _clean_text(frontmatter.get("imessage_chat_id", ""))
+                    and not _clean_text(frontmatter.get("thread", ""))
+                )
                 or (sketch.participant_handles and not _iter_string_values(frontmatter.get("people", [])))
             )
         if sketch.card_type == "imessage_thread":
             return bool(
-                (_clean_text(frontmatter.get("imessage_chat_id", "")) and not _iter_string_values(frontmatter.get("messages", [])))
+                (
+                    _clean_text(frontmatter.get("imessage_chat_id", ""))
+                    and not _iter_string_values(frontmatter.get("messages", []))
+                )
                 or (sketch.participant_handles and not _iter_string_values(frontmatter.get("people", [])))
             )
         if sketch.card_type == "imessage_attachment":
@@ -520,7 +557,10 @@ def _iter_string_values(value: Any) -> list[str]:
 
 
 def _external_ids(frontmatter: dict[str, Any]) -> dict[str, set[str]]:
-    return {provider: {item for item in values if _clean_text(item)} for provider, values in external_ids_by_provider(frontmatter).items()}
+    return {
+        provider: {item for item in values if _clean_text(item)}
+        for provider, values in external_ids_by_provider(frontmatter).items()
+    }
 
 
 def _frontmatter_content_hash(rel_path: str, frontmatter: dict[str, Any]) -> str:
@@ -550,14 +590,24 @@ def _sketch_from_frontmatter(
         aliases.add(_normalize_alias(alias))
     emails = {
         _normalize_email(item)
-        for field_name in ("emails", "to_emails", "cc_emails", "bcc_emails", "reply_to_emails", "attendee_emails", "participant_emails")
+        for field_name in (
+            "emails",
+            "to_emails",
+            "cc_emails",
+            "bcc_emails",
+            "reply_to_emails",
+            "attendee_emails",
+            "participant_emails",
+        )
         for item in _iter_string_values(frontmatter.get(field_name, []))
     }
     for field_name in ("account_email", "from_email", "organizer_email"):
         value = _normalize_email(frontmatter.get(field_name, ""))
         if value:
             emails.add(value)
-    phones = {_normalize_phone(item) for item in _iter_string_values(frontmatter.get("phones", [])) if _normalize_phone(item)}
+    phones = {
+        _normalize_phone(item) for item in _iter_string_values(frontmatter.get("phones", [])) if _normalize_phone(item)
+    }
     handles = set()
     for field_name in ("linkedin", "github", "twitter", "instagram", "telegram", "discord", "sender_handle"):
         value = _normalize_handle(frontmatter.get(field_name, ""))
@@ -1128,16 +1178,24 @@ def _person_matches_for_identifiers(
     matches: dict[str, dict[str, Any]] = {}
     for email in emails or set():
         for sketch in catalog.person_by_email.get(email, []):
-            matches.setdefault(sketch.uid, {"deterministic_hits": set(), "target": sketch})["deterministic_hits"].add("exact_email")
+            matches.setdefault(sketch.uid, {"deterministic_hits": set(), "target": sketch})["deterministic_hits"].add(
+                "exact_email"
+            )
     for phone in phones or set():
         for sketch in catalog.person_by_phone.get(phone, []):
-            matches.setdefault(sketch.uid, {"deterministic_hits": set(), "target": sketch})["deterministic_hits"].add("exact_phone")
+            matches.setdefault(sketch.uid, {"deterministic_hits": set(), "target": sketch})["deterministic_hits"].add(
+                "exact_phone"
+            )
     for handle in handles or set():
         for sketch in catalog.person_by_handle.get(handle, []):
-            matches.setdefault(sketch.uid, {"deterministic_hits": set(), "target": sketch})["deterministic_hits"].add("exact_handle")
+            matches.setdefault(sketch.uid, {"deterministic_hits": set(), "target": sketch})["deterministic_hits"].add(
+                "exact_handle"
+            )
     for alias in aliases or set():
         for sketch in catalog.person_by_alias.get(alias, []):
-            matches.setdefault(sketch.uid, {"deterministic_hits": set(), "target": sketch})["deterministic_hits"].add("exact_alias")
+            matches.setdefault(sketch.uid, {"deterministic_hits": set(), "target": sketch})["deterministic_hits"].add(
+                "exact_alias"
+            )
     return matches
 
 
@@ -1179,7 +1237,8 @@ def _generate_identity_candidates(catalog: SeedLinkCatalog, source: SeedCardSket
             "deterministic_hits": deterministic_hits,
             "name_similarity": round(_name_similarity(source.summary, target.summary), 4),
             "shared_company": int(
-                _normalize_alias(source.frontmatter.get("company", "")) == _normalize_alias(target.frontmatter.get("company", ""))
+                _normalize_alias(source.frontmatter.get("company", ""))
+                == _normalize_alias(target.frontmatter.get("company", ""))
                 and bool(_clean_text(source.frontmatter.get("company", "")))
             ),
             "shared_people_names": _shared_people_names(source, target),
@@ -1254,20 +1313,41 @@ def _generate_person_link_candidates(
     return results
 
 
-def _message_thread_features(message: SeedCardSketch, thread: SeedCardSketch) -> tuple[dict[str, Any], list[LinkEvidence]]:
-    message_thread_id = _clean_text(message.frontmatter.get("gmail_thread_id", "")) or _clean_text(message.frontmatter.get("imessage_chat_id", ""))
-    thread_thread_id = _clean_text(thread.frontmatter.get("gmail_thread_id", "")) or _clean_text(thread.frontmatter.get("imessage_chat_id", ""))
-    reverse_list = {_normalize_slug(_slug_from_ref(item)) for item in _iter_string_values(thread.frontmatter.get("messages", []))}
+def _message_thread_features(
+    message: SeedCardSketch, thread: SeedCardSketch
+) -> tuple[dict[str, Any], list[LinkEvidence]]:
+    message_thread_id = _clean_text(message.frontmatter.get("gmail_thread_id", "")) or _clean_text(
+        message.frontmatter.get("imessage_chat_id", "")
+    )
+    thread_thread_id = _clean_text(thread.frontmatter.get("gmail_thread_id", "")) or _clean_text(
+        thread.frontmatter.get("imessage_chat_id", "")
+    )
+    reverse_list = {
+        _normalize_slug(_slug_from_ref(item)) for item in _iter_string_values(thread.frontmatter.get("messages", []))
+    }
     features = {
         "exact_thread_id": int(bool(message_thread_id and message_thread_id == thread_thread_id)),
         "message_thread_field_present": int(bool(_clean_text(message.frontmatter.get("thread", "")))),
         "reverse_messages_present": int(_normalize_slug(message.slug) in reverse_list),
-        "subject_similarity": round(_name_similarity(_clean_text(message.frontmatter.get("subject", "")), _clean_text(thread.frontmatter.get("subject", ""))), 4),
+        "subject_similarity": round(
+            _name_similarity(
+                _clean_text(message.frontmatter.get("subject", "")), _clean_text(thread.frontmatter.get("subject", ""))
+            ),
+            4,
+        ),
     }
     evidences = []
     if features["exact_thread_id"]:
         evidences.append(
-            _make_evidence("exact_thread_id", "frontmatter", "thread_id", message_thread_id, 1.0, source_uid=message.uid, target_uid=thread.uid)
+            _make_evidence(
+                "exact_thread_id",
+                "frontmatter",
+                "thread_id",
+                message_thread_id,
+                1.0,
+                source_uid=message.uid,
+                target_uid=thread.uid,
+            )
         )
     if features["reverse_messages_present"]:
         evidences.append(
@@ -1304,7 +1384,9 @@ def _generate_communication_candidates(catalog: SeedLinkCatalog, source: SeedCar
             if thread.uid == source.uid:
                 continue
             features, evidences = _message_thread_features(source, thread)
-            if features["exact_thread_id"] and _normalize_slug(_slug_from_ref(source.frontmatter.get("thread", ""))) != _normalize_slug(thread.slug):
+            if features["exact_thread_id"] and _normalize_slug(
+                _slug_from_ref(source.frontmatter.get("thread", ""))
+            ) != _normalize_slug(thread.slug):
                 _append_candidate(
                     results,
                     module_name=MODULE_COMMUNICATION,
@@ -1326,8 +1408,13 @@ def _generate_communication_candidates(catalog: SeedLinkCatalog, source: SeedCar
                     features=features,
                     evidences=evidences,
                 )
-        attachment_matches = catalog.email_attachments_by_message_id.get(_clean_text(source.frontmatter.get("gmail_message_id", "")), [])
-        existing_attachments = {_normalize_slug(_slug_from_ref(item)) for item in _iter_string_values(source.frontmatter.get("attachments", []))}
+        attachment_matches = catalog.email_attachments_by_message_id.get(
+            _clean_text(source.frontmatter.get("gmail_message_id", "")), []
+        )
+        existing_attachments = {
+            _normalize_slug(_slug_from_ref(item))
+            for item in _iter_string_values(source.frontmatter.get("attachments", []))
+        }
         for attachment in attachment_matches:
             if _normalize_slug(attachment.slug) in existing_attachments:
                 continue
@@ -1352,7 +1439,11 @@ def _generate_communication_candidates(catalog: SeedLinkCatalog, source: SeedCar
                 features={"exact_parent_message": 1, "ambiguous_target_count": len(attachment_matches)},
                 evidences=evidences,
             )
-        person_emails = source.participant_emails | ({_normalize_email(source.frontmatter.get("from_email", ""))} if _normalize_email(source.frontmatter.get("from_email", "")) else set())
+        person_emails = source.participant_emails | (
+            {_normalize_email(source.frontmatter.get("from_email", ""))}
+            if _normalize_email(source.frontmatter.get("from_email", ""))
+            else set()
+        )
         results.extend(
             _generate_person_link_candidates(
                 catalog,
@@ -1392,16 +1483,26 @@ def _generate_communication_candidates(catalog: SeedLinkCatalog, source: SeedCar
             _generate_person_link_candidates(
                 catalog,
                 source=source,
-                emails=source.participant_emails | ({_normalize_email(source.frontmatter.get("account_email", ""))} if _normalize_email(source.frontmatter.get("account_email", "")) else set()),
+                emails=source.participant_emails
+                | (
+                    {_normalize_email(source.frontmatter.get("account_email", ""))}
+                    if _normalize_email(source.frontmatter.get("account_email", ""))
+                    else set()
+                ),
                 handles=set(),
                 link_type=LINK_TYPE_THREAD_HAS_PERSON,
                 candidate_group="participant_resolution",
             )
         )
     elif source.card_type == "email_attachment":
-        message_matches = catalog.email_messages_by_message_id.get(_clean_text(source.frontmatter.get("gmail_message_id", "")), [])
+        message_matches = catalog.email_messages_by_message_id.get(
+            _clean_text(source.frontmatter.get("gmail_message_id", "")), []
+        )
         for message in message_matches:
-            existing_attachments = {_normalize_slug(_slug_from_ref(item)) for item in _iter_string_values(message.frontmatter.get("attachments", []))}
+            existing_attachments = {
+                _normalize_slug(_slug_from_ref(item))
+                for item in _iter_string_values(message.frontmatter.get("attachments", []))
+            }
             if _normalize_slug(source.slug) in existing_attachments:
                 continue
             evidences = [
@@ -1428,7 +1529,10 @@ def _generate_communication_candidates(catalog: SeedLinkCatalog, source: SeedCar
     elif source.card_type == "imessage_message":
         chat_id = _clean_text(source.frontmatter.get("imessage_chat_id", ""))
         for thread in catalog.imessage_threads_by_chat_id.get(chat_id, []):
-            reverse_list = {_normalize_slug(_slug_from_ref(item)) for item in _iter_string_values(thread.frontmatter.get("messages", []))}
+            reverse_list = {
+                _normalize_slug(_slug_from_ref(item))
+                for item in _iter_string_values(thread.frontmatter.get("messages", []))
+            }
             features = {
                 "exact_thread_id": int(bool(chat_id)),
                 "reverse_messages_present": int(_normalize_slug(source.slug) in reverse_list),
@@ -1472,7 +1576,12 @@ def _generate_communication_candidates(catalog: SeedLinkCatalog, source: SeedCar
                 catalog,
                 source=source,
                 emails=set(),
-                handles=source.participant_handles | ({_normalize_handle(source.frontmatter.get("sender_handle", ""))} if _normalize_handle(source.frontmatter.get("sender_handle", "")) else set()),
+                handles=source.participant_handles
+                | (
+                    {_normalize_handle(source.frontmatter.get("sender_handle", ""))}
+                    if _normalize_handle(source.frontmatter.get("sender_handle", ""))
+                    else set()
+                ),
                 link_type=LINK_TYPE_MESSAGE_MENTIONS_PERSON,
                 candidate_group="participant_resolution",
             )
@@ -1521,7 +1630,10 @@ def _event_matches_for_source(catalog: SeedLinkCatalog, source: SeedCardSketch) 
 def _generate_calendar_candidates(catalog: SeedLinkCatalog, source: SeedCardSketch) -> list[SeedLinkCandidate]:
     results: list[SeedLinkCandidate] = []
     if source.card_type in {"email_message", "email_thread", "meeting_transcript"}:
-        existing_event_slugs = {_normalize_slug(_slug_from_ref(item)) for item in _iter_string_values(source.frontmatter.get("calendar_events", []))}
+        existing_event_slugs = {
+            _normalize_slug(_slug_from_ref(item))
+            for item in _iter_string_values(source.frontmatter.get("calendar_events", []))
+        }
         for event in _event_matches_for_source(catalog, source):
             title_similarity = _name_similarity(
                 _clean_text(source.frontmatter.get("invite_title", ""))
@@ -1537,7 +1649,10 @@ def _generate_calendar_candidates(catalog: SeedLinkCatalog, source: SeedCardSket
                 reverse_field = "source_threads"
             else:
                 reverse_field = "meeting_transcripts"
-            reverse_refs = {_normalize_slug(_slug_from_ref(item)) for item in _iter_string_values(event.frontmatter.get(reverse_field, []))}
+            reverse_refs = {
+                _normalize_slug(_slug_from_ref(item))
+                for item in _iter_string_values(event.frontmatter.get(reverse_field, []))
+            }
             features = {
                 "exact_event_id": exact_event_id,
                 "reverse_reference_present": int(_normalize_slug(source.slug) in reverse_refs),
@@ -1547,15 +1662,37 @@ def _generate_calendar_candidates(catalog: SeedLinkCatalog, source: SeedCardSket
             evidences = []
             if exact_event_id:
                 evidences.append(
-                    _make_evidence("exact_event_hint", "frontmatter", "event_hint", sorted(source.event_hints & event.external_ids.get("calendar", set()))[0], 1.0)
+                    _make_evidence(
+                        "exact_event_hint",
+                        "frontmatter",
+                        "event_hint",
+                        sorted(source.event_hints & event.external_ids.get("calendar", set()))[0],
+                        1.0,
+                    )
                 )
             if features["reverse_reference_present"]:
                 evidences.append(
-                    _make_evidence("reverse_reference", "frontmatter", reverse_field, source.slug, 0.95, source_uid=event.uid, target_uid=source.uid)
+                    _make_evidence(
+                        "reverse_reference",
+                        "frontmatter",
+                        reverse_field,
+                        source.slug,
+                        0.95,
+                        source_uid=event.uid,
+                        target_uid=source.uid,
+                    )
                 )
             if title_similarity:
                 evidences.append(
-                    _make_evidence("lexical_overlap", "frontmatter", "title_similarity", title_similarity, 0.25, source=source.summary, target=event.summary)
+                    _make_evidence(
+                        "lexical_overlap",
+                        "frontmatter",
+                        "title_similarity",
+                        title_similarity,
+                        0.25,
+                        source=source.summary,
+                        target=event.summary,
+                    )
                 )
             if _normalize_slug(event.slug) not in existing_event_slugs:
                 _append_candidate(
@@ -1608,15 +1745,30 @@ def _generate_calendar_candidates(catalog: SeedLinkCatalog, source: SeedCardSket
                     evidences=evidences,
                 )
     elif source.card_type == "calendar_event":
-        reverse_messages = {_normalize_slug(_slug_from_ref(item)) for item in _iter_string_values(source.frontmatter.get("source_messages", []))}
-        reverse_threads = {_normalize_slug(_slug_from_ref(item)) for item in _iter_string_values(source.frontmatter.get("source_threads", []))}
-        reverse_transcripts = {_normalize_slug(_slug_from_ref(item)) for item in _iter_string_values(source.frontmatter.get("meeting_transcripts", []))}
+        reverse_messages = {
+            _normalize_slug(_slug_from_ref(item))
+            for item in _iter_string_values(source.frontmatter.get("source_messages", []))
+        }
+        reverse_threads = {
+            _normalize_slug(_slug_from_ref(item))
+            for item in _iter_string_values(source.frontmatter.get("source_threads", []))
+        }
+        reverse_transcripts = {
+            _normalize_slug(_slug_from_ref(item))
+            for item in _iter_string_values(source.frontmatter.get("meeting_transcripts", []))
+        }
         for message in catalog.cards_by_type.get("email_message", []):
             event_hints = set(message.event_hints)
             exact_event_id = int(bool(event_hints & source.external_ids.get("calendar", set())))
             if exact_event_id and _normalize_slug(message.slug) not in reverse_messages:
                 evidences = [
-                    _make_evidence("exact_event_hint", "frontmatter", "event_hint", sorted(event_hints & source.external_ids.get("calendar", set()))[0], 1.0)
+                    _make_evidence(
+                        "exact_event_hint",
+                        "frontmatter",
+                        "event_hint",
+                        sorted(event_hints & source.external_ids.get("calendar", set()))[0],
+                        1.0,
+                    )
                 ]
                 _append_candidate(
                     results,
@@ -1625,7 +1777,10 @@ def _generate_calendar_candidates(catalog: SeedLinkCatalog, source: SeedCardSket
                     target=message,
                     proposed_link_type=LINK_TYPE_EVENT_HAS_MESSAGE,
                     candidate_group="event_association",
-                    features={"exact_event_id": 1, "participant_overlap": len(message.participant_emails & source.emails)},
+                    features={
+                        "exact_event_id": 1,
+                        "participant_overlap": len(message.participant_emails & source.emails),
+                    },
                     evidences=evidences,
                 )
         for thread in catalog.cards_by_type.get("email_thread", []):
@@ -1633,7 +1788,13 @@ def _generate_calendar_candidates(catalog: SeedLinkCatalog, source: SeedCardSket
             exact_event_id = int(bool(event_hints & source.external_ids.get("calendar", set())))
             if exact_event_id and _normalize_slug(thread.slug) not in reverse_threads:
                 evidences = [
-                    _make_evidence("exact_event_hint", "frontmatter", "event_hint", sorted(event_hints & source.external_ids.get("calendar", set()))[0], 1.0)
+                    _make_evidence(
+                        "exact_event_hint",
+                        "frontmatter",
+                        "event_hint",
+                        sorted(event_hints & source.external_ids.get("calendar", set()))[0],
+                        1.0,
+                    )
                 ]
                 _append_candidate(
                     results,
@@ -1642,7 +1803,10 @@ def _generate_calendar_candidates(catalog: SeedLinkCatalog, source: SeedCardSket
                     target=thread,
                     proposed_link_type=LINK_TYPE_EVENT_HAS_THREAD,
                     candidate_group="event_association",
-                    features={"exact_event_id": 1, "participant_overlap": len(thread.participant_emails & source.emails)},
+                    features={
+                        "exact_event_id": 1,
+                        "participant_overlap": len(thread.participant_emails & source.emails),
+                    },
                     evidences=evidences,
                 )
         for transcript in catalog.cards_by_type.get("meeting_transcript", []):
@@ -1650,7 +1814,13 @@ def _generate_calendar_candidates(catalog: SeedLinkCatalog, source: SeedCardSket
             exact_event_id = int(bool(event_hints & source.external_ids.get("calendar", set())))
             if exact_event_id and _normalize_slug(transcript.slug) not in reverse_transcripts:
                 evidences = [
-                    _make_evidence("exact_event_hint", "frontmatter", "event_hint", sorted(event_hints & source.external_ids.get("calendar", set()))[0], 1.0)
+                    _make_evidence(
+                        "exact_event_hint",
+                        "frontmatter",
+                        "event_hint",
+                        sorted(event_hints & source.external_ids.get("calendar", set()))[0],
+                        1.0,
+                    )
                 ]
                 _append_candidate(
                     results,
@@ -1659,14 +1829,22 @@ def _generate_calendar_candidates(catalog: SeedLinkCatalog, source: SeedCardSket
                     target=transcript,
                     proposed_link_type=LINK_TYPE_EVENT_HAS_TRANSCRIPT,
                     candidate_group="event_association",
-                    features={"exact_event_id": 1, "participant_overlap": len(transcript.participant_emails & source.emails)},
+                    features={
+                        "exact_event_id": 1,
+                        "participant_overlap": len(transcript.participant_emails & source.emails),
+                    },
                     evidences=evidences,
                 )
         results.extend(
             _generate_person_link_candidates(
                 catalog,
                 source=source,
-                emails=source.participant_emails | ({_normalize_email(source.frontmatter.get("organizer_email", ""))} if _normalize_email(source.frontmatter.get("organizer_email", "")) else set()),
+                emails=source.participant_emails
+                | (
+                    {_normalize_email(source.frontmatter.get("organizer_email", ""))}
+                    if _normalize_email(source.frontmatter.get("organizer_email", ""))
+                    else set()
+                ),
                 handles=set(),
                 link_type=LINK_TYPE_EVENT_HAS_PERSON,
                 candidate_group="participant_resolution",
@@ -1705,22 +1883,36 @@ def _generate_media_candidates(catalog: SeedLinkCatalog, source: SeedCardSketch)
         )
     for event in _event_matches_for_source(catalog, source):
         location_overlap = int(bool(source.locations & event.locations)) if source.locations and event.locations else 0
-        same_day_event_cluster = int(_day_key(_clean_text(source.frontmatter.get("captured_at", ""))) == _day_key(_clean_text(event.frontmatter.get("start_at", ""))))
+        same_day_event_cluster = int(
+            _day_key(_clean_text(source.frontmatter.get("captured_at", "")))
+            == _day_key(_clean_text(event.frontmatter.get("start_at", "")))
+        )
         title_similarity = round(_name_similarity(source.summary, event.summary), 4)
         features = {
             "exact_event_id": int(bool(source.event_hints & event.external_ids.get("calendar", set()))),
             "same_day_event_cluster": same_day_event_cluster,
             "location_overlap": location_overlap,
             "title_similarity": title_similarity,
-            "participant_overlap": len(source.person_labels & {_normalize_alias(item) for item in _iter_string_values(event.frontmatter.get("people", []))}),
+            "participant_overlap": len(
+                source.person_labels
+                & {_normalize_alias(item) for item in _iter_string_values(event.frontmatter.get("people", []))}
+            ),
         }
         evidences = []
         if same_day_event_cluster:
-            evidences.append(_make_evidence("time_window", "frontmatter", "same_day_event_cluster", 1, 0.45, target_uid=event.uid))
+            evidences.append(
+                _make_evidence("time_window", "frontmatter", "same_day_event_cluster", 1, 0.45, target_uid=event.uid)
+            )
         if location_overlap:
-            evidences.append(_make_evidence("location_overlap", "frontmatter", "location_overlap", 1, 0.35, target_uid=event.uid))
+            evidences.append(
+                _make_evidence("location_overlap", "frontmatter", "location_overlap", 1, 0.35, target_uid=event.uid)
+            )
         if title_similarity:
-            evidences.append(_make_evidence("lexical_overlap", "frontmatter", "title_similarity", title_similarity, 0.2, target_uid=event.uid))
+            evidences.append(
+                _make_evidence(
+                    "lexical_overlap", "frontmatter", "title_similarity", title_similarity, 0.2, target_uid=event.uid
+                )
+            )
         _append_candidate(
             results,
             module_name=MODULE_MEDIA,
@@ -1755,7 +1947,15 @@ def _generate_orphan_candidates(catalog: SeedLinkCatalog, source: SeedCardSketch
             "ambiguous_target_count": 1,
         }
         evidences = [
-            _make_evidence("orphan_reference", field_name, "normalized_slug", target.slug, 1.0, source_uid=source.uid, target_uid=target.uid)
+            _make_evidence(
+                "orphan_reference",
+                field_name,
+                "normalized_slug",
+                target.slug,
+                1.0,
+                source_uid=source.uid,
+                target_uid=target.uid,
+            )
         ]
         _append_candidate(
             results,
@@ -1774,12 +1974,23 @@ def _generate_graph_consistency_candidates(catalog: SeedLinkCatalog, source: See
     results: list[SeedLinkCandidate] = []
     if source.card_type == "email_thread":
         thread_id = _clean_text(source.frontmatter.get("gmail_thread_id", ""))
-        existing = {_normalize_slug(_slug_from_ref(item)) for item in _iter_string_values(source.frontmatter.get("messages", []))}
+        existing = {
+            _normalize_slug(_slug_from_ref(item))
+            for item in _iter_string_values(source.frontmatter.get("messages", []))
+        }
         for message in catalog.email_messages_by_thread_id.get(thread_id, []):
             if _normalize_slug(message.slug) in existing:
                 continue
             evidences = [
-                _make_evidence("graph_closure", "index", "missing_reverse_edge", message.slug, 1.0, source_uid=source.uid, target_uid=message.uid)
+                _make_evidence(
+                    "graph_closure",
+                    "index",
+                    "missing_reverse_edge",
+                    message.slug,
+                    1.0,
+                    source_uid=source.uid,
+                    target_uid=message.uid,
+                )
             ]
             _append_candidate(
                 results,
@@ -1792,13 +2003,33 @@ def _generate_graph_consistency_candidates(catalog: SeedLinkCatalog, source: See
                 evidences=evidences,
             )
     if source.card_type == "calendar_event":
-        existing_messages = {_normalize_slug(_slug_from_ref(item)) for item in _iter_string_values(source.frontmatter.get("source_messages", []))}
-        existing_threads = {_normalize_slug(_slug_from_ref(item)) for item in _iter_string_values(source.frontmatter.get("source_threads", []))}
-        existing_transcripts = {_normalize_slug(_slug_from_ref(item)) for item in _iter_string_values(source.frontmatter.get("meeting_transcripts", []))}
+        existing_messages = {
+            _normalize_slug(_slug_from_ref(item))
+            for item in _iter_string_values(source.frontmatter.get("source_messages", []))
+        }
+        existing_threads = {
+            _normalize_slug(_slug_from_ref(item))
+            for item in _iter_string_values(source.frontmatter.get("source_threads", []))
+        }
+        existing_transcripts = {
+            _normalize_slug(_slug_from_ref(item))
+            for item in _iter_string_values(source.frontmatter.get("meeting_transcripts", []))
+        }
         for message in catalog.cards_by_type.get("email_message", []):
-            if set(message.event_hints) & source.external_ids.get("calendar", set()) and _normalize_slug(message.slug) not in existing_messages:
+            if (
+                set(message.event_hints) & source.external_ids.get("calendar", set())
+                and _normalize_slug(message.slug) not in existing_messages
+            ):
                 evidences = [
-                    _make_evidence("graph_closure", "index", "missing_reverse_edge", message.slug, 1.0, source_uid=source.uid, target_uid=message.uid)
+                    _make_evidence(
+                        "graph_closure",
+                        "index",
+                        "missing_reverse_edge",
+                        message.slug,
+                        1.0,
+                        source_uid=source.uid,
+                        target_uid=message.uid,
+                    )
                 ]
                 _append_candidate(
                     results,
@@ -1811,9 +2042,20 @@ def _generate_graph_consistency_candidates(catalog: SeedLinkCatalog, source: See
                     evidences=evidences,
                 )
         for thread in catalog.cards_by_type.get("email_thread", []):
-            if set(thread.event_hints) & source.external_ids.get("calendar", set()) and _normalize_slug(thread.slug) not in existing_threads:
+            if (
+                set(thread.event_hints) & source.external_ids.get("calendar", set())
+                and _normalize_slug(thread.slug) not in existing_threads
+            ):
                 evidences = [
-                    _make_evidence("graph_closure", "index", "missing_reverse_edge", thread.slug, 1.0, source_uid=source.uid, target_uid=thread.uid)
+                    _make_evidence(
+                        "graph_closure",
+                        "index",
+                        "missing_reverse_edge",
+                        thread.slug,
+                        1.0,
+                        source_uid=source.uid,
+                        target_uid=thread.uid,
+                    )
                 ]
                 _append_candidate(
                     results,
@@ -1826,9 +2068,20 @@ def _generate_graph_consistency_candidates(catalog: SeedLinkCatalog, source: See
                     evidences=evidences,
                 )
         for transcript in catalog.cards_by_type.get("meeting_transcript", []):
-            if set(transcript.event_hints) & source.external_ids.get("calendar", set()) and _normalize_slug(transcript.slug) not in existing_transcripts:
+            if (
+                set(transcript.event_hints) & source.external_ids.get("calendar", set())
+                and _normalize_slug(transcript.slug) not in existing_transcripts
+            ):
                 evidences = [
-                    _make_evidence("graph_closure", "index", "missing_reverse_edge", transcript.slug, 1.0, source_uid=source.uid, target_uid=transcript.uid)
+                    _make_evidence(
+                        "graph_closure",
+                        "index",
+                        "missing_reverse_edge",
+                        transcript.slug,
+                        1.0,
+                        source_uid=source.uid,
+                        target_uid=transcript.uid,
+                    )
                 ]
                 _append_candidate(
                     results,
@@ -1843,7 +2096,9 @@ def _generate_graph_consistency_candidates(catalog: SeedLinkCatalog, source: See
     return results
 
 
-def generate_seed_link_candidates(catalog: SeedLinkCatalog, source: SeedCardSketch, module_name: str) -> list[SeedLinkCandidate]:
+def generate_seed_link_candidates(
+    catalog: SeedLinkCatalog, source: SeedCardSketch, module_name: str
+) -> list[SeedLinkCandidate]:
     if module_name == MODULE_IDENTITY:
         return _generate_identity_candidates(catalog, source)
     if module_name == MODULE_COMMUNICATION:
@@ -1895,10 +2150,16 @@ def _parse_llm_json(response: str) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
-def llm_judge_candidate(vault_path: str | Path, candidate: SeedLinkCandidate, source: SeedCardSketch, target: SeedCardSketch) -> tuple[float, str, dict[str, Any]]:
+def llm_judge_candidate(
+    vault_path: str | Path, candidate: SeedLinkCandidate, source: SeedCardSketch, target: SeedCardSketch
+) -> tuple[float, str, dict[str, Any]]:
     if candidate.module_name not in LLM_REVIEW_MODULES:
         return 1.0, "", {}
-    if candidate.features.get("exact_thread_id") or candidate.features.get("exact_parent_message") or candidate.features.get("exact_event_id"):
+    if (
+        candidate.features.get("exact_thread_id")
+        or candidate.features.get("exact_parent_message")
+        or candidate.features.get("exact_event_id")
+    ):
         return 1.0, "", {}
     if candidate.features.get("deterministic_hits"):
         return 1.0, "", {}
@@ -1944,7 +2205,8 @@ def _component_scores(candidate: SeedLinkCandidate) -> tuple[float, float, float
         )
         lexical_score = min(
             1.0,
-            float(features.get("name_similarity", 0.0)) * 0.75 + (0.25 if int(features.get("shared_company", 0)) else 0.0),
+            float(features.get("name_similarity", 0.0)) * 0.75
+            + (0.25 if int(features.get("shared_company", 0)) else 0.0),
         )
         graph_score = min(1.0, min(int(features.get("shared_people_names", 0)), 3) * 0.2)
         if int(features.get("ambiguous_target_count", 0)) > 1:
@@ -1960,7 +2222,8 @@ def _component_scores(candidate: SeedLinkCandidate) -> tuple[float, float, float
         )
         lexical_score = min(
             1.0,
-            float(features.get("subject_similarity", 0.0)) * 0.6 + min(int(features.get("participant_overlap", 0)), 3) * 0.12,
+            float(features.get("subject_similarity", 0.0)) * 0.6
+            + min(int(features.get("participant_overlap", 0)), 3) * 0.12,
         )
         graph_score = min(
             1.0,
@@ -1977,26 +2240,35 @@ def _component_scores(candidate: SeedLinkCandidate) -> tuple[float, float, float
         )
         lexical_score = min(
             1.0,
-            float(features.get("title_similarity", 0.0)) * 0.7 + min(int(features.get("participant_overlap", 0)), 3) * 0.08,
+            float(features.get("title_similarity", 0.0)) * 0.7
+            + min(int(features.get("participant_overlap", 0)), 3) * 0.08,
         )
-        graph_score = 0.85 if int(features.get("reverse_reference_present", 0)) else min(int(features.get("participant_overlap", 0)), 4) * 0.12
+        graph_score = (
+            0.85
+            if int(features.get("reverse_reference_present", 0))
+            else min(int(features.get("participant_overlap", 0)), 4) * 0.12
+        )
         if deterministic_score < 1.0 and lexical_score < 0.55:
             risk_penalty += 0.15
     elif module_name == MODULE_MEDIA:
         deterministic_score = min(1.0, 0.9 if deterministic_hits else 0.0)
         lexical_score = min(
             1.0,
-            float(features.get("title_similarity", 0.0)) * 0.45 + (0.35 if int(features.get("location_overlap", 0)) else 0.0),
+            float(features.get("title_similarity", 0.0)) * 0.45
+            + (0.35 if int(features.get("location_overlap", 0)) else 0.0),
         )
         graph_score = min(
             1.0,
-            (0.4 if int(features.get("same_day_event_cluster", 0)) else 0.0) + min(int(features.get("participant_overlap", 0)), 3) * 0.18,
+            (0.4 if int(features.get("same_day_event_cluster", 0)) else 0.0)
+            + min(int(features.get("participant_overlap", 0)), 3) * 0.18,
         )
         risk_penalty += 0.18
         if int(features.get("ambiguous_target_count", 0)) > 1:
             risk_penalty += 0.12
     elif module_name == MODULE_ORPHAN:
-        deterministic_score = 1.0 if int(features.get("target_exists", 0)) and int(features.get("exact_slug_match", 0)) else 0.0
+        deterministic_score = (
+            1.0 if int(features.get("target_exists", 0)) and int(features.get("exact_slug_match", 0)) else 0.0
+        )
         lexical_score = 0.65 if int(features.get("target_exists", 0)) else 0.0
         graph_score = 0.4 if int(features.get("target_exists", 0)) else 0.0
         if not deterministic_score:
@@ -2082,7 +2354,12 @@ def evaluate_seed_link_candidate(
     elif candidate.module_name == MODULE_CALENDAR and (deterministic_score >= 0.8 or lexical_score >= 0.6):
         decision_reason = DECISION_REASON_CALENDAR_HINT
 
-    if candidate.surface == SURFACE_CANONICAL_SAFE and deterministic_score >= 1.0 and final_confidence >= canonical_floor and risk_penalty < 0.2:
+    if (
+        candidate.surface == SURFACE_CANONICAL_SAFE
+        and deterministic_score >= 1.0
+        and final_confidence >= canonical_floor
+        and risk_penalty < 0.2
+    ):
         decision = DECISION_CANONICAL_SAFE
     elif final_confidence >= auto_floor and risk_penalty < 0.25:
         decision = DECISION_AUTO_PROMOTE
@@ -2110,18 +2387,24 @@ def evaluate_seed_link_candidate(
     )
 
 
-def candidate_to_metric_row(module_name: str, link_type: str, final_confidence: float, decision: str, action: str = "") -> dict[str, Any]:
+def candidate_to_metric_row(
+    module_name: str, link_type: str, final_confidence: float, decision: str, action: str = ""
+) -> dict[str, Any]:
     row = {
         "module_name": module_name,
         "link_type": link_type,
         "score_band": _score_band(final_confidence),
         "candidate_count": 1,
         "approved_count": 1 if decision in {DECISION_AUTO_PROMOTE, DECISION_CANONICAL_SAFE} else 0,
-        "rejected_count": 1 if decision == DECISION_DISCARD or action in {REVIEW_ACTION_REJECT, REVIEW_ACTION_OVERRIDE_REJECT} else 0,
+        "rejected_count": 1
+        if decision == DECISION_DISCARD or action in {REVIEW_ACTION_REJECT, REVIEW_ACTION_OVERRIDE_REJECT}
+        else 0,
         "override_count": 1 if action in {REVIEW_ACTION_OVERRIDE_APPROVE, REVIEW_ACTION_OVERRIDE_REJECT} else 0,
         "auto_promoted_count": 1 if decision == DECISION_AUTO_PROMOTE else 0,
         "sampled_auto_promoted_count": 1 if action and decision == DECISION_AUTO_PROMOTE else 0,
-        "sample_precision": 1.0 if action in {REVIEW_ACTION_APPROVE, REVIEW_ACTION_OVERRIDE_APPROVE} and decision == DECISION_AUTO_PROMOTE else 0.0,
+        "sample_precision": 1.0
+        if action in {REVIEW_ACTION_APPROVE, REVIEW_ACTION_OVERRIDE_APPROVE} and decision == DECISION_AUTO_PROMOTE
+        else 0.0,
     }
     return row
 
@@ -2140,7 +2423,9 @@ def _safe_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, ensure_ascii=False)
 
 
-def _merge_module_metric(target: dict[str, dict[str, float]], module_name: str, *, elapsed_seconds: float, jobs: int = 0, candidates: int = 0) -> None:
+def _merge_module_metric(
+    target: dict[str, dict[str, float]], module_name: str, *, elapsed_seconds: float, jobs: int = 0, candidates: int = 0
+) -> None:
     bucket = target.setdefault(module_name, {"elapsed_seconds": 0.0, "jobs": 0.0, "candidates": 0.0})
     bucket["elapsed_seconds"] += float(elapsed_seconds)
     bucket["jobs"] += float(jobs)
@@ -2221,7 +2506,9 @@ def enqueue_seed_link_jobs(
             for module_name in get_modules_for_card_type(sketch.card_type):
                 if selected and module_name not in selected:
                     continue
-                if not _module_should_enqueue_fast(sketch, module_name, force=force_selected, known_exact_slugs=known_exact_slugs):
+                if not _module_should_enqueue_fast(
+                    sketch, module_name, force=force_selected, known_exact_slugs=known_exact_slugs
+                ):
                     continue
                 prepared += 1
                 shard_key = f"{module_name}:{_path_bucket(sketch.rel_path)}"
@@ -2283,7 +2570,9 @@ def enqueue_seed_link_jobs(
     }
 
 
-def _claim_next_jobs(conn: Any, index: Any, worker_name: str, limit: int, modules: list[str] | None = None) -> list[dict[str, Any]]:
+def _claim_next_jobs(
+    conn: Any, index: Any, worker_name: str, limit: int, modules: list[str] | None = None
+) -> list[dict[str, Any]]:
     clauses = ["status = 'pending'"]
     params: list[Any] = []
     if modules:
@@ -2295,7 +2584,7 @@ def _claim_next_jobs(conn: Any, index: Any, worker_name: str, limit: int, module
         WITH next_jobs AS (
             SELECT job_id
             FROM {index.schema}.link_jobs
-            WHERE {' AND '.join(clauses)}
+            WHERE {" AND ".join(clauses)}
             ORDER BY priority DESC, job_id ASC
             FOR UPDATE SKIP LOCKED
             LIMIT %s
@@ -2344,9 +2633,11 @@ def _fail_job(conn: Any, index: Any, job_id: int, error_text: str, *, commit: bo
         conn.commit()
 
 
-def _persist_candidate(conn: Any, index: Any, job_id: int, candidate: SeedLinkCandidate, decision: SeedLinkDecision, *, commit: bool = True) -> tuple[int, str]:
+def _persist_candidate(
+    conn: Any, index: Any, job_id: int, candidate: SeedLinkCandidate, decision: SeedLinkDecision, *, commit: bool = True
+) -> tuple[int, str]:
     row = conn.execute(
-            f"""
+        f"""
             INSERT INTO {index.schema}.link_candidates(
                 job_id, module_name, linker_version, source_card_uid, source_rel_path, target_card_uid,
                 target_rel_path, target_kind, proposed_link_type, candidate_group, input_hash, evidence_hash, status
@@ -2364,22 +2655,26 @@ def _persist_candidate(conn: Any, index: Any, job_id: int, candidate: SeedLinkCa
                 created_at = NOW()
             RETURNING candidate_id
             """,
-            (
-                job_id,
-                candidate.module_name,
-                SEED_LINKER_VERSION,
-                candidate.source_card_uid,
-                candidate.source_rel_path,
-                candidate.target_card_uid,
-                candidate.target_rel_path,
-                candidate.target_kind,
-                candidate.proposed_link_type,
-                candidate.candidate_group,
-                candidate.input_hash,
-                candidate.evidence_hash,
-                STATUS_NEEDS_REVIEW if decision.decision == DECISION_REVIEW else STATUS_APPROVED if decision.decision in {DECISION_AUTO_PROMOTE, DECISION_CANONICAL_SAFE} else STATUS_REJECTED,
-            ),
-        ).fetchone()
+        (
+            job_id,
+            candidate.module_name,
+            SEED_LINKER_VERSION,
+            candidate.source_card_uid,
+            candidate.source_rel_path,
+            candidate.target_card_uid,
+            candidate.target_rel_path,
+            candidate.target_kind,
+            candidate.proposed_link_type,
+            candidate.candidate_group,
+            candidate.input_hash,
+            candidate.evidence_hash,
+            STATUS_NEEDS_REVIEW
+            if decision.decision == DECISION_REVIEW
+            else STATUS_APPROVED
+            if decision.decision in {DECISION_AUTO_PROMOTE, DECISION_CANONICAL_SAFE}
+            else STATUS_REJECTED,
+        ),
+    ).fetchone()
     assert row is not None
     candidate_id = int(row["candidate_id"])
     conn.execute(f"DELETE FROM {index.schema}.link_evidence WHERE candidate_id = %s", (candidate_id,))
@@ -2447,7 +2742,13 @@ def _persist_candidate(conn: Any, index: Any, job_id: int, candidate: SeedLinkCa
         )
     if commit:
         conn.commit()
-    status = STATUS_NEEDS_REVIEW if decision.decision == DECISION_REVIEW else STATUS_APPROVED if decision.decision in {DECISION_AUTO_PROMOTE, DECISION_CANONICAL_SAFE} else STATUS_REJECTED
+    status = (
+        STATUS_NEEDS_REVIEW
+        if decision.decision == DECISION_REVIEW
+        else STATUS_APPROVED
+        if decision.decision in {DECISION_AUTO_PROMOTE, DECISION_CANONICAL_SAFE}
+        else STATUS_REJECTED
+    )
     return candidate_id, status
 
 
@@ -2497,7 +2798,10 @@ def _apply_canonical_promotion(index: Any, candidate_row: dict[str, Any], catalo
     value = _canonical_value_for_candidate(candidate, target)
     current = card_data.get(field_name)
     if isinstance(current, list):
-        normalized_existing = {(_normalize_alias(item) if field_name == "people" else _normalize_slug(_slug_from_ref(str(item)))) for item in current}
+        normalized_existing = {
+            (_normalize_alias(item) if field_name == "people" else _normalize_slug(_slug_from_ref(str(item))))
+            for item in current
+        }
         normalized_value = _normalize_alias(value) if field_name == "people" else _normalize_slug(_slug_from_ref(value))
         if normalized_value in normalized_existing:
             return False, "already present"
@@ -2528,9 +2832,7 @@ def _mark_canonical_dirty(index: Any, conn: Any | None = None) -> None:
 
 def _canonical_dirty(index: Any) -> bool:
     with index._connect() as conn:
-        row = conn.execute(
-            f"SELECT value FROM {index.schema}.meta WHERE key = 'seed_link_canonical_dirty'"
-        ).fetchone()
+        row = conn.execute(f"SELECT value FROM {index.schema}.meta WHERE key = 'seed_link_canonical_dirty'").fetchone()
     return bool(row is not None and str(row["value"]).strip() == "1")
 
 
@@ -2622,7 +2924,9 @@ def _promotion_candidate_record(conn: Any, index: Any, promotion_id: int) -> dic
     return None if row is None else dict(row)
 
 
-def _complete_promotion(conn: Any, index: Any, promotion_id: int, candidate_id: int, *, blocked_reason: str = "", applied: bool) -> None:
+def _complete_promotion(
+    conn: Any, index: Any, promotion_id: int, candidate_id: int, *, blocked_reason: str = "", applied: bool
+) -> None:
     conn.execute(
         f"""
         UPDATE {index.schema}.promotion_queue
@@ -2631,7 +2935,12 @@ def _complete_promotion(conn: Any, index: Any, promotion_id: int, candidate_id: 
             blocked_reason = %s
         WHERE promotion_id = %s
         """,
-        (PROMOTION_STATUS_APPLIED if applied else PROMOTION_STATUS_BLOCKED, PROMOTION_STATUS_APPLIED if applied else PROMOTION_STATUS_BLOCKED, blocked_reason, promotion_id),
+        (
+            PROMOTION_STATUS_APPLIED if applied else PROMOTION_STATUS_BLOCKED,
+            PROMOTION_STATUS_APPLIED if applied else PROMOTION_STATUS_BLOCKED,
+            blocked_reason,
+            promotion_id,
+        ),
     )
     conn.execute(
         f"UPDATE {index.schema}.link_candidates SET status = %s WHERE candidate_id = %s",
@@ -2850,7 +3159,9 @@ def run_seed_link_workers(
                         source = catalog.cards_by_uid.get(str(job["source_card_uid"]))
                         if source is None:
                             raise ValueError("source card missing from catalog")
-                        candidates = _dedupe_candidates(generate_seed_link_candidates(catalog, source, str(job["module_name"])))
+                        candidates = _dedupe_candidates(
+                            generate_seed_link_candidates(catalog, source, str(job["module_name"]))
+                        )
                         if not include_llm:
                             for candidate in candidates:
                                 candidate.features["llm_disabled"] = 1
@@ -2927,7 +3238,9 @@ def run_seed_link_workers(
                 "jobs": int(metrics["jobs"]),
                 "candidates": int(metrics["candidates"]),
                 "jobs_per_second": round(float(metrics["jobs"]) / max(float(metrics["elapsed_seconds"]), 0.001), 3),
-                "candidates_per_second": round(float(metrics["candidates"]) / max(float(metrics["elapsed_seconds"]), 0.001), 3),
+                "candidates_per_second": round(
+                    float(metrics["candidates"]) / max(float(metrics["elapsed_seconds"]), 0.001), 3
+                ),
             }
             for module_name, metrics in sorted(summary.module_metrics.items())
         },
@@ -2977,7 +3290,9 @@ def run_seed_link_promotion_workers(
                         conn.rollback()
                         continue
                     if record["promotion_target"] == PROMOTION_TARGET_DERIVED_EDGE:
-                        _complete_promotion(conn, index, int(record["promotion_id"]), int(record["candidate_id"]), applied=True)
+                        _complete_promotion(
+                            conn, index, int(record["promotion_id"]), int(record["candidate_id"]), applied=True
+                        )
                         conn.commit()
                         worker_counts["derived_edge"] += 1
                         continue
@@ -3142,7 +3457,7 @@ def list_link_candidates(
             FROM {index.schema}.link_candidates lc
             JOIN {index.schema}.link_decisions ld ON ld.candidate_id = lc.candidate_id
             LEFT JOIN {index.schema}.promotion_queue pq ON pq.candidate_id = lc.candidate_id
-            WHERE {' AND '.join(clauses)}
+            WHERE {" AND ".join(clauses)}
             ORDER BY ld.final_confidence DESC, lc.candidate_id ASC
             LIMIT %s
             """,
@@ -3191,7 +3506,9 @@ def get_link_candidate_details(index: Any, candidate_id: int) -> dict[str, Any] 
     return payload
 
 
-def review_link_candidate(index: Any, *, candidate_id: int, reviewer: str, action: str, notes: str = "") -> dict[str, Any]:
+def review_link_candidate(
+    index: Any, *, candidate_id: int, reviewer: str, action: str, notes: str = ""
+) -> dict[str, Any]:
     if action not in REVIEW_ACTIONS:
         raise ValueError(f"Unsupported review action: {action}")
     details = get_link_candidate_details(index, candidate_id)
@@ -3200,7 +3517,10 @@ def review_link_candidate(index: Any, *, candidate_id: int, reviewer: str, actio
     new_decision = str(details["decision"])
     new_status = STATUS_NEEDS_REVIEW
     if action in {REVIEW_ACTION_APPROVE, REVIEW_ACTION_OVERRIDE_APPROVE}:
-        if details.get("promotion_target") == PROMOTION_TARGET_CANONICAL_FIELD and float(details.get("deterministic_score", 0.0)) >= 1.0:
+        if (
+            details.get("promotion_target") == PROMOTION_TARGET_CANONICAL_FIELD
+            and float(details.get("deterministic_score", 0.0)) >= 1.0
+        ):
             new_decision = DECISION_CANONICAL_SAFE
         else:
             new_decision = DECISION_AUTO_PROMOTE
@@ -3334,7 +3654,9 @@ def compute_link_quality_gate(index: Any) -> dict[str, Any]:
     duplicate_uid_count = int(str(duplicate_row["value"])) if duplicate_row is not None else 0
     high_priority_backlog = sum(int(row["count"]) for row in backlog_rows)
     high_risk_precision = 1.0
-    risk_rows = [row for row in auto_rows if str(row["module_name"]) in {MODULE_IDENTITY, MODULE_MEDIA, MODULE_CALENDAR}]
+    risk_rows = [
+        row for row in auto_rows if str(row["module_name"]) in {MODULE_IDENTITY, MODULE_MEDIA, MODULE_CALENDAR}
+    ]
     if risk_rows:
         non_zero = [float(row["sample_precision"]) for row in risk_rows if float(row["sample_precision"]) > 0]
         high_risk_precision = min(non_zero) if non_zero else 1.0

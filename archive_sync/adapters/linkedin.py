@@ -11,9 +11,10 @@ from io import StringIO
 from pathlib import Path
 from typing import Any
 
-from .base import BaseAdapter, deterministic_provenance
 from hfa.schema import PersonCard
 from hfa.uid import generate_uid
+
+from .base import BaseAdapter, deterministic_provenance
 
 
 def _extract_linkedin_username(url: str) -> str:
@@ -130,7 +131,9 @@ def _resolve_export_paths(csv_path: str | None) -> tuple[Path | None, Path | Non
             [
                 candidate
                 for candidate in downloads.iterdir()
-                if candidate.is_dir() and "linkedin" in candidate.name.lower() and (candidate / "Connections.csv").is_file()
+                if candidate.is_dir()
+                and "linkedin" in candidate.name.lower()
+                and (candidate / "Connections.csv").is_file()
             ]
         )
         if directory_candidates:
@@ -282,7 +285,9 @@ def _build_profile_item(export_dir: Path) -> dict[str, Any] | None:
     companies = _dedupe_preserve_order(
         [row.get("Company Name", "").strip() for row in position_rows if row.get("Company Name", "").strip()]
     )
-    titles = _dedupe_preserve_order([row.get("Title", "").strip() for row in position_rows if row.get("Title", "").strip()])
+    titles = _dedupe_preserve_order(
+        [row.get("Title", "").strip() for row in position_rows if row.get("Title", "").strip()]
+    )
     current_position = next((row for row in position_rows if not row.get("Finished On", "").strip()), None)
     primary_position = current_position or (position_rows[0] if position_rows else {})
     company = primary_position.get("Company Name", "").strip()
@@ -307,10 +312,14 @@ def _build_profile_item(export_dir: Path) -> dict[str, Any] | None:
         ]
     )
 
-    education_entries = [entry for entry in (_format_education_row(row) for row in _read_csv_rows(export_dir / "Education.csv")) if entry]
+    education_entries = [
+        entry for entry in (_format_education_row(row) for row in _read_csv_rows(export_dir / "Education.csv")) if entry
+    ]
     verification_entries = [
         entry
-        for entry in (_format_verification_row(row) for row in _read_csv_rows(export_dir / "Verifications" / "Verifications.csv"))
+        for entry in (
+            _format_verification_row(row) for row in _read_csv_rows(export_dir / "Verifications" / "Verifications.csv")
+        )
         if entry
     ]
     position_entries = [entry for entry in (_format_position_row(row) for row in position_rows) if entry]
@@ -403,7 +412,12 @@ class LinkedInAdapter(BaseAdapter):
         emails = list(item.get("emails", []))
         phones = list(item.get("phones", []))
         linkedin_username = str(item.get("linkedin", "")).strip().lower()
-        source_id = linkedin_username or (emails[0] if emails else "") or str(item.get("name", "")).strip() or "linkedin-unknown"
+        source_id = (
+            linkedin_username
+            or (emails[0] if emails else "")
+            or str(item.get("name", "")).strip()
+            or "linkedin-unknown"
+        )
         company = str(item.get("company", "")).strip()
         title = str(item.get("title", "")).strip()
         companies = [value.strip() for value in item.get("companies", []) if str(value).strip()]

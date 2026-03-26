@@ -7,8 +7,7 @@ import json
 import re
 from typing import Any
 
-from hfa.schema import (DETERMINISTIC_ONLY, LLM_ELIGIBLE, BaseCard,
-                        validate_card_permissive)
+from hfa.schema import BaseCard, validate_card_permissive
 
 from .card_registry import REGISTRATION_BY_CARD_TYPE
 from .features import CHUNKABLE_TEXT_FIELDS
@@ -194,7 +193,9 @@ def _format_labeled_block(title: str, values: list[str]) -> str:
 
 def _build_person_chunks(card: BaseCard, frontmatter: dict[str, Any], body: str, append_chunks) -> None:
     profile_lines = [
-        _format_labeled_block("name", [card.summary, str(frontmatter.get("first_name", "")), str(frontmatter.get("last_name", ""))]),
+        _format_labeled_block(
+            "name", [card.summary, str(frontmatter.get("first_name", "")), str(frontmatter.get("last_name", ""))]
+        ),
         _format_labeled_block("aliases", _coerce_string_list(frontmatter.get("aliases", []))),
         _format_labeled_block("emails", _coerce_string_list(frontmatter.get("emails", []))),
         _format_labeled_block("phones", _coerce_string_list(frontmatter.get("phones", []))),
@@ -209,21 +210,33 @@ def _build_person_chunks(card: BaseCard, frontmatter: dict[str, Any], body: str,
             ],
         ),
     ]
-    append_chunks("person_profile", "\n".join(line for line in profile_lines if line), ["summary", "emails", "phones", "aliases"])
+    append_chunks(
+        "person_profile", "\n".join(line for line in profile_lines if line), ["summary", "emails", "phones", "aliases"]
+    )
     role_lines = [
-        _format_labeled_block("company", [str(frontmatter.get("company", ""))] + _coerce_string_list(frontmatter.get("companies", []))),
-        _format_labeled_block("title", [str(frontmatter.get("title", ""))] + _coerce_string_list(frontmatter.get("titles", []))),
+        _format_labeled_block(
+            "company", [str(frontmatter.get("company", ""))] + _coerce_string_list(frontmatter.get("companies", []))
+        ),
+        _format_labeled_block(
+            "title", [str(frontmatter.get("title", ""))] + _coerce_string_list(frontmatter.get("titles", []))
+        ),
         _format_labeled_block("reports_to", [str(frontmatter.get("reports_to", ""))]),
         _format_labeled_block("relationship", [str(frontmatter.get("relationship_type", ""))]),
     ]
-    append_chunks("person_role", "\n".join(line for line in role_lines if line), ["company", "companies", "title", "titles", "reports_to", "relationship_type"])
+    append_chunks(
+        "person_role",
+        "\n".join(line for line in role_lines if line),
+        ["company", "companies", "title", "titles", "reports_to", "relationship_type"],
+    )
     context_lines = [
         _format_labeled_block("description", [str(frontmatter.get("description", ""))]),
         _format_labeled_block("people", _coerce_string_list(frontmatter.get("people", []))),
         _format_labeled_block("orgs", _coerce_string_list(frontmatter.get("orgs", []))),
         _format_labeled_block("tags", _coerce_string_list(frontmatter.get("tags", []))),
     ]
-    append_chunks("person_context", "\n".join(line for line in context_lines if line), ["description", "people", "orgs", "tags"])
+    append_chunks(
+        "person_context", "\n".join(line for line in context_lines if line), ["description", "people", "orgs", "tags"]
+    )
     if body.strip():
         append_chunks("person_body", body.strip(), ["body"])
 
@@ -234,13 +247,22 @@ def _build_email_thread_chunks(frontmatter: dict[str, Any], body: str, append_ch
         line
         for line in [
             _format_labeled_block("summary", [str(frontmatter.get("summary", ""))]),
-            _format_labeled_block("participants", [str(frontmatter.get("account_email", ""))] + _coerce_string_list(frontmatter.get("participants", []))),
+            _format_labeled_block(
+                "participants",
+                [str(frontmatter.get("account_email", ""))] + _coerce_string_list(frontmatter.get("participants", [])),
+            ),
             _format_labeled_block("labels", _coerce_string_list(frontmatter.get("label_ids", []))),
-            _format_labeled_block("time", [str(frontmatter.get("first_message_at", "")), str(frontmatter.get("last_message_at", ""))]),
+            _format_labeled_block(
+                "time", [str(frontmatter.get("first_message_at", "")), str(frontmatter.get("last_message_at", ""))]
+            ),
         ]
         if line
     )
-    append_chunks("thread_context", thread_meta, ["summary", "participants", "account_email", "label_ids", "first_message_at", "last_message_at"])
+    append_chunks(
+        "thread_context",
+        thread_meta,
+        ["summary", "participants", "account_email", "label_ids", "first_message_at", "last_message_at"],
+    )
     append_chunks("thread_summary", str(frontmatter.get("thread_summary", "")), ["thread_summary"])
     for window in _rolling_text_windows(body, limit=limit, window_size=2):
         append_chunks("thread_window", window, ["body", "messages"])
@@ -258,10 +280,14 @@ def _build_email_message_chunks(frontmatter: dict[str, Any], body: str, append_c
         line
         for line in [
             _format_labeled_block("summary", [str(frontmatter.get("summary", ""))]),
-            _format_labeled_block("from", [str(frontmatter.get("from_name", "")), str(frontmatter.get("from_email", ""))]),
+            _format_labeled_block(
+                "from", [str(frontmatter.get("from_name", "")), str(frontmatter.get("from_email", ""))]
+            ),
             _format_labeled_block("to", _coerce_string_list(frontmatter.get("to_emails", []))),
             _format_labeled_block("participants", _coerce_string_list(frontmatter.get("participant_emails", []))),
-            _format_labeled_block("thread", [str(frontmatter.get("thread", "")), str(frontmatter.get("gmail_thread_id", ""))]),
+            _format_labeled_block(
+                "thread", [str(frontmatter.get("thread", "")), str(frontmatter.get("gmail_thread_id", ""))]
+            ),
         ]
         if line
     )
@@ -274,7 +300,9 @@ def _build_email_message_chunks(frontmatter: dict[str, Any], body: str, append_c
         line
         for line in [
             _format_labeled_block("invite_title", [str(frontmatter.get("invite_title", ""))]),
-            _format_labeled_block("invite_time", [str(frontmatter.get("invite_start_at", "")), str(frontmatter.get("invite_end_at", ""))]),
+            _format_labeled_block(
+                "invite_time", [str(frontmatter.get("invite_start_at", "")), str(frontmatter.get("invite_end_at", ""))]
+            ),
             _format_labeled_block("calendar_events", _coerce_string_list(frontmatter.get("calendar_events", []))),
         ]
         if line
@@ -282,7 +310,14 @@ def _build_email_message_chunks(frontmatter: dict[str, Any], body: str, append_c
     append_chunks(
         "message_invite_context",
         invite_context,
-        ["invite_title", "invite_start_at", "invite_end_at", "calendar_events", "invite_ical_uid", "invite_event_id_hint"],
+        [
+            "invite_title",
+            "invite_start_at",
+            "invite_end_at",
+            "calendar_events",
+            "invite_ical_uid",
+            "invite_event_id_hint",
+        ],
     )
     if body.strip():
         append_chunks("message_body", body.strip(), ["body"])
@@ -293,13 +328,19 @@ def _build_imessage_thread_chunks(frontmatter: dict[str, Any], body: str, append
         line
         for line in [
             _format_labeled_block("summary", [str(frontmatter.get("summary", ""))]),
-            _format_labeled_block("display", [str(frontmatter.get("display_name", "")), str(frontmatter.get("chat_identifier", ""))]),
+            _format_labeled_block(
+                "display", [str(frontmatter.get("display_name", "")), str(frontmatter.get("chat_identifier", ""))]
+            ),
             _format_labeled_block("participants", _coerce_string_list(frontmatter.get("participant_handles", []))),
             _format_labeled_block("service", [str(frontmatter.get("service", ""))]),
         ]
         if line
     )
-    append_chunks("imessage_thread_context", meta, ["summary", "display_name", "chat_identifier", "participant_handles", "service"])
+    append_chunks(
+        "imessage_thread_context",
+        meta,
+        ["summary", "display_name", "chat_identifier", "participant_handles", "service"],
+    )
     append_chunks("imessage_thread_summary", str(frontmatter.get("thread_summary", "")), ["thread_summary"])
     for window in _rolling_text_windows(body, limit=limit, window_size=3):
         append_chunks("imessage_thread_window", window, ["body", "messages"])
@@ -315,34 +356,57 @@ def _build_calendar_event_chunks(frontmatter: dict[str, Any], body: str, append_
         line
         for line in [
             _format_labeled_block("title", [str(frontmatter.get("title", "")), str(frontmatter.get("summary", ""))]),
-            _format_labeled_block("time", [str(frontmatter.get("start_at", "")), str(frontmatter.get("end_at", "")), str(frontmatter.get("timezone", ""))]),
-            _format_labeled_block("location", [str(frontmatter.get("location", "")), str(frontmatter.get("conference_url", ""))]),
+            _format_labeled_block(
+                "time",
+                [
+                    str(frontmatter.get("start_at", "")),
+                    str(frontmatter.get("end_at", "")),
+                    str(frontmatter.get("timezone", "")),
+                ],
+            ),
+            _format_labeled_block(
+                "location", [str(frontmatter.get("location", "")), str(frontmatter.get("conference_url", ""))]
+            ),
         ]
         if line
     )
-    append_chunks("event_title_time", title_time, ["title", "summary", "start_at", "end_at", "timezone", "location", "conference_url"])
+    append_chunks(
+        "event_title_time",
+        title_time,
+        ["title", "summary", "start_at", "end_at", "timezone", "location", "conference_url"],
+    )
     participants = "\n".join(
         line
         for line in [
-            _format_labeled_block("organizer", [str(frontmatter.get("organizer_name", "")), str(frontmatter.get("organizer_email", ""))]),
+            _format_labeled_block(
+                "organizer", [str(frontmatter.get("organizer_name", "")), str(frontmatter.get("organizer_email", ""))]
+            ),
             _format_labeled_block("attendees", _coerce_string_list(frontmatter.get("attendee_emails", []))),
             _format_labeled_block("people", _coerce_string_list(frontmatter.get("people", []))),
         ]
         if line
     )
-    append_chunks("event_participants", participants, ["organizer_name", "organizer_email", "attendee_emails", "people"])
+    append_chunks(
+        "event_participants", participants, ["organizer_name", "organizer_email", "attendee_emails", "people"]
+    )
     append_chunks("event_description", str(frontmatter.get("description", "")), ["description"])
     source_context = "\n".join(
         line
         for line in [
             _format_labeled_block("source_messages", _coerce_string_list(frontmatter.get("source_messages", []))),
             _format_labeled_block("source_threads", _coerce_string_list(frontmatter.get("source_threads", []))),
-            _format_labeled_block("meeting_transcripts", _coerce_string_list(frontmatter.get("meeting_transcripts", []))),
+            _format_labeled_block(
+                "meeting_transcripts", _coerce_string_list(frontmatter.get("meeting_transcripts", []))
+            ),
             _format_labeled_block("status", [str(frontmatter.get("status", "")), str(frontmatter.get("ical_uid", ""))]),
         ]
         if line
     )
-    append_chunks("event_sources", source_context, ["source_messages", "source_threads", "meeting_transcripts", "status", "ical_uid"])
+    append_chunks(
+        "event_sources",
+        source_context,
+        ["source_messages", "source_threads", "meeting_transcripts", "status", "ical_uid"],
+    )
     if body.strip():
         append_chunks("event_body", body.strip(), ["body"])
 
@@ -352,17 +416,33 @@ def _build_meeting_transcript_chunks(frontmatter: dict[str, Any], body: str, app
         line
         for line in [
             _format_labeled_block("title", [str(frontmatter.get("title", "")), str(frontmatter.get("summary", ""))]),
-            _format_labeled_block("otter_ids", [str(frontmatter.get("otter_meeting_id", "")), str(frontmatter.get("otter_conversation_id", ""))]),
+            _format_labeled_block(
+                "otter_ids",
+                [str(frontmatter.get("otter_meeting_id", "")), str(frontmatter.get("otter_conversation_id", ""))],
+            ),
             _format_labeled_block("status", [str(frontmatter.get("status", "")), str(frontmatter.get("language", ""))]),
             _format_labeled_block("time", [str(frontmatter.get("start_at", "")), str(frontmatter.get("end_at", ""))]),
-            _format_labeled_block("urls", [str(frontmatter.get("meeting_url", "")), str(frontmatter.get("transcript_url", ""))]),
+            _format_labeled_block(
+                "urls", [str(frontmatter.get("meeting_url", "")), str(frontmatter.get("transcript_url", ""))]
+            ),
         ]
         if line
     )
     append_chunks(
         "meeting_transcript_identity",
         identity,
-        ["title", "summary", "otter_meeting_id", "otter_conversation_id", "status", "language", "start_at", "end_at", "meeting_url", "transcript_url"],
+        [
+            "title",
+            "summary",
+            "otter_meeting_id",
+            "otter_conversation_id",
+            "status",
+            "language",
+            "start_at",
+            "end_at",
+            "meeting_url",
+            "transcript_url",
+        ],
     )
     participants = "\n".join(
         line
@@ -384,7 +464,9 @@ def _build_meeting_transcript_chunks(frontmatter: dict[str, Any], body: str, app
         line
         for line in [
             _format_labeled_block("calendar_events", _coerce_string_list(frontmatter.get("calendar_events", []))),
-            _format_labeled_block("event_hints", [str(frontmatter.get("event_id_hint", "")), str(frontmatter.get("ical_uid", ""))]),
+            _format_labeled_block(
+                "event_hints", [str(frontmatter.get("event_id_hint", "")), str(frontmatter.get("ical_uid", ""))]
+            ),
             _format_labeled_block("conference_url", [str(frontmatter.get("conference_url", ""))]),
         ]
         if line
@@ -419,7 +501,9 @@ def _build_document_chunks(frontmatter: dict[str, Any], body: str, append_chunks
         line
         for line in [
             _format_labeled_block("title", [str(frontmatter.get("title", "")), str(frontmatter.get("summary", ""))]),
-            _format_labeled_block("type", [str(frontmatter.get("document_type", "")), str(frontmatter.get("extension", ""))]),
+            _format_labeled_block(
+                "type", [str(frontmatter.get("document_type", "")), str(frontmatter.get("extension", ""))]
+            ),
             _format_labeled_block(
                 "date",
                 [
@@ -431,7 +515,9 @@ def _build_document_chunks(frontmatter: dict[str, Any], body: str, append_chunks
                 ],
             ),
             _format_labeled_block("location", [str(frontmatter.get("location", ""))]),
-            _format_labeled_block("path", [str(frontmatter.get("library_root", "")), str(frontmatter.get("relative_path", ""))]),
+            _format_labeled_block(
+                "path", [str(frontmatter.get("library_root", "")), str(frontmatter.get("relative_path", ""))]
+            ),
         ]
         if line
     )
@@ -497,8 +583,12 @@ def _build_git_repository_chunks(frontmatter: dict[str, Any], body: str, append_
     identity = "\n".join(
         line
         for line in [
-            _format_labeled_block("repo", [str(frontmatter.get("name_with_owner", "")), str(frontmatter.get("summary", ""))]),
-            _format_labeled_block("owner", [str(frontmatter.get("owner_login", "")), str(frontmatter.get("owner_type", ""))]),
+            _format_labeled_block(
+                "repo", [str(frontmatter.get("name_with_owner", "")), str(frontmatter.get("summary", ""))]
+            ),
+            _format_labeled_block(
+                "owner", [str(frontmatter.get("owner_login", "")), str(frontmatter.get("owner_type", ""))]
+            ),
             _format_labeled_block("visibility", [str(frontmatter.get("visibility", ""))]),
             _format_labeled_block("default_branch", [str(frontmatter.get("default_branch", ""))]),
             _format_labeled_block("parent", [str(frontmatter.get("parent_name_with_owner", ""))]),
@@ -508,7 +598,15 @@ def _build_git_repository_chunks(frontmatter: dict[str, Any], body: str, append_
     append_chunks(
         "git_repo_identity",
         identity,
-        ["name_with_owner", "summary", "owner_login", "owner_type", "visibility", "default_branch", "parent_name_with_owner"],
+        [
+            "name_with_owner",
+            "summary",
+            "owner_login",
+            "owner_type",
+            "visibility",
+            "default_branch",
+            "parent_name_with_owner",
+        ],
     )
     topics = "\n".join(
         line
@@ -542,9 +640,25 @@ def _build_git_commit_chunks(frontmatter: dict[str, Any], body: str, append_chun
         for line in [
             _format_labeled_block("repo", [str(frontmatter.get("repository_name_with_owner", ""))]),
             _format_labeled_block("sha", [str(frontmatter.get("commit_sha", ""))]),
-            _format_labeled_block("author", [str(frontmatter.get("author_name", "")), str(frontmatter.get("author_login", "")), str(frontmatter.get("author_email", ""))]),
-            _format_labeled_block("committer", [str(frontmatter.get("committer_name", "")), str(frontmatter.get("committer_login", "")), str(frontmatter.get("committer_email", ""))]),
-            _format_labeled_block("time", [str(frontmatter.get("authored_at", "")), str(frontmatter.get("committed_at", ""))]),
+            _format_labeled_block(
+                "author",
+                [
+                    str(frontmatter.get("author_name", "")),
+                    str(frontmatter.get("author_login", "")),
+                    str(frontmatter.get("author_email", "")),
+                ],
+            ),
+            _format_labeled_block(
+                "committer",
+                [
+                    str(frontmatter.get("committer_name", "")),
+                    str(frontmatter.get("committer_login", "")),
+                    str(frontmatter.get("committer_email", "")),
+                ],
+            ),
+            _format_labeled_block(
+                "time", [str(frontmatter.get("authored_at", "")), str(frontmatter.get("committed_at", ""))]
+            ),
             _format_labeled_block(
                 "stats",
                 [
@@ -587,8 +701,17 @@ def _build_git_thread_chunks(frontmatter: dict[str, Any], body: str, append_chun
         for line in [
             _format_labeled_block("title", [str(frontmatter.get("title", "")), str(frontmatter.get("summary", ""))]),
             _format_labeled_block("repo", [str(frontmatter.get("repository_name_with_owner", ""))]),
-            _format_labeled_block("thread", [str(frontmatter.get("thread_type", "")), str(frontmatter.get("number", ""))]),
-            _format_labeled_block("state", [str(frontmatter.get("state", "")), str(frontmatter.get("merged_at", "")), str(frontmatter.get("closed_at", ""))]),
+            _format_labeled_block(
+                "thread", [str(frontmatter.get("thread_type", "")), str(frontmatter.get("number", ""))]
+            ),
+            _format_labeled_block(
+                "state",
+                [
+                    str(frontmatter.get("state", "")),
+                    str(frontmatter.get("merged_at", "")),
+                    str(frontmatter.get("closed_at", "")),
+                ],
+            ),
         ]
         if line
     )
@@ -638,23 +761,50 @@ def _build_git_message_chunks(frontmatter: dict[str, Any], body: str, append_chu
             _format_labeled_block("summary", [str(frontmatter.get("summary", ""))]),
             _format_labeled_block("repo", [str(frontmatter.get("repository_name_with_owner", ""))]),
             _format_labeled_block("thread", [str(frontmatter.get("thread", ""))]),
-            _format_labeled_block("type", [str(frontmatter.get("message_type", "")), str(frontmatter.get("review_state", ""))]),
-            _format_labeled_block("actor", [str(frontmatter.get("actor_name", "")), str(frontmatter.get("actor_login", "")), str(frontmatter.get("actor_email", ""))]),
-            _format_labeled_block("time", [str(frontmatter.get("sent_at", "")), str(frontmatter.get("updated_at", ""))]),
+            _format_labeled_block(
+                "type", [str(frontmatter.get("message_type", "")), str(frontmatter.get("review_state", ""))]
+            ),
+            _format_labeled_block(
+                "actor",
+                [
+                    str(frontmatter.get("actor_name", "")),
+                    str(frontmatter.get("actor_login", "")),
+                    str(frontmatter.get("actor_email", "")),
+                ],
+            ),
+            _format_labeled_block(
+                "time", [str(frontmatter.get("sent_at", "")), str(frontmatter.get("updated_at", ""))]
+            ),
         ]
         if line
     )
     append_chunks(
         "git_message_context",
         context,
-        ["summary", "repository_name_with_owner", "thread", "message_type", "review_state", "actor_name", "actor_login", "actor_email", "sent_at", "updated_at"],
+        [
+            "summary",
+            "repository_name_with_owner",
+            "thread",
+            "message_type",
+            "review_state",
+            "actor_name",
+            "actor_login",
+            "actor_email",
+            "sent_at",
+            "updated_at",
+        ],
     )
     review_context = "\n".join(
         line
         for line in [
             _format_labeled_block("path", [str(frontmatter.get("path", ""))]),
-            _format_labeled_block("position", [str(frontmatter.get("position", "")), str(frontmatter.get("original_position", ""))]),
-            _format_labeled_block("commits", [str(frontmatter.get("review_commit_sha", "")), str(frontmatter.get("original_commit_sha", ""))]),
+            _format_labeled_block(
+                "position", [str(frontmatter.get("position", "")), str(frontmatter.get("original_position", ""))]
+            ),
+            _format_labeled_block(
+                "commits",
+                [str(frontmatter.get("review_commit_sha", "")), str(frontmatter.get("original_commit_sha", ""))],
+            ),
             _format_labeled_block("reply_to", [str(frontmatter.get("in_reply_to_message_id", ""))]),
         ]
         if line

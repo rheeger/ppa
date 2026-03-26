@@ -4,8 +4,7 @@ import json
 from pathlib import Path
 
 from archive_sync.adapters.base import deterministic_provenance
-from archive_sync.adapters.github_history import (GitHubHistoryAdapter, _message_uid,
-                                     _repo_uid, _thread_uid)
+from archive_sync.adapters.github_history import GitHubHistoryAdapter, _message_uid, _repo_uid, _thread_uid
 from hfa.schema import PersonCard
 from hfa.vault import read_note, write_card
 
@@ -253,7 +252,12 @@ def test_import_stage_creates_git_cards(tmp_vault: Path, tmp_path: Path):
     stage_dir = tmp_path / "stage"
     stage_dir.mkdir()
     bundle = _sample_bundle()
-    for name, key in (("repos.jsonl", "repo"), ("commits.jsonl", "commits"), ("threads.jsonl", "threads"), ("messages.jsonl", "messages")):
+    for name, key in (
+        ("repos.jsonl", "repo"),
+        ("commits.jsonl", "commits"),
+        ("threads.jsonl", "threads"),
+        ("messages.jsonl", "messages"),
+    ):
         records = bundle[key]
         rows = [records] if isinstance(records, dict) else list(records)
         (stage_dir / name).write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
@@ -291,7 +295,12 @@ def test_import_stage_enriches_existing_person_with_github_handle(tmp_vault: Pat
     stage_dir = tmp_path / "stage"
     stage_dir.mkdir()
     bundle = _sample_bundle()
-    for name, key in (("repos.jsonl", "repo"), ("commits.jsonl", "commits"), ("threads.jsonl", "threads"), ("messages.jsonl", "messages")):
+    for name, key in (
+        ("repos.jsonl", "repo"),
+        ("commits.jsonl", "commits"),
+        ("threads.jsonl", "threads"),
+        ("messages.jsonl", "messages"),
+    ):
         records = bundle[key]
         rows = [records] if isinstance(records, dict) else list(records)
         (stage_dir / name).write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")

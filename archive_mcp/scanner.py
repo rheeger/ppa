@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 import time
 from collections.abc import Iterable
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
@@ -13,8 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from hfa.schema import BaseCard, validate_card_permissive
-from hfa.vault import (iter_note_paths, read_note_file,
-                       read_note_frontmatter_file)
+from hfa.vault import iter_note_paths, read_note_file, read_note_frontmatter_file
 
 from .index_config import HASH_SUFFIX_RE, SCAN_MANIFEST_VERSION
 from .projections.registry import projection_for_card_type
@@ -249,9 +247,7 @@ def _build_manifest_rows_from_canonical(
     for row in rows:
         body = read_note_file(vault / row.rel_path, vault_root=vault).body
         ch = _content_hash(row.frontmatter, body)
-        out.append(
-            _note_manifest_row_from_materialized(row, stats=file_stats, content_hash=ch, versions=versions)
-        )
+        out.append(_note_manifest_row_from_materialized(row, stats=file_stats, content_hash=ch, versions=versions))
     return out
 
 
@@ -263,6 +259,7 @@ def _collect_canonical_rows(
     progress_every: int = 0,
 ) -> tuple[list[CanonicalRow], dict[str, str], int, list[tuple[Any, ...]], str, dict[str, tuple[int, int]]]:
     from .loader import _log_rebuild_step, _RebuildProgressReporter
+
     _log_rebuild_step(1, 6, "discover canonical note paths", f"vault={vault}")
     rel_paths = [rel_path.as_posix() for rel_path in iter_note_paths(vault)]
     file_stats, vault_fingerprint = _vault_paths_and_fingerprint(vault, rel_paths)

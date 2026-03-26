@@ -63,7 +63,11 @@ class DeterministicQueryPlanner:
     def plan(self, query: str, *, max_variants: int = 2, **_: Any) -> QueryPlan:
         text = (query or "").strip()
         if not text:
-            return QueryPlan(queries=(PlannedQuery(text="", role="primary"),), inferred=FilterInference(), planner_provider="deterministic")
+            return QueryPlan(
+                queries=(PlannedQuery(text="", role="primary"),),
+                inferred=FilterInference(),
+                planner_provider="deterministic",
+            )
 
         phrases = tuple(m.group(1).strip() for m in _QUOTED.finditer(text) if m.group(1).strip())
         emails = tuple(sorted(set(_EMAIL.findall(text))))
@@ -138,7 +142,9 @@ def build_query_plan(
     if (qp.get("provider") or "deterministic") == "model":
         plan = augment_plan_with_model(plan)
     if not qp.get("allow_filter_inference", True):
-        plan = QueryPlan(queries=plan.queries, inferred=FilterInference(), planner_provider=plan.planner_provider + "+no_inference")
+        plan = QueryPlan(
+            queries=plan.queries, inferred=FilterInference(), planner_provider=plan.planner_provider + "+no_inference"
+        )
 
     return plan
 

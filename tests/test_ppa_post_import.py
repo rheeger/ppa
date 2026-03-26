@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -61,7 +62,7 @@ def test_hfa_post_import_logs_run(tmp_vault):
     script_path = repo_root / "scripts" / "ppa-post-import.sh"
     env = os.environ.copy()
     env["PPA_PATH"] = str(tmp_vault)
-    env["PYTHON"] = str(repo_root / ".venv" / "bin" / "python")
+    env["PYTHON"] = sys.executable
 
     result = subprocess.run(
         ["bash", str(script_path)],

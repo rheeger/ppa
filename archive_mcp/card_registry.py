@@ -17,24 +17,80 @@ from .contracts import CardTypeRegistration, DeclEdgeRule, ProjectionColumnSpec
 # ---------------------------------------------------------------------------
 
 
-def _text(name: str, *, source_field: str | None = None, nullable: bool = True, indexed: bool = False, default: str = "", value_mode: str = "text") -> ProjectionColumnSpec:
-    return ProjectionColumnSpec(name, "TEXT", nullable=nullable, indexed=indexed, source_field=source_field or name, value_mode=value_mode, default=default)
+def _text(
+    name: str,
+    *,
+    source_field: str | None = None,
+    nullable: bool = True,
+    indexed: bool = False,
+    default: str = "",
+    value_mode: str = "text",
+) -> ProjectionColumnSpec:
+    return ProjectionColumnSpec(
+        name,
+        "TEXT",
+        nullable=nullable,
+        indexed=indexed,
+        source_field=source_field or name,
+        value_mode=value_mode,
+        default=default,
+    )
 
 
-def _json(name: str, *, source_field: str | None = None, nullable: bool = False, indexed: bool = False, default: str = "[]") -> ProjectionColumnSpec:
-    return ProjectionColumnSpec(name, "JSONB", nullable=nullable, indexed=indexed, source_field=source_field or name, value_mode="json", default=default)
+def _json(
+    name: str, *, source_field: str | None = None, nullable: bool = False, indexed: bool = False, default: str = "[]"
+) -> ProjectionColumnSpec:
+    return ProjectionColumnSpec(
+        name,
+        "JSONB",
+        nullable=nullable,
+        indexed=indexed,
+        source_field=source_field or name,
+        value_mode="json",
+        default=default,
+    )
 
 
-def _bool(name: str, *, source_field: str | None = None, nullable: bool = False, indexed: bool = False, default: bool = False) -> ProjectionColumnSpec:
-    return ProjectionColumnSpec(name, "BOOLEAN", nullable=nullable, indexed=indexed, source_field=source_field or name, value_mode="bool", default=default)
+def _bool(
+    name: str, *, source_field: str | None = None, nullable: bool = False, indexed: bool = False, default: bool = False
+) -> ProjectionColumnSpec:
+    return ProjectionColumnSpec(
+        name,
+        "BOOLEAN",
+        nullable=nullable,
+        indexed=indexed,
+        source_field=source_field or name,
+        value_mode="bool",
+        default=default,
+    )
 
 
-def _float(name: str, *, source_field: str | None = None, nullable: bool = False, indexed: bool = False, default: float = 0.0) -> ProjectionColumnSpec:
-    return ProjectionColumnSpec(name, "DOUBLE PRECISION", nullable=nullable, indexed=indexed, source_field=source_field or name, value_mode="float", default=default)
+def _float(
+    name: str, *, source_field: str | None = None, nullable: bool = False, indexed: bool = False, default: float = 0.0
+) -> ProjectionColumnSpec:
+    return ProjectionColumnSpec(
+        name,
+        "DOUBLE PRECISION",
+        nullable=nullable,
+        indexed=indexed,
+        source_field=source_field or name,
+        value_mode="float",
+        default=default,
+    )
 
 
-def _int(name: str, *, source_field: str | None = None, nullable: bool = False, indexed: bool = False, default: int = 0) -> ProjectionColumnSpec:
-    return ProjectionColumnSpec(name, "INTEGER", nullable=nullable, indexed=indexed, source_field=source_field or name, value_mode="int", default=default)
+def _int(
+    name: str, *, source_field: str | None = None, nullable: bool = False, indexed: bool = False, default: int = 0
+) -> ProjectionColumnSpec:
+    return ProjectionColumnSpec(
+        name,
+        "INTEGER",
+        nullable=nullable,
+        indexed=indexed,
+        source_field=source_field or name,
+        value_mode="int",
+        default=default,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -67,9 +123,7 @@ CARD_TYPE_REGISTRATIONS: tuple[CardTypeRegistration, ...] = (
             _text("birthday"),
         ),
         person_edge_type="mentions_person",
-        edge_rules=(
-            DeclEdgeRule("reports_to", "person_reports_to", "person", ("reports_to",), multi=False),
-        ),
+        edge_rules=(DeclEdgeRule("reports_to", "person_reports_to", "person", ("reports_to",), multi=False),),
         chunk_builder_name="person",
         chunk_types=("person_profile", "person_role", "person_context", "person_body"),
     ),
@@ -204,7 +258,12 @@ CARD_TYPE_REGISTRATIONS: tuple[CardTypeRegistration, ...] = (
             DeclEdgeRule("attachments", "message_has_attachment", "card", ("attachments",)),
             DeclEdgeRule("calendar_events", "message_has_calendar_event", "card", ("calendar_events",)),
             DeclEdgeRule("thread", "message_in_thread", "card", ("thread",), multi=False),
-            DeclEdgeRule("participant_emails", "message_mentions_person", "person", ("from_email", "participant_emails", "to_emails", "cc_emails", "bcc_emails")),
+            DeclEdgeRule(
+                "participant_emails",
+                "message_mentions_person",
+                "person",
+                ("from_email", "participant_emails", "to_emails", "cc_emails", "bcc_emails"),
+            ),
         ),
         chunk_builder_name="email_message",
         chunk_types=("message_subject", "message_snippet", "message_context", "message_invite_context", "message_body"),
@@ -255,7 +314,12 @@ CARD_TYPE_REGISTRATIONS: tuple[CardTypeRegistration, ...] = (
             DeclEdgeRule("participant_handles", "thread_has_person", "person", ("participant_handles",)),
         ),
         chunk_builder_name="imessage_thread",
-        chunk_types=("imessage_thread_context", "imessage_thread_summary", "imessage_thread_window", "imessage_thread_recent_window"),
+        chunk_types=(
+            "imessage_thread_context",
+            "imessage_thread_summary",
+            "imessage_thread_window",
+            "imessage_thread_recent_window",
+        ),
     ),
     # ── imessage_message ────────────────────────────────────────────────
     CardTypeRegistration(
@@ -284,7 +348,9 @@ CARD_TYPE_REGISTRATIONS: tuple[CardTypeRegistration, ...] = (
         edge_rules=(
             DeclEdgeRule("thread", "message_in_thread", "card", ("thread",), multi=False),
             DeclEdgeRule("attachments", "message_has_attachment", "card", ("attachments",)),
-            DeclEdgeRule("participant_handles", "message_mentions_person", "person", ("sender_handle", "participant_handles")),
+            DeclEdgeRule(
+                "participant_handles", "message_mentions_person", "person", ("sender_handle", "participant_handles")
+            ),
         ),
         chunk_builder_name=None,
         chunk_types=(),
@@ -482,7 +548,13 @@ CARD_TYPE_REGISTRATIONS: tuple[CardTypeRegistration, ...] = (
         person_edge_type="mentions_person",
         edge_rules=(),
         chunk_builder_name="document",
-        chunk_types=("document_title_meta", "document_entities", "document_extraction_meta", "document_description", "document_body"),
+        chunk_types=(
+            "document_title_meta",
+            "document_entities",
+            "document_extraction_meta",
+            "document_description",
+            "document_body",
+        ),
     ),
     # ── meeting_transcript ──────────────────────────────────────────────
     CardTypeRegistration(
@@ -507,11 +579,14 @@ CARD_TYPE_REGISTRATIONS: tuple[CardTypeRegistration, ...] = (
             _text("transcript_body_sha"),
         ),
         person_edge_type="mentions_person",
-        edge_rules=(
-            DeclEdgeRule("calendar_events", "transcript_has_calendar_event", "card", ("calendar_events",)),
-        ),
+        edge_rules=(DeclEdgeRule("calendar_events", "transcript_has_calendar_event", "card", ("calendar_events",)),),
         chunk_builder_name="meeting_transcript",
-        chunk_types=("meeting_transcript_identity", "meeting_transcript_participants", "meeting_transcript_links", "meeting_transcript_body"),
+        chunk_types=(
+            "meeting_transcript_identity",
+            "meeting_transcript_participants",
+            "meeting_transcript_links",
+            "meeting_transcript_body",
+        ),
     ),
     # ── git_repository ──────────────────────────────────────────────────
     CardTypeRegistration(
@@ -551,9 +626,7 @@ CARD_TYPE_REGISTRATIONS: tuple[CardTypeRegistration, ...] = (
             _json("pull_numbers_json", source_field="pull_numbers"),
         ),
         person_edge_type="commit_authored_by_person",
-        edge_rules=(
-            DeclEdgeRule("repository", "commit_in_repo", "card", ("repository",), multi=False),
-        ),
+        edge_rules=(DeclEdgeRule("repository", "commit_in_repo", "card", ("repository",), multi=False),),
         chunk_builder_name="git_commit",
         chunk_types=("git_commit_headline", "git_commit_context", "git_commit_body"),
     ),
@@ -585,7 +658,12 @@ CARD_TYPE_REGISTRATIONS: tuple[CardTypeRegistration, ...] = (
             DeclEdgeRule("messages", "thread_has_message", "card", ("messages",)),
         ),
         chunk_builder_name="git_thread",
-        chunk_types=("git_thread_title_state", "git_thread_participants", "git_thread_branch_context", "git_thread_body"),
+        chunk_types=(
+            "git_thread_title_state",
+            "git_thread_participants",
+            "git_thread_branch_context",
+            "git_thread_body",
+        ),
     ),
     # ── git_message ─────────────────────────────────────────────────────
     CardTypeRegistration(
@@ -618,9 +696,7 @@ CARD_TYPE_REGISTRATIONS: tuple[CardTypeRegistration, ...] = (
 # Lookup indexes
 # ---------------------------------------------------------------------------
 
-REGISTRATION_BY_CARD_TYPE: dict[str, CardTypeRegistration] = {
-    reg.card_type: reg for reg in CARD_TYPE_REGISTRATIONS
-}
+REGISTRATION_BY_CARD_TYPE: dict[str, CardTypeRegistration] = {reg.card_type: reg for reg in CARD_TYPE_REGISTRATIONS}
 
 
 def get_registration(card_type: str) -> CardTypeRegistration | None:

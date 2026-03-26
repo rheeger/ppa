@@ -12,10 +12,9 @@ from pathlib import Path
 from typing import Any
 
 from hfa.config import PPAConfig, load_config
-from hfa.identity import (IdentityCache, _normalize_identifier, resolve_any,
-                          upsert_identity_map)
+from hfa.identity import IdentityCache, _normalize_identifier, resolve_any, upsert_identity_map
 from hfa.provenance import ProvenanceEntry
-from hfa.schema import BaseCard, validate_card_permissive, validate_card_strict
+from hfa.schema import validate_card_permissive, validate_card_strict
 from hfa.vault import find_note_by_slug, iter_notes, read_note, write_card
 
 try:
@@ -118,10 +117,7 @@ class PersonIndex:
         return PersonIndexSnapshot(
             records={wikilink: dict(data) for wikilink, data in self.records.items()},
             by_last_name={key: tuple(sorted(value)) for key, value in self.by_last_name.items()},
-            by_first_initial_last={
-                key: tuple(sorted(value))
-                for key, value in self.by_first_initial_last.items()
-            },
+            by_first_initial_last={key: tuple(sorted(value)) for key, value in self.by_first_initial_last.items()},
         )
 
 
@@ -138,7 +134,9 @@ def load_nicknames(vault_path: str | Path) -> dict[str, list[str]]:
     if not isinstance(payload, dict):
         return {}
     return {
-        normalize_person_name(str(canonical)): [normalize_person_name(str(alias)) for alias in aliases if str(alias).strip()]
+        normalize_person_name(str(canonical)): [
+            normalize_person_name(str(alias)) for alias in aliases if str(alias).strip()
+        ]
         for canonical, aliases in payload.items()
         if isinstance(aliases, list)
     }
@@ -249,11 +247,7 @@ def _snapshot_candidates(
             candidate_links.update(snapshot.by_first_initial_last.get((last, first[:1]), ()))
     if not candidate_links:
         candidate_links = set(snapshot.records)
-    return [
-        (wikilink, snapshot.records[wikilink])
-        for wikilink in candidate_links
-        if wikilink in snapshot.records
-    ]
+    return [(wikilink, snapshot.records[wikilink]) for wikilink in candidate_links if wikilink in snapshot.records]
 
 
 def _best_name_match(
@@ -485,7 +479,10 @@ def resolve_person(
         people_index.candidates(identifiers)
         if people_index is not None
         else [
-            (f"[[{rel_path.stem}]]", validate_card_permissive(read_note(vault_path, str(rel_path))[0]).model_dump(mode="python"))
+            (
+                f"[[{rel_path.stem}]]",
+                validate_card_permissive(read_note(vault_path, str(rel_path))[0]).model_dump(mode="python"),
+            )
             for rel_path, _ in iter_notes(vault_path)
             if rel_path.parts and rel_path.parts[0] == "People"
         ]
@@ -595,7 +592,11 @@ def _should_replace_scalar(
             return True
         if existing_text.lower() == "unknown":
             return True
-        if existing_source == "linkedin" and incoming_source.startswith("contacts") and _text_quality(incoming_text) >= _text_quality(existing_text):
+        if (
+            existing_source == "linkedin"
+            and incoming_source.startswith("contacts")
+            and _text_quality(incoming_text) >= _text_quality(existing_text)
+        ):
             return True
         return False
     if field_name == "emails_seen_count":
@@ -640,7 +641,11 @@ def merge_into_existing(
     changed_fields: set[str] = set()
     existing_summary = str(merged_data.get("summary", "")).strip()
     incoming_summary = str(new_data.get("summary", "")).strip()
-    if incoming_summary and existing_summary and normalize_person_name(incoming_summary) != normalize_person_name(existing_summary):
+    if (
+        incoming_summary
+        and existing_summary
+        and normalize_person_name(incoming_summary) != normalize_person_name(existing_summary)
+    ):
         if "aliases" not in new_provenance and "summary" in new_provenance:
             new_provenance = {**new_provenance, "aliases": _clone_provenance(new_provenance["summary"])}
         merged_aliases = _union_preserve_order(merged_data.get("aliases", []), [incoming_summary])
@@ -686,7 +691,9 @@ def merge_into_existing(
             merged_prov["aliases"] = _clone_provenance(merged_prov["summary"])
         elif "summary" in new_provenance:
             merged_prov["aliases"] = _clone_provenance(new_provenance["summary"])
-    write_card(Path(vault_path), str(target.relative_to(vault_path)), merged_card, body=merged_body, provenance=merged_prov)
+    write_card(
+        Path(vault_path), str(target.relative_to(vault_path)), merged_card, body=merged_body, provenance=merged_prov
+    )
     aliases = {
         "name": merged_card.summary,
         "emails": getattr(merged_card, "emails", []),

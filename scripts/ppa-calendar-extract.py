@@ -5,15 +5,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
 from archive_sync.adapters.calendar_events import CalendarEventsAdapter
-from ppa_google_auth import (CALENDAR_READONLY_SCOPES,
-                             build_google_cli_token_manager)
+from ppa_google_auth import CALENDAR_READONLY_SCOPES, build_google_cli_token_manager
 
 
 def _read_json(path: Path, default: dict) -> dict:
@@ -131,7 +129,9 @@ def main() -> int:
             event_id = str(event.get("id", "")).strip()
             if not event_id:
                 continue
-            (events_dir / _event_filename(event_id)).write_text(json.dumps(event, separators=(",", ":")), encoding="utf-8")
+            (events_dir / _event_filename(event_id)).write_text(
+                json.dumps(event, separators=(",", ":")), encoding="utf-8"
+            )
             extracted_events += 1
 
         state.update(

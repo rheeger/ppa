@@ -1,10 +1,8 @@
 """Shared ingest pipeline tests."""
 
 import json
-from datetime import date
 
 from archive_sync.adapters.base import BaseAdapter, FetchedBatch, deterministic_provenance
-from hfa.provenance import read_provenance
 from hfa.schema import PersonCard
 from hfa.vault import read_note, write_card
 
@@ -168,7 +166,9 @@ def test_ingest_logs_conflicts(tmp_vault):
         emails=["robbie@endaoment.org"],
         company="Endaoment",
     )
-    write_card(tmp_vault, "People/robbie-heeger.md", existing, provenance=deterministic_provenance(existing, "contacts.apple"))
+    write_card(
+        tmp_vault, "People/robbie-heeger.md", existing, provenance=deterministic_provenance(existing, "contacts.apple")
+    )
 
     adapter = MockAdapter(
         [

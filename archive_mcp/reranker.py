@@ -43,7 +43,9 @@ class HeuristicReranker:
     def rerank(self, query: str, candidates: list[dict[str, Any]], **kwargs: Any) -> list[RerankResult]:
         q_tokens = _tokenize(query)
         if not q_tokens:
-            return [RerankResult(card_uid=str(c.get("card_uid", "")), score=0.0, detail="empty_query") for c in candidates]
+            return [
+                RerankResult(card_uid=str(c.get("card_uid", "")), score=0.0, detail="empty_query") for c in candidates
+            ]
         out: list[RerankResult] = []
         for c in candidates:
             blob = " ".join(
@@ -57,7 +59,9 @@ class HeuristicReranker:
             overlap = len(q_tokens & ct)
             union = len(q_tokens | ct) or 1
             score = min(1.0, overlap / max(len(q_tokens), 1) * 0.5 + (overlap / union) * 0.5)
-            out.append(RerankResult(card_uid=str(c.get("card_uid", "")), score=round(score, 6), detail=f"overlap={overlap}"))
+            out.append(
+                RerankResult(card_uid=str(c.get("card_uid", "")), score=round(score, 6), detail=f"overlap={overlap}")
+            )
         return out
 
 

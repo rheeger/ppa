@@ -7,8 +7,9 @@ source "$SCRIPT_DIR/ppa-lib.sh"
 
 ppa_require_root
 
-IMAGE="${PPA_IMAGE:-/mnt/user/ppa-secure/ppa-vault.img}"
-MAPPER="${PPA_MAPPER:-ppa-vault}"
+SECURE_DIR="${PPA_SECURE_DIR:-/mnt/user/archive-secure}"
+IMAGE="${PPA_IMAGE:-$SECURE_DIR/hfa-vault.img}"
+MAPPER="${PPA_MAPPER:-hfa-archive-vault}"
 UNLOCK_KEY="${PPA_UNLOCK_KEY:-}"
 UNLOCK_KEY_OP_REF="${PPA_UNLOCK_KEY_OP_REF:-}"
 UNLOCK_KEY_FILE="${PPA_UNLOCK_KEY_FILE:-}"

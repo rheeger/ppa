@@ -8,10 +8,8 @@ import time
 from pathlib import Path
 
 from archive_sync.adapters.base import deterministic_provenance
-from archive_sync.adapters.gmail_messages import (GmailMessagesAdapter, _attachment_uid,
-                                     _message_uid, _thread_uid)
-from hfa.schema import (EmailAttachmentCard, EmailMessageCard, EmailThreadCard,
-                        PersonCard)
+from archive_sync.adapters.gmail_messages import GmailMessagesAdapter, _attachment_uid, _message_uid, _thread_uid
+from hfa.schema import EmailAttachmentCard, EmailMessageCard, EmailThreadCard, PersonCard
 from hfa.vault import read_note, write_card
 
 
@@ -97,10 +95,7 @@ def _normalize_items(items: list[dict]) -> list[dict]:
 
 
 def _hash_tree(root: Path) -> dict[str, str]:
-    return {
-        str(path.relative_to(root)): path.read_text(encoding="utf-8")
-        for path in sorted(root.rglob("*.md"))
-    }
+    return {str(path.relative_to(root)): path.read_text(encoding="utf-8") for path in sorted(root.rglob("*.md"))}
 
 
 def test_fetch_resumes_with_page_thread_cursor(tmp_vault):
@@ -452,7 +447,12 @@ def test_ingest_updates_thread_card_incrementally(tmp_vault):
                     from_value="Alice Example <alice@example.com>",
                     to_value="me@example.com",
                     snippet="hello one",
-                    attachment={"attachment_id": "a1", "filename": "contract.pdf", "mime_type": "application/pdf", "size_bytes": 123},
+                    attachment={
+                        "attachment_id": "a1",
+                        "filename": "contract.pdf",
+                        "mime_type": "application/pdf",
+                        "size_bytes": 123,
+                    },
                 ),
             ),
         ]
@@ -475,7 +475,12 @@ def test_ingest_updates_thread_card_incrementally(tmp_vault):
                     from_value="Alice Example <alice@example.com>",
                     to_value="me@example.com",
                     snippet="hello one",
-                    attachment={"attachment_id": "a1", "filename": "contract.pdf", "mime_type": "application/pdf", "size_bytes": 123},
+                    attachment={
+                        "attachment_id": "a1",
+                        "filename": "contract.pdf",
+                        "mime_type": "application/pdf",
+                        "size_bytes": 123,
+                    },
                 ),
                 _message(
                     message_id="m2",
@@ -667,7 +672,12 @@ def test_quick_update_only_emits_changed_messages_and_attachments(tmp_vault):
                     from_value="Alice Example <alice@example.com>",
                     to_value="me@example.com",
                     snippet="hello one",
-                    attachment={"attachment_id": "a1", "filename": "contract.pdf", "mime_type": "application/pdf", "size_bytes": 123},
+                    attachment={
+                        "attachment_id": "a1",
+                        "filename": "contract.pdf",
+                        "mime_type": "application/pdf",
+                        "size_bytes": 123,
+                    },
                 ),
                 history_id="h1",
             ),
@@ -691,7 +701,12 @@ def test_quick_update_only_emits_changed_messages_and_attachments(tmp_vault):
                     from_value="Alice Example <alice@example.com>",
                     to_value="me@example.com",
                     snippet="hello one",
-                    attachment={"attachment_id": "a1", "filename": "contract.pdf", "mime_type": "application/pdf", "size_bytes": 123},
+                    attachment={
+                        "attachment_id": "a1",
+                        "filename": "contract.pdf",
+                        "mime_type": "application/pdf",
+                        "size_bytes": 123,
+                    },
                 ),
                 _message(
                     message_id="m2",
@@ -792,7 +807,9 @@ def test_gws_with_retry_retries_failed_precondition_errors(monkeypatch):
     def flaky(args):
         calls["count"] += 1
         if calls["count"] == 1:
-            raise RuntimeError('{"error":{"code":400,"reason":"failedPrecondition","message":"Precondition check failed."}}')
+            raise RuntimeError(
+                '{"error":{"code":400,"reason":"failedPrecondition","message":"Precondition check failed."}}'
+            )
         return {"ok": True}
 
     monkeypatch.setattr(adapter, "_gws", flaky)
@@ -848,7 +865,12 @@ def test_attachment_cap_does_not_leave_orphaned_attachment_links(tmp_vault):
                     from_value="Alice Example <alice@example.com>",
                     to_value="me@example.com",
                     snippet="hello one",
-                    attachment={"attachment_id": "a1", "filename": "contract-1.pdf", "mime_type": "application/pdf", "size_bytes": 123},
+                    attachment={
+                        "attachment_id": "a1",
+                        "filename": "contract-1.pdf",
+                        "mime_type": "application/pdf",
+                        "size_bytes": 123,
+                    },
                 ),
                 _message(
                     message_id="m2",
@@ -859,7 +881,12 @@ def test_attachment_cap_does_not_leave_orphaned_attachment_links(tmp_vault):
                     from_value="Bob Example <bob@example.com>",
                     to_value="me@example.com",
                     snippet="hello two",
-                    attachment={"attachment_id": "a2", "filename": "contract-2.pdf", "mime_type": "application/pdf", "size_bytes": 456},
+                    attachment={
+                        "attachment_id": "a2",
+                        "filename": "contract-2.pdf",
+                        "mime_type": "application/pdf",
+                        "size_bytes": 456,
+                    },
                 ),
                 history_id="h1",
             ),
@@ -904,7 +931,11 @@ def test_extracts_invite_data_from_calendar_attachment_fetch():
         event_id_hint="event-google-1",
         calendar_attachment_only=True,
     )
-    adapter._gws = lambda args: {"data": _b64("BEGIN:VCALENDAR\nMETHOD:REQUEST\nBEGIN:VEVENT\nUID:event-uid-1@google.com\nSUMMARY:Board Meeting\nDTSTART:20260310T150000Z\nDTEND:20260310T160000Z\nEND:VEVENT\nEND:VCALENDAR")}  # type: ignore[method-assign]
+    adapter._gws = lambda args: {
+        "data": _b64(
+            "BEGIN:VCALENDAR\nMETHOD:REQUEST\nBEGIN:VEVENT\nUID:event-uid-1@google.com\nSUMMARY:Board Meeting\nDTSTART:20260310T150000Z\nDTEND:20260310T160000Z\nEND:VEVENT\nEND:VCALENDAR"
+        )
+    }  # type: ignore[method-assign]
     record, _ = adapter._message_records(  # type: ignore[misc]
         message,
         account_email="me@example.com",
@@ -935,7 +966,7 @@ def test_extracts_google_calendar_html_without_ics():
         internal_date="1732557610000",
         subject="Reminder: OSO (Carl+Ray) (Robbie Heeger) @ Tue Nov 26, 2024 1pm - 1:30pm (EST) (ray@karibalabs.co)",
         body="You have an upcoming appointment with ray@karibalabs.co",
-        from_value="\"ray@karibalabs.co (Google Calendar)\" <calendar-notification@google.com>",
+        from_value='"ray@karibalabs.co (Google Calendar)" <calendar-notification@google.com>',
         to_value="me@example.com",
         snippet="You have an upcoming appointment",
         html_body=html_body,

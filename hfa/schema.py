@@ -6,8 +6,7 @@ import re
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import (BaseModel, ConfigDict, Field, field_validator,
-                      model_validator)
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 PARTIAL_DATE_RE = re.compile(r"^(?:\d{4}-\d{2}|\d{2}-\d{2}|\d{4}-\d{2}-\d{2})$")
@@ -625,11 +624,7 @@ class MedicalRecordCard(BaseCard):
         self.status = _clean_string(self.status).lower()
         if not self.summary:
             self.summary = (
-                self.code_display
-                or self.value_text
-                or self.record_subtype
-                or self.record_type
-                or self.source_id
+                self.code_display or self.value_text or self.record_subtype or self.record_type or self.source_id
             )
         self.summary = _clean_string(self.summary)
         return self
@@ -902,8 +897,10 @@ class IMessageThreadCard(BaseCard):
     @model_validator(mode="after")
     def thread_summary_fallback(self) -> IMessageThreadCard:
         if not self.summary:
-            self.summary = self.display_name or self.chat_identifier or (
-                ", ".join(self.participant_handles[:3]) if self.participant_handles else self.imessage_chat_id
+            self.summary = (
+                self.display_name
+                or self.chat_identifier
+                or (", ".join(self.participant_handles[:3]) if self.participant_handles else self.imessage_chat_id)
             )
         self.summary = _clean_string(self.summary)
         if self.messages:
@@ -990,7 +987,9 @@ class IMessageAttachmentCard(BaseCard):
     original_path: str = ""
     exported_path: str = ""
 
-    @field_validator("message", "thread", "filename", "transfer_name", "mime_type", "uti", "original_path", "exported_path")
+    @field_validator(
+        "message", "thread", "filename", "transfer_name", "mime_type", "uti", "original_path", "exported_path"
+    )
     @classmethod
     def clean_imessage_attachment_strings(cls, value: str) -> str:
         return _clean_string(value)
@@ -1325,9 +1324,7 @@ class MediaAssetCard(BaseCard):
     @field_validator("labels")
     @classmethod
     def normalize_media_labels(cls, value: list[str]) -> list[str]:
-        return _dedupe_preserve_order(
-            [_clean_string(item).lower() for item in value if item and _clean_string(item)]
-        )
+        return _dedupe_preserve_order([_clean_string(item).lower() for item in value if item and _clean_string(item)])
 
     @field_validator("keywords", "person_labels", "albums", "album_paths", "folders")
     @classmethod
@@ -1555,7 +1552,9 @@ class GitRepositoryCard(BaseCard):
         self.visibility = _clean_string(self.visibility).lower()
         self.primary_language = _clean_string(self.primary_language)
         self.languages = _dedupe_preserve_order([_clean_string(item) for item in self.languages if _clean_string(item)])
-        self.topics = _dedupe_preserve_order([_clean_string(item).lower() for item in self.topics if _clean_string(item)])
+        self.topics = _dedupe_preserve_order(
+            [_clean_string(item).lower() for item in self.topics if _clean_string(item)]
+        )
         if not self.summary:
             self.summary = self.name_with_owner or self.source_id or self.github_repo_id
         self.summary = _clean_string(self.summary)
@@ -1683,11 +1682,15 @@ class GitThreadCard(BaseCard):
     def git_thread_summary_fallback(self) -> GitThreadCard:
         self.thread_type = _clean_string(self.thread_type).lower()
         self.state = _clean_string(self.state).lower()
-        self.assignees = _dedupe_preserve_order([_normalize_handle(item) for item in self.assignees if _normalize_handle(item)])
+        self.assignees = _dedupe_preserve_order(
+            [_normalize_handle(item) for item in self.assignees if _normalize_handle(item)]
+        )
         self.participant_logins = _dedupe_preserve_order(
             [_normalize_handle(item) for item in self.participant_logins if _normalize_handle(item)]
         )
-        self.labels = _dedupe_preserve_order([_clean_string(item).lower() for item in self.labels if _clean_string(item)])
+        self.labels = _dedupe_preserve_order(
+            [_clean_string(item).lower() for item in self.labels if _clean_string(item)]
+        )
         if self.messages:
             self.message_count = max(self.message_count, len(self.messages))
         if not self.summary:
@@ -1846,7 +1849,6 @@ def get_card_type_spec(card_type: str):
 def iter_card_type_specs():
     """Return all canonical card contracts in registry order."""
 
-    from hfa.card_contracts import \
-        iter_card_type_specs as _iter_card_type_specs
+    from hfa.card_contracts import iter_card_type_specs as _iter_card_type_specs
 
     return _iter_card_type_specs()

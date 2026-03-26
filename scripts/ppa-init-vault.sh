@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-VAULT="${1:-${PPA_PATH:-/home/arnold/archive/hf-archives}}"
+VAULT="${1:-${PPA_PATH:-/srv/hfa-secure/vault}}"
 PYTHON="${PYTHON:-python3}"
 
 mkdir -p "$VAULT/People" "$VAULT/Finance" "$VAULT/Photos" "$VAULT/_meta" "$VAULT/_templates" "$VAULT/Attachments"

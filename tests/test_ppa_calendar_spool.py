@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -38,7 +39,7 @@ def test_calendar_spool_import_links_to_existing_email_cards(tmp_path):
         "write_card(vault, 'EmailThreads/2026-03/hfa-email-thread-111111111111.md', thread, provenance=deterministic_provenance(thread, 'gmail.thread'))\n"
         "write_card(vault, 'Email/2026-03/hfa-email-message-111111111111.md', message, provenance=deterministic_provenance(message, 'gmail.message'))\n"
     )
-    subprocess.run([str(repo_root / ".venv" / "bin" / "python"), "-c", bootstrap], check=True)
+    subprocess.run([sys.executable, "-c", bootstrap], check=True)
 
     spool = tmp_path / "calendar-spool"
     (spool / "events").mkdir(parents=True)
@@ -74,7 +75,7 @@ def test_calendar_spool_import_links_to_existing_email_cards(tmp_path):
 
     result = subprocess.run(
         [
-            str(repo_root / ".venv" / "bin" / "python"),
+            sys.executable,
             str(repo_root / "scripts" / "ppa-calendar-import-spool.py"),
             "--vault",
             str(vault),
@@ -119,7 +120,7 @@ def test_calendar_spool_import_rejects_manifest_account_mismatch(tmp_path):
 
     result = subprocess.run(
         [
-            str(repo_root / ".venv" / "bin" / "python"),
+            sys.executable,
             str(repo_root / "scripts" / "ppa-calendar-import-spool.py"),
             "--vault",
             str(vault),

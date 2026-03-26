@@ -3,40 +3,126 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
+import logging
+import os
+import sys
 from pathlib import Path
 
-from .benchmark import (BENCHMARK_PROFILES, DEFAULT_BENCHMARK_SOURCE_VAULT,
-                        benchmark_rebuild, benchmark_seed_links,
-                        build_benchmark_sample)
+from .benchmark import (
+    BENCHMARK_PROFILES,
+    DEFAULT_BENCHMARK_SOURCE_VAULT,
+    benchmark_rebuild,
+    benchmark_seed_links,
+    build_benchmark_sample,
+)
+from .commands import admin as admin_cmd
+from .commands import explain
+from .commands import graph as graph_cmd
+from .commands import query as query_cmd
+from .commands import read as read_cmd
+from .commands import search as search_cmd
+from .commands import seed_links as seed_cmd
+from .commands import status as status_cmd
+from .commands._resolve import resolve_index, resolve_store
+from .errors import PpaError
 from .index_config import get_seed_links_enabled
-from .server import (archive_bootstrap_postgres, archive_duplicate_uids,
-                     archive_embed_pending, archive_index_status,
-                     archive_link_candidate, archive_link_candidates,
-                     archive_link_quality_gate, archive_projection_explain,
-                     archive_projection_inventory, archive_projection_status,
-                     archive_rebuild_indexes, archive_review_link_candidate,
-                     archive_seed_link_backfill, archive_seed_link_enqueue,
-                     archive_seed_link_promote, archive_seed_link_refresh,
-                     archive_seed_link_report, archive_seed_link_surface,
-                     archive_seed_link_worker, mcp)
-from .store import get_archive_store
+from .log import configure_logging
+from .server import mcp
+
+_cli_log = logging.getLogger("ppa.cli")
+
+
+def _print_json(data: object) -> None:
+    print(json.dumps(data, indent=2, default=str))
+
+
+def _print_cli_result(data: object) -> None:
+    """Print dict/list as JSON; pass through str for mocks and human one-liners."""
+    if isinstance(data, str):
+        print(data)
+    else:
+        _print_json(data)
+
+
+def _cli_fail(exc: PpaError) -> None:
+    print(str(exc), file=sys.stderr)
+    raise SystemExit(1)
+
+
+def _ppa_env_name_is_secret(name: str) -> bool:
+    upper = name.upper()
+    return any(s in upper for s in ("KEY", "SECRET", "TOKEN", "PASSWORD"))
+
+
+def _emit_mcp_config() -> None:
+    """Print a paste-ready MCP client JSON block from the current environment.
+
+    Secrets are omitted by design: only `PPA_*` vars are included, and names
+    matching *KEY*, *SECRET*, *TOKEN*, or *PASSWORD* are skipped so API keys
+    never appear in terminal output or copied configs.
+    """
+    env: dict[str, str] = {}
+    for key, value in os.environ.items():
+        if not key.startswith("PPA_"):
+            continue
+        if _ppa_env_name_is_secret(key):
+            continue
+        env[key] = value
+    server_name = os.environ.get("PPA_MCP_CONFIG_SERVER_NAME", "ppa").strip() or "ppa"
+    args = ["serve"]
+    tunnel = os.environ.get("PPA_MCP_TUNNEL_HOST", "").strip()
+    if tunnel:
+        args.extend(["--tunnel", tunnel])
+    block = {
+        "mcpServers": {
+            server_name: {
+                "command": "ppa",
+                "args": args,
+                "env": env,
+            }
+        }
+    }
+    print(json.dumps(block, indent=2))
+
 
 _SEED_LINKS_DISABLED_MSG = "Seed links are not enabled. Set PPA_SEED_LINKS_ENABLED=1 to enable."
 
-_SEED_LINK_COMMANDS = frozenset({
-    "seed-link-surface", "seed-link-enqueue", "seed-link-backfill",
-    "seed-link-refresh", "seed-link-worker", "seed-link-promote",
-    "seed-link-report", "link-candidates", "link-candidate",
-    "review-link-candidate", "link-quality-gate", "benchmark-seed-links",
-})
+_SEED_LINK_COMMANDS = frozenset(
+    {
+        "seed-link-surface",
+        "seed-link-enqueue",
+        "seed-link-backfill",
+        "seed-link-refresh",
+        "seed-link-worker",
+        "seed-link-promote",
+        "seed-link-report",
+        "link-candidates",
+        "link-candidate",
+        "review-link-candidate",
+        "link-quality-gate",
+        "benchmark-seed-links",
+    }
+)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Archive MCP server and index maintenance")
+    parser.add_argument("-v", "--verbose", action="store_true", help="DEBUG logging on stderr")
     subparsers = parser.add_subparsers(dest="command")
 
-    subparsers.add_parser("serve")
+    serve_parser = subparsers.add_parser("serve", help="Start MCP server (stdio)")
+    serve_parser.add_argument(
+        "--tunnel",
+        default="",
+        metavar="USER@HOST",
+        help="Manage SSH tunnel: localhost:PPA_TUNNEL_PORT -> remote 127.0.0.1:5432",
+    )
+    subparsers.add_parser(
+        "mcp-config",
+        help="Print paste-ready MCP JSON for this environment (no secrets)",
+    )
     rebuild_parser = subparsers.add_parser("rebuild-indexes")
     rebuild_parser.add_argument("--workers", type=int)
     rebuild_parser.add_argument("--batch-size", type=int)
@@ -133,143 +219,498 @@ def main() -> None:
     seed_bench_parser.add_argument("--no-rebuild-first", action="store_true")
 
     migrate_parser = subparsers.add_parser("migrate")
-    migrate_parser.add_argument("--dry-run", action="store_true", help="Show pending migrations without applying")
+    migrate_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show pending migrations without applying",
+    )
     subparsers.add_parser("migration-status")
+    subparsers.add_parser("health")
+
+    search_parser = subparsers.add_parser("search", help="Full-text search (JSON on stdout)")
+    search_parser.add_argument("query")
+    search_parser.add_argument("--limit", type=int, default=20)
+    read_parser = subparsers.add_parser("read", help="Read one note by path or UID (JSON)")
+    read_parser.add_argument("path_or_uid")
+    read_many_parser = subparsers.add_parser("read-many", help="Read multiple notes (JSON)")
+    read_many_parser.add_argument("paths", nargs="+", metavar="PATH_OR_UID")
+    query_parser = subparsers.add_parser("query", help="Structured query (JSON)")
+    query_parser.add_argument("--type", dest="type_filter", default="")
+    query_parser.add_argument("--source", dest="source_filter", default="")
+    query_parser.add_argument("--people", dest="people_filter", default="")
+    query_parser.add_argument("--org", dest="org_filter", default="")
+    query_parser.add_argument("--limit", type=int, default=20)
+    graph_parser = subparsers.add_parser("graph", help="Wikilink graph from a note (JSON)")
+    graph_parser.add_argument("note_path")
+    graph_parser.add_argument("--hops", type=int, default=2)
+    person_parser = subparsers.add_parser("person", help="Person profile by slug (JSON)")
+    person_parser.add_argument("name")
+    timeline_parser = subparsers.add_parser("timeline", help="Notes in date range (JSON)")
+    timeline_parser.add_argument("--start", dest="start_date", default="")
+    timeline_parser.add_argument("--end", dest="end_date", default="")
+    timeline_parser.add_argument("--limit", type=int, default=20)
+    subparsers.add_parser("stats", help="Vault/index stats (JSON)")
+    subparsers.add_parser("validate", help="Validate all vault cards (JSON)")
+    subparsers.add_parser("duplicates", help="Dedup candidates from _meta (JSON)")
+    vec_parser = subparsers.add_parser("vector-search", help="Semantic search (JSON)")
+    vec_parser.add_argument("query")
+    vec_parser.add_argument("--limit", type=int, default=20)
+    vec_parser.add_argument("--embedding-model", default="")
+    vec_parser.add_argument("--embedding-version", type=int, default=0)
+    vec_parser.add_argument("--type", dest="type_filter", default="")
+    vec_parser.add_argument("--source", dest="source_filter", default="")
+    vec_parser.add_argument("--people", dest="people_filter", default="")
+    vec_parser.add_argument("--start-date", dest="start_date", default="")
+    vec_parser.add_argument("--end-date", dest="end_date", default="")
+    hybrid_parser = subparsers.add_parser("hybrid-search", help="Hybrid lexical+vector (JSON)")
+    hybrid_parser.add_argument("query")
+    hybrid_parser.add_argument("--limit", type=int, default=20)
+    hybrid_parser.add_argument("--embedding-model", default="")
+    hybrid_parser.add_argument("--embedding-version", type=int, default=0)
+    hybrid_parser.add_argument("--type", dest="type_filter", default="")
+    hybrid_parser.add_argument("--source", dest="source_filter", default="")
+    hybrid_parser.add_argument("--people", dest="people_filter", default="")
+    hybrid_parser.add_argument("--start-date", dest="start_date", default="")
+    hybrid_parser.add_argument("--end-date", dest="end_date", default="")
+    explain_parser = subparsers.add_parser("explain", help="Retrieval explain payload (JSON)")
+    explain_parser.add_argument("query")
+    explain_parser.add_argument("--mode", default="hybrid")
+    explain_parser.add_argument("--limit", type=int, default=10)
+    explain_parser.add_argument("--embedding-model", default="")
+    explain_parser.add_argument("--embedding-version", type=int, default=0)
+    emb_stat_parser = subparsers.add_parser("embedding-status", help="Embedding coverage (JSON)")
+    emb_stat_parser.add_argument("--embedding-model", default="")
+    emb_stat_parser.add_argument("--embedding-version", type=int, default=0)
+    emb_back_parser = subparsers.add_parser("embedding-backlog", help="Pending embedding chunks (JSON)")
+    emb_back_parser.add_argument("--limit", type=int, default=20)
+    emb_back_parser.add_argument("--embedding-model", default="")
+    emb_back_parser.add_argument("--embedding-version", type=int, default=0)
+    subparsers.add_parser(
+        "status",
+        help="Index and runtime status as JSON (same as archive_status_json MCP tool)",
+    )
 
     parser.set_defaults(command="serve")
     args = parser.parse_args()
+    if args.command == "serve" and not hasattr(args, "tunnel"):
+        args.tunnel = ""
+    # Stderr-only logging for all subcommands; keep stdout for MCP JSON-RPC / CLI JSON. See archive_mcp/log.py.
+    configure_logging(verbose=args.verbose)
+    if args.command == "mcp-config":
+        _emit_mcp_config()
+        return
+    if args.command == "health":
+        from .health import run_health_checks
+
+        result = run_health_checks()
+        print(json.dumps(result, indent=2))
+        raise SystemExit(0 if result["ok"] else 1)
+    if args.command == "search":
+        try:
+            store = resolve_store()
+            out = search_cmd.search(args.query, limit=args.limit, store=store, logger=_cli_log)
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "read":
+        try:
+            store = resolve_store()
+            out = read_cmd.read(args.path_or_uid, store=store, logger=_cli_log)
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "read-many":
+        try:
+            store = resolve_store()
+            out = read_cmd.read_many(args.paths, store=store, logger=_cli_log)
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "query":
+        try:
+            store = resolve_store()
+            out = query_cmd.query(
+                type_filter=args.type_filter,
+                source_filter=args.source_filter,
+                people_filter=args.people_filter,
+                org_filter=args.org_filter,
+                limit=args.limit,
+                store=store,
+                logger=_cli_log,
+            )
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "graph":
+        try:
+            store = resolve_store()
+            out = graph_cmd.graph(args.note_path, hops=args.hops, store=store, logger=_cli_log)
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "person":
+        try:
+            store = resolve_store()
+            out = graph_cmd.person(args.name, store=store, logger=_cli_log)
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "timeline":
+        try:
+            store = resolve_store()
+            out = graph_cmd.timeline(
+                start_date=args.start_date,
+                end_date=args.end_date,
+                limit=args.limit,
+                store=store,
+                logger=_cli_log,
+            )
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "stats":
+        try:
+            index = resolve_index()
+            out = status_cmd.stats(index=index, logger=_cli_log)
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "validate":
+        try:
+            vault = resolve_store().vault
+            out = status_cmd.validate(vault=vault, logger=_cli_log)
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "duplicates":
+        try:
+            vault = resolve_store().vault
+            out = status_cmd.duplicates(vault=vault, logger=_cli_log)
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "vector-search":
+        try:
+            store = resolve_store()
+            out = search_cmd.vector_search(
+                args.query,
+                store=store,
+                logger=_cli_log,
+                limit=args.limit,
+                embedding_model=args.embedding_model,
+                embedding_version=args.embedding_version,
+                type_filter=args.type_filter,
+                source_filter=args.source_filter,
+                people_filter=args.people_filter,
+                start_date=args.start_date,
+                end_date=args.end_date,
+            )
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "hybrid-search":
+        try:
+            store = resolve_store()
+            out = search_cmd.hybrid_search(
+                args.query,
+                store=store,
+                logger=_cli_log,
+                limit=args.limit,
+                embedding_model=args.embedding_model,
+                embedding_version=args.embedding_version,
+                type_filter=args.type_filter,
+                source_filter=args.source_filter,
+                people_filter=args.people_filter,
+                start_date=args.start_date,
+                end_date=args.end_date,
+            )
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "explain":
+        try:
+            store = resolve_store()
+            out = explain.retrieval_explain(
+                args.query,
+                store=store,
+                logger=_cli_log,
+                mode=args.mode,
+                limit=args.limit,
+                embedding_model=args.embedding_model,
+                embedding_version=args.embedding_version,
+            )
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "embedding-status":
+        try:
+            store = resolve_store()
+            out = status_cmd.embedding_status(
+                store=store,
+                logger=_cli_log,
+                embedding_model=args.embedding_model,
+                embedding_version=args.embedding_version,
+            )
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "embedding-backlog":
+        try:
+            store = resolve_store()
+            out = status_cmd.embedding_backlog(
+                store=store,
+                logger=_cli_log,
+                limit=args.limit,
+                embedding_model=args.embedding_model,
+                embedding_version=args.embedding_version,
+            )
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "status":
+        try:
+            store = resolve_store()
+            out = status_cmd.status_json(store=store, logger=_cli_log)
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
     if args.command in _SEED_LINK_COMMANDS and not get_seed_links_enabled():
         print(_SEED_LINKS_DISABLED_MSG)
         return
     if args.command == "embed-pending":
-        kwargs: dict[str, object] = {}
-        kwargs["limit"] = args.limit
+        kwargs: dict[str, object] = {"limit": args.limit}
         if args.embedding_model:
             kwargs["embedding_model"] = args.embedding_model
         if args.embedding_version:
             kwargs["embedding_version"] = args.embedding_version
-        print(archive_embed_pending(**kwargs))
+        try:
+            store = resolve_store()
+            result = admin_cmd.embed_pending(store=store, logger=_cli_log, **kwargs)
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "bootstrap-postgres":
-        print(archive_bootstrap_postgres())
+        try:
+            vault = resolve_store().vault
+            result = admin_cmd.bootstrap_postgres(vault=vault, logger=_cli_log)
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "rebuild-indexes":
-        store = get_archive_store()
-        print(
-            json.dumps(
-                store.rebuild(
-                    workers=args.workers,
-                    batch_size=args.batch_size,
-                    commit_interval=args.commit_interval,
-                    progress_every=args.progress_every,
-                    executor_kind=args.executor_kind,
-                    force_full=bool(getattr(args, "force_full_rebuild", False)),
-                    disable_manifest_cache=bool(getattr(args, "disable_manifest_cache", False)),
-                ),
-                indent=2,
+        try:
+            store = resolve_store()
+            result = admin_cmd.rebuild_indexes(
+                store=store,
+                logger=_cli_log,
+                workers=args.workers,
+                batch_size=args.batch_size,
+                commit_interval=args.commit_interval,
+                progress_every=args.progress_every,
+                executor_kind=args.executor_kind,
+                force_full=bool(getattr(args, "force_full_rebuild", False)),
+                disable_manifest_cache=bool(getattr(args, "disable_manifest_cache", False)),
             )
-        )
+            _print_json(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "index-status":
-        print(archive_index_status())
+        try:
+            store = resolve_store()
+            result = status_cmd.index_status(store=store, logger=_cli_log)
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "projection-inventory":
-        print(archive_projection_inventory())
+        try:
+            store = resolve_store()
+            result = admin_cmd.projection_inventory(store=store, logger=_cli_log)
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "projection-status":
-        print(archive_projection_status())
+        try:
+            store = resolve_store()
+            result = admin_cmd.projection_status(store=store, logger=_cli_log)
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "projection-explain":
-        print(archive_projection_explain(args.card_uid))
+        try:
+            store = resolve_store()
+            result = admin_cmd.projection_explain(args.card_uid, store=store, logger=_cli_log)
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "seed-link-surface":
-        print(archive_seed_link_surface())
+        try:
+            result = seed_cmd.seed_link_surface(logger=_cli_log)
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "seed-link-enqueue":
-        print(
-            archive_seed_link_enqueue(
+        try:
+            index = resolve_index()
+            result = seed_cmd.seed_link_enqueue(
+                index=index,
+                logger=_cli_log,
                 modules=args.modules,
                 source_uids=args.source_uids,
                 job_type=args.job_type,
                 reset_existing=bool(args.reset_existing),
             )
-        )
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "seed-link-backfill":
-        print(
-            archive_seed_link_backfill(
+        try:
+            index = resolve_index()
+            result = seed_cmd.seed_link_backfill(
+                index=index,
+                logger=_cli_log,
                 limit=args.limit,
                 modules=args.modules,
                 workers=args.workers,
                 include_llm=bool(args.include_llm),
                 apply_promotions=not bool(args.no_apply_promotions),
             )
-        )
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "seed-link-refresh":
-        print(
-            archive_seed_link_refresh(
+        try:
+            index = resolve_index()
+            result = seed_cmd.seed_link_refresh(
+                index=index,
+                logger=_cli_log,
                 source_uids=args.source_uids,
                 modules=args.modules,
                 workers=args.workers,
                 include_llm=bool(args.include_llm),
                 apply_promotions=not bool(args.no_apply_promotions),
             )
-        )
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "seed-link-worker":
-        print(
-            archive_seed_link_worker(
+        try:
+            index = resolve_index()
+            result = seed_cmd.seed_link_worker(
+                index=index,
+                logger=_cli_log,
                 limit=args.limit,
                 modules=args.modules,
                 workers=args.workers,
                 include_llm=bool(args.include_llm),
             )
-        )
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "seed-link-promote":
-        print(
-            archive_seed_link_promote(
+        try:
+            index = resolve_index()
+            result = seed_cmd.seed_link_promote(
+                index=index,
+                logger=_cli_log,
                 limit=args.limit,
                 workers=args.workers,
             )
-        )
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "seed-link-report":
-        print(
-            archive_seed_link_report(
+        try:
+            index = resolve_index()
+            result = seed_cmd.seed_link_report(
+                index=index,
+                logger=_cli_log,
                 rebuild_if_dirty=not bool(args.no_rebuild_if_dirty),
             )
-        )
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "link-candidates":
-        print(
-            archive_link_candidates(
+        try:
+            index = resolve_index()
+            result = seed_cmd.link_candidates(
+                index=index,
+                logger=_cli_log,
                 status=args.status,
                 module_name=args.module_name,
                 min_confidence=args.min_confidence,
                 limit=args.limit,
             )
-        )
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "link-candidate":
-        print(archive_link_candidate(args.candidate_id))
+        try:
+            index = resolve_index()
+            result = seed_cmd.link_candidate(args.candidate_id, index=index, logger=_cli_log)
+            _print_cli_result(result if result is not None else "Candidate not found")
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "review-link-candidate":
-        print(
-            archive_review_link_candidate(
+        try:
+            index = resolve_index()
+            result = seed_cmd.review_link_candidate(
+                index=index,
+                logger=_cli_log,
                 candidate_id=args.candidate_id,
                 reviewer=args.reviewer,
                 action=args.action,
                 notes=args.notes,
             )
-        )
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "duplicate-uids":
-        print(archive_duplicate_uids(limit=args.limit))
+        try:
+            index = resolve_index()
+            result = status_cmd.duplicate_uids(limit=args.limit, index=index, logger=_cli_log)
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "link-quality-gate":
-        print(archive_link_quality_gate())
+        try:
+            index = resolve_index()
+            result = seed_cmd.link_quality_gate(index=index, logger=_cli_log)
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
         return
     if args.command == "build-benchmark-sample":
         print(
@@ -327,27 +768,42 @@ def main() -> None:
         )
         return
     if args.command == "migrate":
-        store = get_archive_store()
+        store = resolve_store()
         from .migrate import MigrationRunner
+
         with store.index._connect() as conn:
             runner = MigrationRunner(conn, store.index.schema)
             result = runner.run(dry_run=bool(args.dry_run))
-            print(json.dumps({
-                "dry_run": bool(args.dry_run),
-                "applied": result.applied,
-                "already_applied": result.already_applied,
-                "failed": result.failed,
-                "error": result.error,
-                "elapsed_ms": result.elapsed_ms,
-            }, indent=2))
+            print(
+                json.dumps(
+                    {
+                        "dry_run": bool(args.dry_run),
+                        "applied": result.applied,
+                        "already_applied": result.already_applied,
+                        "failed": result.failed,
+                        "error": result.error,
+                        "elapsed_ms": result.elapsed_ms,
+                    },
+                    indent=2,
+                )
+            )
         return
     if args.command == "migration-status":
-        store = get_archive_store()
+        store = resolve_store()
         from .migrate import MigrationRunner
+
         with store.index._connect() as conn:
             runner = MigrationRunner(conn, store.index.schema)
             print(json.dumps(runner.status(), indent=2, default=str))
         return
+    if args.command == "serve" and getattr(args, "tunnel", ""):
+        from .tunnel import TunnelManager
+
+        local_port = int(os.environ.get("PPA_TUNNEL_PORT", "5433"))
+        remote_port = int(os.environ.get("PPA_TUNNEL_REMOTE_PORT", "5432"))
+        tunnel_mgr = TunnelManager(args.tunnel, local_port=local_port, remote_port=remote_port)
+        tunnel_mgr.start()
+        atexit.register(tunnel_mgr.stop)
     mcp.run()
 
 

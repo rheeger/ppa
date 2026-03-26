@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
-from pathlib import Path
+import time
 
 try:
     from mcp.server.fastmcp import FastMCP
 except ImportError:  # pragma: no cover
+
     class FastMCP:  # type: ignore[override]
         def __init__(self, *_args, **_kwargs):
             pass
@@ -23,47 +25,54 @@ except ImportError:  # pragma: no cover
             raise RuntimeError("mcp package is required to run ppa")
 
 
-from hfa.provenance import validate_provenance
-from hfa.schema import BaseCard, validate_card_permissive, validate_card_strict
-from hfa.vault import (find_note_by_slug, iter_notes, iter_parsed_notes,
-                       read_note)
-
-from .embedding_provider import get_embedding_provider
+from .commands import admin, explain
+from .commands import formatters as fmt
+from .commands import graph as graph_cmd
+from .commands import query as query_cmd
+from .commands import read as read_cmd
+from .commands import search as search_cmd
+from .commands import seed_links as seed_cmd
+from .commands import status as status_cmd
+from .commands._resolve import resolve_index, resolve_store
+from .errors import InvalidInputError, PpaError, SeedLinksDisabledError
 from .index_config import get_seed_links_enabled
-from .index_store import (BaseArchiveIndex, PostgresArchiveIndex,
-                          get_archive_index, get_default_embedding_model,
-                          get_default_embedding_version, get_index_dsn)
-from .store import get_archive_store
+from .index_store import get_default_embedding_model, get_default_embedding_version
 
 _SEED_LINKS_DISABLED_MSG = "Seed links are not enabled. Set PPA_SEED_LINKS_ENABLED=1 to enable."
 
+_log = logging.getLogger("ppa.server")
 
-def _import_seed_links():
-    from .seed_links import (compute_link_quality_gate,
-                             get_link_candidate_details, get_seed_scope_rows,
-                             get_surface_policy_rows, list_link_candidates,
-                             review_link_candidate,
-                             run_incremental_link_refresh,
-                             run_seed_link_backfill, run_seed_link_enqueue,
-                             run_seed_link_promotion_workers,
-                             run_seed_link_report, run_seed_link_workers)
-    return {
-        "compute_link_quality_gate": compute_link_quality_gate,
-        "get_link_candidate_details": get_link_candidate_details,
-        "get_seed_scope_rows": get_seed_scope_rows,
-        "get_surface_policy_rows": get_surface_policy_rows,
-        "list_link_candidates": list_link_candidates,
-        "review_link_candidate": review_link_candidate,
-        "run_incremental_link_refresh": run_incremental_link_refresh,
-        "run_seed_link_backfill": run_seed_link_backfill,
-        "run_seed_link_enqueue": run_seed_link_enqueue,
-        "run_seed_link_promotion_workers": run_seed_link_promotion_workers,
-        "run_seed_link_report": run_seed_link_report,
-        "run_seed_link_workers": run_seed_link_workers,
-    }
+
+def _log_tool_call(tool_name: str, **params: object) -> float:
+    """Log tool invocation at INFO. Returns monotonic start time for elapsed calculation."""
+    parts = " ".join(f"{k}={v!r}" for k, v in params.items())
+    _log.info("tool_start tool=%s %s", tool_name, parts)
+    return time.monotonic()
+
+
+def _log_tool_done(tool_name: str, t0: float, **extra: object) -> None:
+    elapsed_ms = int((time.monotonic() - t0) * 1000)
+    extras = " ".join(f"{k}={v!r}" for k, v in extra.items())
+    if extras:
+        _log.info("tool_done tool=%s elapsed_ms=%d %s", tool_name, elapsed_ms, extras)
+    else:
+        _log.info("tool_done tool=%s elapsed_ms=%d", tool_name, elapsed_ms)
+
+
+def _log_tool_return_error(tool_name: str, message: str) -> str:
+    _log.error("tool=%s error=%s", tool_name, message)
+    return message
+
 
 _instance_name = os.environ.get("PPA_INSTANCE_NAME", "Personal Private Archives").strip()
-mcp = FastMCP("ppa", _instance_name)
+_server_instructions = (
+    f"{_instance_name}\n\n"
+    "Retrieval order: (1) archive_read for known UIDs/paths (2) archive_query for structured filters "
+    "(3) archive_search_json for keywords (4) archive_hybrid_search_json for semantic queries "
+    "(5) archive_graph for relationships. Always read canonical cards before factual claims. "
+    "Prefer _json tool variants when available."
+)
+mcp = FastMCP("ppa", _server_instructions)
 
 _TOOL_PROFILES: dict[str, set[str] | None] = {
     "full": None,
@@ -120,32 +129,9 @@ _TOOL_PROFILES: dict[str, set[str] | None] = {
 }
 
 
-def get_vault() -> Path:
-    return Path(os.environ.get("PPA_PATH", Path.home() / "Archive" / "vault"))
-
-
-def get_index(vault: Path | None = None) -> BaseArchiveIndex:
-    return get_archive_index(vault or get_vault())
-
-
-def get_store(vault: Path | None = None):
-    resolved_vault = vault or get_vault()
-    return get_archive_store(
-        vault=resolved_vault,
-        index=get_index(resolved_vault),
-        provider_factory=get_embedding_provider,
-    )
-
-
-def _load_store(vault: Path):
-    try:
-        return get_store(vault), None
-    except RuntimeError as exc:
-        return None, str(exc)
-
-
 def _tool_profile_error(tool_name: str) -> str | None:
     from .index_config import _ppa_env
+
     profile = _ppa_env("PPA_MCP_TOOL_PROFILE", default="full").lower() or "full"
     allowed = _TOOL_PROFILES.get(profile)
     if allowed is None:
@@ -155,83 +141,54 @@ def _tool_profile_error(tool_name: str) -> str | None:
     return f"Tool disabled by PPA_MCP_TOOL_PROFILE={profile}"
 
 
-def _resolve_vault_note_path(vault: Path, rel_or_note_path: str) -> Path | None:
-    try:
-        candidate = (vault / rel_or_note_path).resolve()
-        candidate.relative_to(vault.resolve())
-    except Exception:
-        return None
-    if not candidate.exists() or candidate.suffix != ".md":
-        return None
-    return candidate
-
-
-def _load_index(vault: Path) -> tuple[BaseArchiveIndex | None, str | None]:
-    try:
-        return get_index(vault), None
-    except RuntimeError as exc:
-        return None, str(exc)
-
-
-def _card_summary(card: BaseCard, rel_path: Path) -> str:
-    return f"- {rel_path}: {card.summary[:80]}"
-
-
-def _format_search_line(row: dict) -> str:
-    """Render a search/query result row with type, date, and fuller summary."""
-    rel_path = row.get("rel_path", "")
-    card_type = row.get("type", "")
-    date = str(row.get("activity_at", ""))[:10]
-    summary = str(row.get("summary", ""))[:200]
-    meta = ", ".join(part for part in [card_type, date] if part)
-    return f"- {rel_path} [{meta}]: {summary}"
-
-
-def _all_cards(vault: Path) -> list[tuple[Path, BaseCard, str, dict]]:
-    rows: list[tuple[Path, BaseCard, str, dict]] = []
-    for note in iter_parsed_notes(vault):
-        card = validate_card_permissive(note.frontmatter)
-        rows.append((note.rel_path, card, note.body, note.provenance))
-    return rows
+def _ppa_err(tool: str, exc: BaseException) -> str:
+    _log.error("tool=%s ppa_error=%s", tool, str(exc))
+    return str(exc)
 
 
 @mcp.tool()
 def archive_search(query: str, limit: int = 20) -> str:
     """Full-text search across all notes."""
 
-    profile_error = _tool_profile_error("archive_search")
-    if profile_error:
-        return profile_error
-    vault = get_vault()
-    if not vault.is_dir():
-        return "Vault not found"
-    store, error = _load_store(vault)
-    if error:
-        return error
-    assert store is not None
-    rows = store.search(query, limit=limit)["rows"]
-    results = [_format_search_line(row) for row in rows]
-    return "\n".join(results) if results else "No matches"
+    t0 = _log_tool_call("archive_search", query=query, limit=limit)
+    try:
+        profile_error = _tool_profile_error("archive_search")
+        if profile_error:
+            return _log_tool_return_error("archive_search", profile_error)
+        store = resolve_store()
+        result = search_cmd.search(query, limit=limit, store=store, logger=_log)
+        rows = result["rows"]
+        out = fmt.format_search(result)
+        _log_tool_done("archive_search", t0, result_count=len(rows))
+        return out
+    except PpaError as exc:
+        return _ppa_err("archive_search", exc)
+    except Exception as exc:
+        _log.error("tool=archive_search error=%s", str(exc))
+        raise
 
 
 @mcp.tool()
 def archive_read(path_or_uid: str) -> str:
     """Read note by relative path or UID."""
 
-    profile_error = _tool_profile_error("archive_read")
-    if profile_error:
-        return profile_error
-    vault = get_vault()
-    if not vault.is_dir():
-        return "Vault not found"
-    store, error = _load_store(vault)
-    if error:
-        return error
-    assert store is not None
-    payload = store.read(path_or_uid)
-    if not payload.get("found"):
-        return "Not found"
-    return str(payload.get("content", ""))
+    t0 = _log_tool_call("archive_read", path_or_uid=path_or_uid)
+    try:
+        profile_error = _tool_profile_error("archive_read")
+        if profile_error:
+            return _log_tool_return_error("archive_read", profile_error)
+        store = resolve_store()
+        payload = read_cmd.read(path_or_uid, store=store, logger=_log)
+        if not payload.get("found"):
+            _log_tool_done("archive_read", t0, found=False)
+            return "Not found"
+        _log_tool_done("archive_read", t0, found=True)
+        return str(payload.get("content", ""))
+    except PpaError as exc:
+        return _ppa_err("archive_read", exc)
+    except Exception as exc:
+        _log.error("tool=archive_read error=%s", str(exc))
+        raise
 
 
 @mcp.tool()
@@ -244,25 +201,37 @@ def archive_query(
 ) -> str:
     """Structured query by frontmatter fields."""
 
-    profile_error = _tool_profile_error("archive_query")
-    if profile_error:
-        return profile_error
-    vault = get_vault()
-    if not vault.is_dir():
-        return "Vault not found"
-    store, error = _load_store(vault)
-    if error:
-        return error
-    assert store is not None
-    rows = store.query(
+    t0 = _log_tool_call(
+        "archive_query",
         type_filter=type_filter,
         source_filter=source_filter,
         people_filter=people_filter,
         org_filter=org_filter,
         limit=limit,
-    )["rows"]
-    results = [_format_search_line(row) for row in rows]
-    return "\n".join(results) if results else "No matches"
+    )
+    try:
+        profile_error = _tool_profile_error("archive_query")
+        if profile_error:
+            return _log_tool_return_error("archive_query", profile_error)
+        store = resolve_store()
+        result = query_cmd.query(
+            type_filter=type_filter,
+            source_filter=source_filter,
+            people_filter=people_filter,
+            org_filter=org_filter,
+            limit=limit,
+            store=store,
+            logger=_log,
+        )
+        rows = result["rows"]
+        out = fmt.format_search(result)
+        _log_tool_done("archive_query", t0, result_count=len(rows))
+        return out
+    except PpaError as exc:
+        return _ppa_err("archive_query", exc)
+    except Exception as exc:
+        _log.error("tool=archive_query error=%s", str(exc))
+        raise
 
 
 @mcp.tool()
@@ -272,25 +241,21 @@ def archive_graph(note_path: str, hops: int = 2) -> str:
     profile_error = _tool_profile_error("archive_graph")
     if profile_error:
         return profile_error
-    vault = get_vault()
-    if not vault.is_dir():
-        return "Vault not found"
-    store, error = _load_store(vault)
-    if error:
-        return error
-    assert store is not None
-    payload = store.graph(note_path, hops=hops)
-    rel_path = str(payload.get("rel_path", note_path))
-    graph = payload.get("graph")
-    if graph is None:
-        return "Note not found"
+    t0 = _log_tool_call("archive_graph", note_path=note_path, hops=hops)
+    try:
+        store = resolve_store()
+        payload = graph_cmd.graph(note_path, hops=hops, store=store, logger=_log)
+        rel_path = str(payload.get("rel_path", note_path))
+        graph = payload.get("graph")
+        if graph is None:
+            _log_tool_done("archive_graph", t0, found=False)
+            return "Note not found"
 
-    lines = [f"Graph from {rel_path}:"]
-    for source, targets in graph.items():
-        lines.append(f"- {source}")
-        for target in targets:
-            lines.append(f"  -> {target}")
-    return "\n".join(lines) if len(lines) > 1 else "No linked notes"
+        out = fmt.format_graph(rel_path, graph)
+        _log_tool_done("archive_graph", t0, edge_count=max(0, len(out.splitlines()) - 1))
+        return out
+    except PpaError as exc:
+        return _ppa_err("archive_graph", exc)
 
 
 @mcp.tool()
@@ -300,23 +265,17 @@ def archive_person(name: str) -> str:
     profile_error = _tool_profile_error("archive_person")
     if profile_error:
         return profile_error
-    vault = get_vault()
-    if not vault.is_dir():
-        return "Vault not found"
-    index, error = _load_index(vault)
-    if error:
-        return error
-    assert index is not None
-    rel_path = index.person_path(name)
-    if rel_path is None:
-        match = find_note_by_slug(vault, name.replace(" ", "-").lower())
-        if match is None:
+    t0 = _log_tool_call("archive_person", name=name)
+    try:
+        store = resolve_store()
+        result = graph_cmd.person(name, store=store, logger=_log)
+        if not result.get("found"):
+            _log_tool_done("archive_person", t0, found=False)
             return "Person not found"
-        return match.read_text(encoding="utf-8")
-    path = vault / rel_path
-    if not path.exists():
-        return "Person not found"
-    return path.read_text(encoding="utf-8")
+        _log_tool_done("archive_person", t0, found=True)
+        return str(result.get("content", ""))
+    except PpaError as exc:
+        return _ppa_err("archive_person", exc)
 
 
 @mcp.tool()
@@ -326,16 +285,22 @@ def archive_timeline(start_date: str = "", end_date: str = "", limit: int = 20) 
     profile_error = _tool_profile_error("archive_timeline")
     if profile_error:
         return profile_error
-    vault = get_vault()
-    if not vault.is_dir():
-        return "Vault not found"
-    store, error = _load_store(vault)
-    if error:
-        return error
-    assert store is not None
-    rows = store.timeline(start_date=start_date, end_date=end_date, limit=limit)["rows"]
-    results = [f"- {str(row['created'])[:10]} {row['rel_path']}: {str(row['summary'])[:160]}" for row in rows]
-    return "\n".join(results) if results else "No matches"
+    t0 = _log_tool_call("archive_timeline", start_date=start_date, end_date=end_date, limit=limit)
+    try:
+        store = resolve_store()
+        result = graph_cmd.timeline(
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
+            store=store,
+            logger=_log,
+        )
+        rows = result["rows"]
+        out = fmt.format_timeline(result)
+        _log_tool_done("archive_timeline", t0, result_count=len(rows))
+        return out
+    except PpaError as exc:
+        return _ppa_err("archive_timeline", exc)
 
 
 @mcp.tool()
@@ -345,21 +310,15 @@ def archive_stats() -> str:
     profile_error = _tool_profile_error("archive_stats")
     if profile_error:
         return profile_error
-    vault = get_vault()
-    if not vault.is_dir():
-        return "Vault not found"
-    index, error = _load_index(vault)
-    if error:
-        return error
-    assert index is not None
-    total, by_type, by_source = index.stats()
-    lines = [f"Total: {total} notes", "", "By type:"]
-    for row in by_type:
-        lines.append(f"  {row['type']}: {row['count']}")
-    lines.extend(["", "By source:"])
-    for row in by_source:
-        lines.append(f"  {row['source']}: {row['count']}")
-    return "\n".join(lines)
+    t0 = _log_tool_call("archive_stats")
+    try:
+        index = resolve_index()
+        result = status_cmd.stats(index=index, logger=_log)
+        total = result["total"]
+        _log_tool_done("archive_stats", t0, total=total)
+        return fmt.format_stats(result)
+    except PpaError as exc:
+        return _ppa_err("archive_stats", exc)
 
 
 @mcp.tool()
@@ -369,32 +328,17 @@ def archive_validate() -> str:
     profile_error = _tool_profile_error("archive_validate")
     if profile_error:
         return profile_error
-    vault = get_vault()
-    if not vault.is_dir():
-        return "Vault not found"
-    total = 0
-    valid = 0
-    errors: list[str] = []
-    for rel_path, _ in iter_notes(vault):
-        total += 1
-        try:
-            frontmatter, _, provenance = read_note(vault, str(rel_path))
-            card = validate_card_strict(frontmatter)
-            provenance_errors = validate_provenance(card.model_dump(mode="python"), provenance)
-            if provenance_errors:
-                raise ValueError("; ".join(provenance_errors))
-            valid += 1
-        except Exception as exc:
-            errors.append(f"- {rel_path}: {exc}")
-    lines = [f"Validated {valid}/{total} notes"]
-    if errors:
-        lines.append("Errors:")
-        lines.extend(errors[:20])
-        if len(errors) > 20:
-            lines.append(f"... and {len(errors) - 20} more")
-    else:
-        lines.append("0 errors")
-    return "\n".join(lines)
+    t0 = _log_tool_call("archive_validate")
+    try:
+        vault = resolve_store().vault
+        result = status_cmd.validate(vault=vault, logger=_log)
+        valid = result["valid"]
+        total = result["total"]
+        errors = result["errors"]
+        _log_tool_done("archive_validate", t0, valid=valid, total=total, error_count=len(errors))
+        return fmt.format_validate(result)
+    except PpaError as exc:
+        return _ppa_err("archive_validate", exc)
 
 
 @mcp.tool()
@@ -404,28 +348,20 @@ def archive_duplicates() -> str:
     profile_error = _tool_profile_error("archive_duplicates")
     if profile_error:
         return profile_error
-    vault = get_vault()
-    if not vault.is_dir():
-        return "Vault not found"
-    path = vault / "_meta" / "dedup-candidates.json"
-    if not path.exists():
-        return "No pending duplicate candidates"
+    t0 = _log_tool_call("archive_duplicates")
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return "Could not parse dedup candidates"
-    if not isinstance(payload, list) or not payload:
-        return "No pending duplicate candidates"
-    lines: list[str] = []
-    for candidate in payload[:20]:
-        if not isinstance(candidate, dict):
-            continue
-        existing = str(candidate.get("existing", ""))
-        confidence = candidate.get("confidence", "")
-        incoming = candidate.get("incoming", {})
-        incoming_summary = incoming.get("summary", "") if isinstance(incoming, dict) else ""
-        lines.append(f"- {incoming_summary} -> {existing} ({confidence})")
-    return "\n".join(lines) if lines else "No pending duplicate candidates"
+        vault = resolve_store().vault
+        result = status_cmd.duplicates(vault=vault, logger=_log)
+        st = result["status"]
+        out = fmt.format_duplicates(result)
+        if st in ("missing", "parse_error", "empty"):
+            _log_tool_done("archive_duplicates", t0, status=st)
+        else:
+            line_count = len([ln for ln in out.splitlines() if ln.startswith("- ")])
+            _log_tool_done("archive_duplicates", t0, status=st, line_count=line_count)
+        return out
+    except PpaError as exc:
+        return _ppa_err("archive_duplicates", exc)
 
 
 @mcp.tool()
@@ -435,23 +371,16 @@ def archive_duplicate_uids(limit: int = 20) -> str:
     profile_error = _tool_profile_error("archive_duplicate_uids")
     if profile_error:
         return profile_error
-    vault = get_vault()
-    if not vault.is_dir():
-        return "Vault not found"
-    index, error = _load_index(vault)
-    if error:
-        return error
-    assert index is not None
-    rows = index.duplicate_uid_rows(limit=limit)
-    if not rows:
-        return "No duplicate UID rows"
-    lines = ["Archive duplicate UID rows:"]
-    for row in rows:
-        lines.append(
-            f"- uid={row['uid']} group_size={row['duplicate_group_size']} preferred={row['preferred_rel_path']} "
-            f"duplicate={row['duplicate_rel_path']} preferred_type={row['preferred_type']} duplicate_type={row['duplicate_type']}"
-        )
-    return "\n".join(lines)
+    t0 = _log_tool_call("archive_duplicate_uids", limit=limit)
+    try:
+        index = resolve_index()
+        result = status_cmd.duplicate_uids(limit=limit, index=index, logger=_log)
+        rows = result["rows"]
+        out = fmt.format_duplicate_uids(result)
+        _log_tool_done("archive_duplicate_uids", t0, result_count=len(rows))
+        return out
+    except PpaError as exc:
+        return _ppa_err("archive_duplicate_uids", exc)
 
 
 @mcp.tool()
@@ -461,22 +390,19 @@ def archive_rebuild_indexes() -> str:
     profile_error = _tool_profile_error("archive_rebuild_indexes")
     if profile_error:
         return profile_error
-    vault = get_vault()
-    if not vault.is_dir():
-        return "Vault not found"
-    index, error = _load_index(vault)
-    if error:
-        return error
-    assert index is not None
-    counts = index.rebuild()
-    return (
-        f"Rebuilt archive index at {index.location}\n"
-        f"- cards: {counts['cards']}\n"
-        f"- external_ids: {counts['external_ids']}\n"
-        f"- edges: {counts['edges']}\n"
-        f"- chunks: {counts['chunks']}\n"
-        f"- duplicate_uids: {counts['duplicate_uids']}"
-    )
+    t0 = _log_tool_call("archive_rebuild_indexes")
+    try:
+        index = resolve_index()
+        counts = index.rebuild()
+        _log_tool_done(
+            "archive_rebuild_indexes",
+            t0,
+            cards=counts.get("cards"),
+            chunks=counts.get("chunks"),
+        )
+        return fmt.format_rebuild_indexes(index.location, counts)
+    except PpaError as exc:
+        return _ppa_err("archive_rebuild_indexes", exc)
 
 
 @mcp.tool()
@@ -486,17 +412,14 @@ def archive_bootstrap_postgres() -> str:
     profile_error = _tool_profile_error("archive_bootstrap_postgres")
     if profile_error:
         return profile_error
-    vault = get_vault()
-    if not vault.is_dir():
-        return "Vault not found"
-    dsn = get_index_dsn()
-    if not dsn:
-        return "PPA_INDEX_DSN is required"
-    result = PostgresArchiveIndex(vault, dsn=dsn).bootstrap()
-    lines = ["Bootstrapped Postgres archive index:"]
-    for key in sorted(result):
-        lines.append(f"- {key}: {result[key]}")
-    return "\n".join(lines)
+    t0 = _log_tool_call("archive_bootstrap_postgres")
+    try:
+        vault = resolve_store().vault
+        result = admin.bootstrap_postgres(vault=vault, logger=_log)
+        _log_tool_done("archive_bootstrap_postgres", t0, keys=list(result.keys()))
+        return fmt.format_bootstrap_postgres(result)
+    except PpaError as exc:
+        return _ppa_err("archive_bootstrap_postgres", exc)
 
 
 @mcp.tool()
@@ -506,20 +429,17 @@ def archive_index_status() -> str:
     profile_error = _tool_profile_error("archive_index_status")
     if profile_error:
         return profile_error
-    vault = get_vault()
-    if not vault.is_dir():
-        return "Vault not found"
-    store, error = _load_store(vault)
-    if error:
-        return error
-    assert store is not None
-    status = store.status()
-    if not status:
-        return "No index metadata found"
-    lines = ["Archive index status:"]
-    for key in sorted(status):
-        lines.append(f"- {key}: {status[key]}")
-    return "\n".join(lines)
+    t0 = _log_tool_call("archive_index_status")
+    try:
+        store = resolve_store()
+        status = status_cmd.index_status(store=store, logger=_log)
+        if not status:
+            _log_tool_done("archive_index_status", t0, empty=True)
+        else:
+            _log_tool_done("archive_index_status", t0, keys=list(status.keys()))
+        return fmt.format_index_status(status)
+    except PpaError as exc:
+        return _ppa_err("archive_index_status", exc)
 
 
 @mcp.tool()
@@ -529,19 +449,15 @@ def archive_projection_inventory() -> str:
     profile_error = _tool_profile_error("archive_projection_inventory")
     if profile_error:
         return profile_error
-    vault = get_vault()
-    store, error = _load_store(vault)
-    if error:
-        return error
-    assert store is not None
-    payload = store.projection_inventory()
-    lines = ["Archive projection inventory:"]
-    for projection in payload.get("projections", []):
-        lines.append(
-            f"- {projection['name']} table={projection['table_name']} kind={projection['kind']} "
-            f"types={','.join(projection['applies_to_types'])}"
-        )
-    return "\n".join(lines)
+    t0 = _log_tool_call("archive_projection_inventory")
+    try:
+        store = resolve_store()
+        payload = admin.projection_inventory(store=store, logger=_log)
+        projections = payload.get("projections", [])
+        _log_tool_done("archive_projection_inventory", t0, projection_count=len(projections))
+        return fmt.format_projection_inventory(payload)
+    except PpaError as exc:
+        return _ppa_err("archive_projection_inventory", exc)
 
 
 @mcp.tool()
@@ -551,20 +467,15 @@ def archive_projection_status() -> str:
     profile_error = _tool_profile_error("archive_projection_status")
     if profile_error:
         return profile_error
-    vault = get_vault()
-    store, error = _load_store(vault)
-    if error:
-        return error
-    assert store is not None
-    payload = store.projection_status()
-    lines = ["Archive projection status:"]
-    for row in payload.get("projection_coverage", []):
-        blockers = ",".join(row.get("migration_blockers", []))
-        lines.append(
-            f"- {row['card_type']} projection={row['typed_projection']} rows={row['materialized_row_count']} "
-            f"ready_ratio={float(row['canonical_ready_ratio']):.2f} blockers={blockers}"
-        )
-    return "\n".join(lines)
+    t0 = _log_tool_call("archive_projection_status")
+    try:
+        store = resolve_store()
+        payload = admin.projection_status(store=store, logger=_log)
+        cov = payload.get("projection_coverage", [])
+        _log_tool_done("archive_projection_status", t0, row_count=len(cov))
+        return fmt.format_projection_status(payload)
+    except PpaError as exc:
+        return _ppa_err("archive_projection_status", exc)
 
 
 @mcp.tool()
@@ -574,24 +485,15 @@ def archive_projection_explain(card_uid: str) -> str:
     profile_error = _tool_profile_error("archive_projection_explain")
     if profile_error:
         return profile_error
-    vault = get_vault()
-    store, error = _load_store(vault)
-    if error:
-        return error
-    assert store is not None
-    payload = store.projection_explain(card_uid)
-    lines = [
-        f"Archive projection explain for {card_uid}:",
-        f"- card_type: {payload.get('card_type', '')}",
-        f"- typed_projection: {payload.get('typed_projection', '')}",
-        f"- canonical_ready: {payload.get('canonical_ready', False)}",
-    ]
-    for mapping in payload.get("field_mappings", [])[:20]:
-        fields = ",".join(mapping.get("canonical_fields", []))
-        lines.append(f"- {mapping['typed_column']} <- {fields} ({mapping['status']})")
-    if payload.get("migration_notes"):
-        lines.append(f"- migration_notes: {'; '.join(payload['migration_notes'])}")
-    return "\n".join(lines)
+    t0 = _log_tool_call("archive_projection_explain", card_uid=card_uid)
+    try:
+        store = resolve_store()
+        payload = admin.projection_explain(card_uid, store=store, logger=_log)
+        mappings = payload.get("field_mappings", [])[:20]
+        _log_tool_done("archive_projection_explain", t0, mapping_count=len(mappings))
+        return fmt.format_projection_explain(card_uid, payload)
+    except PpaError as exc:
+        return _ppa_err("archive_projection_explain", exc)
 
 
 @mcp.tool()
@@ -601,21 +503,27 @@ def archive_embedding_status(embedding_model: str = "", embedding_version: int =
     profile_error = _tool_profile_error("archive_embedding_status")
     if profile_error:
         return profile_error
-    vault = get_vault()
-    if not vault.is_dir():
-        return "Vault not found"
-    store, error = _load_store(vault)
-    if error:
-        return error
-    assert store is not None
-    status = store.embedding_status(
-        embedding_model=embedding_model.strip(),
+    t0 = _log_tool_call(
+        "archive_embedding_status",
+        embedding_model=embedding_model,
         embedding_version=embedding_version,
     )
-    lines = ["Archive embedding status:"]
-    for key in ("embedding_model", "embedding_version", "chunk_schema_version", "chunk_count", "embedded_chunk_count", "pending_chunk_count"):
-        lines.append(f"- {key}: {status[key]}")
-    return "\n".join(lines)
+    try:
+        store = resolve_store()
+        status = status_cmd.embedding_status(
+            store=store,
+            logger=_log,
+            embedding_model=embedding_model,
+            embedding_version=embedding_version,
+        )
+        _log_tool_done(
+            "archive_embedding_status",
+            t0,
+            pending_chunk_count=status.get("pending_chunk_count"),
+        )
+        return fmt.format_embedding_status(status)
+    except PpaError as exc:
+        return _ppa_err("archive_embedding_status", exc)
 
 
 @mcp.tool()
@@ -625,30 +533,27 @@ def archive_embedding_backlog(limit: int = 20, embedding_model: str = "", embedd
     profile_error = _tool_profile_error("archive_embedding_backlog")
     if profile_error:
         return profile_error
-    vault = get_vault()
-    if not vault.is_dir():
-        return "Vault not found"
-    store, error = _load_store(vault)
-    if error:
-        return error
-    assert store is not None
-    payload = store.embedding_backlog(
+    t0 = _log_tool_call(
+        "archive_embedding_backlog",
         limit=limit,
-        embedding_model=embedding_model.strip(),
+        embedding_model=embedding_model,
         embedding_version=embedding_version,
     )
-    model = str(payload["embedding_model"])
-    version = int(payload["embedding_version"])
-    rows = payload["rows"]
-    if not rows:
-        return f"No pending chunks for {model} v{version}"
-    lines = [f"Embedding backlog for {model} v{version}:"]
-    for row in rows:
-        preview = str(row["content"]).replace("\n", " ")[:80]
-        lines.append(
-            f"- {row['rel_path']} [{row['chunk_type']}#{row['chunk_index']}] ({row['token_count']} tokens): {preview}"
+    try:
+        store = resolve_store()
+        payload = status_cmd.embedding_backlog(
+            store=store,
+            logger=_log,
+            limit=limit,
+            embedding_model=embedding_model,
+            embedding_version=embedding_version,
         )
-    return "\n".join(lines)
+        rows = payload["rows"]
+        out = fmt.format_embedding_backlog(payload)
+        _log_tool_done("archive_embedding_backlog", t0, result_count=len(rows))
+        return out
+    except PpaError as exc:
+        return _ppa_err("archive_embedding_backlog", exc)
 
 
 @mcp.tool()
@@ -658,33 +563,30 @@ def archive_embed_pending(limit: int = 20, embedding_model: str = "", embedding_
     profile_error = _tool_profile_error("archive_embed_pending")
     if profile_error:
         return profile_error
-    vault = get_vault()
-    if not vault.is_dir():
-        return "Vault not found"
-    store, error = _load_store(vault)
-    if error:
-        return error
-    assert store is not None
-    result = store.embed_pending(
+    t0 = _log_tool_call(
+        "archive_embed_pending",
         limit=limit,
-        embedding_model=embedding_model.strip(),
+        embedding_model=embedding_model,
         embedding_version=embedding_version,
     )
-    lines = [
-        f"Embedded chunks for {result['embedding_model']} v{result['embedding_version']}",
-        f"- provider: {result['provider']}",
-        f"- chunk_schema_version: {result['chunk_schema_version']}",
-        f"- batch_size: {result['batch_size']}",
-        f"- embedded: {result['embedded']}",
-        f"- failed: {result['failed']}",
-    ]
-    if result.get("write_batch_size") is not None:
-        lines.insert(4, f"- write_batch_size: {result['write_batch_size']}")
-    if result.get("concurrency") is not None:
-        lines.insert(5, f"- concurrency: {result['concurrency']}")
-    if result.get("last_error"):
-        lines.append(f"- last_error: {result['last_error']}")
-    return "\n".join(lines)
+    try:
+        store = resolve_store()
+        result = admin.embed_pending(
+            store=store,
+            logger=_log,
+            limit=limit,
+            embedding_model=embedding_model.strip(),
+            embedding_version=embedding_version,
+        )
+        _log_tool_done(
+            "archive_embed_pending",
+            t0,
+            embedded=result.get("embedded"),
+            failed=result.get("failed"),
+        )
+        return fmt.format_embed_pending(result)
+    except PpaError as exc:
+        return _ppa_err("archive_embed_pending", exc)
 
 
 @mcp.tool()
@@ -696,26 +598,30 @@ def archive_seed_link_surface() -> str:
     profile_error = _tool_profile_error("archive_seed_link_surface")
     if profile_error:
         return profile_error
-    sl = _import_seed_links()
-    scope_rows = sl["get_seed_scope_rows"]()
-    policy_rows = sl["get_surface_policy_rows"]()
-    lines = ["Archive seed link surface:", "", "Scope:"]
-    for row in scope_rows:
-        modules = ",".join(row["modules"])
-        lines.append(f"- priority={row['priority']} type={row['card_type']} modules={modules}")
-    lines.extend(["", "Policies:"])
-    for row in policy_rows:
-        target_field = f" field={row['canonical_field_name']}" if row["canonical_field_name"] else ""
-        lines.append(
-            f"- {row['link_type']} module={row['module_name']} surface={row['surface']} "
-            f"promotion={row['promotion_target']}{target_field} auto={row['auto_promote_floor']:.2f} "
-            f"canonical={row['canonical_floor']:.2f}"
+    t0 = _log_tool_call("archive_seed_link_surface")
+    try:
+        payload = seed_cmd.seed_link_surface(logger=_log)
+        out = fmt.format_seed_link_surface(payload)
+        _log_tool_done(
+            "archive_seed_link_surface",
+            t0,
+            scope_rows=len(payload.get("scope", [])),
+            policy_rows=len(payload.get("policies", [])),
         )
-    return "\n".join(lines)
+        return out
+    except SeedLinksDisabledError:
+        return _SEED_LINKS_DISABLED_MSG
+    except PpaError as exc:
+        return _ppa_err("archive_seed_link_surface", exc)
 
 
 @mcp.tool()
-def archive_seed_link_enqueue(modules: str = "", source_uids: str = "", job_type: str = "seed_backfill", reset_existing: bool = False) -> str:
+def archive_seed_link_enqueue(
+    modules: str = "",
+    source_uids: str = "",
+    job_type: str = "seed_backfill",
+    reset_existing: bool = False,
+) -> str:
     """Enqueue seed link jobs without processing them."""
 
     if not get_seed_links_enabled():
@@ -723,30 +629,33 @@ def archive_seed_link_enqueue(modules: str = "", source_uids: str = "", job_type
     profile_error = _tool_profile_error("archive_seed_link_enqueue")
     if profile_error:
         return profile_error
-    vault = get_vault()
-    if not vault.is_dir():
-        return "Vault not found"
-    index, error = _load_index(vault)
-    if error:
-        return error
-    assert index is not None
-    sl = _import_seed_links()
-    selected_modules = [item.strip() for item in modules.split(",") if item.strip()]
-    selected_uids = {item.strip() for item in source_uids.split(",") if item.strip()}
-    result = sl["run_seed_link_enqueue"](
-        index,
-        modules=selected_modules or None,
-        source_uids=selected_uids or None,
-        job_type=job_type.strip() or "seed_backfill",
-        reset_existing=bool(reset_existing),
+    t0 = _log_tool_call(
+        "archive_seed_link_enqueue",
+        modules=modules,
+        job_type=job_type,
+        reset_existing=reset_existing,
     )
-    return (
-        "Archive seed link enqueue:\n"
-        f"- job_type: {job_type}\n"
-        f"- prepared: {result['prepared']}\n"
-        f"- enqueued: {result['enqueued']}\n"
-        f"- existing: {result['existing']}"
-    )
+    try:
+        index = resolve_index()
+        result = seed_cmd.seed_link_enqueue(
+            index=index,
+            logger=_log,
+            modules=modules,
+            source_uids=source_uids,
+            job_type=job_type,
+            reset_existing=reset_existing,
+        )
+        _log_tool_done(
+            "archive_seed_link_enqueue",
+            t0,
+            prepared=result.get("prepared"),
+            enqueued=result.get("enqueued"),
+        )
+        return fmt.format_seed_link_enqueue(job_type, result)
+    except SeedLinksDisabledError:
+        return _SEED_LINKS_DISABLED_MSG
+    except PpaError as exc:
+        return _ppa_err("archive_seed_link_enqueue", exc)
 
 
 @mcp.tool()
@@ -764,42 +673,35 @@ def archive_seed_link_backfill(
     profile_error = _tool_profile_error("archive_seed_link_backfill")
     if profile_error:
         return profile_error
-    vault = get_vault()
-    if not vault.is_dir():
-        return "Vault not found"
-    index, error = _load_index(vault)
-    if error:
-        return error
-    assert index is not None
-    sl = _import_seed_links()
-    selected_modules = [item.strip() for item in modules.split(",") if item.strip()]
-    result = sl["run_seed_link_backfill"](
-        index,
-        modules=selected_modules or None,
+    t0 = _log_tool_call(
+        "archive_seed_link_backfill",
         limit=limit,
-        max_workers=workers,
-        include_llm=bool(include_llm),
-        apply_promotions=bool(apply_promotions),
+        modules=modules,
+        workers=workers,
+        include_llm=include_llm,
     )
-    lines = ["Archive seed link backfill:"]
-    for key in (
-        "workers",
-        "jobs_enqueued",
-        "jobs_completed",
-        "jobs_failed",
-        "candidates",
-        "needs_review",
-        "auto_promoted",
-        "canonical_safe",
-        "derived_promotions_applied",
-        "canonical_applied",
-        "llm_judged",
-        "promotion_blocked",
-        "orphaned_links_before",
-        "orphaned_links_after",
-    ):
-        lines.append(f"- {key}: {result[key]}")
-    return "\n".join(lines)
+    try:
+        index = resolve_index()
+        result = seed_cmd.seed_link_backfill(
+            index=index,
+            logger=_log,
+            limit=limit,
+            modules=modules,
+            workers=workers,
+            include_llm=include_llm,
+            apply_promotions=apply_promotions,
+        )
+        _log_tool_done(
+            "archive_seed_link_backfill",
+            t0,
+            jobs_completed=result.get("jobs_completed"),
+            candidates=result.get("candidates"),
+        )
+        return fmt.format_seed_link_backfill(result)
+    except SeedLinksDisabledError:
+        return _SEED_LINKS_DISABLED_MSG
+    except PpaError as exc:
+        return _ppa_err("archive_seed_link_backfill", exc)
 
 
 @mcp.tool()
@@ -817,41 +719,30 @@ def archive_seed_link_refresh(
     profile_error = _tool_profile_error("archive_seed_link_refresh")
     if profile_error:
         return profile_error
-    vault = get_vault()
-    if not vault.is_dir():
-        return "Vault not found"
-    index, error = _load_index(vault)
-    if error:
-        return error
-    assert index is not None
-    sl = _import_seed_links()
-    selected_uids = [item.strip() for item in source_uids.split(",") if item.strip()]
-    if not selected_uids:
-        return "source_uids is required"
-    selected_modules = [item.strip() for item in modules.split(",") if item.strip()]
-    result = sl["run_incremental_link_refresh"](
-        index,
-        source_uids=selected_uids,
-        modules=selected_modules or None,
-        max_workers=workers,
-        include_llm=bool(include_llm),
-        apply_promotions=bool(apply_promotions),
+    t0 = _log_tool_call(
+        "archive_seed_link_refresh",
+        source_uids=source_uids,
+        modules=modules,
+        workers=workers,
+        include_llm=include_llm,
     )
-    lines = ["Archive seed link refresh:"]
-    for key in (
-        "job_type",
-        "jobs_enqueued",
-        "jobs_completed",
-        "jobs_failed",
-        "candidates",
-        "needs_review",
-        "auto_promoted",
-        "canonical_safe",
-        "derived_promotions_applied",
-        "canonical_applied",
-    ):
-        lines.append(f"- {key}: {result[key]}")
-    return "\n".join(lines)
+    try:
+        index = resolve_index()
+        result = seed_cmd.seed_link_refresh(
+            index=index,
+            logger=_log,
+            source_uids=source_uids,
+            modules=modules,
+            workers=workers,
+            include_llm=include_llm,
+            apply_promotions=apply_promotions,
+        )
+        _log_tool_done("archive_seed_link_refresh", t0, jobs_completed=result.get("jobs_completed"))
+        return fmt.format_seed_link_refresh(result)
+    except SeedLinksDisabledError:
+        return _SEED_LINKS_DISABLED_MSG
+    except PpaError as exc:
+        return _ppa_err("archive_seed_link_refresh", exc)
 
 
 @mcp.tool()
@@ -863,26 +754,29 @@ def archive_seed_link_worker(limit: int = 0, modules: str = "", workers: int = 0
     profile_error = _tool_profile_error("archive_seed_link_worker")
     if profile_error:
         return profile_error
-    vault = get_vault()
-    if not vault.is_dir():
-        return "Vault not found"
-    index, error = _load_index(vault)
-    if error:
-        return error
-    assert index is not None
-    sl = _import_seed_links()
-    selected_modules = [item.strip() for item in modules.split(",") if item.strip()]
-    result = sl["run_seed_link_workers"](
-        index,
-        modules=selected_modules or None,
+    t0 = _log_tool_call(
+        "archive_seed_link_worker",
         limit=limit,
-        max_workers=workers,
-        include_llm=bool(include_llm),
+        modules=modules,
+        workers=workers,
+        include_llm=include_llm,
     )
-    lines = ["Archive seed link worker:"]
-    for key in ("workers", "jobs_completed", "jobs_failed", "candidates", "needs_review", "auto_promoted", "canonical_safe", "llm_judged"):
-        lines.append(f"- {key}: {result[key]}")
-    return "\n".join(lines)
+    try:
+        index = resolve_index()
+        result = seed_cmd.seed_link_worker(
+            index=index,
+            logger=_log,
+            limit=limit,
+            modules=modules,
+            workers=workers,
+            include_llm=include_llm,
+        )
+        _log_tool_done("archive_seed_link_worker", t0, jobs_completed=result.get("jobs_completed"))
+        return fmt.format_seed_link_worker(result)
+    except SeedLinksDisabledError:
+        return _SEED_LINKS_DISABLED_MSG
+    except PpaError as exc:
+        return _ppa_err("archive_seed_link_worker", exc)
 
 
 @mcp.tool()
@@ -894,21 +788,21 @@ def archive_seed_link_promote(limit: int = 0, workers: int = 1) -> str:
     profile_error = _tool_profile_error("archive_seed_link_promote")
     if profile_error:
         return profile_error
-    vault = get_vault()
-    if not vault.is_dir():
-        return "Vault not found"
-    index, error = _load_index(vault)
-    if error:
-        return error
-    assert index is not None
-    sl = _import_seed_links()
-    result = sl["run_seed_link_promotion_workers"](index, limit=limit, max_workers=max(1, workers))
-    return (
-        "Archive seed link promote:\n"
-        f"- derived_edge: {result['derived_edge']}\n"
-        f"- canonical_field: {result['canonical_field']}\n"
-        f"- blocked: {result['blocked']}"
-    )
+    t0 = _log_tool_call("archive_seed_link_promote", limit=limit, workers=workers)
+    try:
+        index = resolve_index()
+        result = seed_cmd.seed_link_promote(index=index, logger=_log, limit=limit, workers=workers)
+        _log_tool_done(
+            "archive_seed_link_promote",
+            t0,
+            derived_edge=result.get("derived_edge"),
+            blocked=result.get("blocked"),
+        )
+        return fmt.format_seed_link_promote(result)
+    except SeedLinksDisabledError:
+        return _SEED_LINKS_DISABLED_MSG
+    except PpaError as exc:
+        return _ppa_err("archive_seed_link_promote", exc)
 
 
 @mcp.tool()
@@ -920,34 +814,25 @@ def archive_seed_link_report(rebuild_if_dirty: bool = True) -> str:
     profile_error = _tool_profile_error("archive_seed_link_report")
     if profile_error:
         return profile_error
-    vault = get_vault()
-    if not vault.is_dir():
-        return "Vault not found"
-    index, error = _load_index(vault)
-    if error:
-        return error
-    assert index is not None
-    sl = _import_seed_links()
-    payload = sl["run_seed_link_report"](index, rebuild_if_dirty=bool(rebuild_if_dirty))
-    lines = ["Archive seed link report:"]
-    for key in (
-        "rebuilt",
-        "passes",
-        "seed_card_count",
-        "reviewable_seed_card_count",
-        "total_cards_reviewed",
-        "scan_coverage",
-        "orphaned_links_after",
-        "duplicate_uid_count",
-        "high_priority_review_backlog",
-        "high_risk_precision",
-    ):
-        lines.append(f"- {key}: {payload[key]}")
-    return "\n".join(lines)
+    t0 = _log_tool_call("archive_seed_link_report", rebuild_if_dirty=rebuild_if_dirty)
+    try:
+        index = resolve_index()
+        payload = seed_cmd.seed_link_report(index=index, logger=_log, rebuild_if_dirty=bool(rebuild_if_dirty))
+        _log_tool_done("archive_seed_link_report", t0, passes=payload.get("passes"))
+        return fmt.format_seed_link_report(payload)
+    except SeedLinksDisabledError:
+        return _SEED_LINKS_DISABLED_MSG
+    except PpaError as exc:
+        return _ppa_err("archive_seed_link_report", exc)
 
 
 @mcp.tool()
-def archive_link_candidates(status: str = "", module_name: str = "", min_confidence: float = 0.0, limit: int = 20) -> str:
+def archive_link_candidates(
+    status: str = "",
+    module_name: str = "",
+    min_confidence: float = 0.0,
+    limit: int = 20,
+) -> str:
     """List seed link candidates and review queue items."""
 
     if not get_seed_links_enabled():
@@ -955,32 +840,31 @@ def archive_link_candidates(status: str = "", module_name: str = "", min_confide
     profile_error = _tool_profile_error("archive_link_candidates")
     if profile_error:
         return profile_error
-    vault = get_vault()
-    if not vault.is_dir():
-        return "Vault not found"
-    index, error = _load_index(vault)
-    if error:
-        return error
-    assert index is not None
-    sl = _import_seed_links()
-    rows = sl["list_link_candidates"](
-        index,
-        status=status.strip(),
-        module_name=module_name.strip(),
+    t0 = _log_tool_call(
+        "archive_link_candidates",
+        status=status,
+        module_name=module_name,
         min_confidence=min_confidence,
         limit=limit,
     )
-    if not rows:
-        return "No link candidates"
-    lines = ["Archive link candidates:"]
-    for row in rows:
-        promotion_status = f" promotion={row['promotion_status']}" if row.get("promotion_status") else ""
-        lines.append(
-            f"- id={row['candidate_id']} module={row['module_name']} score={float(row['final_confidence']):.4f} "
-            f"status={row['status']} decision={row['decision']} type={row['proposed_link_type']}{promotion_status}: "
-            f"{row['source_rel_path']} -> {row['target_rel_path']}"
+    try:
+        index = resolve_index()
+        result = seed_cmd.link_candidates(
+            index=index,
+            logger=_log,
+            status=status,
+            module_name=module_name,
+            min_confidence=min_confidence,
+            limit=limit,
         )
-    return "\n".join(lines)
+        rows = result["rows"]
+        out = fmt.format_link_candidates(result)
+        _log_tool_done("archive_link_candidates", t0, result_count=len(rows))
+        return out
+    except SeedLinksDisabledError:
+        return _SEED_LINKS_DISABLED_MSG
+    except PpaError as exc:
+        return _ppa_err("archive_link_candidates", exc)
 
 
 @mcp.tool()
@@ -992,52 +876,19 @@ def archive_link_candidate(candidate_id: int) -> str:
     profile_error = _tool_profile_error("archive_link_candidate")
     if profile_error:
         return profile_error
-    vault = get_vault()
-    if not vault.is_dir():
-        return "Vault not found"
-    index, error = _load_index(vault)
-    if error:
-        return error
-    assert index is not None
-    sl = _import_seed_links()
-    payload = sl["get_link_candidate_details"](index, candidate_id)
-    if payload is None:
-        return "Candidate not found"
-    lines = [
-        f"Archive link candidate {candidate_id}:",
-        f"- module: {payload['module_name']}",
-        f"- type: {payload['proposed_link_type']}",
-        f"- source: {payload['source_rel_path']}",
-        f"- target: {payload['target_rel_path']}",
-        f"- status: {payload['status']}",
-        f"- confidence: {float(payload['final_confidence']):.4f}",
-        f"- decision: {payload['decision']}",
-        f"- reason: {payload['decision_reason']}",
-        f"- scores: deterministic={float(payload['deterministic_score']):.4f} lexical={float(payload['lexical_score']):.4f} "
-        f"graph={float(payload['graph_score']):.4f} llm={float(payload['llm_score']):.4f} risk={float(payload['risk_penalty']):.4f}",
-    ]
-    if payload.get("promotion_target"):
-        lines.append(
-            f"- promotion: target={payload['promotion_target']} status={payload.get('promotion_status', '')} "
-            f"field={payload.get('target_field_name', '')} blocked_reason={payload.get('blocked_reason', '')}"
-        )
-    if payload.get("llm_model"):
-        lines.append(f"- llm_model: {payload['llm_model']}")
-    if payload.get("evidence"):
-        lines.append("Evidence:")
-        for evidence in payload["evidence"][:20]:
-            lines.append(
-                f"  - {evidence['evidence_type']} source={evidence['evidence_source']} "
-                f"{evidence['feature_name']}={evidence['feature_value']} weight={float(evidence['feature_weight']):.2f}"
-            )
-    if payload.get("reviews"):
-        lines.append("Reviews:")
-        for review in payload["reviews"][:10]:
-            lines.append(
-                f"  - {review['created_at']} reviewer={review['reviewer']} action={review['action']} "
-                f"score={float(review['score_at_review']):.4f} decision={review['decision_at_review']}"
-            )
-    return "\n".join(lines)
+    t0 = _log_tool_call("archive_link_candidate", candidate_id=candidate_id)
+    try:
+        index = resolve_index()
+        payload = seed_cmd.link_candidate(candidate_id, index=index, logger=_log)
+        if payload is None:
+            _log_tool_done("archive_link_candidate", t0, found=False)
+            return "Candidate not found"
+        _log_tool_done("archive_link_candidate", t0, found=True)
+        return fmt.format_link_candidate(candidate_id, payload)
+    except SeedLinksDisabledError:
+        return _SEED_LINKS_DISABLED_MSG
+    except PpaError as exc:
+        return _ppa_err("archive_link_candidate", exc)
 
 
 @mcp.tool()
@@ -1049,22 +900,28 @@ def archive_review_link_candidate(candidate_id: int, reviewer: str, action: str,
     profile_error = _tool_profile_error("archive_review_link_candidate")
     if profile_error:
         return profile_error
-    vault = get_vault()
-    if not vault.is_dir():
-        return "Vault not found"
-    index, error = _load_index(vault)
-    if error:
-        return error
-    assert index is not None
-    sl = _import_seed_links()
-    payload = sl["review_link_candidate"](index, candidate_id=candidate_id, reviewer=reviewer, action=action, notes=notes)
-    return (
-        f"Reviewed candidate {candidate_id}\n"
-        f"- action: {action}\n"
-        f"- status: {payload.get('status', '')}\n"
-        f"- decision: {payload.get('decision', '')}\n"
-        f"- confidence: {float(payload.get('final_confidence', 0.0)):.4f}"
+    t0 = _log_tool_call(
+        "archive_review_link_candidate",
+        candidate_id=candidate_id,
+        reviewer=reviewer,
+        action=action,
     )
+    try:
+        index = resolve_index()
+        payload = seed_cmd.review_link_candidate(
+            index=index,
+            logger=_log,
+            candidate_id=candidate_id,
+            reviewer=reviewer,
+            action=action,
+            notes=notes,
+        )
+        _log_tool_done("archive_review_link_candidate", t0, status=payload.get("status"))
+        return fmt.format_review_link_candidate(candidate_id, action, payload)
+    except SeedLinksDisabledError:
+        return _SEED_LINKS_DISABLED_MSG
+    except PpaError as exc:
+        return _ppa_err("archive_review_link_candidate", exc)
 
 
 @mcp.tool()
@@ -1076,40 +933,16 @@ def archive_link_quality_gate() -> str:
     profile_error = _tool_profile_error("archive_link_quality_gate")
     if profile_error:
         return profile_error
-    vault = get_vault()
-    if not vault.is_dir():
-        return "Vault not found"
-    index, error = _load_index(vault)
-    if error:
-        return error
-    assert index is not None
-    sl = _import_seed_links()
-    gate = sl["compute_link_quality_gate"](index)
-    lines = ["Archive link quality gate:"]
-    for key in (
-        "passes",
-        "seed_card_count",
-        "total_cards_reviewed",
-        "scan_coverage",
-        "required_scan_coverage",
-        "orphaned_links_after",
-        "duplicate_uid_count",
-        "dead_end_count",
-        "high_priority_review_backlog",
-        "max_high_priority_review_backlog",
-        "high_risk_precision",
-        "required_high_risk_precision",
-    ):
-        lines.append(f"- {key}: {gate[key]}")
-    if gate.get("candidate_counts"):
-        lines.append("Candidate counts:")
-        for row in gate["candidate_counts"][:20]:
-            lines.append(f"  - {row['module_name']} {row['proposed_link_type']}: {row['count']}")
-    if gate.get("auto_promoted_counts"):
-        lines.append("Auto promoted counts:")
-        for row in gate["auto_promoted_counts"][:20]:
-            lines.append(f"  - {row['module_name']} {row['proposed_link_type']}: {row['count']}")
-    return "\n".join(lines)
+    t0 = _log_tool_call("archive_link_quality_gate")
+    try:
+        index = resolve_index()
+        gate = seed_cmd.link_quality_gate(index=index, logger=_log)
+        _log_tool_done("archive_link_quality_gate", t0, passes=gate.get("passes"))
+        return fmt.format_link_quality_gate(gate)
+    except SeedLinksDisabledError:
+        return _SEED_LINKS_DISABLED_MSG
+    except PpaError as exc:
+        return _ppa_err("archive_link_quality_gate", exc)
 
 
 @mcp.tool()
@@ -1126,46 +959,42 @@ def archive_vector_search(
 ) -> str:
     """Run semantic search over embedded chunks."""
 
-    profile_error = _tool_profile_error("archive_vector_search")
-    if profile_error:
-        return profile_error
-    vault = get_vault()
-    if not vault.is_dir():
-        return "Vault not found"
-    model = embedding_model.strip() or get_default_embedding_model()
-    version = embedding_version or get_default_embedding_version()
-    provider = get_embedding_provider(model=model)
-    query_vector = provider.embed_texts([query.strip() or ""])[0]
-    index, error = _load_index(vault)
-    if error:
-        return error
-    assert index is not None
-    rows = index.vector_search(
-        query_vector=query_vector,
-        embedding_model=model,
-        embedding_version=version,
-        type_filter=type_filter,
-        source_filter=source_filter,
-        people_filter=people_filter,
-        start_date=start_date,
-        end_date=end_date,
+    t0 = _log_tool_call(
+        "archive_vector_search",
+        query=query,
         limit=limit,
+        embedding_model=embedding_model,
+        embedding_version=embedding_version,
     )
-    if not rows:
-        return f"No vector matches for {model} v{version}"
-    lines = [f"Vector matches for {model} v{version}:"]
-    for row in rows:
-        card_type = str(row.get("type", ""))
-        date = str(row.get("activity_at", ""))[:10]
-        summary = str(row.get("summary", ""))[:200]
-        lines.append(
-            f"- {row['rel_path']} [{card_type}, {date}] matched_by={row['matched_by']} score={float(row['score']):.4f} "
-            f"sim={float(row['similarity']):.4f} chunk={row['chunk_type']}#{row['chunk_index']} "
-            f"provenance_bias={row['provenance_bias']} matched_chunks={row['matched_chunk_count']}\n"
-            f"  summary: {summary}\n"
-            f"  preview: {row['preview']}"
+    try:
+        profile_error = _tool_profile_error("archive_vector_search")
+        if profile_error:
+            return _log_tool_return_error("archive_vector_search", profile_error)
+        store = resolve_store()
+        model = embedding_model.strip() or get_default_embedding_model()
+        version = embedding_version or get_default_embedding_version()
+        result = search_cmd.vector_search(
+            query,
+            store=store,
+            logger=_log,
+            limit=limit,
+            embedding_model=model,
+            embedding_version=version,
+            type_filter=type_filter,
+            source_filter=source_filter,
+            people_filter=people_filter,
+            start_date=start_date,
+            end_date=end_date,
         )
-    return "\n".join(lines)
+        rows = result["rows"]
+        out = fmt.format_vector_search(model, version, rows)
+        _log_tool_done("archive_vector_search", t0, result_count=len(rows))
+        return out
+    except PpaError as exc:
+        return _ppa_err("archive_vector_search", exc)
+    except Exception as exc:
+        _log.error("tool=archive_vector_search error=%s", str(exc))
+        raise
 
 
 @mcp.tool()
@@ -1181,19 +1010,29 @@ def archive_retrieval_explain(
     profile_error = _tool_profile_error("archive_retrieval_explain")
     if profile_error:
         return profile_error
-    vault = get_vault()
-    store, error = _load_store(vault)
-    if error:
-        return error
-    assert store is not None
-    payload = store.retrieval_explain(
-        query,
+    t0 = _log_tool_call(
+        "archive_retrieval_explain",
+        query=query,
         mode=mode,
         limit=limit,
         embedding_model=embedding_model,
         embedding_version=embedding_version,
     )
-    return json.dumps(payload, indent=2)
+    try:
+        store = resolve_store()
+        payload = explain.retrieval_explain(
+            query,
+            store=store,
+            logger=_log,
+            mode=mode,
+            limit=limit,
+            embedding_model=embedding_model,
+            embedding_version=embedding_version,
+        )
+        _log_tool_done("archive_retrieval_explain", t0, keys=list(payload.keys())[:12])
+        return json.dumps(payload, indent=2)
+    except PpaError as exc:
+        return _ppa_err("archive_retrieval_explain", exc)
 
 
 @mcp.tool()
@@ -1210,51 +1049,42 @@ def archive_hybrid_search(
 ) -> str:
     """Combine lexical and semantic retrieval into a ranked card-level result set."""
 
-    profile_error = _tool_profile_error("archive_hybrid_search")
-    if profile_error:
-        return profile_error
-    vault = get_vault()
-    if not vault.is_dir():
-        return "Vault not found"
-    store, error = _load_store(vault)
-    if error:
-        return error
-    assert store is not None
-    model = embedding_model.strip() or get_default_embedding_model()
-    version = embedding_version or get_default_embedding_version()
-    payload = store.hybrid_search(
-        query,
+    t0 = _log_tool_call(
+        "archive_hybrid_search",
+        query=query,
         limit=limit,
-        embedding_model=model,
-        embedding_version=version,
-        type_filter=type_filter,
-        source_filter=source_filter,
-        people_filter=people_filter,
-        start_date=start_date,
-        end_date=end_date,
+        embedding_model=embedding_model,
+        embedding_version=embedding_version,
     )
-    rows = payload["rows"]
-    if not rows:
-        return f"No hybrid matches for '{query}'"
-    lines = [f"Hybrid matches for '{query}':"]
-    for row in rows:
-        card_type = str(row.get("type", ""))
-        date = str(row.get("activity_at", ""))[:10]
-        graph_hops = f" graph_hops={row['graph_hops']}" if row.get("graph_hops") else ""
-        chunk = ""
-        if int(row.get("chunk_index", -1)) >= 0 and str(row.get("chunk_type", "")):
-            chunk = f" chunk={row['chunk_type']}#{row['chunk_index']}"
-        summary = str(row.get("summary", ""))[:200]
-        preview = str(row.get("preview", ""))
-        lines.append(
-            f"- {row['rel_path']} [{card_type}, {date}] matched_by={row['matched_by']} score={float(row['score']):.4f} "
-            f"lexical={float(row['lexical_score']):.4f} vector={float(row['vector_similarity']):.4f} "
-            f"exact_match={str(bool(row['exact_match'])).lower()}{graph_hops}{chunk} "
-            f"provenance_bias={row['provenance_bias']}\n"
-            f"  summary: {summary}\n"
-            f"  preview: {preview}"
+    try:
+        profile_error = _tool_profile_error("archive_hybrid_search")
+        if profile_error:
+            return _log_tool_return_error("archive_hybrid_search", profile_error)
+        store = resolve_store()
+        model = embedding_model.strip() or get_default_embedding_model()
+        version = embedding_version or get_default_embedding_version()
+        payload = search_cmd.hybrid_search(
+            query,
+            store=store,
+            logger=_log,
+            limit=limit,
+            embedding_model=model,
+            embedding_version=version,
+            type_filter=type_filter,
+            source_filter=source_filter,
+            people_filter=people_filter,
+            start_date=start_date,
+            end_date=end_date,
         )
-    return "\n".join(lines)
+        rows = payload["rows"]
+        out = fmt.format_hybrid_search(query, rows)
+        _log_tool_done("archive_hybrid_search", t0, result_count=len(rows))
+        return out
+    except PpaError as exc:
+        return _ppa_err("archive_hybrid_search", exc)
+    except Exception as exc:
+        _log.error("tool=archive_hybrid_search error=%s", str(exc))
+        raise
 
 
 @mcp.tool()
@@ -1264,12 +1094,19 @@ def archive_search_json(query: str, limit: int = 20) -> str:
     profile_error = _tool_profile_error("archive_search_json")
     if profile_error:
         return profile_error
-    vault = get_vault()
-    store, error = _load_store(vault)
-    if error:
-        return error
-    assert store is not None
-    return json.dumps(store.search(query, limit=limit), indent=2)
+    t0 = _log_tool_call("archive_search_json", query=query, limit=limit)
+    try:
+        store = resolve_store()
+        result = search_cmd.search(query, limit=limit, store=store, logger=_log)
+        rows = result.get("rows", [])
+        _log_tool_done(
+            "archive_search_json",
+            t0,
+            result_count=len(rows) if isinstance(rows, list) else 0,
+        )
+        return json.dumps(result, indent=2)
+    except PpaError as exc:
+        return str(exc)
 
 
 @mcp.tool()
@@ -1289,25 +1126,39 @@ def archive_hybrid_search_json(
     profile_error = _tool_profile_error("archive_hybrid_search_json")
     if profile_error:
         return profile_error
-    vault = get_vault()
-    store, error = _load_store(vault)
-    if error:
-        return error
-    assert store is not None
-    model = embedding_model.strip() or get_default_embedding_model()
-    version = embedding_version or get_default_embedding_version()
-    payload = store.hybrid_search(
-        query,
+    t0 = _log_tool_call(
+        "archive_hybrid_search_json",
+        query=query,
         limit=limit,
-        embedding_model=model,
-        embedding_version=version,
-        type_filter=type_filter,
-        source_filter=source_filter,
-        people_filter=people_filter,
-        start_date=start_date,
-        end_date=end_date,
+        embedding_model=embedding_model,
+        embedding_version=embedding_version,
     )
-    return json.dumps(payload, indent=2)
+    try:
+        store = resolve_store()
+        model = embedding_model.strip() or get_default_embedding_model()
+        version = embedding_version or get_default_embedding_version()
+        payload = search_cmd.hybrid_search(
+            query,
+            store=store,
+            logger=_log,
+            limit=limit,
+            embedding_model=model,
+            embedding_version=version,
+            type_filter=type_filter,
+            source_filter=source_filter,
+            people_filter=people_filter,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        rows = payload.get("rows", [])
+        _log_tool_done(
+            "archive_hybrid_search_json",
+            t0,
+            result_count=len(rows) if isinstance(rows, list) else 0,
+        )
+        return json.dumps(payload, indent=2)
+    except PpaError as exc:
+        return str(exc)
 
 
 @mcp.tool()
@@ -1317,18 +1168,17 @@ def archive_read_many(paths_json: str) -> str:
     profile_error = _tool_profile_error("archive_read_many")
     if profile_error:
         return profile_error
-    vault = get_vault()
-    store, error = _load_store(vault)
-    if error:
-        return error
-    assert store is not None
     try:
-        paths = json.loads(paths_json)
-    except json.JSONDecodeError as exc:
-        return f"Invalid JSON: {exc}"
-    if not isinstance(paths, list):
-        return "paths_json must be a JSON array"
-    return json.dumps(store.read_many([str(p) for p in paths]), indent=2)
+        store = resolve_store()
+        paths = read_cmd.parse_paths_json(paths_json)
+        t0 = _log_tool_call("archive_read_many", requested=len(paths))
+        result = read_cmd.read_many(paths, store=store, logger=_log)
+        _log_tool_done("archive_read_many", t0, requested=len(paths))
+        return json.dumps(result, indent=2)
+    except InvalidInputError as exc:
+        return str(exc)
+    except PpaError as exc:
+        return str(exc)
 
 
 @mcp.tool()
@@ -1338,12 +1188,14 @@ def archive_status_json() -> str:
     profile_error = _tool_profile_error("archive_status_json")
     if profile_error:
         return profile_error
-    vault = get_vault()
-    store, error = _load_store(vault)
-    if error:
-        return error
-    assert store is not None
-    return json.dumps(store.status(), indent=2)
+    t0 = _log_tool_call("archive_status_json")
+    try:
+        store = resolve_store()
+        result = status_cmd.status_json(store=store, logger=_log)
+        _log_tool_done("archive_status_json", t0, keys=list(result.keys())[:15])
+        return json.dumps(result, indent=2)
+    except PpaError as exc:
+        return str(exc)
 
 
 @mcp.tool()
@@ -1359,19 +1211,29 @@ def archive_retrieval_explain_json(
     profile_error = _tool_profile_error("archive_retrieval_explain_json")
     if profile_error:
         return profile_error
-    vault = get_vault()
-    store, error = _load_store(vault)
-    if error:
-        return error
-    assert store is not None
-    payload = store.retrieval_explain(
-        query,
+    t0 = _log_tool_call(
+        "archive_retrieval_explain_json",
+        query=query,
         mode=mode,
         limit=limit,
         embedding_model=embedding_model,
         embedding_version=embedding_version,
     )
-    return json.dumps(payload, indent=2)
+    try:
+        store = resolve_store()
+        payload = explain.retrieval_explain(
+            query,
+            store=store,
+            logger=_log,
+            mode=mode,
+            limit=limit,
+            embedding_model=embedding_model,
+            embedding_version=embedding_version,
+        )
+        _log_tool_done("archive_retrieval_explain_json", t0, keys=list(payload.keys())[:12])
+        return json.dumps(payload, indent=2)
+    except PpaError as exc:
+        return str(exc)
 
 
 if __name__ == "__main__":

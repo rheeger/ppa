@@ -5,18 +5,15 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import sys
-import time
 from collections import Counter
 from pathlib import Path
 
 from archive_sync.adapters.gmail_correspondents import load_own_aliases
 from archive_sync.adapters.gmail_messages import GmailMessagesAdapter
-from ppa_google_auth import build_google_cli_token_manager
 from hfa.identity import IdentityCache
 from hfa.sync_state import load_sync_state, update_cursor
 from hfa.vault import write_card
+from ppa_google_auth import build_google_cli_token_manager
 
 
 def main() -> int:
@@ -41,7 +38,9 @@ def main() -> int:
     own_emails.update(load_own_aliases(str(vault)))
     identity_cache = IdentityCache(vault)
     created = Counter()
-    created["email_thread"] = len(list((vault / "EmailThreads").rglob("*.md"))) if (vault / "EmailThreads").exists() else 0
+    created["email_thread"] = (
+        len(list((vault / "EmailThreads").rglob("*.md"))) if (vault / "EmailThreads").exists() else 0
+    )
     created["email_message"] = len(list((vault / "Email").rglob("*.md"))) if (vault / "Email").exists() else 0
     created["email_attachment"] = (
         len(list((vault / "EmailAttachments").rglob("*.md"))) if (vault / "EmailAttachments").exists() else 0
@@ -109,7 +108,9 @@ def main() -> int:
             if page_token:
                 params["pageToken"] = page_token
             list_data = adapter._gws_with_retry(["gmail", "users", "threads", "list", "--params", json.dumps(params)])
-            page_thread_ids = [str(thread.get("id", "")).strip() for thread in list_data.get("threads", []) or [] if thread.get("id")]
+            page_thread_ids = [
+                str(thread.get("id", "")).strip() for thread in list_data.get("threads", []) or [] if thread.get("id")
+            ]
             page_next_token = list_data.get("nextPageToken")
             page_index = 0
             if not page_thread_ids:
@@ -122,7 +123,14 @@ def main() -> int:
         while page_index < len(page_thread_ids):
             thread_id = page_thread_ids[page_index]
             thread_data = adapter._gws_with_retry(
-                ["gmail", "users", "threads", "get", "--params", json.dumps({"userId": "me", "id": thread_id, "format": "full"})]
+                [
+                    "gmail",
+                    "users",
+                    "threads",
+                    "get",
+                    "--params",
+                    json.dumps({"userId": "me", "id": thread_id, "format": "full"}),
+                ]
             )
             thread_record, message_records, attachment_records = adapter._thread_records(
                 thread_data,

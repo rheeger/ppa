@@ -9,7 +9,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -260,7 +259,13 @@ def main() -> int:
         rel_path_mapping[rel_path_key] = str(entry.rel_path)
         entries.append(entry)
 
-    print(json.dumps({"phase": "collected-google-notes", "entries": len(entries), "uid_mappings": len(uid_mapping)}, sort_keys=True), flush=True)
+    print(
+        json.dumps(
+            {"phase": "collected-google-notes", "entries": len(entries), "uid_mappings": len(uid_mapping)},
+            sort_keys=True,
+        ),
+        flush=True,
+    )
 
     report = {
         "vault": str(vault),

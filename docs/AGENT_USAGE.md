@@ -16,6 +16,22 @@ Use retrieval methods in this order:
 6. graph expansion to collect neighboring evidence
 7. canonical card reads before final answers
 
+### Decision tree (MCP tools)
+
+1. **Known UID or path?** → `archive_read` / `archive_read_many`
+2. **Structured filters?** → `archive_query`
+3. **Keywords?** → `archive_search_json`
+4. **Semantic / vague?** → `archive_hybrid_search_json`
+5. **Relationships?** → `archive_graph`
+6. **Person slug?** → `archive_person`
+7. **Date range?** → `archive_timeline`
+
+Prefer `_json` variants when available (`archive_search_json`, `archive_hybrid_search_json`, `archive_status_json`) for structured parsing.
+
+### Health before heavy retrieval
+
+Run `ppa health` in a shell when available, or call `archive_status_json` / `archive_embedding_status` over MCP to confirm index and embeddings before trusting search results.
+
 ## Grounding Rules
 
 - Read canonical cards before making factual claims.
@@ -77,6 +93,8 @@ For semantic retrieval:
 - If the index is unavailable, fall back to canonical reads instead of inventing missing results.
 
 ## Practical Tool Usage
+
+CLI parity (no MCP): `ppa search`, `ppa query`, `ppa hybrid-search`, `ppa read`, `ppa graph`, `ppa health`, `ppa status` — same semantics as the MCP tools listed below.
 
 Current `ppa` tool order:
 

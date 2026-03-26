@@ -98,7 +98,12 @@ def merge_vector_rows(existing: list[dict[str, Any]], incoming: list[dict[str, A
 def anchor_uids_from_lexical(lexical_rows: list[dict[str, Any]]) -> list[str]:
     out: list[str] = []
     for row in lexical_rows:
-        if int(row.get("slug_exact", 0)) or int(row.get("summary_exact", 0)) or int(row.get("external_id_exact", 0)) or int(row.get("person_exact", 0)):
+        if (
+            int(row.get("slug_exact", 0))
+            or int(row.get("summary_exact", 0))
+            or int(row.get("external_id_exact", 0))
+            or int(row.get("person_exact", 0))
+        ):
             out.append(str(row["card_uid"]))
     return out
 

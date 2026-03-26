@@ -13,10 +13,11 @@ from email.utils import getaddresses
 from pathlib import Path
 from typing import Any
 
-from .base import BaseAdapter, deterministic_provenance
-from ppa_google_auth import ACCOUNTS, build_google_cli_token_manager
 from hfa.schema import PersonCard
 from hfa.uid import generate_uid
+from ppa_google_auth import ACCOUNTS, build_google_cli_token_manager
+
+from .base import BaseAdapter, deterministic_provenance
 
 AUTOMATED_LOCAL_PREFIXES = {
     "alert",
@@ -251,11 +252,7 @@ class GmailCorrespondentsAdapter(BaseAdapter):
 
     def get_cursor_key(self, **kwargs) -> str:
         account_emails = sorted(
-            {
-                str(value).strip().lower()
-                for value in (kwargs.get("account_emails") or [])
-                if str(value).strip()
-            }
+            {str(value).strip().lower() for value in (kwargs.get("account_emails") or []) if str(value).strip()}
         )
         if account_emails:
             return f"{self.source_id}:aggregate:{'+'.join(account_emails)}"

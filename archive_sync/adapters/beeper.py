@@ -14,18 +14,21 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
-from .base import (BaseAdapter, FetchedBatch, IngestResult,
-                           deterministic_provenance)
-from hfa.config import load_config
 from hfa.identity import IdentityCache
 from hfa.identity_resolver import merge_into_existing
 from hfa.provenance import ProvenanceEntry, compute_input_hash
-from hfa.schema import (BeeperAttachmentCard, BeeperMessageCard,
-                        BeeperThreadCard, PersonCard)
+from hfa.schema import (
+    BeeperAttachmentCard,
+    BeeperMessageCard,
+    BeeperThreadCard,
+    PersonCard,
+)
 from hfa.slugger import normalize_for_slug
 from hfa.sync_state import load_sync_state, update_cursor
 from hfa.uid import generate_uid
 from hfa.vault import write_card
+
+from .base import BaseAdapter, FetchedBatch, IngestResult, deterministic_provenance
 
 THREAD_SOURCE = "beeper.thread"
 MESSAGE_SOURCE = "beeper.message"
@@ -331,7 +334,7 @@ class BeeperIndex:
         query = f"""
             SELECT threadID, accountID, timestamp, thread
             FROM threads
-            WHERE {' AND '.join(conditions)}
+            WHERE {" AND ".join(conditions)}
             ORDER BY timestamp ASC, threadID ASC
             LIMIT ?
         """
@@ -383,10 +386,7 @@ class BeeperIndex:
                 identifier_type = _clean(row["identifier_type"]).lower()
                 if identifier and identifier_type and (identifier_type, identifier) not in record.identifiers:
                     record.identifiers.append((identifier_type, identifier))
-        return {
-            room_id: list(room_records.values())
-            for room_id, room_records in records_by_room.items()
-        }
+        return {room_id: list(room_records.values()) for room_id, room_records in records_by_room.items()}
 
     def messages_for_room(self, room_id: str) -> list[dict[str, Any]]:
         return self.messages_for_rooms([room_id]).get(room_id, [])
@@ -566,7 +566,9 @@ class BeeperAdapter(BaseAdapter):
         hash8 = hashlib.sha256(card.source_id.encode("utf-8")).hexdigest()[:8]
         return Path("People") / f"{base_slug}-{hash8}.md"
 
-    def _prepare_person_write(self, item: dict[str, Any], *, cache: IdentityCache) -> tuple[PlannedPersonWrite | None, bool]:
+    def _prepare_person_write(
+        self, item: dict[str, Any], *, cache: IdentityCache
+    ) -> tuple[PlannedPersonWrite | None, bool]:
         card, provenance, body = self.to_card(item)
         assert isinstance(card, PersonCard)
         existing_wikilink = self._resolve_person_card_exact(cache, card)
@@ -577,13 +579,16 @@ class BeeperAdapter(BaseAdapter):
         rel_path = self._beeper_person_rel_path(card)
         wikilink = f"[[{rel_path.stem}]]"
         cache.upsert(wikilink, self._beeper_person_identity_aliases(card))
-        return PlannedPersonWrite(
-            card=card,
-            provenance=provenance,
-            body=body,
-            rel_path=rel_path,
-            wikilink=wikilink,
-        ), False
+        return (
+            PlannedPersonWrite(
+                card=card,
+                provenance=provenance,
+                body=body,
+                rel_path=rel_path,
+                wikilink=wikilink,
+            ),
+            False,
+        )
 
     def _person_handle_field(self, account_id: str) -> str:
         normalized_account = _clean(account_id).split(".", 1)[0].lower()
@@ -615,7 +620,11 @@ class BeeperAdapter(BaseAdapter):
         if participant.is_self:
             return None
         identifier_tokens = participant.identifier_tokens()
-        summary = participant.full_name or _identifier_value(participant.best_identifier_token()) or participant.participant_id
+        summary = (
+            participant.full_name
+            or _identifier_value(participant.best_identifier_token())
+            or participant.participant_id
+        )
         if not _clean(summary):
             return None
         first_name = ""
@@ -727,7 +736,9 @@ class BeeperAdapter(BaseAdapter):
         for row in messages:
             payload = _json_load(row.get("message"), {})
             event_id = _clean(row.get("eventID", "")) or _clean(payload.get("eventID", "")) or f"mx-row:{row.get('id')}"
-            message_type = _clean(row.get("type", "")).upper() or _clean((payload.get("extra") or {}).get("type", "")).upper()
+            message_type = (
+                _clean(row.get("type", "")).upper() or _clean((payload.get("extra") or {}).get("type", "")).upper()
+            )
             sent_at = _parse_timestamp(row.get("timestamp") or payload.get("timestamp"))
             if sent_at and (not first_message_at or sent_at < first_message_at):
                 first_message_at = sent_at
@@ -739,11 +750,14 @@ class BeeperAdapter(BaseAdapter):
             sender_name = sender_participant.full_name if sender_participant else ""
             sender_identifier = _best_identifier(sender_participant.identifiers) if sender_participant else ""
             sender_person = (
-                resolved_people_by_participant_id.get(sender_id, "")
-                if sender_participant is not None
-                else ""
+                resolved_people_by_participant_id.get(sender_id, "") if sender_participant is not None else ""
             )
-            if not sender_person and sender_participant is not None and not sender_participant.is_self and thread_type == "single":
+            if (
+                not sender_person
+                and sender_participant is not None
+                and not sender_participant.is_self
+                and thread_type == "single"
+            ):
                 sender_person = single_counterpart_person
             reaction_key = _clean((payload.get("action") or {}).get("reactionKey", "")) or _clean(
                 ((payload.get("extra") or {}).get("partialReactionContent") or {}).get("description", "")
@@ -753,7 +767,9 @@ class BeeperAdapter(BaseAdapter):
             attachment_uids: list[str] = []
             attachments = payload.get("attachments") or []
             for index, attachment in enumerate(attachments):
-                attachment_id = _clean(attachment.get("id", "")) or _clean(attachment.get("srcURL", "")) or f"{event_id}:{index}"
+                attachment_id = (
+                    _clean(attachment.get("id", "")) or _clean(attachment.get("srcURL", "")) or f"{event_id}:{index}"
+                )
                 attachment_uid = _attachment_uid(event_id, attachment_id)
                 attachment_uids.append(attachment_uid)
                 attachment_payload = {
@@ -840,7 +856,9 @@ class BeeperAdapter(BaseAdapter):
             )
 
         if not first_message_at:
-            first_message_at = _parse_timestamp(thread_payload.get("createdAt")) or _parse_timestamp(thread_payload.get("timestamp"))
+            first_message_at = _parse_timestamp(thread_payload.get("createdAt")) or _parse_timestamp(
+                thread_payload.get("timestamp")
+            )
         if not last_message_at:
             last_message_at = _parse_timestamp(thread_payload.get("timestamp")) or first_message_at
 
@@ -1015,7 +1033,11 @@ class BeeperAdapter(BaseAdapter):
                     self._adapter_log("fetch_batches done: no more threads", verbose=verbose)
                     break
 
-                room_ids = [_clean(thread_row.get("threadID", "")) for thread_row in threads if _clean(thread_row.get("threadID", ""))]
+                room_ids = [
+                    _clean(thread_row.get("threadID", ""))
+                    for thread_row in threads
+                    if _clean(thread_row.get("threadID", ""))
+                ]
                 load_started_at = perf_counter()
                 participants_by_room = index.participants_for_rooms(room_ids)
                 messages_by_room = index.messages_for_rooms(room_ids)
@@ -1041,13 +1063,16 @@ class BeeperAdapter(BaseAdapter):
                 items: list[dict[str, Any]] = []
                 skipped = 0
                 skip_details: dict[str, int] = {}
-                build_thread = lambda thread_row: self._build_thread_items(
-                    thread_row=thread_row,
-                    participants_by_room=participants_by_room,
-                    messages_by_room=messages_by_room,
-                    media_root=resolved_media_root,
-                    identity_cache=identity_cache,
-                )
+
+                def build_thread(thread_row: dict[str, Any]) -> list[dict[str, Any]]:
+                    return self._build_thread_items(
+                        thread_row=thread_row,
+                        participants_by_room=participants_by_room,
+                        messages_by_room=messages_by_room,
+                        media_root=resolved_media_root,
+                        identity_cache=identity_cache,
+                    )
+
                 if worker_count > 1 and len(threads) > 1:
                     build_started_at = perf_counter()
                     self._adapter_log(
@@ -1152,7 +1177,13 @@ class BeeperAdapter(BaseAdapter):
             return
 
         if not dry_run:
-            write_card(vault, str(plan.rel_path), plan.card, body=plan.body, provenance=plan.provenance)
+            write_card(
+                vault,
+                str(plan.rel_path),
+                plan.card,
+                body=plan.body,
+                provenance=plan.provenance,
+            )
             identity_cache.upsert(plan.wikilink, aliases)
         result.created += 1
 
@@ -1183,7 +1214,12 @@ class BeeperAdapter(BaseAdapter):
         progress_every = self.ingest_progress_every(**kwargs)
         cursor_key = self.get_cursor_key(**kwargs)
         cursor = load_sync_state(vault).get(cursor_key, {})
-        if kwargs.get("ignore_cursor") or str(os.environ.get("HFA_BEEPER_IGNORE_CURSOR", "")).strip().lower() in {"1", "true", "yes", "on"}:
+        if kwargs.get("ignore_cursor") or str(os.environ.get("HFA_BEEPER_IGNORE_CURSOR", "")).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }:
             cursor = {}
         if not isinstance(cursor, dict):
             cursor = {}
@@ -1192,7 +1228,10 @@ class BeeperAdapter(BaseAdapter):
         resolved_media_root = Path(kwargs.get("media_root") or DEFAULT_MEDIA_ROOT).expanduser().resolve()
         normalized_thread_types = _parse_csv(kwargs.get("thread_types"), default=["single"])
         normalized_account_ids = _parse_csv(kwargs.get("account_ids"))
-        batch_size = max(1, int(kwargs.get("batch_size") or os.environ.get("HFA_BEEPER_BATCH_SIZE") or 10))
+        batch_size = max(
+            1,
+            int(kwargs.get("batch_size") or os.environ.get("HFA_BEEPER_BATCH_SIZE") or 10),
+        )
         worker_count = self._worker_count(kwargs.get("workers"))
         max_threads = kwargs.get("max_threads")
         remaining = None if max_threads in (None, "") else max(0, int(max_threads))
@@ -1252,20 +1291,26 @@ class BeeperAdapter(BaseAdapter):
                 if not threads:
                     break
 
-                room_ids = [_clean(thread_row.get("threadID", "")) for thread_row in threads if _clean(thread_row.get("threadID", ""))]
+                room_ids = [
+                    _clean(thread_row.get("threadID", ""))
+                    for thread_row in threads
+                    if _clean(thread_row.get("threadID", ""))
+                ]
                 participants_by_room = index.participants_for_rooms(room_ids)
                 messages_by_room = index.messages_for_rooms(room_ids)
                 person_items = self._build_person_items(threads=threads, participants_by_room=participants_by_room)
                 batch_identity = _clone_identity_cache(identity_cache)
                 person_plans, matched_existing = self._plan_person_writes(person_items, batch_identity=batch_identity)
 
-                build_thread = lambda thread_row: self._build_thread_items(
-                    thread_row=thread_row,
-                    participants_by_room=participants_by_room,
-                    messages_by_room=messages_by_room,
-                    media_root=resolved_media_root,
-                    identity_cache=batch_identity,
-                )
+                def build_thread(thread_row: dict[str, Any]) -> list[dict[str, Any]]:
+                    return self._build_thread_items(
+                        thread_row=thread_row,
+                        participants_by_room=participants_by_room,
+                        messages_by_room=messages_by_room,
+                        media_root=resolved_media_root,
+                        identity_cache=batch_identity,
+                    )
+
                 if worker_count > 1 and len(threads) > 1:
                     with ThreadPoolExecutor(max_workers=max(1, min(worker_count, len(threads)))) as executor:
                         thread_results = list(executor.map(build_thread, threads))
@@ -1310,7 +1355,11 @@ class BeeperAdapter(BaseAdapter):
                         self._apply_nonperson_item(vault, item, result=result, dry_run=dry_run)
                         processed_successfully += 1
                     except Exception as exc:
-                        item_id = _clean(item.get("event_id", "")) or _clean(item.get("room_id", "")) or _clean(item.get("attachment_id", ""))
+                        item_id = (
+                            _clean(item.get("event_id", ""))
+                            or _clean(item.get("room_id", ""))
+                            or _clean(item.get("attachment_id", ""))
+                        )
                         result.errors.append(f"item {item_id}: {exc}")
 
                 identity_cache.entries = batch_identity.entries
@@ -1410,7 +1459,11 @@ class BeeperAdapter(BaseAdapter):
                 discord=_clean(item.get("discord", "")),
                 tags=list(item.get("tags", [])),
             )
-            return card, deterministic_provenance(card, "beeper"), _clean(item.get("body", ""))
+            return (
+                card,
+                deterministic_provenance(card, "beeper"),
+                _clean(item.get("body", "")),
+            )
 
         if kind == "message":
             event_id = _clean(item.get("event_id", ""))
@@ -1445,7 +1498,11 @@ class BeeperAdapter(BaseAdapter):
                 attachments=list(item.get("attachments", [])),
                 message_body_sha=_clean(item.get("message_body_sha", "")),
             )
-            return card, deterministic_provenance(card, MESSAGE_SOURCE), _clean(item.get("body", ""))
+            return (
+                card,
+                deterministic_provenance(card, MESSAGE_SOURCE),
+                _clean(item.get("body", "")),
+            )
 
         if kind == "attachment":
             event_id = _clean(item.get("event_id", ""))

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 import uuid
@@ -11,31 +12,42 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from functools import partial
 from itertools import islice
-from pathlib import Path
 from typing import Any
 
-from .index_config import (CHUNK_SCHEMA_VERSION, DEFAULT_POSTGRES_SCHEMA,
-                           INDEX_SCHEMA_VERSION, MANIFEST_SCHEMA_VERSION,
-                           PROJECTIONS_BY_LOAD_ORDER, get_force_full_rebuild,
-                           get_index_dsn, get_rebuild_batch_size,
-                           get_rebuild_commit_interval, get_rebuild_executor,
-                           get_rebuild_progress_every,
-                           get_rebuild_staging_mode, get_rebuild_workers,
-                           get_seed_frozen_enabled, get_vector_dimension,
-                           manifest_cache_disabled)
+from .index_config import (
+    CHUNK_SCHEMA_VERSION,
+    INDEX_SCHEMA_VERSION,
+    MANIFEST_SCHEMA_VERSION,
+    PROJECTIONS_BY_LOAD_ORDER,
+    get_force_full_rebuild,
+    get_rebuild_batch_size,
+    get_rebuild_commit_interval,
+    get_rebuild_executor,
+    get_rebuild_progress_every,
+    get_rebuild_staging_mode,
+    get_rebuild_workers,
+    get_seed_frozen_enabled,
+    manifest_cache_disabled,
+)
 from .materializer import _build_person_lookup, _materialize_row_batch
 from .projections.base import ProjectionRowBuffer
-from .projections.registry import (PROJECTION_REGISTRY,
-                                   PROJECTION_REGISTRY_VERSION,
-                                   TYPED_PROJECTIONS)
-from .scanner import (CanonicalRow, NoteManifestRow,
-                      _build_manifest_rows_from_canonical,
-                      _classify_manifest_rebuild_delta,
-                      _collect_canonical_rows)
+from .projections.registry import (
+    PROJECTION_REGISTRY,
+    PROJECTION_REGISTRY_VERSION,
+    TYPED_PROJECTIONS,
+)
+from .scanner import (
+    CanonicalRow,
+    NoteManifestRow,
+    _build_manifest_rows_from_canonical,
+    _classify_manifest_rebuild_delta,
+    _collect_canonical_rows,
+)
+
+logger = logging.getLogger("ppa.loader")
 
 PROJECTION_COLUMNS_BY_TABLE = {
-    projection.table_name: tuple(column.name for column in projection.columns)
-    for projection in PROJECTION_REGISTRY
+    projection.table_name: tuple(column.name for column in projection.columns) for projection in PROJECTION_REGISTRY
 }
 PROJECTION_NAMES = tuple(projection.table_name for projection in PROJECTION_REGISTRY)
 TYPED_PROJECTION_TABLES = tuple(projection.table_name for projection in TYPED_PROJECTIONS)
@@ -64,6 +76,7 @@ DEFAULT_REBUILD_FLUSH_MAX_BYTES = 256 * 1024 * 1024
 def get_rebuild_flush_caps(commit_interval: int) -> _RebuildFlushCaps:
     """Upper bounds for the load buffer before COPY flush (adaptive vs card-count-only)."""
     from .index_config import _ppa_env
+
     raw_total = _ppa_env("PPA_REBUILD_FLUSH_MAX_TOTAL_ROWS")
     if raw_total:
         try:
@@ -164,7 +177,8 @@ class _RebuildProgressReporter:
     def _emit(self, message: str, count: int) -> None:
         self.last_log_at = time.time()
         self.last_logged_count = count
-        print(message, flush=True)
+        # All rebuild progress goes to stderr via logger — stdout is reserved for MCP JSON-RPC.
+        logger.info("%s", message)
 
     def _progress_bar(self, count: int, width: int = 24) -> str:
         if self.total_items <= 0:
@@ -204,7 +218,7 @@ class _RebuildProgressReporter:
 
 def _log_rebuild_step(step_number: int, total_steps: int, title: str, detail: str = "") -> None:
     suffix = f" {detail}" if detail else ""
-    print(f"[ppa] step {step_number}/{total_steps} {title}{suffix}", flush=True)
+    logger.info("step %d/%d %s%s", step_number, total_steps, title, suffix)
 
 
 def _chunked(iterable: Iterable[Any], size: int) -> Iterable[list[Any]]:
@@ -224,6 +238,7 @@ def _sanitize_copy_value(value: Any) -> Any:
 
 class LoaderMixin:
     """Data loading, rebuild orchestration, and manifest management mixin."""
+
     schema: str
     vault: Any
     dsn: str
@@ -310,7 +325,12 @@ class LoaderMixin:
     ) -> dict[str, int]:
         counts = {table_name: len(buffer.rows_for(table_name)) for table_name in PROJECTION_NAMES}
         for projection in PROJECTION_REGISTRY:
-            self._copy_rows(conn, projection.table_name, buffer.rows_for(projection.table_name), dest_suffix=dest_suffix)
+            self._copy_rows(
+                conn,
+                projection.table_name,
+                buffer.rows_for(projection.table_name),
+                dest_suffix=dest_suffix,
+            )
         return counts
 
     def _meta_dict(self, conn) -> dict[str, str]:
@@ -408,10 +428,19 @@ class LoaderMixin:
                 f"DELETE FROM {self.schema}.{projection.table_name} WHERE card_uid = ANY(%s)",
                 (uid_list,),
             )
-        conn.execute(f"DELETE FROM {self.schema}.external_ids WHERE card_uid = ANY(%s)", (uid_list,))
+        conn.execute(
+            f"DELETE FROM {self.schema}.external_ids WHERE card_uid = ANY(%s)",
+            (uid_list,),
+        )
         conn.execute(f"DELETE FROM {self.schema}.card_orgs WHERE card_uid = ANY(%s)", (uid_list,))
-        conn.execute(f"DELETE FROM {self.schema}.card_people WHERE card_uid = ANY(%s)", (uid_list,))
-        conn.execute(f"DELETE FROM {self.schema}.card_sources WHERE card_uid = ANY(%s)", (uid_list,))
+        conn.execute(
+            f"DELETE FROM {self.schema}.card_people WHERE card_uid = ANY(%s)",
+            (uid_list,),
+        )
+        conn.execute(
+            f"DELETE FROM {self.schema}.card_sources WHERE card_uid = ANY(%s)",
+            (uid_list,),
+        )
         conn.execute(f"DELETE FROM {self.schema}.cards WHERE uid = ANY(%s)", (uid_list,))
 
     def _ensure_unlogged_stage_tables(self, conn) -> None:
@@ -748,7 +777,11 @@ class LoaderMixin:
         force_full: bool | None = None,
         disable_manifest_cache: bool | None = None,
     ) -> RebuildRunResult:
-        if os.environ.get("PPA_FORBID_REBUILD", "").strip().lower() in {"1", "true", "yes"}:
+        if os.environ.get("PPA_FORBID_REBUILD", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+        }:
             raise RuntimeError(
                 "Rebuild is forbidden (PPA_FORBID_REBUILD=1). "
                 "This is a safety guard for production databases. "
@@ -763,12 +796,23 @@ class LoaderMixin:
         force_full = get_force_full_rebuild() if force_full is None else bool(force_full)
         disable_manifest = manifest_cache_disabled() if disable_manifest_cache is None else bool(disable_manifest_cache)
         staging_mode = get_rebuild_staging_mode()
-        versions = (INDEX_SCHEMA_VERSION, CHUNK_SCHEMA_VERSION, PROJECTION_REGISTRY_VERSION)
+        versions = (
+            INDEX_SCHEMA_VERSION,
+            CHUNK_SCHEMA_VERSION,
+            PROJECTION_REGISTRY_VERSION,
+        )
         run_id = str(uuid.uuid4())
 
         started_at = time.time()
         scan_started_at = time.time()
-        rows, slug_map, duplicate_uid_count, duplicate_uid_rows, vault_fingerprint, file_stats = _collect_canonical_rows(
+        (
+            rows,
+            slug_map,
+            duplicate_uid_count,
+            duplicate_uid_rows,
+            vault_fingerprint,
+            file_stats,
+        ) = _collect_canonical_rows(
             self.vault,
             workers=workers,
             executor_kind=executor_kind,
@@ -831,7 +875,12 @@ class LoaderMixin:
                     and int(meta.get("manifest_note_count", -1)) == len(rows)
                 )
                 if seed_ok:
-                    _log_rebuild_step(2, 6, "fingerprint notes complete", "mode=seed_frozen reused=all vault_unchanged=1")
+                    _log_rebuild_step(
+                        2,
+                        6,
+                        "fingerprint notes complete",
+                        "mode=seed_frozen reused=all vault_unchanged=1",
+                    )
                 else:
                     _log_rebuild_step(
                         2,
@@ -947,10 +996,7 @@ class LoaderMixin:
                     6,
                     6,
                     "finalize manifest complete",
-                    (
-                        f"reused={manifest_counters.get('unchanged', 0)} "
-                        f"manifest_notes={len(manifest_entries)}"
-                    ),
+                    (f"reused={manifest_counters.get('unchanged', 0)} manifest_notes={len(manifest_entries)}"),
                 )
                 self._clear_meta_for_finalize(conn)
                 self._upsert_meta(
@@ -988,7 +1034,13 @@ class LoaderMixin:
                             f"{table_name}_count": str(final_counts.get(table_name, 0))
                             for table_name in PROJECTION_NAMES
                             if table_name
-                            not in {"cards", "external_ids", "duplicate_uid_rows", "edges", "chunks"}
+                            not in {
+                                "cards",
+                                "external_ids",
+                                "duplicate_uid_rows",
+                                "edges",
+                                "chunks",
+                            }
                         },
                     },
                 )
@@ -1022,7 +1074,12 @@ class LoaderMixin:
             _log_rebuild_step(4, 6, "prepare schema", f"mode=full schema={self.schema}")
             step4_started_at = time.time()
             create_tables_started_at = time.time()
-            _log_rebuild_step(4, 6, "prepare schema create tables", "ensure_indexes=0 recreate_typed=1")
+            _log_rebuild_step(
+                4,
+                6,
+                "prepare schema create tables",
+                "ensure_indexes=0 recreate_typed=1",
+            )
             self._create_schema(conn, recreate_typed=True, ensure_indexes=False)
             conn.commit()
             _log_rebuild_step(
@@ -1034,7 +1091,12 @@ class LoaderMixin:
             self._clear_rebuild_checkpoint(conn)
             conn.commit()
             clear_started_at = time.time()
-            _log_rebuild_step(4, 6, "prepare schema clear projections", "truncate existing derived tables")
+            _log_rebuild_step(
+                4,
+                6,
+                "prepare schema clear projections",
+                "truncate existing derived tables",
+            )
             self._clear(conn)
             conn.commit()
             _log_rebuild_step(
@@ -1049,7 +1111,12 @@ class LoaderMixin:
                 dest_suffix = "_stage"
 
             duplicate_rows_started_at = time.time()
-            _log_rebuild_step(4, 6, "prepare schema load duplicate uid rows", f"rows={len(duplicate_uid_rows)}")
+            _log_rebuild_step(
+                4,
+                6,
+                "prepare schema load duplicate uid rows",
+                f"rows={len(duplicate_uid_rows)}",
+            )
             self._copy_rows(conn, "duplicate_uid_rows", duplicate_uid_rows)
             conn.commit()
             _log_rebuild_step(
@@ -1175,7 +1242,13 @@ class LoaderMixin:
                         f"{table_name}_count": str(counts.get(table_name, 0))
                         for table_name in PROJECTION_NAMES
                         if table_name
-                        not in {"cards", "external_ids", "duplicate_uid_rows", "edges", "chunks"}
+                        not in {
+                            "cards",
+                            "external_ids",
+                            "duplicate_uid_rows",
+                            "edges",
+                            "chunks",
+                        }
                     },
                 },
             )

@@ -181,10 +181,14 @@ def test_fetch_google_falls_back_to_direct_for_selected_account(monkeypatch):
         account_name_from_email=lambda email: "rheeger" if email == "rheeger@gmail.com" else None
     )
     monkeypatch.setitem(sys.modules, "arnoldlib.bootstrap", fake_bootstrap)
-    monkeypatch.setitem(sys.modules, "ppa_google_auth", types.SimpleNamespace(
-        ACCOUNTS=fake_accounts.ACCOUNTS,
-        account_name_from_email=fake_google_cli_auth.account_name_from_email,
-    ))
+    monkeypatch.setitem(
+        sys.modules,
+        "ppa_google_auth",
+        types.SimpleNamespace(
+            ACCOUNTS=fake_accounts.ACCOUNTS,
+            account_name_from_email=fake_google_cli_auth.account_name_from_email,
+        ),
+    )
 
     rows = adapter._fetch_google()
     assert calls == ["rheeger"]

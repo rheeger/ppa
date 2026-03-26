@@ -187,9 +187,11 @@ def _sync_cursor(vault: Path, key: str) -> dict[str, Any]:
 
 
 def _gmail_complete(cursor: dict[str, Any]) -> bool:
-    return not cursor.get("page_token") and not list(cursor.get("page_thread_ids") or []) and _coerce_int(
-        cursor.get("page_index")
-    ) == 0
+    return (
+        not cursor.get("page_token")
+        and not list(cursor.get("page_thread_ids") or [])
+        and _coerce_int(cursor.get("page_index")) == 0
+    )
 
 
 def _calendar_complete(cursor: dict[str, Any]) -> bool:
@@ -344,7 +346,14 @@ class SeedRunbook:
     def _save_state(self) -> None:
         _write_json(self.state_path, self.state)
 
-    def _record_event(self, kind: str, message: str, *, phase_id: str | None = None, data: dict[str, Any] | None = None) -> None:
+    def _record_event(
+        self,
+        kind: str,
+        message: str,
+        *,
+        phase_id: str | None = None,
+        data: dict[str, Any] | None = None,
+    ) -> None:
         payload = {
             "timestamp": _now(),
             "kind": kind,
@@ -410,7 +419,12 @@ class SeedRunbook:
         if archive_path is not None:
             phase.setdefault("artifacts", []).append(str(archive_path))
         self._save_state()
-        self._record_event("checkpoint", f"Checkpoint written for {phase_id}", phase_id=phase_id, data={"path": str(checkpoint_path)})
+        self._record_event(
+            "checkpoint",
+            f"Checkpoint written for {phase_id}",
+            phase_id=phase_id,
+            data={"path": str(checkpoint_path)},
+        )
         return checkpoint_path
 
     def _run_command(
@@ -465,7 +479,8 @@ class SeedRunbook:
         output = self._run_command(
             [
                 self.manifest.python_bin,
-                "-m", "archive_doctor",
+                "-m",
+                "archive_doctor",
                 "--vault",
                 str(self.vault),
                 "validate",
@@ -480,7 +495,8 @@ class SeedRunbook:
         return self._run_command(
             [
                 self.manifest.python_bin,
-                "-m", "archive_doctor",
+                "-m",
+                "archive_doctor",
                 "--vault",
                 str(self.vault),
                 "stats",
@@ -503,7 +519,10 @@ class SeedRunbook:
             f"skipped={result.skipped} errors={len(result.errors)}"
         )
         if result.errors:
-            raise PhaseFailure(f"{label} reported {len(result.errors)} ingest errors", retryable=self.current_phase in RETRYABLE_PHASES)
+            raise PhaseFailure(
+                f"{label} reported {len(result.errors)} ingest errors",
+                retryable=self.current_phase in RETRYABLE_PHASES,
+            )
         return metrics
 
     def _ensure_writable_dir(self, path: Path) -> None:
@@ -527,10 +546,20 @@ class SeedRunbook:
                 phase["attempts"] = _coerce_int(phase.get("attempts")) + 1
                 self._save_state()
                 try:
-                    self._record_event("phase-start", f"Starting {phase_id}", phase_id=phase_id, data={"attempt": phase["attempts"]})
+                    self._record_event(
+                        "phase-start",
+                        f"Starting {phase_id}",
+                        phase_id=phase_id,
+                        data={"attempt": phase["attempts"]},
+                    )
                     metrics = getattr(self, f"_phase_{phase_id.replace('-', '_')}")()
                     self._update_phase(phase_id, status="completed", metrics=metrics)
-                    self._record_event("phase-complete", f"Completed {phase_id}", phase_id=phase_id, data=metrics)
+                    self._record_event(
+                        "phase-complete",
+                        f"Completed {phase_id}",
+                        phase_id=phase_id,
+                        data=metrics,
+                    )
                     break
                 except PhaseFailure as exc:
                     self._record_event(
@@ -603,11 +632,22 @@ class SeedRunbook:
             raise PhaseFailure(f"Apple Health export not found: {apple_health_export}")
         for path in (self.log_dir, self.checkpoint_dir):
             self._ensure_writable_dir(path)
-        for path in (self.log_dir, self.checkpoint_dir, self.vault.parent, Path(self.manifest.imessage_snapshot_dir).expanduser().parent):
+        for path in (
+            self.log_dir,
+            self.checkpoint_dir,
+            self.vault.parent,
+            Path(self.manifest.imessage_snapshot_dir).expanduser().parent,
+        ):
             free_gb = self._disk_free_gb(path)
             if free_gb < self.config.min_free_gb:
-                raise PhaseFailure(f"Insufficient free space at {path}: {free_gb:.2f} GB < {self.config.min_free_gb:.2f} GB")
-        if _vault_has_content(self.vault) and not _is_vault_initialized(self.vault) and not self.config.allow_nonempty_vault:
+                raise PhaseFailure(
+                    f"Insufficient free space at {path}: {free_gb:.2f} GB < {self.config.min_free_gb:.2f} GB"
+                )
+        if (
+            _vault_has_content(self.vault)
+            and not _is_vault_initialized(self.vault)
+            and not self.config.allow_nonempty_vault
+        ):
             raise PhaseFailure("Vault has unexpected content but is not initialized for a resumable run")
         return {
             "python_bin": str(python_bin),
@@ -637,7 +677,12 @@ class SeedRunbook:
         missing = [str(path) for path in expected if not path.exists()]
         if missing:
             raise PhaseFailure(f"Snapshot bundle missing expected files: {', '.join(missing)}")
-        contacts_metrics = self._ingest("google-auth-warmup.contacts", ContactsAdapter(), dry_run=True, sources=["google"])
+        contacts_metrics = self._ingest(
+            "google-auth-warmup.contacts",
+            ContactsAdapter(),
+            dry_run=True,
+            sources=["google"],
+        )
         gmail_metrics = self._ingest(
             "google-auth-warmup.gmail-correspondents",
             GmailCorrespondentsAdapter(),
@@ -665,7 +710,11 @@ class SeedRunbook:
         }
 
     def _phase_init_canonical(self) -> dict[str, Any]:
-        if _vault_has_content(self.vault) and not self.config.allow_nonempty_vault and not _is_vault_initialized(self.vault):
+        if (
+            _vault_has_content(self.vault)
+            and not self.config.allow_nonempty_vault
+            and not _is_vault_initialized(self.vault)
+        ):
             raise PhaseFailure("Refusing to initialize a non-empty vault without --allow-nonempty-vault")
         self._run_command(
             ["bash", str(REPO_ROOT / "scripts" / "ppa-init-vault.sh"), str(self.vault)],
@@ -674,7 +723,11 @@ class SeedRunbook:
         if not _is_vault_initialized(self.vault):
             raise PhaseFailure("Vault init did not create expected metadata files")
         metrics = {"vault": str(self.vault), **_vault_metrics(self.vault)}
-        self._checkpoint("init-canonical", metrics=metrics, full="init-canonical" in self.manifest.full_checkpoint_phases)
+        self._checkpoint(
+            "init-canonical",
+            metrics=metrics,
+            full="init-canonical" in self.manifest.full_checkpoint_phases,
+        )
         return metrics
 
     def _phase_seed_apple_contacts(self) -> dict[str, Any]:
@@ -700,7 +753,7 @@ class SeedRunbook:
             "cursor_present": True,
             "people_count": _people_count(self.vault),
             "dedup_candidates": _dedup_candidate_count(self.vault),
-            "validate_total": validate["report"].get("total_cards", 0) if isinstance(validate["report"], dict) else 0,
+            "validate_total": (validate["report"].get("total_cards", 0) if isinstance(validate["report"], dict) else 0),
             "stats_preview": stats_output.splitlines()[:10],
         }
         self._checkpoint(
@@ -726,7 +779,7 @@ class SeedRunbook:
             "cursor_present": True,
             "people_count": _people_count(self.vault),
             "dedup_candidates": _dedup_candidate_count(self.vault),
-            "validate_total": validate["report"].get("total_cards", 0) if isinstance(validate["report"], dict) else 0,
+            "validate_total": (validate["report"].get("total_cards", 0) if isinstance(validate["report"], dict) else 0),
             "stats_preview": stats_output.splitlines()[:10],
         }
         self._checkpoint(
@@ -825,9 +878,15 @@ class SeedRunbook:
             ],
             retryable=True,
         )
-        cursor = _sync_cursor(self.vault, f"imessage:{self.manifest.imessage_source_label.strip().lower()}")
+        cursor = _sync_cursor(
+            self.vault,
+            f"imessage:{self.manifest.imessage_source_label.strip().lower()}",
+        )
         if not _imessage_complete(cursor):
-            raise PhaseFailure("iMessage import did not reach snapshot rowid completion", retryable=True)
+            raise PhaseFailure(
+                "iMessage import did not reach snapshot rowid completion",
+                retryable=True,
+            )
         return {
             "cursor": cursor,
             "imessage_threads": _card_count(self.vault, "IMessageThreads"),
@@ -835,7 +894,10 @@ class SeedRunbook:
         }
 
     def _phase_verify_imessage(self) -> dict[str, Any]:
-        cursor = _sync_cursor(self.vault, f"imessage:{self.manifest.imessage_source_label.strip().lower()}")
+        cursor = _sync_cursor(
+            self.vault,
+            f"imessage:{self.manifest.imessage_source_label.strip().lower()}",
+        )
         if not _imessage_complete(cursor):
             raise PhaseFailure("iMessage sync-state is not complete")
         metrics = {
@@ -846,7 +908,11 @@ class SeedRunbook:
             "threads_with_people_links": _cards_with_field(self.vault, "IMessageThreads", "people"),
             "messages_with_attachments": _cards_with_field(self.vault, "IMessage", "attachments"),
         }
-        self._checkpoint("verify-imessage", metrics=metrics, full="verify-imessage" in self.manifest.full_checkpoint_phases)
+        self._checkpoint(
+            "verify-imessage",
+            metrics=metrics,
+            full="verify-imessage" in self.manifest.full_checkpoint_phases,
+        )
         return metrics
 
     def _phase_seed_photos(self) -> dict[str, Any]:
@@ -906,7 +972,12 @@ class SeedRunbook:
                 quick_update=True,
             )
             after = _sync_cursor(self.vault, key)
-            self._record_event("gmail-loop", "Completed Gmail batch", phase_id=self.current_phase, data={"iteration": iterations, **metrics})
+            self._record_event(
+                "gmail-loop",
+                "Completed Gmail batch",
+                phase_id=self.current_phase,
+                data={"iteration": iterations, **metrics},
+            )
             if _gmail_complete(after):
                 return {"iterations": iterations, "cursor": after, **metrics}
             if not _progress_changed(before, after, tracked_fields):
@@ -946,7 +1017,12 @@ class SeedRunbook:
                 quick_update=True,
             )
             after = _sync_cursor(self.vault, key)
-            self._record_event("calendar-loop", "Completed Calendar batch", phase_id=self.current_phase, data={"iteration": iterations, **metrics})
+            self._record_event(
+                "calendar-loop",
+                "Completed Calendar batch",
+                phase_id=self.current_phase,
+                data={"iteration": iterations, **metrics},
+            )
             if _calendar_complete(after):
                 return {"iterations": iterations, "cursor": after, **metrics}
             if not _progress_changed(before, after, tracked_fields):
@@ -968,7 +1044,13 @@ class SeedRunbook:
 
     def _phase_seed_gmail_correspondents(self) -> dict[str, Any]:
         key = f"gmail-correspondents:{self.manifest.google_account.strip().lower()}"
-        tracked_fields = ["page_token", "scanned_messages", "processed", "created", "merged"]
+        tracked_fields = [
+            "page_token",
+            "scanned_messages",
+            "processed",
+            "created",
+            "merged",
+        ]
         iterations = 0
         while True:
             iterations += 1
@@ -1036,8 +1118,8 @@ class SeedRunbook:
         return metrics
 
     def _archive_modules(self):
-        if str(ARCHIVE_MCP_ROOT) not in sys.path:
-            sys.path.insert(0, str(ARCHIVE_MCP_ROOT))
+        if str(REPO_ROOT) not in sys.path:
+            sys.path.insert(0, str(REPO_ROOT))
         os.environ["PPA_PATH"] = str(self.vault)
         os.environ["ARCHIVE_INDEX_DSN"] = self.manifest.archive_index_dsn
         os.environ["ARCHIVE_EMBEDDING_PROVIDER"] = self.manifest.embedding_provider
@@ -1049,7 +1131,12 @@ class SeedRunbook:
         archive_index_store = importlib.import_module("archive_mcp.index_store")
         archive_embedding = importlib.import_module("archive_mcp.embedding_provider")
         archive_seed_links = importlib.import_module("archive_mcp.seed_links")
-        return archive_server, archive_index_store, archive_embedding, archive_seed_links
+        return (
+            archive_server,
+            archive_index_store,
+            archive_embedding,
+            archive_seed_links,
+        )
 
     def _phase_rebuild_derived_index(self) -> dict[str, Any]:
         _, archive_index_store, _, _ = self._archive_modules()
@@ -1138,7 +1225,12 @@ class SeedRunbook:
                 embedding_version=self.manifest.embedding_version,
             )
             pending = _coerce_int(status.get("pending_chunk_count"))
-            self._record_event("embedding-status", "Embedding status polled", phase_id=self.current_phase, data=status)
+            self._record_event(
+                "embedding-status",
+                "Embedding status polled",
+                phase_id=self.current_phase,
+                data=status,
+            )
             if pending == 0:
                 break
             iterations += 1
@@ -1226,11 +1318,20 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     def add_shared_arguments(target: argparse.ArgumentParser) -> None:
-        target.add_argument("--run-id", default=os.environ.get("RUN_ID", f"ppa-seed-{datetime.now():%Y%m%d-%H%M%S}"))
-        target.add_argument("--vault", default=os.environ.get("PPA_PATH", str(Path.home() / "Archive" / "production" / "hf-archives")))
+        target.add_argument(
+            "--run-id",
+            default=os.environ.get("RUN_ID", f"ppa-seed-{datetime.now():%Y%m%d-%H%M%S}"),
+        )
+        target.add_argument(
+            "--vault",
+            default=os.environ.get("PPA_PATH", str(Path.home() / "Archive" / "production" / "hf-archives")),
+        )
         target.add_argument(
             "--log-dir",
-            default=os.environ.get("LOG_DIR", str(Path.home() / "Archive" / "ops" / "ppa-seed-logs" / os.environ.get("RUN_ID", "latest"))),
+            default=os.environ.get(
+                "LOG_DIR",
+                str(Path.home() / "Archive" / "ops" / "ppa-seed-logs" / os.environ.get("RUN_ID", "latest")),
+            ),
         )
         target.add_argument(
             "--checkpoint-dir",
@@ -1240,21 +1341,61 @@ def _build_parser() -> argparse.ArgumentParser:
             ),
         )
         target.add_argument("--apple-contacts-vcf", default=os.environ.get("APPLE_CONTACTS_VCF", ""))
-        target.add_argument("--google-account", default=os.environ.get("GOOGLE_ACCOUNT", "rheeger@gmail.com"))
-        target.add_argument("--google-calendar-id", default=os.environ.get("GOOGLE_CALENDAR_ID", "primary"))
-        target.add_argument("--imessage-snapshot-dir", default=os.environ.get("IMESSAGE_SNAPSHOT_DIR", str(Path.home() / "Archive" / "ppa-imessage-snapshot")))
-        target.add_argument("--imessage-source-label", default=os.environ.get("IMESSAGE_SOURCE_LABEL", "local-messages"))
-        target.add_argument("--photos-library-path", default=os.environ.get("PHOTOS_LIBRARY_PATH", str(Path.home() / "Pictures" / "Photos Library.photoslibrary")))
-        target.add_argument("--photos-source-label", default=os.environ.get("PHOTOS_SOURCE_LABEL", "apple-photos"))
-        target.add_argument("--one-medical-fhir-json", default=os.environ.get("ONE_MEDICAL_FHIR_JSON", ""))
+        target.add_argument(
+            "--google-account",
+            default=os.environ.get("GOOGLE_ACCOUNT", "rheeger@gmail.com"),
+        )
+        target.add_argument(
+            "--google-calendar-id",
+            default=os.environ.get("GOOGLE_CALENDAR_ID", "primary"),
+        )
+        target.add_argument(
+            "--imessage-snapshot-dir",
+            default=os.environ.get(
+                "IMESSAGE_SNAPSHOT_DIR",
+                str(Path.home() / "Archive" / "ppa-imessage-snapshot"),
+            ),
+        )
+        target.add_argument(
+            "--imessage-source-label",
+            default=os.environ.get("IMESSAGE_SOURCE_LABEL", "local-messages"),
+        )
+        target.add_argument(
+            "--photos-library-path",
+            default=os.environ.get(
+                "PHOTOS_LIBRARY_PATH",
+                str(Path.home() / "Pictures" / "Photos Library.photoslibrary"),
+            ),
+        )
+        target.add_argument(
+            "--photos-source-label",
+            default=os.environ.get("PHOTOS_SOURCE_LABEL", "apple-photos"),
+        )
+        target.add_argument(
+            "--one-medical-fhir-json",
+            default=os.environ.get("ONE_MEDICAL_FHIR_JSON", ""),
+        )
         target.add_argument("--one-medical-ccd-xml", default=os.environ.get("ONE_MEDICAL_CCD_XML", ""))
         target.add_argument("--vaccine-pdf", default=os.environ.get("VACCINE_PDF", ""))
-        target.add_argument("--apple-health-export-xml", default=os.environ.get("APPLE_HEALTH_EXPORT_XML", ""))
+        target.add_argument(
+            "--apple-health-export-xml",
+            default=os.environ.get("APPLE_HEALTH_EXPORT_XML", ""),
+        )
         target.add_argument("--person-wikilink", default=os.environ.get("PERSON_WIKILINK", ""))
         target.add_argument("--archive-index-dsn", default=os.environ.get("ARCHIVE_INDEX_DSN", ""))
-        target.add_argument("--embedding-provider", default=os.environ.get("ARCHIVE_EMBEDDING_PROVIDER", "hash"))
-        target.add_argument("--embedding-model", default=os.environ.get("ARCHIVE_EMBEDDING_MODEL", "archive-hash-dev"))
-        target.add_argument("--embedding-version", type=int, default=int(os.environ.get("ARCHIVE_EMBEDDING_VERSION", "1")))
+        target.add_argument(
+            "--embedding-provider",
+            default=os.environ.get("ARCHIVE_EMBEDDING_PROVIDER", "hash"),
+        )
+        target.add_argument(
+            "--embedding-model",
+            default=os.environ.get("ARCHIVE_EMBEDDING_MODEL", "archive-hash-dev"),
+        )
+        target.add_argument(
+            "--embedding-version",
+            type=int,
+            default=int(os.environ.get("ARCHIVE_EMBEDDING_VERSION", "1")),
+        )
         target.add_argument("--python-bin", default=os.environ.get("PYTHON", sys.executable))
 
     run = sub.add_parser("run")
@@ -1286,7 +1427,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _manifest_from_args(args: argparse.Namespace) -> RunManifest:
-    full_checkpoint_phases = [item.strip() for item in getattr(args, "full_checkpoint_phases", "").split(",") if item.strip()]
+    full_checkpoint_phases = [
+        item.strip() for item in getattr(args, "full_checkpoint_phases", "").split(",") if item.strip()
+    ]
     return RunManifest(
         run_id=args.run_id,
         vault_path=args.vault,

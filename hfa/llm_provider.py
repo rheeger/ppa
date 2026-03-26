@@ -55,10 +55,7 @@ class GeminiProvider:
         api_key = os.environ.get("GEMINI_API_KEY")
         if not api_key:
             return None
-        url = (
-            f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
-            f"?key={api_key}"
-        )
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={api_key}"
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"maxOutputTokens": max_tokens},

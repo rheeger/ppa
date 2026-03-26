@@ -98,11 +98,7 @@ def _gmail_message(
             "parts": [
                 {
                     "mimeType": "text/plain",
-                    "body": {
-                        "data": "aGVsbG8="
-                        if body == "hello"
-                        else "d29ybGQ="
-                    },
+                    "body": {"data": "aGVsbG8=" if body == "hello" else "d29ybGQ="},
                 }
             ],
         },
@@ -119,10 +115,7 @@ def _hash_markdown_tree(root: Path, *dirs: str) -> dict[str, str]:
         target = root / dir_name
         if target.exists():
             files.extend(sorted(target.rglob("*.md")))
-    return {
-        str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
-        for path in files
-    }
+    return {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest() for path in files}
 
 
 def test_uid_is_deterministic():
@@ -152,8 +145,7 @@ def test_wipe_and_reimport_produces_same_card_hashes(tmp_vault, tmp_path):
     fixtures = _write_fixtures(tmp_path)
     _run_import(tmp_vault, fixtures)
     before = {
-        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
-        for path in sorted((tmp_vault / "People").glob("*.md"))
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted((tmp_vault / "People").glob("*.md"))
     }
 
     for path in (tmp_vault / "People").glob("*.md"):
@@ -163,8 +155,7 @@ def test_wipe_and_reimport_produces_same_card_hashes(tmp_vault, tmp_path):
 
     _run_import(tmp_vault, fixtures)
     after = {
-        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
-        for path in sorted((tmp_vault / "People").glob("*.md"))
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted((tmp_vault / "People").glob("*.md"))
     }
     assert before == after
 

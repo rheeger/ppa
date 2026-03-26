@@ -32,7 +32,11 @@ def _resolve_accounts(raw_value: str | None) -> list[str]:
     if raw_value:
         requested = [item.strip().lower() for item in raw_value.split(",") if item.strip()]
     else:
-        requested = [email for email in DEFAULT_ACCOUNTS if any(email == str(account.get("email", "")).strip().lower() for account in ACCOUNTS.values())]
+        requested = [
+            email
+            for email in DEFAULT_ACCOUNTS
+            if any(email == str(account.get("email", "")).strip().lower() for account in ACCOUNTS.values())
+        ]
     seen: set[str] = set()
     ordered: list[str] = []
     for email in requested:
@@ -123,7 +127,9 @@ def main() -> int:
     additional_accounts = [account for account in accounts if account != migrate_account]
 
     if not args.skip_migration:
-        migration_backup_dir = raw_root / "migrations" / migrate_account / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        migration_backup_dir = (
+            raw_root / "migrations" / migrate_account / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        )
         _run(
             [
                 args.python_bin,

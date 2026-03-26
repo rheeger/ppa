@@ -2,24 +2,37 @@
 
 from __future__ import annotations
 
-import sys
+import logging
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from .explain import (projection_explain_payload, projection_inventory_payload,
-                      projection_status_payload)
-from .index_config import (VECTOR_CANDIDATE_MULTIPLIER, _apply_recency_boost,
-                           _card_type_prior, _coerce_source_fields,
-                           _field_provenance_bonus, _field_provenance_label,
-                           _format_row, _vector_literal,
-                           get_seed_links_enabled)
+from .explain import (
+    projection_explain_payload,
+    projection_inventory_payload,
+    projection_status_payload,
+)
+from .index_config import (
+    VECTOR_CANDIDATE_MULTIPLIER,
+    _apply_recency_boost,
+    _card_type_prior,
+    _coerce_source_fields,
+    _field_provenance_bonus,
+    _field_provenance_label,
+    _vector_literal,
+    get_seed_links_enabled,
+)
 from .materializer import _normalize_exact_text, _normalize_slug
-from .projections.registry import (PROJECTION_REGISTRY, TYPED_PROJECTIONS,
-                                   projection_for_card_type)
+from .projections.registry import (
+    PROJECTION_REGISTRY,
+    TYPED_PROJECTIONS,
+    projection_for_card_type,
+)
+
+logger = logging.getLogger("ppa.index_query")
 
 
 class QueryMixin:
-
     def status(self) -> dict[str, str]:
         self.ensure_ready()
         with self._connect() as conn:
@@ -124,11 +137,11 @@ class QueryMixin:
                 card_uid=card_uid,
                 card_type=card_type,
                 typed_projection=projection.table_name,
-                canonical_ready=bool(row["canonical_ready"]) if row is not None else False,
+                canonical_ready=(bool(row["canonical_ready"]) if row is not None else False),
                 field_mappings=[
                     {
                         "typed_column": column.name,
-                        "canonical_fields": [column.source_field] if column.source_field else [],
+                        "canonical_fields": ([column.source_field] if column.source_field else []),
                         "status": "materialized" if row is not None else "missing",
                     }
                     for column in projection.columns
@@ -176,17 +189,13 @@ class QueryMixin:
         return clauses, params
 
     @staticmethod
-    def _merge_lexical_uid_rows(
-        a: list[dict[str, Any]], b: list[dict[str, Any]]
-    ) -> list[dict[str, Any]]:
+    def _merge_lexical_uid_rows(a: list[dict[str, Any]], b: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Keep best lexical_score per card_uid (same rule as retrieval_pipeline.merge_lexical_rows)."""
         by_uid: dict[str, dict[str, Any]] = {str(r["card_uid"]): dict(r) for r in a}
         for row in b:
             uid = str(row["card_uid"])
             prev = by_uid.get(uid)
-            if prev is None or float(row.get("lexical_score", 0.0)) > float(
-                prev.get("lexical_score", 0.0)
-            ):
+            if prev is None or float(row.get("lexical_score", 0.0)) > float(prev.get("lexical_score", 0.0)):
                 by_uid[uid] = dict(row)
         return list(by_uid.values())
 
@@ -265,7 +274,7 @@ class QueryMixin:
         with self._connect() as conn:
             inner_fts = f"""
                 {select_sql}
-                WHERE {' AND '.join(clauses)}
+                WHERE {" AND ".join(clauses)}
                   AND c.search_document @@ plainto_tsquery('english', %s)
             """
             fts_sql = _wrap_lexical_order(inner_fts)
@@ -283,7 +292,7 @@ class QueryMixin:
 
             inner_exact = f"""
                 {select_sql}
-                WHERE {' AND '.join(clauses)}
+                WHERE {" AND ".join(clauses)}
                   AND (
                       c.slug = %s
                       OR EXISTS (
@@ -349,16 +358,24 @@ class QueryMixin:
                 ON card.uid = chunk.card_uid
             WHERE embedding.embedding_model = %s
               AND embedding.embedding_version = %s
-              AND {' AND '.join(clauses)}
+              AND {" AND ".join(clauses)}
             ORDER BY embedding.embedding <=> %s::vector ASC, card.activity_at DESC, chunk.chunk_index ASC
             LIMIT %s
         """
-        rows = conn.execute(sql, [vector_value, embedding_model, embedding_version, *params, vector_value, limit]).fetchall()
+        rows = conn.execute(
+            sql,
+            [
+                vector_value,
+                embedding_model,
+                embedding_version,
+                *params,
+                vector_value,
+                limit,
+            ],
+        ).fetchall()
         return [dict(row) for row in rows]
 
-    def _aggregate_vector_candidates(
-        self, rows: list[dict[str, Any]], *, limit: int
-    ) -> list[dict[str, Any]]:
+    def _aggregate_vector_candidates(self, rows: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
         """Collapse chunk-level vector rows to card-level, keeping best similarity.
 
         Returns rows sorted by similarity desc with provenance metadata but no
@@ -407,9 +424,7 @@ class QueryMixin:
         )
         return ranked[:limit]
 
-    def _score_and_rank_vector(
-        self, rows: list[dict[str, Any]], *, limit: int
-    ) -> list[dict[str, Any]]:
+    def _score_and_rank_vector(self, rows: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
         """Apply composite scoring to card-level vector candidates.
 
         Scores combine similarity, type priors, recency, provenance, and a
@@ -418,9 +433,7 @@ class QueryMixin:
         """
         _apply_recency_boost(rows, key_name="recency_score")
         for entry in rows:
-            chunk_match_boost = min(
-                max(int(entry["matched_chunk_count"]) - 1, 0) * 0.025, 0.1
-            )
+            chunk_match_boost = min(max(int(entry["matched_chunk_count"]) - 1, 0) * 0.025, 0.1)
             entry["score"] = round(
                 (float(entry["similarity"]) * 1.35)
                 + _card_type_prior(str(entry["type"]))
@@ -560,26 +573,31 @@ class QueryMixin:
                     limit=cap,
                 )
 
+        # See archive_mcp/log.py — stderr-only logging; never print to stdout in MCP mode.
         with ThreadPoolExecutor(max_workers=2) as pool:
             fut_lex = pool.submit(_lexical_job)
             fut_vec = pool.submit(_vector_job)
             try:
+                t_lex = time.monotonic()
                 lexical_rows = fut_lex.result()
-            except Exception as exc:
-                print(
-                    f"[ppa] lexical retrieval failed: {exc!r}",
-                    file=sys.stderr,
-                    flush=True,
+                logger.info(
+                    "lexical_candidates done rows=%d elapsed_ms=%d",
+                    len(lexical_rows),
+                    int((time.monotonic() - t_lex) * 1000),
                 )
+            except Exception as exc:
+                logger.error("lexical retrieval failed: %r", exc)
                 raise
             try:
+                t_vec = time.monotonic()
                 vector_rows = fut_vec.result()
-            except Exception as exc:
-                print(
-                    f"[ppa] vector retrieval failed: {exc!r}",
-                    file=sys.stderr,
-                    flush=True,
+                logger.info(
+                    "vector_candidates done rows=%d elapsed_ms=%d",
+                    len(vector_rows),
+                    int((time.monotonic() - t_vec) * 1000),
                 )
+            except Exception as exc:
+                logger.error("vector retrieval failed: %r", exc)
                 raise
         return lexical_rows, vector_rows
 
@@ -624,7 +642,10 @@ class QueryMixin:
         anchor_uids = [
             str(row["card_uid"])
             for row in lexical_rows
-            if int(row["slug_exact"]) or int(row["summary_exact"]) or int(row["external_id_exact"]) or int(row["person_exact"])
+            if int(row["slug_exact"])
+            or int(row["summary_exact"])
+            or int(row["external_id_exact"])
+            or int(row["person_exact"])
         ]
         neighbor_uids = self.fetch_graph_neighbors_for_uids(anchor_uids)
         from .retrieval_pipeline import HybridFetchInputs, fuse_and_rank_hybrid
@@ -680,7 +701,7 @@ class QueryMixin:
         sql = f"""
             SELECT DISTINCT c.rel_path, c.summary, c.type, c.activity_at
             FROM {self.schema}.cards c
-            WHERE {' AND '.join(clauses)}
+            WHERE {" AND ".join(clauses)}
             ORDER BY c.activity_at DESC, c.rel_path ASC
             LIMIT %s
         """
@@ -694,7 +715,7 @@ class QueryMixin:
         sql = f"""
             SELECT c.activity_at AS created, c.rel_path, c.summary, c.type
             FROM {self.schema}.cards c
-            WHERE {' AND '.join(clauses)}
+            WHERE {" AND ".join(clauses)}
             ORDER BY c.activity_at ASC, c.rel_path ASC
             LIMIT %s
         """
@@ -711,7 +732,11 @@ class QueryMixin:
             by_source = conn.execute(
                 f"SELECT source, COUNT(*) AS count FROM {self.schema}.card_sources GROUP BY source ORDER BY count DESC, source ASC"
             ).fetchall()
-        return int(total_row["count"]), [dict(row) for row in by_type], [dict(row) for row in by_source]
+        return (
+            int(total_row["count"]),
+            [dict(row) for row in by_type],
+            [dict(row) for row in by_source],
+        )
 
     def graph(self, note_path: str, hops: int = 2) -> dict[str, list[str]] | None:
         self.ensure_ready()

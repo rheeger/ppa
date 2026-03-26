@@ -1,14 +1,29 @@
 import pytest
-from hfa.schema import (BeeperAttachmentCard, BeeperMessageCard,
-                        BeeperThreadCard, DocumentCard, EmailMessageCard,
-                        EmailThreadCard, GitCommitCard, GitMessageCard,
-                        GitRepositoryCard, GitThreadCard,
-                        IMessageAttachmentCard, IMessageMessageCard,
-                        IMessageThreadCard, MediaAssetCard, MedicalRecordCard,
-                        MeetingTranscriptCard, PersonCard, VaccinationCard,
-                        card_to_frontmatter, validate_card_permissive,
-                        validate_card_strict)
 from pydantic import ValidationError
+
+from hfa.schema import (
+    BeeperAttachmentCard,
+    BeeperMessageCard,
+    BeeperThreadCard,
+    DocumentCard,
+    EmailMessageCard,
+    EmailThreadCard,
+    GitCommitCard,
+    GitMessageCard,
+    GitRepositoryCard,
+    GitThreadCard,
+    IMessageAttachmentCard,
+    IMessageMessageCard,
+    IMessageThreadCard,
+    MediaAssetCard,
+    MedicalRecordCard,
+    MeetingTranscriptCard,
+    PersonCard,
+    VaccinationCard,
+    card_to_frontmatter,
+    validate_card_permissive,
+    validate_card_strict,
+)
 
 
 def test_valid_person_card(sample_person_card):

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 from pathlib import Path
@@ -27,7 +26,9 @@ def _rowid(cursor: dict[str, object]) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run the full Apple Messages PPA backfill in resumable chunks")
-    parser.add_argument("--vault", default=os.environ.get("PPA_PATH", str(Path.home() / "Archive" / "production" / "hf-archives")))
+    parser.add_argument(
+        "--vault", default=os.environ.get("PPA_PATH", str(Path.home() / "Archive" / "production" / "hf-archives"))
+    )
     parser.add_argument("--snapshot-dir", required=True)
     parser.add_argument("--source-label", default="local-messages")
     parser.add_argument("--batch-size", type=int, default=10000, help="Max source messages per ingest chunk")

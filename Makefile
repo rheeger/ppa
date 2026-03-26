@@ -53,7 +53,7 @@ PG_RESTORE_JOBS ?= 32
 PG_DUMP_FAST ?= 0
 PG_DUMP_JOBS ?= 0
 
-.PHONY: install pg-up pg-down pg-logs pg-psql dump-schema dump-seed-schema dump-seed-schema-fast dump-seed-schema-stream-arnold pipe-restore-seed-arnold scp-restore-seed-arnold dump-and-scp-restore-seed-arnold watch-scp-restore-continue-hfa bootstrap-postgres bootstrap-seed-postgres rebuild-indexes rebuild-seed-indexes index-status index-status-seed embed-pending migrate migrate-seed migrate-dry-run migration-status migration-status-seed build-benchmark-sample benchmark-rebuild benchmark-seed-links smoke smoke-queries
+.PHONY: install pg-up pg-down pg-logs pg-psql dump-schema dump-seed-schema dump-seed-schema-fast dump-seed-schema-stream-arnold pipe-restore-seed-arnold scp-restore-seed-arnold dump-and-scp-restore-seed-arnold watch-scp-restore-continue-hfa bootstrap-postgres bootstrap-seed-postgres rebuild-indexes rebuild-seed-indexes index-status index-status-seed embed-pending migrate migrate-seed migrate-dry-run migration-status migration-status-seed build-benchmark-sample benchmark-rebuild benchmark-seed-links smoke smoke-queries arnold-smoke
 
 install:
 	$(PYTHON) -m pip install -e .
@@ -236,10 +236,10 @@ smoke-queries:
 	PPA_EMBEDDING_PROVIDER=$(PPA_EMBEDDING_PROVIDER) \
 	PPA_EMBEDDING_MODEL=$(PPA_EMBEDDING_MODEL) \
 	PPA_EMBEDDING_VERSION=$(PPA_EMBEDDING_VERSION) \
-	PPA_USE_ARNOLD_OPENAI_KEY=$(PPA_USE_ARNOLD_OPENAI_KEY) \
-	PPA_OPENAI_API_KEY_OP_REF='$(PPA_OPENAI_API_KEY_OP_REF)' \
-	PPA_OP_SERVICE_ACCOUNT_TOKEN_OP_REF='$(PPA_OP_SERVICE_ACCOUNT_TOKEN_OP_REF)' \
-	PPA_OP_SERVICE_ACCOUNT_TOKEN_FILE='$(PPA_OP_SERVICE_ACCOUNT_TOKEN_FILE)' \
-	$(PYTHON) -c "from archive_mcp.server import archive_embedding_status, archive_graph, archive_hybrid_search, archive_index_status, archive_query, archive_read, archive_search, archive_stats, archive_vector_search; q = archive_query(type_filter='person', limit=1); q = q if q != 'No matches' else archive_query(limit=1); first = q.splitlines()[0] if q and q != 'No matches' else ''; rel_path = first[2:].split(':', 1)[0].strip() if first.startswith('- ') else ''; summary = first.split(':', 1)[1].strip() if ': ' in first else 'archive'; query = ' '.join(summary.split()[:4]).strip() or 'archive'; print('=== INDEX STATUS ==='); print(archive_index_status()); print('=== STATS ==='); print(archive_stats()); print('=== QUERY SAMPLE ==='); print(q); print('=== READ SAMPLE ==='); print(archive_read(rel_path)[:800] if rel_path else 'No sample path'); print('=== GRAPH SAMPLE ==='); print(archive_graph(rel_path, hops=1) if rel_path else 'No sample path'); print('=== EMBEDDING STATUS ==='); print(archive_embedding_status()); print('=== SEARCH SAMPLE ==='); print(archive_search(query, limit=3)); print('=== VECTOR SAMPLE ==='); print(archive_vector_search(query, limit=3)); print('=== HYBRID SAMPLE ==='); print(archive_hybrid_search(query, limit=3))"
+	PATH="$$(dirname $(PYTHON)):$$PATH" \
+	bash scripts/ppa-smoke-test.sh
+
+arnold-smoke:
+	ssh arnold@192.168.50.27 'cd /srv/ppa && ./scripts/ppa-smoke-test.sh'
 
 smoke: install bootstrap-postgres rebuild-indexes index-status embed-pending smoke-queries

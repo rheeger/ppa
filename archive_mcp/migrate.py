@@ -60,9 +60,7 @@ class MigrationRunner:
     def applied_versions(self) -> set[int]:
         """Return the set of migration versions already applied."""
         try:
-            rows = self.conn.execute(
-                f"SELECT version FROM {self.schema}.schema_migrations ORDER BY version"
-            ).fetchall()
+            rows = self.conn.execute(f"SELECT version FROM {self.schema}.schema_migrations ORDER BY version").fetchall()
             return {int(row["version"]) if isinstance(row, dict) else int(row[0]) for row in rows}
         except Exception:
             self.conn.rollback()

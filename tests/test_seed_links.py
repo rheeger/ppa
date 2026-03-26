@@ -5,16 +5,30 @@ from __future__ import annotations
 from pathlib import Path
 
 from archive_mcp.seed_links import (  # type: ignore[import-not-found]
-    DECISION_CANONICAL_SAFE, LINK_TYPE_EVENT_HAS_MESSAGE,
-    LINK_TYPE_EVENT_HAS_TRANSCRIPT, LINK_TYPE_MESSAGE_HAS_CALENDAR_EVENT,
-    LINK_TYPE_MESSAGE_MENTIONS_PERSON, LINK_TYPE_POSSIBLE_SAME_PERSON,
-    LINK_TYPE_TRANSCRIPT_HAS_CALENDAR_EVENT, MODULE_CALENDAR,
-    MODULE_COMMUNICATION, MODULE_IDENTITY, MODULE_MEDIA,
-    build_seed_link_catalog, evaluate_seed_link_candidate,
-    generate_seed_link_candidates, get_surface_policy_rows)
+    DECISION_CANONICAL_SAFE,
+    LINK_TYPE_EVENT_HAS_TRANSCRIPT,
+    LINK_TYPE_MESSAGE_HAS_CALENDAR_EVENT,
+    LINK_TYPE_MESSAGE_MENTIONS_PERSON,
+    LINK_TYPE_POSSIBLE_SAME_PERSON,
+    LINK_TYPE_TRANSCRIPT_HAS_CALENDAR_EVENT,
+    MODULE_CALENDAR,
+    MODULE_COMMUNICATION,
+    MODULE_IDENTITY,
+    MODULE_MEDIA,
+    build_seed_link_catalog,
+    evaluate_seed_link_candidate,
+    generate_seed_link_candidates,
+    get_surface_policy_rows,
+)
 from hfa.provenance import ProvenanceEntry
-from hfa.schema import (CalendarEventCard, EmailMessageCard, EmailThreadCard,
-                        MediaAssetCard, MeetingTranscriptCard, PersonCard)
+from hfa.schema import (
+    CalendarEventCard,
+    EmailMessageCard,
+    EmailThreadCard,
+    MediaAssetCard,
+    MeetingTranscriptCard,
+    PersonCard,
+)
 from hfa.vault import write_card
 
 
@@ -139,9 +153,24 @@ def _seed_link_vault(vault: Path) -> None:
         event_id_hint="board-dinner-event",
     )
 
-    write_card(vault, "People/jane-smith.md", jane, provenance=_prov("summary", "first_name", "last_name", "emails", "aliases", "company"))
-    write_card(vault, "People/jane-smith-dup.md", jane_dup, provenance=_prov("summary", "first_name", "last_name", "emails", "company"))
-    write_card(vault, "Email/board-thread.md", thread, provenance=_prov("summary", "gmail_thread_id", "account_email", "subject", "participants"))
+    write_card(
+        vault,
+        "People/jane-smith.md",
+        jane,
+        provenance=_prov("summary", "first_name", "last_name", "emails", "aliases", "company"),
+    )
+    write_card(
+        vault,
+        "People/jane-smith-dup.md",
+        jane_dup,
+        provenance=_prov("summary", "first_name", "last_name", "emails", "company"),
+    )
+    write_card(
+        vault,
+        "Email/board-thread.md",
+        thread,
+        provenance=_prov("summary", "gmail_thread_id", "account_email", "subject", "participants"),
+    )
     write_card(
         vault,
         "Email/board-message.md",
@@ -165,7 +194,17 @@ def _seed_link_vault(vault: Path) -> None:
         vault,
         "Calendar/board-event.md",
         event,
-        provenance=_prov("summary", "account_email", "calendar_id", "event_id", "ical_uid", "title", "start_at", "end_at", "attendee_emails"),
+        provenance=_prov(
+            "summary",
+            "account_email",
+            "calendar_id",
+            "event_id",
+            "ical_uid",
+            "title",
+            "start_at",
+            "end_at",
+            "attendee_emails",
+        ),
     )
     write_card(
         vault,
@@ -178,7 +217,9 @@ def _seed_link_vault(vault: Path) -> None:
         "MeetingTranscripts/2026-03/board-dinner-transcript.md",
         transcript,
         body="## Transcript\n\nRobbie Heeger | Let's review the board dinner agenda.",
-        provenance=_prov("summary", "otter_meeting_id", "title", "start_at", "end_at", "participant_emails", "event_id_hint"),
+        provenance=_prov(
+            "summary", "otter_meeting_id", "title", "start_at", "end_at", "participant_emails", "event_id_hint"
+        ),
     )
 
 
@@ -198,17 +239,23 @@ def test_seed_link_catalog_and_candidate_generation(tmp_path: Path):
     message = next(item for item in catalog.cards_by_type["email_message"] if item.slug == "board-message")
     identity = next(item for item in catalog.cards_by_type["person"] if item.slug == "jane-smith")
     media = next(item for item in catalog.cards_by_type["media_asset"] if item.slug == "dinner-photo")
-    transcript = next(item for item in catalog.cards_by_type["meeting_transcript"] if item.slug == "board-dinner-transcript")
+    transcript = next(
+        item for item in catalog.cards_by_type["meeting_transcript"] if item.slug == "board-dinner-transcript"
+    )
 
     communication_candidates = generate_seed_link_candidates(catalog, message, MODULE_COMMUNICATION)
     link_types = {candidate.proposed_link_type for candidate in communication_candidates}
     assert LINK_TYPE_MESSAGE_MENTIONS_PERSON in link_types
 
     calendar_candidates = generate_seed_link_candidates(catalog, message, MODULE_CALENDAR)
-    assert any(candidate.proposed_link_type == LINK_TYPE_MESSAGE_HAS_CALENDAR_EVENT for candidate in calendar_candidates)
+    assert any(
+        candidate.proposed_link_type == LINK_TYPE_MESSAGE_HAS_CALENDAR_EVENT for candidate in calendar_candidates
+    )
 
     transcript_candidates = generate_seed_link_candidates(catalog, transcript, MODULE_CALENDAR)
-    assert any(candidate.proposed_link_type == LINK_TYPE_TRANSCRIPT_HAS_CALENDAR_EVENT for candidate in transcript_candidates)
+    assert any(
+        candidate.proposed_link_type == LINK_TYPE_TRANSCRIPT_HAS_CALENDAR_EVENT for candidate in transcript_candidates
+    )
 
     identity_candidates = generate_seed_link_candidates(catalog, identity, MODULE_IDENTITY)
     assert any(candidate.proposed_link_type == LINK_TYPE_POSSIBLE_SAME_PERSON for candidate in identity_candidates)
@@ -227,7 +274,8 @@ def test_seed_link_scoring_prefers_exact_deterministic_links(tmp_path: Path):
     calendar_candidates = [
         candidate
         for candidate in generate_seed_link_candidates(catalog, message, MODULE_CALENDAR)
-        if candidate.proposed_link_type == LINK_TYPE_MESSAGE_HAS_CALENDAR_EVENT and candidate.target_card_uid == event.uid
+        if candidate.proposed_link_type == LINK_TYPE_MESSAGE_HAS_CALENDAR_EVENT
+        and candidate.target_card_uid == event.uid
     ]
     assert calendar_candidates
 
@@ -240,13 +288,16 @@ def test_seed_link_scoring_prefers_exact_transcript_event_links(tmp_path: Path):
     vault = tmp_path / "hf-archives"
     _seed_link_vault(vault)
     catalog = build_seed_link_catalog(vault)
-    transcript = next(item for item in catalog.cards_by_type["meeting_transcript"] if item.slug == "board-dinner-transcript")
+    transcript = next(
+        item for item in catalog.cards_by_type["meeting_transcript"] if item.slug == "board-dinner-transcript"
+    )
     event = next(item for item in catalog.cards_by_type["calendar_event"] if item.slug == "board-event")
 
     transcript_candidates = [
         candidate
         for candidate in generate_seed_link_candidates(catalog, transcript, MODULE_CALENDAR)
-        if candidate.proposed_link_type == LINK_TYPE_TRANSCRIPT_HAS_CALENDAR_EVENT and candidate.target_card_uid == event.uid
+        if candidate.proposed_link_type == LINK_TYPE_TRANSCRIPT_HAS_CALENDAR_EVENT
+        and candidate.target_card_uid == event.uid
     ]
     assert transcript_candidates
 

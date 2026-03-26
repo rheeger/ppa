@@ -10,11 +10,12 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree
 
-from .base import BaseAdapter, deterministic_provenance
-from ..cli_logging import CliProgressReporter, log_cli_step
 from hfa.schema import MedicalRecordCard
 from hfa.uid import generate_uid
 from hfa.vault import find_note_by_slug
+
+from ..cli_logging import CliProgressReporter, log_cli_step
+from .base import BaseAdapter, deterministic_provenance
 
 APPLE_HEALTH_SOURCE = "apple.health"
 APPLE_HEALTH_CURSOR = "apple-health"
@@ -204,7 +205,9 @@ class AppleHealthAdapter(BaseAdapter):
         quantity_buckets: dict[tuple[str, str, str], dict[str, Any]] = defaultdict(
             lambda: {"count": 0, "sum": 0.0, "min": None, "max": None, "unit": ""}
         )
-        sleep_buckets: dict[tuple[str, str, str], dict[str, Any]] = defaultdict(lambda: {"count": 0, "total_hours": 0.0})
+        sleep_buckets: dict[tuple[str, str, str], dict[str, Any]] = defaultdict(
+            lambda: {"count": 0, "total_hours": 0.0}
+        )
         workout_buckets: dict[tuple[str, str, str], dict[str, Any]] = defaultdict(
             lambda: {"count": 0, "total_minutes": 0.0, "distance_sum": 0.0, "energy_sum": 0.0}
         )
@@ -260,7 +263,9 @@ class AppleHealthAdapter(BaseAdapter):
             bucket["energy_sum"] += _float_value(workout.attrib.get("totalEnergyBurned"))
             processed += 1
             reporter.update(processed)
-        reporter.complete(processed, extra=f"record_buckets={len(quantity_buckets)+len(sleep_buckets)+len(workout_buckets)}")
+        reporter.complete(
+            processed, extra=f"record_buckets={len(quantity_buckets) + len(sleep_buckets) + len(workout_buckets)}"
+        )
 
         items: list[dict[str, Any]] = []
         log_cli_step(self.source_id, 3, 3, "emit structured Apple Health cards")

@@ -5,8 +5,7 @@ from __future__ import annotations
 import json
 
 from archive_sync.adapters.base import deterministic_provenance
-from archive_sync.adapters.otter_transcripts import (OtterApiClient, OtterMcpClient,
-                                        OtterTranscriptsAdapter)
+from archive_sync.adapters.otter_transcripts import OtterApiClient, OtterMcpClient, OtterTranscriptsAdapter
 from hfa.schema import CalendarEventCard, MeetingTranscriptCard, PersonCard
 from hfa.vault import read_note, write_card
 
@@ -41,7 +40,9 @@ def _seed_person(tmp_vault):
         summary="Robbie Heeger",
         emails=["robbie@example.com"],
     )
-    write_card(tmp_vault, "People/robbie-heeger.md", person, provenance=deterministic_provenance(person, "contacts.apple"))
+    write_card(
+        tmp_vault, "People/robbie-heeger.md", person, provenance=deterministic_provenance(person, "contacts.apple")
+    )
     (tmp_vault / "_meta" / "identity-map.json").write_text(
         '{\n  "email:robbie@example.com": "[[robbie-heeger]]"\n}',
         encoding="utf-8",
@@ -67,7 +68,12 @@ def _seed_event(tmp_vault):
         conference_url="https://meet.google.com/abc-defg-hij",
         attendee_emails=["robbie@example.com"],
     )
-    write_card(tmp_vault, "Calendar/2026-03/board-sync.md", event, provenance=deterministic_provenance(event, "google.calendar"))
+    write_card(
+        tmp_vault,
+        "Calendar/2026-03/board-sync.md",
+        event,
+        provenance=deterministic_provenance(event, "google.calendar"),
+    )
 
 
 def _read_jsonl(path):
@@ -498,7 +504,9 @@ def test_relink_stage_updates_existing_transcript_and_calendar_event(tmp_vault, 
     assert stats["transcripts_updated"] == 1
     assert stats["calendar_events_updated"] == 1
 
-    transcript_frontmatter, _, _ = read_note(tmp_vault, "MeetingTranscripts/2026-03/hfa-meeting-transcript-abc123def456.md")
+    transcript_frontmatter, _, _ = read_note(
+        tmp_vault, "MeetingTranscripts/2026-03/hfa-meeting-transcript-abc123def456.md"
+    )
     assert transcript_frontmatter["calendar_events"] == ["[[board-sync]]"]
 
     event_frontmatter, _, _ = read_note(tmp_vault, "Calendar/2026-03/board-sync.md")
@@ -583,7 +591,9 @@ def test_relink_existing_links_duplicate_multi_account_calendar_events(tmp_vault
     assert stats["transcripts_updated"] == 1
     assert stats["calendar_events_updated"] == 2
 
-    transcript_frontmatter, _, _ = read_note(tmp_vault, "MeetingTranscripts/2026-03/hfa-meeting-transcript-abc123def456.md")
+    transcript_frontmatter, _, _ = read_note(
+        tmp_vault, "MeetingTranscripts/2026-03/hfa-meeting-transcript-abc123def456.md"
+    )
     assert transcript_frontmatter["calendar_events"] == ["[[board-sync-personal]]", "[[board-sync-work]]"]
 
     personal_frontmatter, _, _ = read_note(tmp_vault, "Calendar/2026-03/board-sync-personal.md")
@@ -618,8 +628,12 @@ def test_stage_transcripts_resumes_from_extract_state(tmp_vault, tmp_path):
             },
         },
         transcripts={
-            "meeting-1": {"segments": [{"speaker_name": "Robbie Heeger", "start_at": "2026-03-10T15:00:05Z", "text": "one"}]},
-            "meeting-2": {"segments": [{"speaker_name": "Robbie Heeger", "start_at": "2026-03-11T15:00:05Z", "text": "two"}]},
+            "meeting-1": {
+                "segments": [{"speaker_name": "Robbie Heeger", "start_at": "2026-03-10T15:00:05Z", "text": "one"}]
+            },
+            "meeting-2": {
+                "segments": [{"speaker_name": "Robbie Heeger", "start_at": "2026-03-11T15:00:05Z", "text": "two"}]
+            },
         },
     )
     adapter._build_client = lambda: initial_client  # type: ignore[method-assign]
@@ -643,7 +657,9 @@ def test_stage_transcripts_resumes_from_extract_state(tmp_vault, tmp_path):
             }
         },
         transcripts={
-            "meeting-2": {"segments": [{"speaker_name": "Robbie Heeger", "start_at": "2026-03-11T15:00:05Z", "text": "two"}]}
+            "meeting-2": {
+                "segments": [{"speaker_name": "Robbie Heeger", "start_at": "2026-03-11T15:00:05Z", "text": "two"}]
+            }
         },
     )
     second_adapter._build_client = lambda: resume_client  # type: ignore[method-assign]
@@ -671,8 +687,14 @@ def test_stage_transcripts_walks_mcp_day_windows_backward(tmp_vault, tmp_path):
         return pages[updated_after]
 
     client.list_meetings = list_meetings  # type: ignore[method-assign]
-    client.get_meeting_detail = lambda meeting_id: {"id": meeting_id, "title": meeting_id, "start_at": "2026-03-10T15:00:00Z"}  # type: ignore[method-assign]
-    client.get_transcript = lambda meeting_id: {"transcript": [{"speaker": "Robbie", "text": meeting_id, "start_time": 5}]}  # type: ignore[method-assign]
+    client.get_meeting_detail = lambda meeting_id: {
+        "id": meeting_id,
+        "title": meeting_id,
+        "start_at": "2026-03-10T15:00:00Z",
+    }  # type: ignore[method-assign]
+    client.get_transcript = lambda meeting_id: {
+        "transcript": [{"speaker": "Robbie", "text": meeting_id, "start_time": 5}]
+    }  # type: ignore[method-assign]
 
     adapter = OtterTranscriptsAdapter()
     adapter._build_client = lambda: client  # type: ignore[method-assign]

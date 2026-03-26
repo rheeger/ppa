@@ -584,11 +584,7 @@ class GoogleCliTokenManager:
     def get_access_token(self, *, force_refresh: bool = False) -> str:
         self._load_cache()
         now = time.time()
-        if (
-            not force_refresh
-            and self._access_token
-            and now < (self._expires_at - self.refresh_margin_seconds)
-        ):
+        if not force_refresh and self._access_token and now < (self._expires_at - self.refresh_margin_seconds):
             return self._access_token
 
         payload = mint_access_token(

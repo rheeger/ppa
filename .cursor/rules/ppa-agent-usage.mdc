@@ -1,0 +1,33 @@
+---
+description: PPA archive retrieval guidance — apply when using archive-seed-local, archive-arnold, or any ppa MCP server
+globs: []
+alwaysApply: false
+---
+
+# PPA archive usage
+
+## Decision tree
+
+1. **Known UID or path?** → `archive_read` (or `archive_read_many` for batch)
+2. **Structured filters** (type, person, source, date)? → `archive_query`
+3. **Keywords or phrases?** → `archive_search_json`
+4. **Vague or semantic question?** → `archive_hybrid_search_json`
+5. **Relationship context?** → `archive_graph`
+6. **Person lookup?** → `archive_person`
+7. **Date-range browsing?** → `archive_timeline`
+
+## Grounding
+
+- Always read canonical cards (`archive_read`) before factual claims.
+- Search and embeddings are navigation aids, not canonical truth.
+- If evidence conflicts, say so; prefer deterministic fields over inferred summaries.
+
+## Status / health
+
+- `archive_status_json` — index + runtime
+- `archive_embedding_status` — embedding coverage
+- CLI: `ppa health` when you have a shell
+
+## Prefer JSON tools
+
+Use `_json` variants (`archive_search_json`, `archive_hybrid_search_json`, `archive_status_json`) when available — structured output is easier to parse.

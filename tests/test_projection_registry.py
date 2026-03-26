@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from archive_mcp.projections.registry import (PROJECTION_REGISTRY,
-                                              TYPED_PROJECTIONS,
-                                              projection_for_card_type)
+from archive_mcp.projections.registry import PROJECTION_REGISTRY, TYPED_PROJECTIONS, projection_for_card_type
 from hfa.schema import CARD_TYPES
 
 

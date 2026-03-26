@@ -7,10 +7,8 @@ are still defined here since they are card-type-independent.
 
 from __future__ import annotations
 
-from archive_mcp.card_registry import (CARD_TYPE_REGISTRATIONS, _bool, _float,
-                                       _int, _json, _text)
-from archive_mcp.contracts import (ChunkRuleSpec, EdgeRuleSpec,
-                                   ProjectionColumnSpec, ProjectionSpec)
+from archive_mcp.card_registry import CARD_TYPE_REGISTRATIONS, _int, _json, _text
+from archive_mcp.contracts import ChunkRuleSpec, EdgeRuleSpec, ProjectionSpec
 from archive_mcp.projections.base import SHARED_TYPED_COLUMNS
 
 PROJECTION_REGISTRY_VERSION = 1
@@ -161,6 +159,7 @@ GENERIC_PROJECTIONS: tuple[ProjectionSpec, ...] = (
 # Typed projections (derived from the unified card registry)
 # ---------------------------------------------------------------------------
 
+
 def _build_typed_projection(reg) -> ProjectionSpec:
     return ProjectionSpec(
         name=reg.projection_table,
@@ -175,9 +174,7 @@ def _build_typed_projection(reg) -> ProjectionSpec:
     )
 
 
-TYPED_PROJECTIONS: tuple[ProjectionSpec, ...] = tuple(
-    _build_typed_projection(reg) for reg in CARD_TYPE_REGISTRATIONS
-)
+TYPED_PROJECTIONS: tuple[ProjectionSpec, ...] = tuple(_build_typed_projection(reg) for reg in CARD_TYPE_REGISTRATIONS)
 
 
 # ---------------------------------------------------------------------------
@@ -207,9 +204,7 @@ EDGE_RULE_SPECS: tuple[EdgeRuleSpec, ...] = tuple(
     EdgeRuleSpec(
         reg.card_type,
         reg.card_type,
-        tuple(sorted(set(
-            rule.edge_type for rule in reg.edge_rules
-        ) | {"wikilink"})),
+        tuple(sorted(set(rule.edge_type for rule in reg.edge_rules) | {"wikilink"})),
     )
     for reg in CARD_TYPE_REGISTRATIONS
     if reg.edge_rules

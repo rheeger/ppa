@@ -11,22 +11,35 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-import archive_mcp.server as archive_server
 import pytest
-from archive_mcp.benchmark import (BENCHMARK_PROFILES, benchmark_rebuild,
-                                   benchmark_seed_links,
-                                   build_benchmark_sample,
-                                   resolve_benchmark_profile)
+from psycopg import connect
+
+from archive_mcp.benchmark import (
+    BENCHMARK_PROFILES,
+    benchmark_rebuild,
+    benchmark_seed_links,
+    build_benchmark_sample,
+    resolve_benchmark_profile,
+)
 from archive_mcp.chunking import render_chunks_for_card
 from archive_mcp.index_store import PostgresArchiveIndex
-from archive_mcp.server import (archive_embed_pending, archive_graph,
-                                archive_hybrid_search, archive_rebuild_indexes,
-                                archive_search, archive_vector_search)
+from archive_mcp.server import (
+    archive_embed_pending,
+    archive_graph,
+    archive_hybrid_search,
+    archive_rebuild_indexes,
+    archive_search,
+    archive_vector_search,
+)
 from hfa.provenance import ProvenanceEntry
-from hfa.schema import (CalendarEventCard, EmailMessageCard, EmailThreadCard,
-                        MeetingTranscriptCard, PersonCard)
+from hfa.schema import (
+    CalendarEventCard,
+    EmailMessageCard,
+    EmailThreadCard,
+    MeetingTranscriptCard,
+    PersonCard,
+)
 from hfa.vault import write_card
-from psycopg import connect
 
 PGVECTOR_IMAGE = "pgvector/pgvector:pg14"
 
@@ -46,7 +59,15 @@ class SemanticFixtureProvider:
     def _embed_text(self, text: str) -> list[float]:
         lowered = text.lower()
         topics = [
-            ("jane", "smith", "donor", "endaoment", "philanthropy", "support", "operations"),
+            (
+                "jane",
+                "smith",
+                "donor",
+                "endaoment",
+                "philanthropy",
+                "support",
+                "operations",
+            ),
             ("board", "dinner", "thread", "coordination", "conversation"),
             ("message", "reply", "followup", "email", "invite"),
             ("calendar", "meeting", "tomorrow", "event", "schedule"),
@@ -288,14 +309,31 @@ def _seed_live_vault(vault: Path) -> None:
         "People/arnold-friedman.md",
         arnold,
         body="Arnold joins the Endaoment board dinner with Jane.",
-        provenance=_common_provenance("contacts.apple", "summary", "first_name", "last_name", "emails", "company", "title"),
+        provenance=_common_provenance(
+            "contacts.apple",
+            "summary",
+            "first_name",
+            "last_name",
+            "emails",
+            "company",
+            "title",
+        ),
     )
     write_card(
         vault,
         "People/mary-jones.md",
         mary,
         body="Mary is unrelated to the dinner thread.",
-        provenance=_common_provenance("notion", "summary", "first_name", "last_name", "emails", "company", "title", "description"),
+        provenance=_common_provenance(
+            "notion",
+            "summary",
+            "first_name",
+            "last_name",
+            "emails",
+            "company",
+            "title",
+            "description",
+        ),
     )
     write_card(
         vault,
@@ -452,11 +490,18 @@ def pgvector_dsn() -> str:
         _wait_for_postgres(dsn)
         yield dsn
     finally:
-        subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True, text=True)
+        subprocess.run(
+            ["docker", "rm", "-f", container_name],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
 
 
 @pytest.fixture
-def live_archive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pgvector_dsn: str) -> tuple[Path, PostgresArchiveIndex, SemanticFixtureProvider]:
+def live_archive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pgvector_dsn: str
+) -> tuple[Path, PostgresArchiveIndex, SemanticFixtureProvider]:
     vault = tmp_path / "hf-archives"
     (vault / "People").mkdir(parents=True)
     (vault / "Email").mkdir()
@@ -480,7 +525,15 @@ def live_archive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pgvector_dsn: 
     index = PostgresArchiveIndex(vault, dsn=pgvector_dsn)
     index.schema = schema_name
     provider = SemanticFixtureProvider(model="fixture-semantic-v1", dimension=8)
-    monkeypatch.setattr(archive_server, "get_embedding_provider", lambda model="": provider)
+
+    def _fixture_embedding_provider(model: str = "") -> SemanticFixtureProvider:
+        return provider
+
+    monkeypatch.setattr("archive_mcp.store.get_embedding_provider", _fixture_embedding_provider)
+    monkeypatch.setattr(
+        "archive_mcp.commands._resolve.get_embedding_provider",
+        _fixture_embedding_provider,
+    )
     return vault, index, provider
 
 
@@ -654,7 +707,10 @@ def test_type_aware_chunk_builder_emits_stable_chunk_types():
     person_chunks = {chunk["chunk_type"] for chunk in render_chunks_for_card(person_card, "Jane supports donors.")}
     thread_chunks = {
         chunk["chunk_type"]
-        for chunk in render_chunks_for_card(thread_card, "Robbie: dinner?\n\nJane: yes tomorrow.\n\nArnold: works for me.")
+        for chunk in render_chunks_for_card(
+            thread_card,
+            "Robbie: dinner?\n\nJane: yes tomorrow.\n\nArnold: works for me.",
+        )
     }
     event_chunks = {chunk["chunk_type"] for chunk in render_chunks_for_card(event_card, "Invite linked from email.")}
     transcript_chunks = {
@@ -665,7 +721,8 @@ def test_type_aware_chunk_builder_emits_stable_chunk_types():
         )
     }
     document_chunks = {
-        chunk["chunk_type"] for chunk in render_chunks_for_card(document_card, "Endaoment helps donors give complex assets.")
+        chunk["chunk_type"]
+        for chunk in render_chunks_for_card(document_card, "Endaoment helps donors give complex assets.")
     }
     document_section_chunks = {
         chunk["chunk_type"]
@@ -675,16 +732,36 @@ def test_type_aware_chunk_builder_emits_stable_chunk_types():
         )
     }
     git_repo_chunks = {chunk["chunk_type"] for chunk in render_chunks_for_card(git_repo_card, "")}
-    git_commit_chunks = {chunk["chunk_type"] for chunk in render_chunks_for_card(git_commit_card, "Build the first GitHub archive ingest path.")}
+    git_commit_chunks = {
+        chunk["chunk_type"]
+        for chunk in render_chunks_for_card(git_commit_card, "Build the first GitHub archive ingest path.")
+    }
     git_thread_chunks = {chunk["chunk_type"] for chunk in render_chunks_for_card(git_thread_card, "")}
     git_message_chunks = {
         chunk["chunk_type"]
         for chunk in render_chunks_for_card(git_message_card, "Can we preserve the GitHub ids here?")
     }
 
-    assert {"person_profile", "person_role", "person_context", "person_body"} <= person_chunks
-    assert {"thread_subject", "thread_context", "thread_summary", "thread_window", "thread_recent_window"} <= thread_chunks
-    assert {"event_title_time", "event_participants", "event_description", "event_sources", "event_body"} <= event_chunks
+    assert {
+        "person_profile",
+        "person_role",
+        "person_context",
+        "person_body",
+    } <= person_chunks
+    assert {
+        "thread_subject",
+        "thread_context",
+        "thread_summary",
+        "thread_window",
+        "thread_recent_window",
+    } <= thread_chunks
+    assert {
+        "event_title_time",
+        "event_participants",
+        "event_description",
+        "event_sources",
+        "event_body",
+    } <= event_chunks
     assert {
         "meeting_transcript_identity",
         "meeting_transcript_participants",
@@ -700,10 +777,27 @@ def test_type_aware_chunk_builder_emits_stable_chunk_types():
         "document_body",
     } <= document_chunks
     assert {"document_section"} <= document_section_chunks
-    assert {"git_repo_identity", "git_repo_topics", "git_repo_description"} <= git_repo_chunks
-    assert {"git_commit_headline", "git_commit_context", "git_commit_body"} <= git_commit_chunks
-    assert {"git_thread_title_state", "git_thread_participants", "git_thread_branch_context"} <= git_thread_chunks
-    assert {"git_message_context", "git_message_review_context", "git_message_diff_hunk", "git_message_body"} <= git_message_chunks
+    assert {
+        "git_repo_identity",
+        "git_repo_topics",
+        "git_repo_description",
+    } <= git_repo_chunks
+    assert {
+        "git_commit_headline",
+        "git_commit_context",
+        "git_commit_body",
+    } <= git_commit_chunks
+    assert {
+        "git_thread_title_state",
+        "git_thread_participants",
+        "git_thread_branch_context",
+    } <= git_thread_chunks
+    assert {
+        "git_message_context",
+        "git_message_review_context",
+        "git_message_diff_hunk",
+        "git_message_body",
+    } <= git_message_chunks
 
 
 def test_live_postgres_rebuild_graph_and_lexical_search(live_archive):
@@ -750,7 +844,9 @@ def test_live_postgres_lexical_candidates_fts_and_exact(live_archive):
     assert int(exact_jane["slug_exact"]) == 1 or int(exact_jane["person_exact"]) == 1
 
 
-def test_live_postgres_vector_search_groups_to_card_level_and_supports_filters(live_archive):
+def test_live_postgres_vector_search_groups_to_card_level_and_supports_filters(
+    live_archive,
+):
     _vault, index, provider = live_archive
     index.rebuild()
     embed_result = archive_embed_pending(limit=50, embedding_model=provider.model, embedding_version=1)
@@ -809,7 +905,9 @@ def test_live_postgres_embed_pending_supports_concurrent_claims(live_archive, mo
     assert int(final_status["pending_chunk_count"]) == 0
 
 
-def test_live_postgres_hybrid_search_prefers_exact_anchor_and_boosts_graph_neighbors(live_archive):
+def test_live_postgres_hybrid_search_prefers_exact_anchor_and_boosts_graph_neighbors(
+    live_archive,
+):
     _vault, index, provider = live_archive
     index.rebuild()
     index.embed_pending(provider=provider, embedding_model=provider.model, embedding_version=1, limit=50)
@@ -908,8 +1006,18 @@ def test_benchmark_sample_builder_dedupes_duplicate_uids(tmp_path: Path):
         summary="Duplicate Person B",
         emails=["dup@example.com"],
     )
-    write_card(source_vault, "People/duplicate-a.md", person_a, provenance=_common_provenance("contacts.apple", "summary", "emails"))
-    write_card(source_vault, "People/duplicate-b.md", person_b, provenance=_common_provenance("contacts.apple", "summary", "emails"))
+    write_card(
+        source_vault,
+        "People/duplicate-a.md",
+        person_a,
+        provenance=_common_provenance("contacts.apple", "summary", "emails"),
+    )
+    write_card(
+        source_vault,
+        "People/duplicate-b.md",
+        person_b,
+        provenance=_common_provenance("contacts.apple", "summary", "emails"),
+    )
 
     output_vault = tmp_path / "sample-deduped"
     manifest = build_benchmark_sample(
@@ -977,7 +1085,14 @@ def test_benchmark_seed_links_returns_metrics(live_archive, monkeypatch: pytest.
     )
     monkeypatch.setattr(
         "archive_mcp.benchmark._repair_opportunities",
-        lambda index: [{"module_name": "communicationLinker", "proposed_link_type": "message_in_thread", "decision": "canonical_safe", "count": 2}],
+        lambda index: [
+            {
+                "module_name": "communicationLinker",
+                "proposed_link_type": "message_in_thread",
+                "decision": "canonical_safe",
+                "count": 2,
+            }
+        ],
     )
 
     result = benchmark_seed_links(

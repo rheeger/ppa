@@ -36,8 +36,18 @@ def test_fetch_links_calendar_events_to_existing_email_cards(tmp_vault):
         invite_ical_uid="event-uid-1",
         invite_event_id_hint="event-google-1",
     )
-    write_card(tmp_vault, "EmailThreads/2026-03/hfa-email-thread-111111111111.md", thread, provenance=deterministic_provenance(thread, "gmail.thread"))
-    write_card(tmp_vault, "Email/2026-03/hfa-email-message-111111111111.md", message, provenance=deterministic_provenance(message, "gmail.message"))
+    write_card(
+        tmp_vault,
+        "EmailThreads/2026-03/hfa-email-thread-111111111111.md",
+        thread,
+        provenance=deterministic_provenance(thread, "gmail.thread"),
+    )
+    write_card(
+        tmp_vault,
+        "Email/2026-03/hfa-email-message-111111111111.md",
+        message,
+        provenance=deterministic_provenance(message, "gmail.message"),
+    )
 
     adapter = CalendarEventsAdapter()
     responses = iter(
@@ -253,7 +263,7 @@ def test_ingest_writes_calendar_event_note(tmp_vault):
                 "items": [
                     {
                         "id": "event-google-1",
-                        "etag": "\"etag-1\"",
+                        "etag": '"etag-1"',
                         "iCalUID": "event-uid-1",
                         "summary": "Board Meeting",
                         "description": "Quarterly review",
@@ -291,7 +301,7 @@ def test_quick_update_skips_unchanged_events(tmp_vault):
                 "items": [
                     {
                         "id": "event-google-1",
-                        "etag": "\"etag-1\"",
+                        "etag": '"etag-1"',
                         "iCalUID": "event-uid-1",
                         "summary": "Board Meeting",
                         "start": {"dateTime": "2026-03-08T15:00:00Z"},
@@ -317,7 +327,7 @@ def test_quick_update_skips_unchanged_events(tmp_vault):
                 "items": [
                     {
                         "id": "event-google-1",
-                        "etag": "\"etag-1\"",
+                        "etag": '"etag-1"',
                         "iCalUID": "event-uid-1",
                         "summary": "Board Meeting",
                         "start": {"dateTime": "2026-03-08T15:00:00Z"},
