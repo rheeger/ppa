@@ -26,6 +26,7 @@ except ImportError:  # pragma: no cover
 
 
 from .commands import admin, explain
+from .commands import formatters as fmt
 from .commands import graph as graph_cmd
 from .commands import query as query_cmd
 from .commands import read as read_cmd
@@ -140,37 +141,9 @@ def _tool_profile_error(tool_name: str) -> str | None:
     return f"Tool disabled by PPA_MCP_TOOL_PROFILE={profile}"
 
 
-def _format_search_line(row: dict) -> str:
-    """Render a search/query result row with type, date, and fuller summary."""
-    rel_path = row.get("rel_path", "")
-    card_type = row.get("type", "")
-    date = str(row.get("activity_at", ""))[:10]
-    summary = str(row.get("summary", ""))[:200]
-    meta = ", ".join(part for part in [card_type, date] if part)
-    return f"- {rel_path} [{meta}]: {summary}"
-
-
 def _ppa_err(tool: str, exc: BaseException) -> str:
     _log.error("tool=%s ppa_error=%s", tool, str(exc))
     return str(exc)
-
-
-def _format_seed_surface(payload: dict) -> str:
-    scope_rows = payload["scope"]
-    policy_rows = payload["policies"]
-    lines = ["Archive seed link surface:", "", "Scope:"]
-    for row in scope_rows:
-        modules = ",".join(row["modules"])
-        lines.append(f"- priority={row['priority']} type={row['card_type']} modules={modules}")
-    lines.extend(["", "Policies:"])
-    for row in policy_rows:
-        target_field = f" field={row['canonical_field_name']}" if row["canonical_field_name"] else ""
-        lines.append(
-            f"- {row['link_type']} module={row['module_name']} surface={row['surface']} "
-            f"promotion={row['promotion_target']}{target_field} auto={row['auto_promote_floor']:.2f} "
-            f"canonical={row['canonical_floor']:.2f}"
-        )
-    return "\n".join(lines)
 
 
 @mcp.tool()
@@ -185,7 +158,7 @@ def archive_search(query: str, limit: int = 20) -> str:
         store = resolve_store()
         result = search_cmd.search(query, limit=limit, store=store, logger=_log)
         rows = result["rows"]
-        out = "\n".join(_format_search_line(r) for r in rows) if rows else "No matches"
+        out = fmt.format_search(result)
         _log_tool_done("archive_search", t0, result_count=len(rows))
         return out
     except PpaError as exc:
@@ -251,7 +224,7 @@ def archive_query(
             logger=_log,
         )
         rows = result["rows"]
-        out = "\n".join(_format_search_line(r) for r in rows) if rows else "No matches"
+        out = fmt.format_search(result)
         _log_tool_done("archive_query", t0, result_count=len(rows))
         return out
     except PpaError as exc:
@@ -278,13 +251,8 @@ def archive_graph(note_path: str, hops: int = 2) -> str:
             _log_tool_done("archive_graph", t0, found=False)
             return "Note not found"
 
-        lines = [f"Graph from {rel_path}:"]
-        for source, targets in graph.items():
-            lines.append(f"- {source}")
-            for target in targets:
-                lines.append(f"  -> {target}")
-        out = "\n".join(lines) if len(lines) > 1 else "No linked notes"
-        _log_tool_done("archive_graph", t0, edge_count=max(0, len(lines) - 1))
+        out = fmt.format_graph(rel_path, graph)
+        _log_tool_done("archive_graph", t0, edge_count=max(0, len(out.splitlines()) - 1))
         return out
     except PpaError as exc:
         return _ppa_err("archive_graph", exc)
@@ -328,8 +296,7 @@ def archive_timeline(start_date: str = "", end_date: str = "", limit: int = 20) 
             logger=_log,
         )
         rows = result["rows"]
-        results = [f"- {str(row['created'])[:10]} {row['rel_path']}: {str(row['summary'])[:160]}" for row in rows]
-        out = "\n".join(results) if results else "No matches"
+        out = fmt.format_timeline(result)
         _log_tool_done("archive_timeline", t0, result_count=len(rows))
         return out
     except PpaError as exc:
@@ -348,16 +315,8 @@ def archive_stats() -> str:
         index = resolve_index()
         result = status_cmd.stats(index=index, logger=_log)
         total = result["total"]
-        by_type = result["by_type"]
-        by_source = result["by_source"]
-        lines = [f"Total: {total} notes", "", "By type:"]
-        for row in by_type:
-            lines.append(f"  {row['type']}: {row['count']}")
-        lines.extend(["", "By source:"])
-        for row in by_source:
-            lines.append(f"  {row['source']}: {row['count']}")
         _log_tool_done("archive_stats", t0, total=total)
-        return "\n".join(lines)
+        return fmt.format_stats(result)
     except PpaError as exc:
         return _ppa_err("archive_stats", exc)
 
@@ -376,16 +335,8 @@ def archive_validate() -> str:
         valid = result["valid"]
         total = result["total"]
         errors = result["errors"]
-        lines = [f"Validated {valid}/{total} notes"]
-        if errors:
-            lines.append("Errors:")
-            lines.extend(errors[:20])
-            if len(errors) > 20:
-                lines.append(f"... and {len(errors) - 20} more")
-        else:
-            lines.append("0 errors")
         _log_tool_done("archive_validate", t0, valid=valid, total=total, error_count=len(errors))
-        return "\n".join(lines)
+        return fmt.format_validate(result)
     except PpaError as exc:
         return _ppa_err("archive_validate", exc)
 
@@ -402,27 +353,12 @@ def archive_duplicates() -> str:
         vault = resolve_store().vault
         result = status_cmd.duplicates(vault=vault, logger=_log)
         st = result["status"]
-        if st == "missing":
+        out = fmt.format_duplicates(result)
+        if st in ("missing", "parse_error", "empty"):
             _log_tool_done("archive_duplicates", t0, status=st)
-            return "No pending duplicate candidates"
-        if st == "parse_error":
-            _log_tool_done("archive_duplicates", t0, status=st)
-            return "Could not parse dedup candidates"
-        if st == "empty":
-            _log_tool_done("archive_duplicates", t0, status=st)
-            return "No pending duplicate candidates"
-        payload = result["candidates"]
-        lines: list[str] = []
-        for candidate in payload[:20]:
-            if not isinstance(candidate, dict):
-                continue
-            existing = str(candidate.get("existing", ""))
-            confidence = candidate.get("confidence", "")
-            incoming = candidate.get("incoming", {})
-            incoming_summary = incoming.get("summary", "") if isinstance(incoming, dict) else ""
-            lines.append(f"- {incoming_summary} -> {existing} ({confidence})")
-        out = "\n".join(lines) if lines else "No pending duplicate candidates"
-        _log_tool_done("archive_duplicates", t0, status=st, line_count=len(lines))
+        else:
+            line_count = len([ln for ln in out.splitlines() if ln.startswith("- ")])
+            _log_tool_done("archive_duplicates", t0, status=st, line_count=line_count)
         return out
     except PpaError as exc:
         return _ppa_err("archive_duplicates", exc)
@@ -440,17 +376,9 @@ def archive_duplicate_uids(limit: int = 20) -> str:
         index = resolve_index()
         result = status_cmd.duplicate_uids(limit=limit, index=index, logger=_log)
         rows = result["rows"]
-        if not rows:
-            _log_tool_done("archive_duplicate_uids", t0, result_count=0)
-            return "No duplicate UID rows"
-        lines = ["Archive duplicate UID rows:"]
-        for row in rows:
-            lines.append(
-                f"- uid={row['uid']} group_size={row['duplicate_group_size']} preferred={row['preferred_rel_path']} "
-                f"duplicate={row['duplicate_rel_path']} preferred_type={row['preferred_type']} duplicate_type={row['duplicate_type']}"
-            )
+        out = fmt.format_duplicate_uids(result)
         _log_tool_done("archive_duplicate_uids", t0, result_count=len(rows))
-        return "\n".join(lines)
+        return out
     except PpaError as exc:
         return _ppa_err("archive_duplicate_uids", exc)
 
@@ -472,14 +400,7 @@ def archive_rebuild_indexes() -> str:
             cards=counts.get("cards"),
             chunks=counts.get("chunks"),
         )
-        return (
-            f"Rebuilt archive index at {index.location}\n"
-            f"- cards: {counts['cards']}\n"
-            f"- external_ids: {counts['external_ids']}\n"
-            f"- edges: {counts['edges']}\n"
-            f"- chunks: {counts['chunks']}\n"
-            f"- duplicate_uids: {counts['duplicate_uids']}"
-        )
+        return fmt.format_rebuild_indexes(index.location, counts)
     except PpaError as exc:
         return _ppa_err("archive_rebuild_indexes", exc)
 
@@ -495,11 +416,8 @@ def archive_bootstrap_postgres() -> str:
     try:
         vault = resolve_store().vault
         result = admin.bootstrap_postgres(vault=vault, logger=_log)
-        lines = ["Bootstrapped Postgres archive index:"]
-        for key in sorted(result):
-            lines.append(f"- {key}: {result[key]}")
         _log_tool_done("archive_bootstrap_postgres", t0, keys=list(result.keys()))
-        return "\n".join(lines)
+        return fmt.format_bootstrap_postgres(result)
     except PpaError as exc:
         return _ppa_err("archive_bootstrap_postgres", exc)
 
@@ -517,12 +435,9 @@ def archive_index_status() -> str:
         status = status_cmd.index_status(store=store, logger=_log)
         if not status:
             _log_tool_done("archive_index_status", t0, empty=True)
-            return "No index metadata found"
-        lines = ["Archive index status:"]
-        for key in sorted(status):
-            lines.append(f"- {key}: {status[key]}")
-        _log_tool_done("archive_index_status", t0, keys=list(status.keys()))
-        return "\n".join(lines)
+        else:
+            _log_tool_done("archive_index_status", t0, keys=list(status.keys()))
+        return fmt.format_index_status(status)
     except PpaError as exc:
         return _ppa_err("archive_index_status", exc)
 
@@ -539,14 +454,8 @@ def archive_projection_inventory() -> str:
         store = resolve_store()
         payload = admin.projection_inventory(store=store, logger=_log)
         projections = payload.get("projections", [])
-        lines = ["Archive projection inventory:"]
-        for projection in projections:
-            lines.append(
-                f"- {projection['name']} table={projection['table_name']} kind={projection['kind']} "
-                f"types={','.join(projection['applies_to_types'])}"
-            )
         _log_tool_done("archive_projection_inventory", t0, projection_count=len(projections))
-        return "\n".join(lines)
+        return fmt.format_projection_inventory(payload)
     except PpaError as exc:
         return _ppa_err("archive_projection_inventory", exc)
 
@@ -563,15 +472,8 @@ def archive_projection_status() -> str:
         store = resolve_store()
         payload = admin.projection_status(store=store, logger=_log)
         cov = payload.get("projection_coverage", [])
-        lines = ["Archive projection status:"]
-        for row in cov:
-            blockers = ",".join(row.get("migration_blockers", []))
-            lines.append(
-                f"- {row['card_type']} projection={row['typed_projection']} rows={row['materialized_row_count']} "
-                f"ready_ratio={float(row['canonical_ready_ratio']):.2f} blockers={blockers}"
-            )
         _log_tool_done("archive_projection_status", t0, row_count=len(cov))
-        return "\n".join(lines)
+        return fmt.format_projection_status(payload)
     except PpaError as exc:
         return _ppa_err("archive_projection_status", exc)
 
@@ -588,19 +490,8 @@ def archive_projection_explain(card_uid: str) -> str:
         store = resolve_store()
         payload = admin.projection_explain(card_uid, store=store, logger=_log)
         mappings = payload.get("field_mappings", [])[:20]
-        lines = [
-            f"Archive projection explain for {card_uid}:",
-            f"- card_type: {payload.get('card_type', '')}",
-            f"- typed_projection: {payload.get('typed_projection', '')}",
-            f"- canonical_ready: {payload.get('canonical_ready', False)}",
-        ]
-        for mapping in mappings:
-            fields = ",".join(mapping.get("canonical_fields", []))
-            lines.append(f"- {mapping['typed_column']} <- {fields} ({mapping['status']})")
-        if payload.get("migration_notes"):
-            lines.append(f"- migration_notes: {'; '.join(payload['migration_notes'])}")
         _log_tool_done("archive_projection_explain", t0, mapping_count=len(mappings))
-        return "\n".join(lines)
+        return fmt.format_projection_explain(card_uid, payload)
     except PpaError as exc:
         return _ppa_err("archive_projection_explain", exc)
 
@@ -625,22 +516,12 @@ def archive_embedding_status(embedding_model: str = "", embedding_version: int =
             embedding_model=embedding_model,
             embedding_version=embedding_version,
         )
-        lines = ["Archive embedding status:"]
-        for key in (
-            "embedding_model",
-            "embedding_version",
-            "chunk_schema_version",
-            "chunk_count",
-            "embedded_chunk_count",
-            "pending_chunk_count",
-        ):
-            lines.append(f"- {key}: {status[key]}")
         _log_tool_done(
             "archive_embedding_status",
             t0,
             pending_chunk_count=status.get("pending_chunk_count"),
         )
-        return "\n".join(lines)
+        return fmt.format_embedding_status(status)
     except PpaError as exc:
         return _ppa_err("archive_embedding_status", exc)
 
@@ -667,20 +548,10 @@ def archive_embedding_backlog(limit: int = 20, embedding_model: str = "", embedd
             embedding_model=embedding_model,
             embedding_version=embedding_version,
         )
-        model = str(payload["embedding_model"])
-        version = int(payload["embedding_version"])
         rows = payload["rows"]
-        if not rows:
-            _log_tool_done("archive_embedding_backlog", t0, result_count=0)
-            return f"No pending chunks for {model} v{version}"
-        lines = [f"Embedding backlog for {model} v{version}:"]
-        for row in rows:
-            preview = str(row["content"]).replace("\n", " ")[:80]
-            lines.append(
-                f"- {row['rel_path']} [{row['chunk_type']}#{row['chunk_index']}] ({row['token_count']} tokens): {preview}"
-            )
+        out = fmt.format_embedding_backlog(payload)
         _log_tool_done("archive_embedding_backlog", t0, result_count=len(rows))
-        return "\n".join(lines)
+        return out
     except PpaError as exc:
         return _ppa_err("archive_embedding_backlog", exc)
 
@@ -707,27 +578,13 @@ def archive_embed_pending(limit: int = 20, embedding_model: str = "", embedding_
             embedding_model=embedding_model.strip(),
             embedding_version=embedding_version,
         )
-        lines = [
-            f"Embedded chunks for {result['embedding_model']} v{result['embedding_version']}",
-            f"- provider: {result['provider']}",
-            f"- chunk_schema_version: {result['chunk_schema_version']}",
-            f"- batch_size: {result['batch_size']}",
-            f"- embedded: {result['embedded']}",
-            f"- failed: {result['failed']}",
-        ]
-        if result.get("write_batch_size") is not None:
-            lines.insert(4, f"- write_batch_size: {result['write_batch_size']}")
-        if result.get("concurrency") is not None:
-            lines.insert(5, f"- concurrency: {result['concurrency']}")
-        if result.get("last_error"):
-            lines.append(f"- last_error: {result['last_error']}")
         _log_tool_done(
             "archive_embed_pending",
             t0,
             embedded=result.get("embedded"),
             failed=result.get("failed"),
         )
-        return "\n".join(lines)
+        return fmt.format_embed_pending(result)
     except PpaError as exc:
         return _ppa_err("archive_embed_pending", exc)
 
@@ -744,7 +601,7 @@ def archive_seed_link_surface() -> str:
     t0 = _log_tool_call("archive_seed_link_surface")
     try:
         payload = seed_cmd.seed_link_surface(logger=_log)
-        out = _format_seed_surface(payload)
+        out = fmt.format_seed_link_surface(payload)
         _log_tool_done(
             "archive_seed_link_surface",
             t0,
@@ -794,13 +651,7 @@ def archive_seed_link_enqueue(
             prepared=result.get("prepared"),
             enqueued=result.get("enqueued"),
         )
-        return (
-            "Archive seed link enqueue:\n"
-            f"- job_type: {job_type}\n"
-            f"- prepared: {result['prepared']}\n"
-            f"- enqueued: {result['enqueued']}\n"
-            f"- existing: {result['existing']}"
-        )
+        return fmt.format_seed_link_enqueue(job_type, result)
     except SeedLinksDisabledError:
         return _SEED_LINKS_DISABLED_MSG
     except PpaError as exc:
@@ -840,31 +691,13 @@ def archive_seed_link_backfill(
             include_llm=include_llm,
             apply_promotions=apply_promotions,
         )
-        lines = ["Archive seed link backfill:"]
-        for key in (
-            "workers",
-            "jobs_enqueued",
-            "jobs_completed",
-            "jobs_failed",
-            "candidates",
-            "needs_review",
-            "auto_promoted",
-            "canonical_safe",
-            "derived_promotions_applied",
-            "canonical_applied",
-            "llm_judged",
-            "promotion_blocked",
-            "orphaned_links_before",
-            "orphaned_links_after",
-        ):
-            lines.append(f"- {key}: {result[key]}")
         _log_tool_done(
             "archive_seed_link_backfill",
             t0,
             jobs_completed=result.get("jobs_completed"),
             candidates=result.get("candidates"),
         )
-        return "\n".join(lines)
+        return fmt.format_seed_link_backfill(result)
     except SeedLinksDisabledError:
         return _SEED_LINKS_DISABLED_MSG
     except PpaError as exc:
@@ -904,22 +737,8 @@ def archive_seed_link_refresh(
             include_llm=include_llm,
             apply_promotions=apply_promotions,
         )
-        lines = ["Archive seed link refresh:"]
-        for key in (
-            "job_type",
-            "jobs_enqueued",
-            "jobs_completed",
-            "jobs_failed",
-            "candidates",
-            "needs_review",
-            "auto_promoted",
-            "canonical_safe",
-            "derived_promotions_applied",
-            "canonical_applied",
-        ):
-            lines.append(f"- {key}: {result[key]}")
         _log_tool_done("archive_seed_link_refresh", t0, jobs_completed=result.get("jobs_completed"))
-        return "\n".join(lines)
+        return fmt.format_seed_link_refresh(result)
     except SeedLinksDisabledError:
         return _SEED_LINKS_DISABLED_MSG
     except PpaError as exc:
@@ -952,20 +771,8 @@ def archive_seed_link_worker(limit: int = 0, modules: str = "", workers: int = 0
             workers=workers,
             include_llm=include_llm,
         )
-        lines = ["Archive seed link worker:"]
-        for key in (
-            "workers",
-            "jobs_completed",
-            "jobs_failed",
-            "candidates",
-            "needs_review",
-            "auto_promoted",
-            "canonical_safe",
-            "llm_judged",
-        ):
-            lines.append(f"- {key}: {result[key]}")
         _log_tool_done("archive_seed_link_worker", t0, jobs_completed=result.get("jobs_completed"))
-        return "\n".join(lines)
+        return fmt.format_seed_link_worker(result)
     except SeedLinksDisabledError:
         return _SEED_LINKS_DISABLED_MSG
     except PpaError as exc:
@@ -991,12 +798,7 @@ def archive_seed_link_promote(limit: int = 0, workers: int = 1) -> str:
             derived_edge=result.get("derived_edge"),
             blocked=result.get("blocked"),
         )
-        return (
-            "Archive seed link promote:\n"
-            f"- derived_edge: {result['derived_edge']}\n"
-            f"- canonical_field: {result['canonical_field']}\n"
-            f"- blocked: {result['blocked']}"
-        )
+        return fmt.format_seed_link_promote(result)
     except SeedLinksDisabledError:
         return _SEED_LINKS_DISABLED_MSG
     except PpaError as exc:
@@ -1016,22 +818,8 @@ def archive_seed_link_report(rebuild_if_dirty: bool = True) -> str:
     try:
         index = resolve_index()
         payload = seed_cmd.seed_link_report(index=index, logger=_log, rebuild_if_dirty=bool(rebuild_if_dirty))
-        lines = ["Archive seed link report:"]
-        for key in (
-            "rebuilt",
-            "passes",
-            "seed_card_count",
-            "reviewable_seed_card_count",
-            "total_cards_reviewed",
-            "scan_coverage",
-            "orphaned_links_after",
-            "duplicate_uid_count",
-            "high_priority_review_backlog",
-            "high_risk_precision",
-        ):
-            lines.append(f"- {key}: {payload[key]}")
         _log_tool_done("archive_seed_link_report", t0, passes=payload.get("passes"))
-        return "\n".join(lines)
+        return fmt.format_seed_link_report(payload)
     except SeedLinksDisabledError:
         return _SEED_LINKS_DISABLED_MSG
     except PpaError as exc:
@@ -1070,19 +858,9 @@ def archive_link_candidates(
             limit=limit,
         )
         rows = result["rows"]
-        if not rows:
-            _log_tool_done("archive_link_candidates", t0, result_count=0)
-            return "No link candidates"
-        lines = ["Archive link candidates:"]
-        for row in rows:
-            promotion_status = f" promotion={row['promotion_status']}" if row.get("promotion_status") else ""
-            lines.append(
-                f"- id={row['candidate_id']} module={row['module_name']} score={float(row['final_confidence']):.4f} "
-                f"status={row['status']} decision={row['decision']} type={row['proposed_link_type']}{promotion_status}: "
-                f"{row['source_rel_path']} -> {row['target_rel_path']}"
-            )
+        out = fmt.format_link_candidates(result)
         _log_tool_done("archive_link_candidates", t0, result_count=len(rows))
-        return "\n".join(lines)
+        return out
     except SeedLinksDisabledError:
         return _SEED_LINKS_DISABLED_MSG
     except PpaError as exc:
@@ -1105,42 +883,8 @@ def archive_link_candidate(candidate_id: int) -> str:
         if payload is None:
             _log_tool_done("archive_link_candidate", t0, found=False)
             return "Candidate not found"
-        lines = [
-            f"Archive link candidate {candidate_id}:",
-            f"- module: {payload['module_name']}",
-            f"- type: {payload['proposed_link_type']}",
-            f"- source: {payload['source_rel_path']}",
-            f"- target: {payload['target_rel_path']}",
-            f"- status: {payload['status']}",
-            f"- confidence: {float(payload['final_confidence']):.4f}",
-            f"- decision: {payload['decision']}",
-            f"- reason: {payload['decision_reason']}",
-            f"- scores: deterministic={float(payload['deterministic_score']):.4f} lexical={float(payload['lexical_score']):.4f} "
-            f"graph={float(payload['graph_score']):.4f} llm={float(payload['llm_score']):.4f} risk={float(payload['risk_penalty']):.4f}",
-        ]
-        if payload.get("promotion_target"):
-            lines.append(
-                f"- promotion: target={payload['promotion_target']} status={payload.get('promotion_status', '')} "
-                f"field={payload.get('target_field_name', '')} blocked_reason={payload.get('blocked_reason', '')}"
-            )
-        if payload.get("llm_model"):
-            lines.append(f"- llm_model: {payload['llm_model']}")
-        if payload.get("evidence"):
-            lines.append("Evidence:")
-            for evidence in payload["evidence"][:20]:
-                lines.append(
-                    f"  - {evidence['evidence_type']} source={evidence['evidence_source']} "
-                    f"{evidence['feature_name']}={evidence['feature_value']} weight={float(evidence['feature_weight']):.2f}"
-                )
-        if payload.get("reviews"):
-            lines.append("Reviews:")
-            for review in payload["reviews"][:10]:
-                lines.append(
-                    f"  - {review['created_at']} reviewer={review['reviewer']} action={review['action']} "
-                    f"score={float(review['score_at_review']):.4f} decision={review['decision_at_review']}"
-                )
         _log_tool_done("archive_link_candidate", t0, found=True)
-        return "\n".join(lines)
+        return fmt.format_link_candidate(candidate_id, payload)
     except SeedLinksDisabledError:
         return _SEED_LINKS_DISABLED_MSG
     except PpaError as exc:
@@ -1173,13 +917,7 @@ def archive_review_link_candidate(candidate_id: int, reviewer: str, action: str,
             notes=notes,
         )
         _log_tool_done("archive_review_link_candidate", t0, status=payload.get("status"))
-        return (
-            f"Reviewed candidate {candidate_id}\n"
-            f"- action: {action}\n"
-            f"- status: {payload.get('status', '')}\n"
-            f"- decision: {payload.get('decision', '')}\n"
-            f"- confidence: {float(payload.get('final_confidence', 0.0)):.4f}"
-        )
+        return fmt.format_review_link_candidate(candidate_id, action, payload)
     except SeedLinksDisabledError:
         return _SEED_LINKS_DISABLED_MSG
     except PpaError as exc:
@@ -1199,32 +937,8 @@ def archive_link_quality_gate() -> str:
     try:
         index = resolve_index()
         gate = seed_cmd.link_quality_gate(index=index, logger=_log)
-        lines = ["Archive link quality gate:"]
-        for key in (
-            "passes",
-            "seed_card_count",
-            "total_cards_reviewed",
-            "scan_coverage",
-            "required_scan_coverage",
-            "orphaned_links_after",
-            "duplicate_uid_count",
-            "dead_end_count",
-            "high_priority_review_backlog",
-            "max_high_priority_review_backlog",
-            "high_risk_precision",
-            "required_high_risk_precision",
-        ):
-            lines.append(f"- {key}: {gate[key]}")
-        if gate.get("candidate_counts"):
-            lines.append("Candidate counts:")
-            for row in gate["candidate_counts"][:20]:
-                lines.append(f"  - {row['module_name']} {row['proposed_link_type']}: {row['count']}")
-        if gate.get("auto_promoted_counts"):
-            lines.append("Auto promoted counts:")
-            for row in gate["auto_promoted_counts"][:20]:
-                lines.append(f"  - {row['module_name']} {row['proposed_link_type']}: {row['count']}")
         _log_tool_done("archive_link_quality_gate", t0, passes=gate.get("passes"))
-        return "\n".join(lines)
+        return fmt.format_link_quality_gate(gate)
     except SeedLinksDisabledError:
         return _SEED_LINKS_DISABLED_MSG
     except PpaError as exc:
@@ -1273,23 +987,9 @@ def archive_vector_search(
             end_date=end_date,
         )
         rows = result["rows"]
-        if not rows:
-            _log_tool_done("archive_vector_search", t0, result_count=0)
-            return f"No vector matches for {model} v{version}"
-        lines = [f"Vector matches for {model} v{version}:"]
-        for row in rows:
-            card_type = str(row.get("type", ""))
-            date = str(row.get("activity_at", ""))[:10]
-            summary = str(row.get("summary", ""))[:200]
-            lines.append(
-                f"- {row['rel_path']} [{card_type}, {date}] matched_by={row['matched_by']} score={float(row['score']):.4f} "
-                f"sim={float(row['similarity']):.4f} chunk={row['chunk_type']}#{row['chunk_index']} "
-                f"provenance_bias={row['provenance_bias']} matched_chunks={row['matched_chunk_count']}\n"
-                f"  summary: {summary}\n"
-                f"  preview: {row['preview']}"
-            )
+        out = fmt.format_vector_search(model, version, rows)
         _log_tool_done("archive_vector_search", t0, result_count=len(rows))
-        return "\n".join(lines)
+        return out
     except PpaError as exc:
         return _ppa_err("archive_vector_search", exc)
     except Exception as exc:
@@ -1377,29 +1077,9 @@ def archive_hybrid_search(
             end_date=end_date,
         )
         rows = payload["rows"]
-        if not rows:
-            _log_tool_done("archive_hybrid_search", t0, result_count=0)
-            return f"No hybrid matches for '{query}'"
-        lines = [f"Hybrid matches for '{query}':"]
-        for row in rows:
-            card_type = str(row.get("type", ""))
-            date = str(row.get("activity_at", ""))[:10]
-            graph_hops = f" graph_hops={row['graph_hops']}" if row.get("graph_hops") else ""
-            chunk = ""
-            if int(row.get("chunk_index", -1)) >= 0 and str(row.get("chunk_type", "")):
-                chunk = f" chunk={row['chunk_type']}#{row['chunk_index']}"
-            summary = str(row.get("summary", ""))[:200]
-            preview = str(row.get("preview", ""))
-            lines.append(
-                f"- {row['rel_path']} [{card_type}, {date}] matched_by={row['matched_by']} score={float(row['score']):.4f} "
-                f"lexical={float(row['lexical_score']):.4f} vector={float(row['vector_similarity']):.4f} "
-                f"exact_match={str(bool(row['exact_match'])).lower()}{graph_hops}{chunk} "
-                f"provenance_bias={row['provenance_bias']}\n"
-                f"  summary: {summary}\n"
-                f"  preview: {preview}"
-            )
+        out = fmt.format_hybrid_search(query, rows)
         _log_tool_done("archive_hybrid_search", t0, result_count=len(rows))
-        return "\n".join(lines)
+        return out
     except PpaError as exc:
         return _ppa_err("archive_hybrid_search", exc)
     except Exception as exc:
