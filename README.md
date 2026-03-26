@@ -1,32 +1,44 @@
 # PPA — Personal Private Archives
 
-Mail, messages, calendar, photos, health portals, bank exports, git history, meeting transcripts — each one sits in a different product with its own UI, export format, and retention rules. There is **no single system** that is “your archive.” If you need something that might be in any of those places, you open several apps or dig through old downloads. Nothing gives you one definitive view.
+**A local archive and search stack for the data you already have in other products** — mail, chat, calendar, photos, health and finance exports, code history, and more. Import into a canonical markdown **vault**, index in **Postgres + pgvector** (lexical + semantic + hybrid retrieval, plus a typed graph), and query from the CLI or over **MCP** for editor and agent workflows.
 
-PPA pulls from the services and files you choose into **one vault of markdown** (with metadata so you know the source), builds a **search index** in Postgres with pgvector, and exposes an **MCP server** so editors and agents can query that index. **The vault is what you keep.** The database is derived and can be rebuilt from the vault. A running deployment is one **instance** (for example, one person or one household).
+Your life is split across apps with different UIs and exports. There is no vendor that gives you one definitive copy of “everything.” PPA is the **one place you control**: files on disk you can back up, a database you can rebuild from those files, and tools that search across sources without uploading your corpus to someone else’s AI product.
 
 | Without | With |
 | ------- | ---- |
-| Search each product separately | One search stack over everything you imported |
-| Model only sees what you paste | MCP tools over your own indexed material |
-| No portable copy of “all of it” | Files you own + DB you can regenerate |
+| Search each product separately | One index over what you’ve imported |
+| Model only sees what you paste | MCP tools over your own material |
+| No single portable archive | Vault + regenerable index |
 
-Typical uses: piecing together who said what and when, using agents in-editor against your corpus (**[docs/AGENT_USAGE.md](docs/AGENT_USAGE.md)**), or keeping a long-term record where each item still traces back to its origin.
+Typical uses: recall and research across sources, agents in-editor against your corpus (**[docs/AGENT_USAGE.md](docs/AGENT_USAGE.md)**), long-term retention with provenance on every card.
+
+### Similar projects
+
+If you only need to **index folders of markdown you already have** (notes, docs, meeting files) with local hybrid search and MCP, **[qmd](https://github.com/tobi/qmd)** is built for that: SQLite + BM25 + vectors + reranking, all local. **PPA** adds **multi-service ingest** (Gmail, iMessage, GitHub, health exports, …), a **vault-first** contract, Postgres, and graph/people/timeline tooling. Use whichever matches where your data actually lives.
 
 ---
 
-## How it works
+## Architecture
 
 ```
-Markdown vault  →  Postgres + pgvector  →  MCP server (stdio)
+┌─────────────────────────────────────────────────────────────┐
+│  Sources (APIs, exports, local DBs)  →  vault (markdown)     │
+└───────────────────────────────┬─────────────────────────────┘
+                                ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Postgres + pgvector: cards, chunks, edges, embeddings       │
+└───────────────────────────────┬─────────────────────────────┘
+                                ▼
+┌─────────────────────────────────────────────────────────────┐
+│  MCP server (stdio): search, read, query, graph, admin       │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 | Layer | Role |
 | ----- | ---- |
-| **Vault** | Markdown, YAML frontmatter, provenance — the thing you back up |
-| **Index** | Cards, edges, chunks, embeddings. Derived. Rebuildable. |
-| **MCP** | Search, read, query, graph, admin — gated by tool profile |
-
-MCP clients come and go. The vault is forever.
+| **Vault** | Markdown, YAML frontmatter, provenance — what you back up |
+| **Index** | Derived; rebuild from the vault anytime |
+| **MCP** | Tools for humans and agents; profiles gate destructive ops |
 
 ---
 
@@ -40,6 +52,8 @@ MCP clients come and go. The vault is forever.
 
 ## Quick start
 
+**Install**
+
 ```bash
 git clone https://github.com/rheeger/ppa.git
 cd ppa
@@ -48,7 +62,7 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e .
 ```
 
-DB up, schema, index from vault, then embeddings:
+**Postgres + index + embeddings** (local Docker via `Makefile`)
 
 ```bash
 cp .env.pgvector.example .env.pgvector
@@ -58,26 +72,41 @@ make rebuild-indexes
 make embed-pending
 ```
 
-MCP (adjust paths):
+**Run MCP** (adjust paths)
 
 ```bash
 ./run-local-seed-mcp.sh
-# Remote: ./scripts/ppa-tunnel.sh & ./run-arnold-mcp.sh
+# Remote index: ./scripts/ppa-tunnel.sh & ./run-arnold-mcp.sh
 ```
 
-Underlying entrypoint:
+**CLI entrypoint** (what the scripts wrap)
 
 ```bash
 python -m archive_mcp serve
 ```
 
-Everything else the binary can do lives in **[docs/PPA_RUNTIME_CONTRACT.md](docs/PPA_RUNTIME_CONTRACT.md)**.
+Other subcommands (`rebuild-indexes`, `embed-pending`, migrations, …): **[docs/PPA_RUNTIME_CONTRACT.md](docs/PPA_RUNTIME_CONTRACT.md)**.
 
 ---
 
-## MCP host config
+## MCP server
 
-`~/.cursor/mcp.json` (tack on more servers the same way):
+PPA exposes a **stdio** MCP server (same pattern as [qmd’s MCP](https://github.com/tobi/qmd#mcp-server): subprocess per client unless you tunnel to a remote index).
+
+**Tools exposed** (names vary slightly by `PPA_MCP_TOOL_PROFILE`; seed-link tools are optional — see runtime contract):
+
+| Area | Tools |
+| ---- | ----- |
+| **Search & read** | `archive_search`, `archive_search_json`, `archive_vector_search`, `archive_hybrid_search`, `archive_hybrid_search_json`, `archive_read`, `archive_read_many` |
+| **Structured** | `archive_query` |
+| **Graph & people** | `archive_graph`, `archive_person`, `archive_timeline` |
+| **Explain** | `archive_retrieval_explain`, `archive_retrieval_explain_json` |
+| **Status** | `archive_stats`, `archive_validate`, `archive_duplicates`, `archive_index_status`, `archive_embedding_status`, `archive_embed_pending`, … |
+| **Admin** | `archive_rebuild_indexes`, `archive_bootstrap_postgres`, projections — **restrict in production** |
+
+Agent prompts and call order: **[docs/AGENT_USAGE.md](docs/AGENT_USAGE.md)**.
+
+**Cursor** — `~/.cursor/mcp.json`:
 
 ```json
 {
@@ -91,6 +120,8 @@ Everything else the binary can do lives in **[docs/PPA_RUNTIME_CONTRACT.md](docs
   }
 }
 ```
+
+**Claude Desktop** — same `command` / `args` shape under your `claude_desktop_config.json` MCP block.
 
 ---
 
@@ -172,12 +203,6 @@ Prefix everything **`PPA_*`**. The exhaustive list is **[docs/PPA_RUNTIME_CONTRA
 | `PPA_EMBEDDING_PROVIDER` | `hash` or `openai` |
 
 Optional: **`PPA_CONFIG_PATH`** forces a specific `ppa.yml`.
-
----
-
-## MCP tools (shape)
-
-Lexical + structured query + vector + hybrid, graph/peek at neighbors, people, timelines, then the admin/rebuild knobs (behind profiles). **Exact names + “don’t shoot yourself in prod”:** runtime contract + **[docs/AGENT_USAGE.md](docs/AGENT_USAGE.md)**.
 
 ---
 
