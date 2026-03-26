@@ -7,9 +7,10 @@ source "$SCRIPT_DIR/ppa-lib.sh"
 
 ppa_require_root
 
-IMAGE="${PPA_IMAGE:-/mnt/user/ppa-secure/ppa-vault.img}"
-MAPPER="${PPA_MAPPER:-ppa-vault}"
-MOUNT_ROOT="${PPA_MOUNT_ROOT:-/srv/ppa-secure}"
+SECURE_DIR="${PPA_SECURE_DIR:-/mnt/user/archive-secure}"
+IMAGE="${PPA_IMAGE:-$SECURE_DIR/hfa-vault.img}"
+MAPPER="${PPA_MAPPER:-hfa-archive-vault}"
+MOUNT_ROOT="${PPA_MOUNT_ROOT:-/srv/hfa-secure}"
 
 if mountpoint -q "$MOUNT_ROOT"; then
   umount "$MOUNT_ROOT"

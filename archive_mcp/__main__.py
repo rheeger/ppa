@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -60,6 +62,42 @@ def _cli_fail(exc: PpaError) -> None:
     raise SystemExit(1)
 
 
+def _ppa_env_name_is_secret(name: str) -> bool:
+    upper = name.upper()
+    return any(s in upper for s in ("KEY", "SECRET", "TOKEN", "PASSWORD"))
+
+
+def _emit_mcp_config() -> None:
+    """Print a paste-ready MCP client JSON block from the current environment.
+
+    Secrets are omitted by design: only `PPA_*` vars are included, and names
+    matching *KEY*, *SECRET*, *TOKEN*, or *PASSWORD* are skipped so API keys
+    never appear in terminal output or copied configs.
+    """
+    env: dict[str, str] = {}
+    for key, value in os.environ.items():
+        if not key.startswith("PPA_"):
+            continue
+        if _ppa_env_name_is_secret(key):
+            continue
+        env[key] = value
+    server_name = os.environ.get("PPA_MCP_CONFIG_SERVER_NAME", "ppa").strip() or "ppa"
+    args = ["serve"]
+    tunnel = os.environ.get("PPA_MCP_TUNNEL_HOST", "").strip()
+    if tunnel:
+        args.extend(["--tunnel", tunnel])
+    block = {
+        "mcpServers": {
+            server_name: {
+                "command": "ppa",
+                "args": args,
+                "env": env,
+            }
+        }
+    }
+    print(json.dumps(block, indent=2))
+
+
 _SEED_LINKS_DISABLED_MSG = "Seed links are not enabled. Set PPA_SEED_LINKS_ENABLED=1 to enable."
 
 _SEED_LINK_COMMANDS = frozenset(
@@ -85,7 +123,17 @@ def main() -> None:
     parser.add_argument("-v", "--verbose", action="store_true", help="DEBUG logging on stderr")
     subparsers = parser.add_subparsers(dest="command")
 
-    subparsers.add_parser("serve")
+    serve_parser = subparsers.add_parser("serve", help="Start MCP server (stdio)")
+    serve_parser.add_argument(
+        "--tunnel",
+        default="",
+        metavar="USER@HOST",
+        help="Manage SSH tunnel: localhost:PPA_TUNNEL_PORT -> remote 127.0.0.1:5432",
+    )
+    subparsers.add_parser(
+        "mcp-config",
+        help="Print paste-ready MCP JSON for this environment (no secrets)",
+    )
     rebuild_parser = subparsers.add_parser("rebuild-indexes")
     rebuild_parser.add_argument("--workers", type=int)
     rebuild_parser.add_argument("--batch-size", type=int)
@@ -255,8 +303,13 @@ def main() -> None:
 
     parser.set_defaults(command="serve")
     args = parser.parse_args()
+    if args.command == "serve" and not hasattr(args, "tunnel"):
+        args.tunnel = ""
     # Stderr-only logging for all subcommands; keep stdout for MCP JSON-RPC / CLI JSON. See archive_mcp/log.py.
     configure_logging(verbose=args.verbose)
+    if args.command == "mcp-config":
+        _emit_mcp_config()
+        return
     if args.command == "health":
         from .health import run_health_checks
 
@@ -665,6 +718,14 @@ def main() -> None:
             runner = MigrationRunner(conn, store.index.schema)
             print(json.dumps(runner.status(), indent=2, default=str))
         return
+    if args.command == "serve" and getattr(args, "tunnel", ""):
+        from .tunnel import TunnelManager
+
+        local_port = int(os.environ.get("PPA_TUNNEL_PORT", "5433"))
+        remote_port = int(os.environ.get("PPA_TUNNEL_REMOTE_PORT", "5432"))
+        tunnel_mgr = TunnelManager(args.tunnel, local_port=local_port, remote_port=remote_port)
+        tunnel_mgr.start()
+        atexit.register(tunnel_mgr.stop)
     mcp.run()
 
 

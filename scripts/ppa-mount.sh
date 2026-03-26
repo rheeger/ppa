@@ -7,8 +7,8 @@ source "$SCRIPT_DIR/ppa-lib.sh"
 
 ppa_require_root
 
-MAPPER="${PPA_MAPPER:-ppa-vault}"
-MOUNT_ROOT="${PPA_MOUNT_ROOT:-/srv/ppa-secure}"
+MAPPER="${PPA_MAPPER:-hfa-archive-vault}"
+MOUNT_ROOT="${PPA_MOUNT_ROOT:-/srv/hfa-secure}"
 UNIX_USER="${PPA_UNIX_USER:-archive}"
 UNIX_GROUP="${PPA_UNIX_GROUP:-archive}"
 

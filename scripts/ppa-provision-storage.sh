@@ -7,10 +7,10 @@ source "$SCRIPT_DIR/ppa-lib.sh"
 
 ppa_require_root
 
-SECURE_DIR="${PPA_SECURE_DIR:-/mnt/user/ppa-secure}"
-IMAGE="${PPA_IMAGE:-$SECURE_DIR/ppa-vault.img}"
-MAPPER="${PPA_MAPPER:-ppa-vault}"
-MOUNT_ROOT="${PPA_MOUNT_ROOT:-/srv/ppa-secure}"
+SECURE_DIR="${PPA_SECURE_DIR:-/mnt/user/archive-secure}"
+IMAGE="${PPA_IMAGE:-$SECURE_DIR/hfa-vault.img}"
+MAPPER="${PPA_MAPPER:-hfa-archive-vault}"
+MOUNT_ROOT="${PPA_MOUNT_ROOT:-/srv/hfa-secure}"
 UNIX_USER="${PPA_UNIX_USER:-archive}"
 UNIX_GROUP="${PPA_UNIX_GROUP:-archive}"
 IMAGE_SIZE="${PPA_IMAGE_SIZE:-256G}"

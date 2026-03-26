@@ -26,7 +26,8 @@ Both invoke `archive_mcp.__main__:main`. This starts the MCP server using stdio 
 
 | Subcommand                 | Purpose                                             | Safety on production |
 | -------------------------- | --------------------------------------------------- | -------------------- |
-| `serve`                    | Start MCP server (stdio)                            | Safe                 |
+| `serve`                    | Start MCP server (stdio); optional `--tunnel USER@HOST` spawns SSH to `PPA_TUNNEL_PORT` | Safe |
+| `mcp-config`               | Print paste-ready MCP JSON from current `PPA_*` env (secrets omitted) | Safe          |
 | `search <query>`           | Full-text search (JSON on stdout)                   | Safe                 |
 | `read <path_or_uid>`       | Read one note (JSON)                                | Safe                 |
 | `read-many <uid> …`        | Read multiple notes (JSON)                           | Safe                 |
@@ -346,6 +347,8 @@ Arnold is a thin consumer of the PPA engine. The integration seam consists of:
 
 - **Secrets**: 1Password-resolved OpenAI API key, service account tokens
 - **Env setup**: `PPA_INDEX_DSN`, `PPA_PATH`, `PPA_INDEX_SCHEMA`, `PPA_EMBEDDING_*` via launcher script
+- **Tunnel**: `ppa serve --tunnel arnold@…` can replace a manually managed `ppa-tunnel.sh` — the SSH forward is a child of the MCP process and exits when the client stops the server. `PPA_TUNNEL_PORT` (default `5433`) and `PPA_TUNNEL_REMOTE_PORT` (default `5432`) tune the forward.
+- **Portable MCP**: clients may use `"command": "ppa", "args": ["serve"]` with `env` instead of absolute paths to shell scripts; `ppa mcp-config` emits a block from the current environment.
 - **Encrypted storage**: LUKS-encrypted volume at `/srv/hfa-secure`
 - **Docker Postgres**: `hfa-archive-postgres` container with data on the encrypted volume
 - **Systemd units**: `hfa-archive-mcp.service`, `hfa-archive-postgres.service` (transitional names; renamed to `ppa-*` in Phase 2.8)
@@ -374,6 +377,10 @@ Arnold is a thin consumer of the PPA engine. The integration seam consists of:
 ---
 
 ## 10. Compatibility Policy
+
+### Launcher scripts
+
+`run-local-seed-mcp.sh` and `run-arnold-mcp.sh` are **convenience wrappers** around `python -m archive_mcp` / `ppa`; they set env and exec the same `main()`. They are not required when using `"command": "ppa"` in MCP clients.
 
 ### Alias support timeline
 

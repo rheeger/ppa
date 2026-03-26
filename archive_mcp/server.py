@@ -78,7 +78,14 @@ def _log_tool_return_error(tool_name: str, message: str) -> str:
 
 
 _instance_name = os.environ.get("PPA_INSTANCE_NAME", "Personal Private Archives").strip()
-mcp = FastMCP("ppa", _instance_name)
+_server_instructions = (
+    f"{_instance_name}\n\n"
+    "Retrieval order: (1) archive_read for known UIDs/paths (2) archive_query for structured filters "
+    "(3) archive_search_json for keywords (4) archive_hybrid_search_json for semantic queries "
+    "(5) archive_graph for relationships. Always read canonical cards before factual claims. "
+    "Prefer _json tool variants when available."
+)
+mcp = FastMCP("ppa", _server_instructions)
 
 _TOOL_PROFILES: dict[str, set[str] | None] = {
     "full": None,

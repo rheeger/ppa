@@ -77,7 +77,16 @@ make embed-pending
 ```bash
 ./run-local-seed-mcp.sh
 # Remote index: ./scripts/ppa-tunnel.sh & ./run-arnold-mcp.sh
+# Or portable: ppa serve --tunnel user@host  (tunnel is a child of the MCP process)
 ```
+
+**Quick setup for any MCP client**
+
+1. `pip install -e .`
+2. Export `PPA_INDEX_DSN`, `PPA_PATH`, `PPA_INDEX_SCHEMA` (and embedding vars as needed).
+3. `ppa mcp-config` → paste into `~/.cursor/mcp.json` (or Claude Desktop / Codex). Add API keys only in the client `env` block — they are never printed by `mcp-config`.
+
+Template: **[ppa.mcp-example.json](ppa.mcp-example.json)** · details: **[docs/MCP_SETUP.md](docs/MCP_SETUP.md)**.
 
 **CLI entrypoint** (what the scripts wrap)
 
@@ -106,20 +115,27 @@ PPA exposes a **stdio** MCP server (same pattern as [qmd’s MCP](https://github
 
 Agent prompts and call order: **[docs/AGENT_USAGE.md](docs/AGENT_USAGE.md)**.
 
-**Cursor** — `~/.cursor/mcp.json`:
+**Portable config** (after `pip install -e .`, `ppa` on `PATH`):
 
 ```json
 {
   "mcpServers": {
-    "archive-local": {
-      "command": "/absolute/path/to/ppa/run-local-seed-mcp.sh"
-    },
-    "archive-remote": {
-      "command": "/absolute/path/to/ppa/run-arnold-mcp.sh"
+    "ppa": {
+      "command": "ppa",
+      "args": ["serve"],
+      "env": {
+        "PPA_INDEX_DSN": "postgresql://archive:archive@127.0.0.1:5432/archive",
+        "PPA_INDEX_SCHEMA": "archive_seed",
+        "PPA_PATH": "/path/to/vault",
+        "PPA_EMBEDDING_PROVIDER": "openai",
+        "PPA_EMBEDDING_MODEL": "text-embedding-3-small"
+      }
     }
   }
 }
 ```
+
+Remote Postgres via SSH: `"args": ["serve", "--tunnel", "user@host"]` and point `PPA_INDEX_DSN` at `127.0.0.1:5433` (or `PPA_TUNNEL_PORT`). **`run-local-seed-mcp.sh` / `run-arnold-mcp.sh`** remain supported convenience wrappers.
 
 **Claude Desktop** — same `command` / `args` shape under your `claude_desktop_config.json` MCP block.
 
@@ -240,6 +256,7 @@ More: **[docs/SECURITY_MODEL.md](docs/SECURITY_MODEL.md)**, **[docs/PPA_BACKUP_A
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System layout |
 | [docs/INDEXING.md](docs/INDEXING.md) | Index pipeline |
 | [docs/AGENT_USAGE.md](docs/AGENT_USAGE.md) | Agent / tool usage |
+| [docs/MCP_SETUP.md](docs/MCP_SETUP.md) | MCP client config, tunnel |
 | [docs/PPA_RUNTIME_CONTRACT.md](docs/PPA_RUNTIME_CONTRACT.md) | CLI, env (frozen) |
 | [docs/PLAYBOOK.md](docs/PLAYBOOK.md) | Ops |
 | [docs/CARD_TYPE_CONTRACTS.md](docs/CARD_TYPE_CONTRACTS.md) | Card types |

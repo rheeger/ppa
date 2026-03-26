@@ -1,0 +1,30 @@
+{
+  "_comment": "Template only — replace PORT, paths, and USER@HOST. Install: pip install -e . then ppa mcp-config for a block from your real env.",
+  "mcpServers": {
+    "ppa-local": {
+      "command": "ppa",
+      "args": ["serve"],
+      "env": {
+        "PPA_INDEX_DSN": "postgresql://archive:archive@127.0.0.1:5432/archive",
+        "PPA_INDEX_SCHEMA": "archive_seed",
+        "PPA_PATH": "/path/to/your/vault",
+        "PPA_EMBEDDING_PROVIDER": "openai",
+        "PPA_EMBEDDING_MODEL": "text-embedding-3-small",
+        "PPA_INSTANCE_NAME": "My Archives"
+      }
+    },
+    "ppa-remote": {
+      "command": "ppa",
+      "args": ["serve", "--tunnel", "user@remote-host"],
+      "env": {
+        "PPA_INDEX_DSN": "postgresql://archive:archive@127.0.0.1:5433/archive",
+        "PPA_INDEX_SCHEMA": "archive_seed",
+        "PPA_PATH": "/path/to/local/mirror/of/vault",
+        "PPA_EMBEDDING_PROVIDER": "openai",
+        "PPA_EMBEDDING_MODEL": "text-embedding-3-small",
+        "PPA_FORBID_REBUILD": "1",
+        "PPA_INSTANCE_NAME": "My Archives (Remote)"
+      }
+    }
+  }
+}

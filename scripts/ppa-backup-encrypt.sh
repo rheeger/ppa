@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/ppa-lib.sh"
 
-VAULT="${PPA_PATH:-/srv/ppa-secure/vault}"
+VAULT="${PPA_PATH:-/srv/hfa-secure/vault}"
 BACKUP_BASE="${PPA_BACKUP_BASE:-/mnt/user/backups/ppa-encrypted}"
 PASSPHRASE="${PPA_BACKUP_PASSPHRASE:-}"
 PASSPHRASE_OP_REF="${PPA_BACKUP_PASSPHRASE_OP_REF:-}"
