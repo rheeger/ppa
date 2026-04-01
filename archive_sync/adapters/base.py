@@ -13,22 +13,19 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
+from archive_mcp.vault_cache import VaultScanCache
 from hfa.config import PPAConfig, load_config
 from hfa.identity import IdentityCache
-from hfa.identity_resolver import (
-    PersonIndex,
-    ResolveResult,
-    load_nicknames,
-    log_conflict,
-    merge_into_existing,
-    resolve_person,
-    resolve_person_snapshot,
-)
-from hfa.provenance import PROVENANCE_EXEMPT_FIELDS, ProvenanceEntry, merge_provenance
-from hfa.schema import BaseCard, PersonCard, card_to_frontmatter, validate_card_permissive, validate_card_strict
+from hfa.identity_resolver import (PersonIndex, ResolveResult, load_nicknames,
+                                   log_conflict, merge_into_existing,
+                                   resolve_person, resolve_person_snapshot)
+from hfa.provenance import (PROVENANCE_EXEMPT_FIELDS, ProvenanceEntry,
+                            merge_provenance)
+from hfa.schema import (BaseCard, PersonCard, card_to_frontmatter,
+                        validate_card_permissive, validate_card_strict)
 from hfa.slugger import normalize_for_slug, unique_slug
 from hfa.sync_state import load_sync_state, update_cursor
-from hfa.vault import iter_parsed_notes, read_note, write_card
+from hfa.vault import read_note, write_card
 
 
 def deterministic_provenance(
@@ -499,19 +496,10 @@ class BaseAdapter(ABC):
         existing_uid_index: dict[str, Path] = {}
         if self.preload_existing_uid_index:
             _log("existing uid preload start")
-            loaded_uid_count = 0
             existing_uid_started_at = perf_counter()
-            for note in iter_parsed_notes(vault):
-                try:
-                    frontmatter = note.frontmatter
-                except Exception:
-                    continue
-                uid = str(frontmatter.get("uid", "")).strip()
-                if uid:
-                    existing_uid_index[uid] = note.rel_path
-                    loaded_uid_count += 1
-                    if progress_every and loaded_uid_count % progress_every == 0:
-                        _log(f"existing uid preload progress: loaded={loaded_uid_count}")
+            uid_cache = VaultScanCache.build_or_load(vault, tier=1, progress_every=progress_every or 0)
+            existing_uid_index = {uid: Path(rp) for uid, rp in uid_cache.uid_to_rel_path().items()}
+            loaded_uid_count = len(existing_uid_index)
             _log(
                 f"existing uid preload done: loaded={loaded_uid_count} elapsed_s={perf_counter() - existing_uid_started_at:.2f}"
             )

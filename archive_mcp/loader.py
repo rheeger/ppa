@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import time
-import uuid
 from collections.abc import Iterable
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -14,37 +14,60 @@ from functools import partial
 from itertools import islice
 from typing import Any
 
-from .index_config import (
-    CHUNK_SCHEMA_VERSION,
-    INDEX_SCHEMA_VERSION,
-    MANIFEST_SCHEMA_VERSION,
-    PROJECTIONS_BY_LOAD_ORDER,
-    get_force_full_rebuild,
-    get_rebuild_batch_size,
-    get_rebuild_commit_interval,
-    get_rebuild_executor,
-    get_rebuild_progress_every,
-    get_rebuild_staging_mode,
-    get_rebuild_workers,
-    get_seed_frozen_enabled,
-    manifest_cache_disabled,
-)
-from .materializer import _build_person_lookup, _materialize_row_batch
+from .index_config import (CHUNK_SCHEMA_VERSION, INDEX_SCHEMA_VERSION,
+                           MANIFEST_SCHEMA_VERSION, PROJECTIONS_BY_LOAD_ORDER,
+                           get_force_full_rebuild, get_rebuild_batch_size,
+                           get_rebuild_commit_interval, get_rebuild_executor,
+                           get_rebuild_progress_every, get_rebuild_resume,
+                           get_rebuild_staging_mode, get_rebuild_verify_hash,
+                           get_rebuild_workers, get_seed_frozen_enabled,
+                           manifest_cache_disabled)
+from .materializer import (_build_person_lookup, _materialize_row_batch,
+                           _resolve_person_reference)
 from .projections.base import ProjectionRowBuffer
-from .projections.registry import (
-    PROJECTION_REGISTRY,
-    PROJECTION_REGISTRY_VERSION,
-    TYPED_PROJECTIONS,
-)
-from .scanner import (
-    CanonicalRow,
-    NoteManifestRow,
-    _build_manifest_rows_from_canonical,
-    _classify_manifest_rebuild_delta,
-    _collect_canonical_rows,
-)
+from .projections.registry import (PROJECTION_REGISTRY,
+                                   PROJECTION_REGISTRY_VERSION,
+                                   TYPED_PROJECTIONS)
+from .scanner import (CanonicalRow, NoteManifestRow,
+                      _build_manifest_rows_from_canonical,
+                      _classify_manifest_rebuild_delta,
+                      _collect_canonical_rows, _row_sort_key)
+from .vault_cache import VaultScanCache
 
 logger = logging.getLogger("ppa.loader")
+
+PERSON_ESCALATION_THRESHOLD = 5000
+
+
+def _compute_run_id(vault_manifest_hash: str) -> str:
+    """Deterministic run_id; schema bumps invalidate stale checkpoints."""
+    components = (
+        f"{vault_manifest_hash}:{INDEX_SCHEMA_VERSION}"
+        f":{CHUNK_SCHEMA_VERSION}:{PROJECTION_REGISTRY_VERSION}"
+    )
+    return hashlib.sha256(components.encode()).hexdigest()[:16]
+
+
+def _try_resume_checkpoint(conn: Any, schema: str, run_id: str) -> tuple[str | None, int]:
+    """Return (last_committed_rel_path, loaded_card_count) when resuming; else (None, 0).
+
+    loaded_card_count is the number of cards already flushed in sorted materialization order;
+    the materialize loop skips that prefix of the ordered row list (see resume_skip_count).
+    """
+    row = conn.execute(
+        f"""SELECT run_id, status, last_committed_rel_path, loaded_card_count
+            FROM {schema}.rebuild_checkpoint WHERE id = 1""",
+    ).fetchone()
+    if row is None:
+        return (None, 0)
+    keys = ["run_id", "status", "last_committed_rel_path", "loaded_card_count"]
+    r = row if isinstance(row, dict) else dict(zip(keys, row))
+    if str(r.get("status") or "") == "in_progress" and str(r.get("run_id") or "") == run_id:
+        path = str(r.get("last_committed_rel_path") or "")
+        lc = int(r.get("loaded_card_count") or 0)
+        return (path if path else None, lc)
+    return (None, 0)
+
 
 PROJECTION_COLUMNS_BY_TABLE = {
     projection.table_name: tuple(column.name for column in projection.columns) for projection in PROJECTION_REGISTRY
@@ -443,6 +466,58 @@ class LoaderMixin:
         )
         conn.execute(f"DELETE FROM {self.schema}.cards WHERE uid = ANY(%s)", (uid_list,))
 
+    def _delete_derived_rows_for_incremental(
+        self,
+        conn,
+        *,
+        materialize_uids: set[str],
+        purge_uids: set[str],
+    ) -> None:
+        """Remove derived rows for incremental rebuild.
+
+        Unlike full _delete_derived_rows_for_uids, incoming edges *to* a rebuilt card are kept:
+        deleting edges WHERE target_uid IN materialize_uids would drop edges from unchanged
+        cards pointing at a materialized target (e.g. attachment -> message) until those
+        sources are also rebuilt.
+        """
+        all_uids = materialize_uids | purge_uids
+        if not all_uids:
+            return
+        uid_list = list(all_uids)
+        conn.execute(
+            f"""
+            DELETE FROM {self.schema}.embeddings
+            WHERE chunk_key IN (SELECT chunk_key FROM {self.schema}.chunks WHERE card_uid = ANY(%s))
+            """,
+            (uid_list,),
+        )
+        conn.execute(f"DELETE FROM {self.schema}.chunks WHERE card_uid = ANY(%s)", (uid_list,))
+        conn.execute(f"DELETE FROM {self.schema}.edges WHERE source_uid = ANY(%s)", (uid_list,))
+        if purge_uids:
+            conn.execute(
+                f"DELETE FROM {self.schema}.edges WHERE target_uid = ANY(%s)",
+                (list(purge_uids),),
+            )
+        for projection in TYPED_PROJECTIONS:
+            conn.execute(
+                f"DELETE FROM {self.schema}.{projection.table_name} WHERE card_uid = ANY(%s)",
+                (uid_list,),
+            )
+        conn.execute(
+            f"DELETE FROM {self.schema}.external_ids WHERE card_uid = ANY(%s)",
+            (uid_list,),
+        )
+        conn.execute(f"DELETE FROM {self.schema}.card_orgs WHERE card_uid = ANY(%s)", (uid_list,))
+        conn.execute(
+            f"DELETE FROM {self.schema}.card_people WHERE card_uid = ANY(%s)",
+            (uid_list,),
+        )
+        conn.execute(
+            f"DELETE FROM {self.schema}.card_sources WHERE card_uid = ANY(%s)",
+            (uid_list,),
+        )
+        conn.execute(f"DELETE FROM {self.schema}.cards WHERE uid = ANY(%s)", (uid_list,))
+
     def _ensure_unlogged_stage_tables(self, conn) -> None:
         for projection in PROJECTIONS_BY_LOAD_ORDER:
             table = projection.table_name
@@ -576,6 +651,8 @@ class LoaderMixin:
         versions: tuple[int, int, int],
         write_checkpoint: bool,
         rebuild_mode: str,
+        resume_after_rel_path: str | None = None,
+        resume_skip_count: int = 0,
     ) -> tuple[dict[str, int], float, float, int]:
         counts = {projection.table_name: 0 for projection in PROJECTION_REGISTRY}
         materialize_seconds = 0.0
@@ -583,6 +660,23 @@ class LoaderMixin:
         committed_cards = 0
         load_buffer = ProjectionRowBuffer()
         load_buffer_pending_bytes = 0
+        ordered = sorted(rows_to_process, key=lambda r: _row_sort_key(r.rel_path))
+        if resume_skip_count > 0:
+            skip = min(max(0, resume_skip_count), len(ordered))
+            try:
+                crow = conn.execute(f"SELECT COUNT(*) AS c FROM {self.schema}.cards").fetchone()
+                db_n = int(crow["c"] if isinstance(crow, dict) else crow[0])
+            except Exception:
+                db_n = 0
+            # Checkpoint loaded_card_count can lag SIGTERM (last flush committed more than last save).
+            if db_n > skip:
+                skip = min(len(ordered), db_n)
+            rows_to_process = ordered[skip:]
+        elif resume_after_rel_path:
+            resume_key = _row_sort_key(resume_after_rel_path)
+            rows_to_process = [r for r in ordered if _row_sort_key(r.rel_path) > resume_key]
+        else:
+            rows_to_process = ordered
         chunked_rows = _chunked(rows_to_process, batch_size)
         materialize_batches_total = max(1, (len(rows_to_process) + batch_size - 1) // batch_size)
         materialize_reporter = _RebuildProgressReporter(
@@ -776,6 +870,7 @@ class LoaderMixin:
         executor_kind: str | None = None,
         force_full: bool | None = None,
         disable_manifest_cache: bool | None = None,
+        no_cache: bool | None = None,
     ) -> RebuildRunResult:
         if os.environ.get("PPA_FORBID_REBUILD", "").strip().lower() in {
             "1",
@@ -801,7 +896,15 @@ class LoaderMixin:
             CHUNK_SCHEMA_VERSION,
             PROJECTION_REGISTRY_VERSION,
         )
-        run_id = str(uuid.uuid4())
+
+        no_cache_flag = getattr(self, "_no_cache", False) if no_cache is None else bool(no_cache)
+        _vault_cache: VaultScanCache | None = VaultScanCache.build_or_load(
+            self.vault,
+            tier=2,
+            workers=workers or 1,
+            progress_every=progress_every,
+            no_cache=no_cache_flag,
+        )
 
         started_at = time.time()
         scan_started_at = time.time()
@@ -817,8 +920,10 @@ class LoaderMixin:
             workers=workers,
             executor_kind=executor_kind,
             progress_every=progress_every,
+            cache=_vault_cache,
         )
         scan_seconds = round(time.time() - scan_started_at, 6)
+        run_id = _compute_run_id(vault_fingerprint)
 
         map_started_at = time.time()
         _log_rebuild_step(3, 6, "build lookup maps", f"rows={len(rows)}")
@@ -856,14 +961,47 @@ class LoaderMixin:
                 and int(meta.get("projection_registry_version", 0)) == versions[2]
             )
             if incremental_ok:
+                verify_hash = get_rebuild_verify_hash()
                 rebuild_mode, materialize_uids, purge_uids, manifest_counters = _classify_manifest_rebuild_delta(
                     rows,
                     manifest_by_path=manifest_map,
                     file_stats=file_stats,
                     versions=versions,
                     duplicate_uid_count=duplicate_uid_count,
+                    verify_hash=verify_hash,
+                    vault=self.vault if verify_hash else None,
                 )
                 deleted_paths = set(manifest_map.keys()) - {r.rel_path for r in rows}
+                if rebuild_mode == "person_triggered":
+                    changed_person_uids = {
+                        str(row.card.uid) for row in rows if row.card.type == "person" and str(row.card.uid) in materialize_uids
+                    }
+                    path_by_person_uid = {str(r.card.uid): r.rel_path for r in rows if r.card.type == "person"}
+                    affected_uids: set[str] = set()
+                    for person_uid in changed_person_uids:
+                        crows = conn.execute(
+                            f"SELECT card_uid FROM {self.schema}.card_people WHERE person = %s",
+                            (person_uid,),
+                        ).fetchall()
+                        for row in crows:
+                            uid = row["card_uid"] if isinstance(row, dict) else row[0]
+                            affected_uids.add(str(uid))
+                    for person_uid in changed_person_uids:
+                        person_rel = path_by_person_uid.get(person_uid)
+                        if not person_rel:
+                            continue
+                        for row in rows:
+                            if str(row.card.uid) == person_uid:
+                                continue
+                            for pref in getattr(row.card, "people", []):
+                                resolved = _resolve_person_reference(person_lookup, pref)
+                                if resolved == person_rel:
+                                    affected_uids.add(str(row.card.uid))
+                    materialize_uids |= affected_uids
+                    if len(materialize_uids) > PERSON_ESCALATION_THRESHOLD:
+                        rebuild_mode = "full"
+                    else:
+                        rebuild_mode = "incremental"
             seed_ok = False
             if rebuild_mode == "noop":
                 stored_fp = meta.get("vault_manifest_hash", "")
@@ -938,9 +1076,12 @@ class LoaderMixin:
                 step4_started_at = time.time()
                 self._create_schema(conn, recreate_typed=False, ensure_indexes=False)
                 conn.commit()
-                delete_uids = purge_uids | materialize_uids
-                if delete_uids:
-                    self._delete_derived_rows_for_uids(conn, delete_uids)
+                if materialize_uids or purge_uids:
+                    self._delete_derived_rows_for_incremental(
+                        conn,
+                        materialize_uids=materialize_uids,
+                        purge_uids=purge_uids,
+                    )
                 if deleted_paths:
                     self._delete_manifest_paths(conn, deleted_paths)
                 conn.execute(f"TRUNCATE TABLE {self.schema}.duplicate_uid_rows")
@@ -985,7 +1126,9 @@ class LoaderMixin:
                     "ensure indexes complete",
                     f"elapsed={round(time.time() - ensure_indexes_started_at, 3)}s",
                 )
-                manifest_entries = _build_manifest_rows_from_canonical(rows, self.vault, file_stats, versions)
+                manifest_entries = _build_manifest_rows_from_canonical(
+                    rows, self.vault, file_stats, versions, cache=_vault_cache
+                )
                 self._replace_note_manifest(conn, manifest_entries)
                 conn.commit()
                 final_counts = self._projection_table_counts(conn)
@@ -1066,46 +1209,65 @@ class LoaderMixin:
                 "fingerprint notes complete",
                 f"new={len(rows)} changed=0 unchanged=0 deleted=0 mode=full_scan",
             )
+            resume_after_full: str | None = None
+            resume_loaded_cards = 0
+            resuming_full = False
+            if get_rebuild_resume():
+                resume_after_full, resume_loaded_cards = _try_resume_checkpoint(conn, self.schema, run_id)
+                resuming_full = resume_loaded_cards > 0 or bool(resume_after_full)
+                if resume_after_full:
+                    logger.info(
+                        "Resuming rebuild from checkpoint after %s loaded_cards=%s",
+                        resume_after_full,
+                        resume_loaded_cards,
+                    )
+                elif resume_loaded_cards > 0:
+                    logger.info("Resuming rebuild from checkpoint loaded_cards=%s", resume_loaded_cards)
+
             dest_suffix = ""
             use_unlogged_stage = staging_mode == "unlogged"
-            if use_unlogged_stage:
+            if use_unlogged_stage and not resuming_full:
                 _log_rebuild_step(4, 6, "prepare schema staging", "mode=unlogged_stage")
 
-            _log_rebuild_step(4, 6, "prepare schema", f"mode=full schema={self.schema}")
+            _log_rebuild_step(4, 6, "prepare schema", f"mode=full schema={self.schema} resume={resuming_full}")
             step4_started_at = time.time()
             create_tables_started_at = time.time()
-            _log_rebuild_step(
-                4,
-                6,
-                "prepare schema create tables",
-                "ensure_indexes=0 recreate_typed=1",
-            )
-            self._create_schema(conn, recreate_typed=True, ensure_indexes=False)
-            conn.commit()
-            _log_rebuild_step(
-                4,
-                6,
-                "prepare schema create tables complete",
-                f"elapsed={round(time.time() - create_tables_started_at, 3)}s",
-            )
-            self._clear_rebuild_checkpoint(conn)
-            conn.commit()
-            clear_started_at = time.time()
-            _log_rebuild_step(
-                4,
-                6,
-                "prepare schema clear projections",
-                "truncate existing derived tables",
-            )
-            self._clear(conn)
-            conn.commit()
-            _log_rebuild_step(
-                4,
-                6,
-                "prepare schema clear projections complete",
-                f"elapsed={round(time.time() - clear_started_at, 3)}s",
-            )
-            if use_unlogged_stage:
+            if not resuming_full:
+                _log_rebuild_step(
+                    4,
+                    6,
+                    "prepare schema create tables",
+                    "ensure_indexes=0 recreate_typed=1",
+                )
+                self._create_schema(conn, recreate_typed=True, ensure_indexes=False)
+                conn.commit()
+                _log_rebuild_step(
+                    4,
+                    6,
+                    "prepare schema create tables complete",
+                    f"elapsed={round(time.time() - create_tables_started_at, 3)}s",
+                )
+                self._clear_rebuild_checkpoint(conn)
+                conn.commit()
+                clear_started_at = time.time()
+                _log_rebuild_step(
+                    4,
+                    6,
+                    "prepare schema clear projections",
+                    "truncate existing derived tables",
+                )
+                self._clear(conn)
+                conn.commit()
+                _log_rebuild_step(
+                    4,
+                    6,
+                    "prepare schema clear projections complete",
+                    f"elapsed={round(time.time() - clear_started_at, 3)}s",
+                )
+            else:
+                self._create_schema(conn, recreate_typed=False, ensure_indexes=False)
+                conn.commit()
+            if use_unlogged_stage and not resuming_full:
                 self._ensure_unlogged_stage_tables(conn)
                 conn.commit()
                 dest_suffix = "_stage"
@@ -1117,6 +1279,8 @@ class LoaderMixin:
                 "prepare schema load duplicate uid rows",
                 f"rows={len(duplicate_uid_rows)}",
             )
+            if resuming_full:
+                conn.execute(f"TRUNCATE TABLE {self.schema}.duplicate_uid_rows")
             self._copy_rows(conn, "duplicate_uid_rows", duplicate_uid_rows)
             conn.commit()
             _log_rebuild_step(
@@ -1174,6 +1338,8 @@ class LoaderMixin:
                 versions=versions,
                 write_checkpoint=True,
                 rebuild_mode="full",
+                resume_after_rel_path=resume_after_full,
+                resume_skip_count=resume_loaded_cards,
             )
             counts["duplicate_uid_rows"] = len(duplicate_uid_rows)
             counts["duplicate_uids"] = duplicate_uid_count
@@ -1199,7 +1365,9 @@ class LoaderMixin:
                 f"elapsed={round(time.time() - ensure_indexes_started_at, 3)}s",
             )
             total_seconds = round(time.time() - started_at, 6)
-            manifest_entries = _build_manifest_rows_from_canonical(rows, self.vault, file_stats, versions)
+            manifest_entries = _build_manifest_rows_from_canonical(
+                rows, self.vault, file_stats, versions, cache=_vault_cache
+            )
             self._replace_note_manifest(conn, manifest_entries)
             conn.commit()
             _log_rebuild_step(

@@ -217,6 +217,11 @@ def get_rebuild_resume() -> bool:
     return _ppa_env_bool("PPA_REBUILD_RESUME")
 
 
+def get_rebuild_verify_hash() -> bool:
+    """When true, incremental classification compares on-disk content_hash to manifest."""
+    return _ppa_env_bool("PPA_REBUILD_VERIFY_HASH")
+
+
 def get_seed_links_enabled() -> bool:
     return _ppa_env_bool("PPA_SEED_LINKS_ENABLED")
 

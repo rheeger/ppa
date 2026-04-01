@@ -53,7 +53,7 @@ PG_RESTORE_JOBS ?= 32
 PG_DUMP_FAST ?= 0
 PG_DUMP_JOBS ?= 0
 
-.PHONY: install pg-up pg-down pg-logs pg-psql dump-schema dump-seed-schema dump-seed-schema-fast dump-seed-schema-stream-arnold pipe-restore-seed-arnold scp-restore-seed-arnold dump-and-scp-restore-seed-arnold watch-scp-restore-continue-hfa bootstrap-postgres bootstrap-seed-postgres rebuild-indexes rebuild-seed-indexes index-status index-status-seed embed-pending migrate migrate-seed migrate-dry-run migration-status migration-status-seed build-benchmark-sample benchmark-rebuild benchmark-seed-links smoke smoke-queries arnold-smoke
+.PHONY: install pg-up pg-down pg-logs pg-psql dump-schema dump-seed-schema dump-seed-schema-fast dump-seed-schema-stream-arnold pipe-restore-seed-arnold scp-restore-seed-arnold dump-and-scp-restore-seed-arnold watch-scp-restore-continue-hfa bootstrap-postgres bootstrap-seed-postgres rebuild-indexes rebuild-seed-indexes index-status index-status-seed embed-pending migrate migrate-seed migrate-dry-run migration-status migration-status-seed build-benchmark-sample benchmark-rebuild benchmark-seed-links smoke smoke-queries arnold-smoke test-unit test-integration test-slice test-slice-smoke test-slice-verify test-slice-verify-smoke verify-incremental benchmark-1pct benchmark-5pct health-check
 
 install:
 	$(PYTHON) -m pip install -e .
@@ -243,3 +243,107 @@ arnold-smoke:
 	ssh arnold@192.168.50.27 'cd /srv/ppa && ./scripts/ppa-smoke-test.sh'
 
 smoke: install bootstrap-postgres rebuild-indexes index-status embed-pending smoke-queries
+
+test-unit:
+	$(PYTHON) -m pytest tests/ -v --tb=short -m "not integration and not slow"
+
+test-integration:
+	@PPA_INDEX_DSN="$$( $(LOCAL_PPA_INDEX_DSN_CMD) )"; \
+	PPA_INDEX_DSN="$$PPA_INDEX_DSN" \
+	PPA_INDEX_SCHEMA=archive_test \
+	PPA_EMBEDDING_PROVIDER=hash \
+	PPA_EMBEDDING_MODEL=archive-hash-dev \
+	PPA_EMBEDDING_VERSION=1 \
+	$(PYTHON) -m pytest tests/ -v --tb=short -m "integration"
+
+# Full stratified slice (~5% target_percent): scans entire seed vault once — wall time scales with note count
+# (often tens of minutes on a multi-million-note seed). Logs: ppa.slice on stderr; optional PPA_SLICE_LOG.
+test-slice:
+	@PPA_INDEX_DSN="$$( $(LOCAL_PPA_INDEX_DSN_CMD) )"; \
+	PPA_INDEX_DSN="$$PPA_INDEX_DSN" \
+	$(PYTHON) -m archive_mcp slice-seed \
+		--config tests/slice_config.json \
+		--output /tmp/ppa-test-slice \
+		--source-vault "$(PPA_BENCHMARK_SOURCE_VAULT)" \
+		--progress-every 10000
+
+# Tiny slice (0.5%% per type, cluster_cap 60) for pipeline / agent smoke — faster copy, still exercises closure.
+test-slice-smoke:
+	@mkdir -p logs; \
+	PPA_INDEX_DSN="$$( $(LOCAL_PPA_INDEX_DSN_CMD) )"; \
+	PPA_INDEX_DSN="$$PPA_INDEX_DSN" \
+	$(PYTHON) -m archive_mcp --log-file logs/ppa-slice-smoke.log slice-seed \
+		--config tests/slice_config.smoke.json \
+		--output /tmp/ppa-test-slice-smoke \
+		--source-vault "$(PPA_BENCHMARK_SOURCE_VAULT)" \
+		--progress-every 2000
+
+test-slice-verify:
+	@PPA_INDEX_DSN="$$( $(LOCAL_PPA_INDEX_DSN_CMD) )"; \
+	PPA_PATH=/tmp/ppa-test-slice \
+	PPA_INDEX_DSN="$$PPA_INDEX_DSN" \
+	PPA_INDEX_SCHEMA=archive_test_slice \
+	PPA_EMBEDDING_PROVIDER=hash \
+	PPA_EMBEDDING_MODEL=archive-hash-dev \
+	PPA_EMBEDDING_VERSION=1 \
+	$(PYTHON) -m archive_mcp bootstrap-postgres && \
+	PPA_PATH=/tmp/ppa-test-slice \
+	PPA_INDEX_DSN="$$PPA_INDEX_DSN" \
+	PPA_INDEX_SCHEMA=archive_test_slice \
+	PPA_EMBEDDING_PROVIDER=hash \
+	PPA_EMBEDDING_MODEL=archive-hash-dev \
+	PPA_EMBEDDING_VERSION=1 \
+	$(PYTHON) -m archive_mcp rebuild-indexes && \
+	PPA_PATH=/tmp/ppa-test-slice \
+	PPA_INDEX_DSN="$$PPA_INDEX_DSN" \
+	PPA_INDEX_SCHEMA=archive_test_slice \
+	$(PYTHON) -m archive_mcp health-check --manifest tests/slice_manifest.json --report-format both
+
+# Rebuild + health-check on smoke slice output (run test-slice-smoke first). Uses separate schema from full slice.
+test-slice-verify-smoke:
+	@PPA_INDEX_DSN="$$( $(LOCAL_PPA_INDEX_DSN_CMD) )"; \
+	PPA_PATH=/tmp/ppa-test-slice-smoke \
+	PPA_INDEX_DSN="$$PPA_INDEX_DSN" \
+	PPA_INDEX_SCHEMA=archive_test_slice_smoke \
+	PPA_EMBEDDING_PROVIDER=hash \
+	PPA_EMBEDDING_MODEL=archive-hash-dev \
+	PPA_EMBEDDING_VERSION=1 \
+	$(PYTHON) -m archive_mcp bootstrap-postgres && \
+	PPA_PATH=/tmp/ppa-test-slice-smoke \
+	PPA_INDEX_DSN="$$PPA_INDEX_DSN" \
+	PPA_INDEX_SCHEMA=archive_test_slice_smoke \
+	PPA_EMBEDDING_PROVIDER=hash \
+	PPA_EMBEDDING_MODEL=archive-hash-dev \
+	PPA_EMBEDDING_VERSION=1 \
+	$(PYTHON) -m archive_mcp --log-file logs/ppa-rebuild-smoke.log rebuild-indexes && \
+	PPA_PATH=/tmp/ppa-test-slice-smoke \
+	PPA_INDEX_DSN="$$PPA_INDEX_DSN" \
+	PPA_INDEX_SCHEMA=archive_test_slice_smoke \
+	$(PYTHON) -m archive_mcp health-check --manifest tests/slice_manifest.smoke.json --report-format both \
+		--report-dir logs
+
+verify-incremental:
+	@PPA_INDEX_DSN="$$( $(LOCAL_PPA_INDEX_DSN_CMD) )"; \
+	PPA_INDEX_DSN="$$PPA_INDEX_DSN" \
+	PPA_INDEX_SCHEMA=archive_test_incr \
+	PPA_EMBEDDING_PROVIDER=hash \
+	PPA_EMBEDDING_MODEL=archive-hash-dev \
+	PPA_EMBEDDING_VERSION=1 \
+	$(PYTHON) -m pytest tests/test_rebuild_incremental.py -v --tb=short
+
+benchmark-1pct:
+	@PPA_INDEX_DSN="$$( $(LOCAL_PPA_INDEX_DSN_CMD) )"; \
+	PPA_INDEX_DSN="$$PPA_INDEX_DSN" \
+	$(PYTHON) -m archive_mcp benchmark --slice-percent 1 --output /tmp/bench-results/
+
+benchmark-5pct:
+	@PPA_INDEX_DSN="$$( $(LOCAL_PPA_INDEX_DSN_CMD) )"; \
+	PPA_INDEX_DSN="$$PPA_INDEX_DSN" \
+	$(PYTHON) -m archive_mcp benchmark --slice-percent 5 --output /tmp/bench-results/
+
+health-check:
+	@PPA_INDEX_DSN="$$( $(LOCAL_PPA_INDEX_DSN_CMD) )"; \
+	PPA_PATH=$(PPA_PATH) \
+	PPA_INDEX_DSN="$$PPA_INDEX_DSN" \
+	PPA_INDEX_SCHEMA=$(PPA_INDEX_SCHEMA) \
+	$(PYTHON) -m archive_mcp health-check

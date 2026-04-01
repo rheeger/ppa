@@ -15,16 +15,10 @@ from typing import Any
 
 from hfa.provenance import ProvenanceEntry
 from hfa.schema import validate_card_permissive, validate_card_strict
-from hfa.vault import (
-    extract_wikilinks,
-    iter_note_paths,
-    read_note,
-    read_note_file,
-    read_note_frontmatter_file,
-    write_card,
-)
+from hfa.vault import extract_wikilinks, read_note, write_card
 
 from .features import card_activity_at, external_ids_by_provider
+from .vault_cache import VaultScanCache
 
 try:
     from hfa.llm_provider import GROUNDING_INSTRUCTION, get_provider_chain
@@ -716,7 +710,11 @@ def _feature_excerpt(sketch: SeedCardSketch) -> str:
     return "\n".join(parts[:12])
 
 
-def build_seed_link_catalog(vault_path: str | Path) -> SeedLinkCatalog:
+def build_seed_link_catalog(
+    vault_path: str | Path,
+    *,
+    cache: VaultScanCache | None = None,
+) -> SeedLinkCatalog:
     vault = Path(vault_path)
     cards_by_uid: dict[str, SeedCardSketch] = {}
     cards_by_exact_slug: dict[str, SeedCardSketch] = {}
@@ -739,17 +737,12 @@ def build_seed_link_catalog(vault_path: str | Path) -> SeedLinkCatalog:
     events_by_day: dict[str, list[SeedCardSketch]] = {}
     path_buckets: dict[str, list[SeedCardSketch]] = {}
 
-    for rel_path in iter_note_paths(vault):
-        note = read_note_file(vault / rel_path, vault_root=vault)
-        sketch = _sketch_from_frontmatter(
-            rel_path=note.rel_path.as_posix(),
-            frontmatter=note.frontmatter,
-            body=note.body,
-            content_hash=hashlib.sha256(note.content.encode("utf-8")).hexdigest(),
-        )
+    if cache is None:
+        cache = VaultScanCache.build_or_load(vault, tier=2, progress_every=0)
+
+    def _ingest(sketch: SeedCardSketch, frontmatter: dict[str, Any]) -> None:
         uid = sketch.uid
         slug = sketch.slug
-        frontmatter = note.frontmatter
         cards_by_uid[uid] = sketch
         cards_by_exact_slug[slug] = sketch
         cards_by_slug[_normalize_slug(slug)] = sketch
@@ -804,6 +797,17 @@ def build_seed_link_catalog(vault_path: str | Path) -> SeedLinkCatalog:
             day = _day_key(_clean_text(frontmatter.get("captured_at", "")))
             if day:
                 media_by_day.setdefault(day, []).append(sketch)
+
+    for rel_path, fm in cache.all_frontmatters():
+        body = cache.body_for_rel_path(rel_path)
+        ch = cache.raw_content_sha256_for_rel_path(rel_path)
+        sketch = _sketch_from_frontmatter(
+            rel_path=rel_path,
+            frontmatter=fm,
+            body=body,
+            content_hash=ch,
+        )
+        _ingest(sketch, fm)
 
     return SeedLinkCatalog(
         cards_by_uid=cards_by_uid,
@@ -2458,16 +2462,22 @@ def _upsert_meta(conn, schema: str, values: dict[str, str]) -> None:
         )
 
 
-def _count_orphaned_links(vault_path: str | Path) -> int:
+def _count_orphaned_links(
+    vault_path: str | Path,
+    *,
+    cache: VaultScanCache | None = None,
+) -> int:
     vault = Path(vault_path)
-    known = {path.stem for path in iter_note_paths(vault)}
+    if cache is None:
+        cache = VaultScanCache.build_or_load(vault, tier=2, progress_every=0)
+    known = cache.all_stems()
     total = 0
-    for rel_path in iter_note_paths(vault):
-        note = read_note_file(vault / rel_path, vault_root=vault)
-        for slug in extract_wikilinks(note.body):
+    for rel_path, wikilinks in cache.all_wikilinks():
+        fm = cache.frontmatter_for_rel_path(rel_path)
+        for slug in wikilinks:
             if slug not in known:
                 total += 1
-        for value in note.frontmatter.values():
+        for value in fm.values():
             for item in _iter_string_values(value):
                 if item.startswith("[[") and item.endswith("]]") and _slug_from_ref(item) not in known:
                     total += 1
@@ -2482,24 +2492,27 @@ def enqueue_seed_link_jobs(
     source_uids: set[str] | None = None,
     reset_existing: bool = False,
     commit_every: int = 1000,
+    cache: VaultScanCache | None = None,
 ) -> dict[str, int]:
     vault = Path(index.vault)
     selected = set(modules or [])
     scoped_uids = set(source_uids or set())
     force_selected = bool(selected)
-    known_exact_slugs = {path.stem for path in iter_note_paths(vault)}
+    if cache is None:
+        cache = VaultScanCache.build_or_load(vault, tier=1, progress_every=0)
+    known_exact_slugs = cache.all_stems()
     prepared = 0
     inserted = 0
     commit_every = max(int(commit_every), 1)
     with index._connect() as conn:
         pending_since_commit = 0
-        for rel_path in iter_note_paths(vault):
-            note = read_note_frontmatter_file(vault / rel_path, vault_root=vault)
+
+        for rel_path_str, frontmatter in cache.all_frontmatters():
             sketch = _sketch_from_frontmatter(
-                rel_path=note.rel_path.as_posix(),
-                frontmatter=note.frontmatter,
+                rel_path=rel_path_str,
+                frontmatter=frontmatter,
                 body="",
-                content_hash=_frontmatter_content_hash(note.rel_path.as_posix(), note.frontmatter),
+                content_hash=_frontmatter_content_hash(rel_path_str, frontmatter),
             )
             if scoped_uids and sketch.uid not in scoped_uids:
                 continue
@@ -3088,6 +3101,7 @@ def run_seed_link_enqueue(
     job_type: str = "seed_backfill",
     source_uids: set[str] | None = None,
     reset_existing: bool = False,
+    cache: VaultScanCache | None = None,
 ) -> dict[str, int]:
     index.ensure_ready()
     result = enqueue_seed_link_jobs(
@@ -3096,6 +3110,7 @@ def run_seed_link_enqueue(
         job_type=job_type,
         source_uids=source_uids,
         reset_existing=reset_existing,
+        cache=cache,
     )
     with index._connect() as conn:
         _upsert_meta(
@@ -3120,9 +3135,10 @@ def run_seed_link_workers(
     max_workers: int = 0,
     include_llm: bool = True,
     worker_name_prefix: str = "seed-link-worker",
+    cache: VaultScanCache | None = None,
 ) -> dict[str, Any]:
     index.ensure_ready()
-    catalog = build_seed_link_catalog(index.vault)
+    catalog = build_seed_link_catalog(index.vault, cache=cache)
     summary = SeedLinkRunSummary()
     reserve_lock = Lock()
     max_to_process = max(int(limit or 0), 0)
@@ -3253,9 +3269,10 @@ def run_seed_link_promotion_workers(
     limit: int = 0,
     max_workers: int = 1,
     worker_name_prefix: str = "seed-link-promoter",
+    cache: VaultScanCache | None = None,
 ) -> dict[str, int]:
     index.ensure_ready()
-    catalog = build_seed_link_catalog(index.vault)
+    catalog = build_seed_link_catalog(index.vault, cache=cache)
     counts = {"derived_edge": 0, "canonical_field": 0, "blocked": 0}
     reserve_lock = Lock()
     max_to_process = max(int(limit or 0), 0)
@@ -3365,13 +3382,15 @@ def run_seed_link_backfill(
     source_uids: set[str] | None = None,
 ) -> dict[str, Any]:
     index.ensure_ready()
-    orphaned_before = _count_orphaned_links(index.vault)
+    seed_cache = VaultScanCache.build_or_load(Path(index.vault), tier=2)
+    orphaned_before = _count_orphaned_links(index.vault, cache=seed_cache)
     enqueue_result = run_seed_link_enqueue(
         index,
         modules=modules,
         job_type=job_type,
         source_uids=source_uids,
         reset_existing=False,
+        cache=seed_cache,
     )
     worker_result = run_seed_link_workers(
         index,
@@ -3379,11 +3398,12 @@ def run_seed_link_backfill(
         limit=limit,
         max_workers=max_workers,
         include_llm=include_llm,
+        cache=seed_cache,
     )
     promotion_counts = {"derived_edge": 0, "canonical_field": 0, "blocked": 0}
     if apply_promotions:
-        promotion_counts = run_seed_link_promotion_workers(index)
-    gate = run_seed_link_report(index, rebuild_if_dirty=bool(apply_promotions))
+        promotion_counts = run_seed_link_promotion_workers(index, cache=seed_cache)
+    gate = run_seed_link_report(index, rebuild_if_dirty=bool(apply_promotions), cache=seed_cache)
     return {
         "workers": int(worker_result["workers"]),
         "jobs_prepared": int(enqueue_result["prepared"]),
@@ -3590,11 +3610,13 @@ def review_link_candidate(
     return get_link_candidate_details(index, candidate_id) or {}
 
 
-def compute_link_quality_gate(index: Any) -> dict[str, Any]:
+def compute_link_quality_gate(index: Any, *, cache: VaultScanCache | None = None) -> dict[str, Any]:
     refresh_link_review_metrics(index)
     refresh_link_dead_ends(index)
     thresholds = quality_gate_thresholds()
-    orphaned_after = _count_orphaned_links(index.vault)
+    if cache is None:
+        cache = VaultScanCache.build_or_load(Path(index.vault), tier=2)
+    orphaned_after = _count_orphaned_links(index.vault, cache=cache)
     with index._connect() as conn:
         card_row = conn.execute(f"SELECT COUNT(*) AS count FROM {index.schema}.cards").fetchone()
         reviewable_card_row = conn.execute(

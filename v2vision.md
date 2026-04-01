@@ -30,6 +30,8 @@ These decision rules govern the entire vision. When executing any phase, defer t
 
 8. **Provenance is preserved for every field.** Deterministically-extracted fields are tagged `deterministic`. LLM-enriched fields are tagged `llm`. Derived cards write provenance blocks following the existing `<!-- provenance ... -->` convention.
 
+9. **Operational logging on long jobs.** Any PPA command or agent-driven pipeline expected to run more than a few minutes must emit structured progress (phase, counts or %, elapsed and ETA in **`M:SS`**, throughput where meaningful) via the `ppa.*` loggers, with optional **`ppa --log-file PATH <subcommand>`** for retained, tail-friendly artifacts under `ppa/logs/`. See **`.cursor/rules/ppa-long-running-jobs.mdc`** (workspace rule, always on) and Phase 0’s **Operational logging** subsection for `slice-seed`, rebuild, benchmark, and CI targets.
+
 ---
 
 ## Complete Card Type Inventory
@@ -103,9 +105,34 @@ These decision rules govern the entire vision. When executing any phase, defer t
 
 ---
 
+## Cursor execution plans (PPA v2)
+
+Detailed, step-by-step **execution plans** for each phase live under **`~/.cursor/plans/`** (same filenames on any machine with Cursor). Open in the editor or link from here:
+
+| Phase                    | Execution plan                                                                                                           |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
+| 0 — Test infrastructure  | [`phase_0_execution_plan_61b73684.plan.md`](file:///Users/rheeger/.cursor/plans/phase_0_execution_plan_61b73684.plan.md) |
+| 1 — Schema & data model  | [`phase_1_execution_plan_f2f5802d.plan.md`](file:///Users/rheeger/.cursor/plans/phase_1_execution_plan_f2f5802d.plan.md) |
+| 2 — Extractors           | [`phase_2_execution_plan_50a42c00.plan.md`](file:///Users/rheeger/.cursor/plans/phase_2_execution_plan_50a42c00.plan.md) |
+| 3 — Full extraction      | [`phase_3_execution_plan_49b4bd6d.plan.md`](file:///Users/rheeger/.cursor/plans/phase_3_execution_plan_49b4bd6d.plan.md) |
+| 4 — ONE full rebuild     | [`phase_4_execution_plan_3156f3e2.plan.md`](file:///Users/rheeger/.cursor/plans/phase_4_execution_plan_3156f3e2.plan.md) |
+| 5 — Embedding pass       | [`phase_5_embedding_pass_17a0e872.plan.md`](file:///Users/rheeger/.cursor/plans/phase_5_embedding_pass_17a0e872.plan.md) |
+| 6 — LLM enrichment       | [`phase_6_llm_enrichment_f286b0bd.plan.md`](file:///Users/rheeger/.cursor/plans/phase_6_llm_enrichment_f286b0bd.plan.md) |
+| 7 — Knowledge cache      | [`phase_7_execution_plan_b4b2c2ef.plan.md`](file:///Users/rheeger/.cursor/plans/phase_7_execution_plan_b4b2c2ef.plan.md) |
+| 8 — Maintenance & tools  | [`phase_8_execution_plan_a16ec5dc.plan.md`](file:///Users/rheeger/.cursor/plans/phase_8_execution_plan_a16ec5dc.plan.md) |
+| 9 — Production on Arnold | [`phase_9_execution_plan_794d5d32.plan.md`](file:///Users/rheeger/.cursor/plans/phase_9_execution_plan_794d5d32.plan.md) |
+
+Each phase section below includes a direct **Execution plan** link in its heading block.
+
+---
+
 ## Phase 0: Test Infrastructure Foundation
 
+**Execution plan:** [`phase_0_execution_plan_61b73684.plan.md`](file:///Users/rheeger/.cursor/plans/phase_0_execution_plan_61b73684.plan.md)
+
 **What it is:** A two-tier test infrastructure — minimal synthetic fixtures for unit tests, and a **stratified real slice** of the seed vault for integration and behavioral tests — that is **relationally complete** (every wikilink resolves, every person reference has a PersonCard, every edge fires), covers every existing card type, and includes known-good query/answer pairs that validate behavior, not just structure.
+
+**Vault scan cache (Phase 0 enhancement):** PPA stores a SQLite vault scan cache under `<vault>/_meta/vault-scan-cache.sqlite3` so repeated `slice-seed`, `rebuild-indexes`, benchmark cleaning metrics, and seed-link passes avoid re-reading millions of notes. See **`docs/SLICE_TESTING.md`** (Vault scan cache section) and global CLI flag **`--no-cache`**.
 
 **Why it exists:** The current `build_benchmark_sample` slices the real vault and produces a graph with orphaned wikilinks, missing person cards, and broken thread/message relationships. `_orphan_metrics` measures the damage but doesn't fix it. You can't verify rebuild correctness, test incremental caching, or benchmark search precision against broken data. More fundamentally, a test harness that only checks structure ("zero orphans") without checking behavior ("this query returns these cards in this order") gives false confidence.
 
@@ -322,6 +349,16 @@ This contract is documented in Phase 0's output so that Phase 1 developers know 
 - `verify-incremental` — using synthetic fixtures: full rebuild, mutate 5%, incremental rebuild, assert identical to fresh full rebuild
 - `health-check` — run `ppa health-check` against local index
 
+### Operational logging (required for Phase 0 work)
+
+All stratified slice generation, rebuilds, benchmarks, and CI jobs that run longer than a few minutes **must** follow `.cursor/rules/ppa-long-running-jobs.mdc`:
+
+- **`slice-seed`:** `ppa --log-file logs/….log slice-seed …` (global `--log-file` **before** `slice-seed`). Logs include immediate `start`, walk `total_notes`, read-pass progress with **`eta_remaining`** (`M:SS`), copy progress with `%` and ETA. Smoke / fast feedback: `tests/slice_config.smoke.json`, `make test-slice-smoke` (writes `logs/ppa-slice-smoke.log`), `make test-slice-verify-smoke` for rebuild + health-check on that output.
+- **`rebuild-indexes` / `benchmark` / `embed-pending` / `migrate`:** Use `--log-file` the same way; set `--progress-every` for noisy progress; never rely on stdout for status (stdout is JSON or MCP).
+- **Agents / humans:** Prefer smoke slice + file log before full 5% slice; retain logs for postmortems and CI artifact upload when applicable.
+
+Structured reports (`test-report.json` / `test-report.md`) remain the behavioral contract; stderr + file logs are the **live** visibility layer.
+
 ### CI integration
 
 - **Every push:** `test-unit` (synthetic fixtures, no Postgres, seconds)
@@ -421,9 +458,13 @@ The invariant: **the vault is the source of truth, and the Postgres index is alw
 
 ## Phase 1: Schema & Data Model
 
+**Execution plan:** [`phase_1_execution_plan_f2f5802d.plan.md`](file:///Users/rheeger/.cursor/plans/phase_1_execution_plan_f2f5802d.plan.md)
+
 **What it is:** Every change that affects the shape of data in the vault and Postgres. All code, zero rebuilds.
 
 **Why everything goes in one phase:** Each of these changes would individually require a rebuild. By batching them, the rebuild cost is paid once. Version constants (`MANIFEST_SCHEMA_VERSION`, `INDEX_SCHEMA_VERSION`, `CHUNK_SCHEMA_VERSION`, `PROJECTION_REGISTRY_VERSION`) get bumped so the first rebuild after these changes correctly detects that the entire corpus needs reprocessing.
+
+**Logging:** Schema work is mostly short-lived; any **`ppa migrate`** run that could take more than a few minutes (large DB) should use **`ppa --log-file logs/migrate.log migrate`** (global flag before `migrate`) and structured `ppa.*` output per `.cursor/rules/ppa-long-running-jobs.mdc`.
 
 ### 1a) Temporal spine
 
@@ -664,9 +705,13 @@ _Quality and infrastructure:_
 
 ## Phase 2: Email Extractor Framework + Extractors
 
+**Execution plan:** [`phase_2_execution_plan_50a42c00.plan.md`](file:///Users/rheeger/.cursor/plans/phase_2_execution_plan_50a42c00.plan.md)
+
 **What it is:** The framework and extractors that transform ~461K raw email cards into structured derived cards. Built and validated incrementally — each extractor is developed, run against real data, and verified before moving to the next. Phase 2 and Phase 3 are not strictly sequential; they form a **per-extractor loop**: build extractor → run against vault → inspect output → fix → promote to vault → next extractor.
 
 **Why it's separate from Phase 1:** Phase 1 defines the slots (schemas, projections, edge rules). Phase 2 builds the machines that fill those slots. Keeping them separate means you can validate schemas with synthetic fixtures and the seed slice before worrying about extractor correctness.
+
+**Logging:** `extract-emails` and per-extractor runs must emit **matched/total, yield, errors, throughput, wall time** on stderr via `ppa.*` loggers. Full-vault or long runs: **`ppa --log-file logs/extract-….log extract-emails …`**.
 
 ### Critical constraint: email bodies are plaintext, not HTML
 
@@ -853,9 +898,13 @@ _Vault integrity:_
 
 ## Phase 3: Full Extraction Run + Vault Promotion
 
+**Execution plan:** [`phase_3_execution_plan_49b4bd6d.plan.md`](file:///Users/rheeger/.cursor/plans/phase_3_execution_plan_49b4bd6d.plan.md)
+
 **What it is:** The final production-scale extraction run across the full vault, entity resolution, and validation. By the time this phase starts, all extractors have been individually developed, tested, and run against staging in the Phase 2 loop. Phase 3 is the batch run at full scale.
 
 **Why it's still its own phase:** Individual extractors were run against staging during Phase 2, but the full vault run at scale — all extractors, all ~461K emails, with parallelism — is a distinct operation. Entity resolution across the full derived card set (not just per-extractor batches) may produce different clustering results. And the final vault state needs comprehensive validation before the Phase 4 rebuild.
+
+**Logging:** Same as Phase 2; full-scale **`extract-emails`** and **`resolve-entities`** require **`--log-file`** artifacts for postmortems. Runner metrics (matched, extracted, yield, errors, wall-clock) must remain visible in logs.
 
 **Process:**
 
@@ -904,9 +953,13 @@ _Performance:_
 
 ## Phase 4: ONE Full Rebuild
 
+**Execution plan:** [`phase_4_execution_plan_3156f3e2.plan.md`](file:///Users/rheeger/.cursor/plans/phase_4_execution_plan_3156f3e2.plan.md)
+
 **What it is:** The single expensive rebuild that processes the entire vault — all existing cards with the new schema, all new derived cards, all entity cards.
 
 **Why now:** All schema changes are in (Phase 1). All new cards are written (Phase 3). The rebuild caching system is verified (Phase 0). This is the one time we pay the cost.
+
+**Logging:** Run **`ppa --log-file logs/phase4-rebuild.log rebuild-indexes --force-full --workers N`** (and **`--progress-every`** as needed). Stderr shows rebuild steps `k/6`, materialize/load progress, checkpoint lines; correlate with **`rebuild_checkpoint`** in Postgres. See Phase 0 operational logging and `ppa-long-running-jobs.mdc`.
 
 **Rollback:** Record the current git commit hash before starting. If the rebuild produces bad data, revert code to that commit and rebuild the old schema. The vault (markdown files) is unaffected by rebuilds — only the derived Postgres index changes.
 
@@ -976,9 +1029,13 @@ _Performance:_
 
 ## Phase 5: ONE Full Embedding Pass
 
+**Execution plan:** [`phase_5_embedding_pass_17a0e872.plan.md`](file:///Users/rheeger/.cursor/plans/phase_5_embedding_pass_17a0e872.plan.md)
+
 **What it is:** Compute embeddings for every chunk in the corpus using OpenAI `text-embedding-3-small` (1536 dimensions, matching `DEFAULT_VECTOR_DIMENSION`). All cards now have their final `search_text` and summaries from the Phase 4 rebuild.
 
 **Why now:** If you embed before the schema changes, the embeddings are computed against the old `search_text` (which didn't include item names, routes, restaurant names, etc.). If you embed before the extractors run, you miss thousands of cards entirely. Embedding after the rebuild means every chunk gets the best possible text, and you pay the API cost once.
+
+**Logging:** **`embed-pending`** is rate-limit-bound — use **`ppa --log-file logs/embed-phase5.log embed-pending …`**; log chunks/sec, retries, and API errors on stderr (`ppa.*`).
 
 **Pre-flight:**
 
@@ -1014,9 +1071,13 @@ _Embedding completeness:_
 
 ## Phase 6: LLM Enrichment
 
+**Execution plan:** [`phase_6_llm_enrichment_f286b0bd.plan.md`](file:///Users/rheeger/.cursor/plans/phase_6_llm_enrichment_f286b0bd.plan.md)
+
 **What it is:** The first LLM-based improvement pass across the corpus. Two parallel workstreams — LLM enrichment (summary improvement, entity extraction) and seed-link analysis — running against the fully-indexed, fully-embedded graph. Geocoding is already complete (moved to Phase 4 post-rebuild).
 
 **Why now:** Enrichment needs embeddings (for semantic neighbor analysis in seed-links), needs the full edge graph (to understand relationships), and needs all cards present (to avoid enriching cards that will later get new edges or context). Running earlier would produce lower-quality enrichment against incomplete data, and you'd have to re-run it.
+
+**Logging:** Enrichment and seed-link backfills must log **queue depth, workers, batch progress, spend/budget counters, and errors** to `ppa.*` stderr; overnight or full-corpus runs use **`--log-file`**.
 
 ### LLM enrichment configuration
 
@@ -1071,9 +1132,9 @@ This enables:
 
 **Post-enrichment:**
 
-7. **Incremental re-embedding.** Cards whose summaries or `search_text` changed get re-embedded. This is a small incremental pass (likely a few thousand cards), not a full re-embed.
+1. **Incremental re-embedding.** Cards whose summaries or `search_text` changed get re-embedded. This is a small incremental pass (likely a few thousand cards), not a full re-embed.
 
-8. **Incremental rebuild.** Run incremental rebuild to update the index with enriched card data (new people, orgs, updated summaries).
+2. **Incremental rebuild.** Run incremental rebuild to update the index with enriched card data (new people, orgs, updated summaries).
 
 ### Enrichment report
 
@@ -1141,9 +1202,13 @@ _Operational:_
 
 ## Phase 7: Knowledge Cache Population
 
+**Execution plan:** [`phase_7_execution_plan_b4b2c2ef.plan.md`](file:///Users/rheeger/.cursor/plans/phase_7_execution_plan_b4b2c2ef.plan.md)
+
 **What it is:** Build a structured understanding of the archive owner's life — preferences, habits, patterns, relationships, and context — organized by domain, continuously maintained, and instantly queryable by any agent or MCP consumer. This is not just "cached SQL aggregations." It's a **living profile** derived from the archive that understands the owner from a human perspective.
 
 **Why now:** Knowledge cards aggregate over the full corpus. The aggregations are best after enrichment has improved card quality — better summaries, more complete entity links, richer metadata.
+
+**Logging:** `refresh-knowledge` / domain rebuilds over large facets must log **domain, facet, rows processed, elapsed, ETA (`M:SS` where implemented)** and use **`--log-file`** for long runs.
 
 **Design principles (inspired by the [endaoment-fabric](https://github.com/endaoment/endaoment-fabric) knowledge architecture):**
 
@@ -1345,11 +1410,15 @@ _Quality:_
 
 ## Phase 8: Maintenance Automation + Tool Enhancements
 
+**Execution plan:** [`phase_8_execution_plan_a16ec5dc.plan.md`](file:///Users/rheeger/.cursor/plans/phase_8_execution_plan_a16ec5dc.plan.md)
+
 **What it is:** Two things: (1) bare-minimum maintenance automation that keeps the system current after deployment, and (2) enhanced MCP tool responses with confidence signaling and gap detection so consuming agents get the most out of the retrieval surface.
 
 **What it is NOT:** Phase 8 does not build a query agent (`archive_ask`), discovery/pattern detection, or agent working memory. The PPA is a **retrieval engine, not a conversational agent.** Consuming agents (Claude, GPT-4o, OpenClaw agents, voice assistants) do the reasoning — the PPA retrieves, ranks, and cites. This separation ensures the PPA never interferes with the consuming agent's interpretation.
 
 **Deferred to post-v2:** Discovery mode (pattern detection, observation cards, agent working memory). These are valuable but not critical for v2 — Phase 7's knowledge facets already capture patterns via SQL. Discovery can be added once v2 is deployed and operational patterns are understood from real usage.
+
+**Logging:** `ppa maintain` must log each step (ledger tail, extract, resolve, rebuild, refresh) with **per-step duration and errors** to stderr; cron should append to **`/var/log/ppa-maintain.log`** (or `ppa --log-file` when invoked manually). Implements the same structured rules as other long jobs.
 
 ### Model provider interface
 
@@ -1357,11 +1426,11 @@ Maintenance uses LLM calls for enrichment tasks (summary improvement, entity ext
 
 **Config format:** `PPA_ENRICHMENT_MODEL=provider:model` where provider is:
 
-| Provider | Format | Example | Notes |
-|----------|--------|---------|-------|
-| `openai` | `openai:<model>` | `openai:gpt-4o-mini` | Cloud API, requires `OPENAI_API_KEY` |
-| `ollama` | `ollama:<model>` | `ollama:llama3.2:3b` | Local, free, private. Requires Ollama running on device. |
-| `openclaw` | `openclaw` | `openclaw` | Future: delegates model selection to OpenClaw based on user preference |
+| Provider   | Format           | Example              | Notes                                                                  |
+| ---------- | ---------------- | -------------------- | ---------------------------------------------------------------------- |
+| `openai`   | `openai:<model>` | `openai:gpt-4o-mini` | Cloud API, requires `OPENAI_API_KEY`                                   |
+| `ollama`   | `ollama:<model>` | `ollama:llama3.2:3b` | Local, free, private. Requires Ollama running on device.               |
+| `openclaw` | `openclaw`       | `openclaw`           | Future: delegates model selection to OpenClaw based on user preference |
 
 **Provider interface** (implemented in `archive_mcp/providers/`):
 
@@ -1381,11 +1450,13 @@ Implementations: `OpenAIProvider`, `OllamaProvider`. `OpenClawProvider` is a fut
 Each existing retrieval tool gains two new response fields:
 
 **Confidence signaling:** Every retrieval tool includes a `confidence` field (high/medium/low) in its response:
+
 - `high` — knowledge cache hit (fresh facet), exact match, or >10 relevant results
 - `medium` — partial matches, stale knowledge, 3-10 results
 - `low` — <3 results, no knowledge cache, query hit a known gap pattern
 
-**Gap detection:** When any retrieval tool returns sparse results (<3 cards, or no results for a query that *should* have results based on known card types), it logs an entry in `retrieval_gaps`:
+**Gap detection:** When any retrieval tool returns sparse results (<3 cards, or no results for a query that _should_ have results based on known card types), it logs an entry in `retrieval_gaps`:
+
 - `query_text`: the original query
 - `gap_type`: `no_results`, `sparse_results`, `stale_knowledge`, `type_mismatch`
 - `card_uid`: if the gap relates to a specific card
@@ -1445,6 +1516,7 @@ A single CLI command that sequences existing operations to keep the system curre
 **Error handling:** If any step fails, log the error and continue to the next step. The cycle is not atomic — partial progress is better than no progress. Failed steps are reported in the coverage report. Steps 2-5 are independently idempotent — safe to re-run.
 
 **Scheduling on Arnold:**
+
 ```cron
 # Run maintenance daily at 3am
 0 3 * * * cd /srv/ppa && ppa maintain >> /var/log/ppa-maintain.log 2>&1
@@ -1483,9 +1555,13 @@ _Model provider:_
 
 ## Phase 9: Production Deployment on Arnold
 
+**Execution plan:** [`phase_9_execution_plan_794d5d32.plan.md`](file:///Users/rheeger/.cursor/plans/phase_9_execution_plan_794d5d32.plan.md)
+
 **What it is:** Deploy v2 to Arnold and rebuild the production index directly on the VM. No pgdump/transfer needed — Arnold has the vault (encrypted share) and Postgres already running. The seed stays local as the test corpus and fallback.
 
 **Why it's a separate phase:** All prior phases develop and test locally against the seed vault. This phase runs the v2 code against the full production vault on Arnold for the first time.
+
+**Logging:** On Arnold, run **`rebuild-indexes`**, **`embed-pending`**, and **`migrate`** with **`ppa --log-file`** under e.g. **`/var/log/ppa/`** or `/srv/ppa/logs/` so SSH disconnects do not lose visibility; tail the same files you use for Phase 4/5 locally.
 
 **Current Arnold architecture** (from hey-arnold):
 
@@ -1515,22 +1591,24 @@ The v2 deployment eliminates the pgdump → scp → restore pipeline. Arnold reb
    - `ppa index-status` — card count matches vault file count
    - Test a sample of manifest queries via the MCP server
 8. **Set up maintenance cron:**
+
    ```cron
    # Run maintenance daily at 3am
    0 3 * * * cd /srv/ppa && ppa maintain >> /var/log/ppa-maintain.log 2>&1
    ```
+
 9. **Restart MCP server:** `systemctl restart ppa-mcp`
 
 **The seed stays as fallback:** During the v2 transition, keep the local seed dump available. If Arnold's rebuild fails or produces bad data, restore the pre-v2 index from the seed dump (`scp-restore-seed-arnold.sh`). Once the v2 production index is confirmed working, the seed becomes the test corpus and disaster-recovery backup, not the primary deployment source.
 
 **Post-v2 steady state (no more pgdump/transfer):**
 
-| Scenario | What happens on Arnold |
-|----------|----------------------|
-| Code change (no schema bump) | Git pull → pip install → restart ppa-mcp. `ppa maintain` handles incremental work. |
-| Code change (schema bump) | Git pull → pip install → run migrations → `ppa rebuild-indexes --force-full` → restart ppa-mcp |
-| New data synced to vault | Vault files appear on encrypted share → `ppa maintain` (daily cron) extracts, resolves, rebuilds incrementally, refreshes knowledge |
-| Disaster recovery | Restore from seed dump or latest backup |
+| Scenario                     | What happens on Arnold                                                                                                              |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Code change (no schema bump) | Git pull → pip install → restart ppa-mcp. `ppa maintain` handles incremental work.                                                  |
+| Code change (schema bump)    | Git pull → pip install → run migrations → `ppa rebuild-indexes --force-full` → restart ppa-mcp                                      |
+| New data synced to vault     | Vault files appear on encrypted share → `ppa maintain` (daily cron) extracts, resolves, rebuilds incrementally, refreshes knowledge |
+| Disaster recovery            | Restore from seed dump or latest backup                                                                                             |
 
 ### Postgres tuning for v2
 
@@ -1565,13 +1643,13 @@ The orthanc hfa-secure encrypted share is the canonical production vault. Docume
 
 The MCP server on Arnold serves over SSH tunnel. Latency targets for the v2 index:
 
-| Query Type | Target Latency | Bottleneck |
-|-----------|---------------|-----------|
-| `archive_knowledge` | < 1s | Single row read from knowledge facet |
-| `archive_search` (FTS) | < 2s | GIN index scan |
-| `archive_temporal_neighbors` | < 2s | B-tree index on `(activity_at, uid)` |
-| `archive_hybrid_search` | < 5s | Vector similarity + FTS fusion |
-| `archive_query` (type filter) | < 2s | Projection table scan |
+| Query Type                    | Target Latency | Bottleneck                           |
+| ----------------------------- | -------------- | ------------------------------------ |
+| `archive_knowledge`           | < 1s           | Single row read from knowledge facet |
+| `archive_search` (FTS)        | < 2s           | GIN index scan                       |
+| `archive_temporal_neighbors`  | < 2s           | B-tree index on `(activity_at, uid)` |
+| `archive_hybrid_search`       | < 5s           | Vector similarity + FTS fusion       |
+| `archive_query` (type filter) | < 2s           | Projection table scan                |
 
 If any query exceeds its target, investigate: connection pooling (`PPA_STATEMENT_TIMEOUT_MS`), Postgres GUC tuning, index stats (`ANALYZE`), or SSH tunnel overhead.
 
@@ -1614,20 +1692,20 @@ _Operational:_
 
 ## New MCP Tools & CLI Commands Reference
 
-| Name                         | Type     | Phase | Profile                      | Purpose                                                                                                                                    |
-| ---------------------------- | -------- | ----- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `archive_temporal_neighbors` | MCP tool | 1a    | full, read-only              | Cards near a timestamp via `(activity_at, uid)` keyset pagination + interval overlap                                                       |
-| `archive_knowledge`          | MCP tool | 1i    | full, read-only              | Read/check knowledge cache by domain                                                                                                       |
-| (all existing retrieval tools) | MCP tools | 8a | full, read-only, remote-read | Enhanced with confidence signaling and gap detection. Agent prompt guide in MCP instructions describes routing. |
-| `slice-seed`                 | CLI      | 0     | —                            | Stratified transitive-closure slice from seed vault                                                                                        |
-| `health-check`               | CLI      | 0     | —                            | Structural + behavioral health assertions against any index                                                                                |
-| `benchmark`                  | CLI      | 0     | —                            | Multi-size performance benchmarking with scaling analysis                                                                                  |
-| `temporal-neighbors`         | CLI      | 1a    | —                            | CLI version of temporal neighbors query                                                                                                    |
-| `extract-emails`             | CLI      | 2     | —                            | Run email extractors against vault                                                                                                         |
-| `resolve-entities`           | CLI      | 2c    | —                            | Create/merge PlaceCard and OrgCard files                                                                                                   |
-| `refresh-knowledge`          | CLI      | 7     | —                            | Recompute stale knowledge cards                                                                                                            |
-| `maintain`                   | CLI      | 8b    | —                            | Run maintenance cycle (extraction, entity resolution, incremental rebuild, knowledge refresh)                                              |
-| `deploy`                     | CLI      | 9     | —                            | Deploy index to remote target                                                                                                              |
+| Name                           | Type      | Phase | Profile                      | Purpose                                                                                                         |
+| ------------------------------ | --------- | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `archive_temporal_neighbors`   | MCP tool  | 1a    | full, read-only              | Cards near a timestamp via `(activity_at, uid)` keyset pagination + interval overlap                            |
+| `archive_knowledge`            | MCP tool  | 1i    | full, read-only              | Read/check knowledge cache by domain                                                                            |
+| (all existing retrieval tools) | MCP tools | 8a    | full, read-only, remote-read | Enhanced with confidence signaling and gap detection. Agent prompt guide in MCP instructions describes routing. |
+| `slice-seed`                   | CLI       | 0     | —                            | Stratified transitive-closure slice from seed vault                                                             |
+| `health-check`                 | CLI       | 0     | —                            | Structural + behavioral health assertions against any index                                                     |
+| `benchmark`                    | CLI       | 0     | —                            | Multi-size performance benchmarking with scaling analysis                                                       |
+| `temporal-neighbors`           | CLI       | 1a    | —                            | CLI version of temporal neighbors query                                                                         |
+| `extract-emails`               | CLI       | 2     | —                            | Run email extractors against vault                                                                              |
+| `resolve-entities`             | CLI       | 2c    | —                            | Create/merge PlaceCard and OrgCard files                                                                        |
+| `refresh-knowledge`            | CLI       | 7     | —                            | Recompute stale knowledge cards                                                                                 |
+| `maintain`                     | CLI       | 8b    | —                            | Run maintenance cycle (extraction, entity resolution, incremental rebuild, knowledge refresh)                   |
+| `deploy`                       | CLI       | 9     | —                            | Deploy index to remote target                                                                                   |
 
 ---
 
@@ -1659,15 +1737,15 @@ Phase 0 (test infrastructure + rebuild verification)
 
 ## Risks
 
-| Risk                                                                                                                                                                                                      | Impact                                                                       | Mitigation                                                                                                                                                                                                  | Decision Point                                                                                                                      |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| **Extractor yield rates** — what % of emails from a given sender actually produce parseable derived cards? Some eras may have HTML-only bodies with no extractable text.                                  | Lower-than-expected derived card counts. Some types may have very few cards. | Summary-only fallback in extractors (emit card with whatever data is available). Audit yield rates during Phase 3 staging.                                                                                  | Phase 3: if yield < 10% for a sender, consider dropping that extractor or investing in HTML parsing.                                |
-| **Entity resolution precision** — fuzzy matching may produce false merges (two different "Main Street Pizza" locations merged) or false splits (same restaurant with slightly different name not merged). | Incorrect PlaceCards, misleading analytics.                                  | Use `(name, city)` compound key. Manual override via tags. Audit entity resolution output during Phase 3.                                                                                                   | Phase 3: spot-check entity resolution output. If error rate > 5%, invest in better disambiguation (geocoding, temporal clustering). |
-| **Rebuild time growth** — 37 card types with more projections and edges means the full rebuild takes longer.                                                                                              | Phase 4 rebuild takes longer than expected.                                  | Benchmark against 1% and 5% seed slices to extrapolate full rebuild time. Use scaling curve analysis (Phase 0) to identify superlinear operations early. Checkpoint resume (Phase 0) provides crash safety. | Phase 4: if projected time > 8 hours, consider parallelizing the materialization loop.                                              |
-| **Embedding cost** — more cards with richer `search_text` means more chunks and higher API cost for the full embedding pass.                                                                              | Phase 5 costs more than budgeted.                                            | Estimate chunk count from Phase 4 rebuild metrics before starting. Consider embedding only high-quality cards first (quality_score > 0.3).                                                                  | Phase 5: review chunk count and projected cost before running.                                                                      |
-| **LLM enrichment ROI** — summary improvement may not meaningfully improve retrieval quality for the token cost.                                                                                           | Phase 6 spends tokens without measurable benefit.                            | Budget-gate enrichment. Measure quality score improvement per 1K tokens spent. Stop if ROI drops below threshold.                                                                                           | Phase 6: after first 1K cards, evaluate quality score improvement vs. cost.                                                         |
-| **Seed slice completeness** — the stratified transitive-closure slicer may produce a corpus that's too large (if a few highly-connected cards pull in thousands of references) or miss rare types.        | Test corpus doesn't represent production well enough.                        | Cap cluster size (max 200 cards per seed). Reject seeds that exceed cap and pick alternatives of the same type. Guarantee ≥5 cards per type via stratified seeding.                                         | Phase 0: validate slice size, type coverage, and structure after first run.                                                         |
-| **Arnold disk space** — the v2 index with 37 types, more projections, and embeddings may exceed Arnold's current disk allocation.                                                                         | Deployment fails in Phase 9.                                                 | Estimate v2 index size from Phase 4 rebuild. Plan Docker volume expansion before Phase 9.                                                                                                                   | Phase 9: pre-flight disk check before deploy.                                                                                       |
+| Risk                                                                                                                                                                                                      | Impact                                                                       | Mitigation                                                                                                                                                                                                         | Decision Point                                                                                                                      |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| **Extractor yield rates** — what % of emails from a given sender actually produce parseable derived cards? Some eras may have HTML-only bodies with no extractable text.                                  | Lower-than-expected derived card counts. Some types may have very few cards. | Summary-only fallback in extractors (emit card with whatever data is available). Audit yield rates during Phase 3 staging.                                                                                         | Phase 3: if yield < 10% for a sender, consider dropping that extractor or investing in HTML parsing.                                |
+| **Entity resolution precision** — fuzzy matching may produce false merges (two different "Main Street Pizza" locations merged) or false splits (same restaurant with slightly different name not merged). | Incorrect PlaceCards, misleading analytics.                                  | Use `(name, city)` compound key. Manual override via tags. Audit entity resolution output during Phase 3.                                                                                                          | Phase 3: spot-check entity resolution output. If error rate > 5%, invest in better disambiguation (geocoding, temporal clustering). |
+| **Rebuild time growth** — 37 card types with more projections and edges means the full rebuild takes longer.                                                                                              | Phase 4 rebuild takes longer than expected.                                  | Benchmark against 1% and 5% seed slices to extrapolate full rebuild time. Use scaling curve analysis (Phase 0) to identify superlinear operations early. Checkpoint resume (Phase 0) provides crash safety.        | Phase 4: if projected time > 8 hours, consider parallelizing the materialization loop.                                              |
+| **Embedding cost** — more cards with richer `search_text` means more chunks and higher API cost for the full embedding pass.                                                                              | Phase 5 costs more than budgeted.                                            | Estimate chunk count from Phase 4 rebuild metrics before starting. Consider embedding only high-quality cards first (quality_score > 0.3).                                                                         | Phase 5: review chunk count and projected cost before running.                                                                      |
+| **LLM enrichment ROI** — summary improvement may not meaningfully improve retrieval quality for the token cost.                                                                                           | Phase 6 spends tokens without measurable benefit.                            | Budget-gate enrichment. Measure quality score improvement per 1K tokens spent. Stop if ROI drops below threshold.                                                                                                  | Phase 6: after first 1K cards, evaluate quality score improvement vs. cost.                                                         |
+| **Seed slice completeness** — the stratified transitive-closure slicer may produce a corpus that's too large (if a few highly-connected cards pull in thousands of references) or miss rare types.        | Test corpus doesn't represent production well enough.                        | Cap cluster size (max 200 cards per seed). Reject seeds that exceed cap and pick alternatives of the same type. Guarantee ≥5 cards per type via stratified seeding.                                                | Phase 0: validate slice size, type coverage, and structure after first run.                                                         |
+| **Arnold disk space** — the v2 index with 37 types, more projections, and embeddings may exceed Arnold's current disk allocation.                                                                         | Deployment fails in Phase 9.                                                 | Estimate v2 index size from Phase 4 rebuild. Plan Docker volume expansion before Phase 9.                                                                                                                          | Phase 9: pre-flight disk check before deploy.                                                                                       |
 | **Template versioning maintenance** — email senders change templates regularly. Extractors need ongoing maintenance.                                                                                      | Derived cards stop being produced for newer emails.                          | Template versioning architecture (Phase 2) makes adding new parsers easy. `ppa maintain` (Phase 8b) runs extraction on new emails automatically; yield rate drops will be visible in maintenance coverage reports. | Ongoing: monitor extraction yield per sender per month via maintenance reports.                                                     |
 
 ---
@@ -1720,16 +1798,16 @@ After all v2 phases are complete, **regular operations are fully incremental. Fu
 
 ### Regular operations — all incremental
 
-| Operation                                           | Mechanism                                                                | Rebuild Type |
-| --------------------------------------------------- | ------------------------------------------------------------------------ | :----------: |
-| Gmail sync brings in new emails                     | New vault files → scanner detects → processes only new files             | Incremental  |
-| Running extractors on new emails                    | `ppa extract-emails` writes derived cards → scanner detects              | Incremental  |
-| Entity resolution on new derived cards              | New PlaceCards/OrgCards → scanner detects                                | Incremental  |
-| Editing a person card                               | Scanner detects change → rebuilds person + up to 5,000 referencing cards | Incremental  |
-| LLM enrichment improves summaries                   | Modified frontmatter_hash → scanner detects                              | Incremental  |
-| Knowledge card refresh                              | SQL aggregation + vault write + incremental index                        | Incremental  |
+| Operation                                           | Mechanism                                                                                     | Rebuild Type |
+| --------------------------------------------------- | --------------------------------------------------------------------------------------------- | :----------: |
+| Gmail sync brings in new emails                     | New vault files → scanner detects → processes only new files                                  | Incremental  |
+| Running extractors on new emails                    | `ppa extract-emails` writes derived cards → scanner detects                                   | Incremental  |
+| Entity resolution on new derived cards              | New PlaceCards/OrgCards → scanner detects                                                     | Incremental  |
+| Editing a person card                               | Scanner detects change → rebuilds person + up to 5,000 referencing cards                      | Incremental  |
+| LLM enrichment improves summaries                   | Modified frontmatter_hash → scanner detects                                                   | Incremental  |
+| Knowledge card refresh                              | SQL aggregation + vault write + incremental index                                             | Incremental  |
 | `ppa maintain` cycle                                | Tails ingestion_log, extracts, resolves entities, rebuilds incrementally, refreshes knowledge | Incremental  |
-| Data source refetch (e.g., re-sync a year of Gmail) | Changed/new cards detected by mtime/size                                 | Incremental  |
+| Data source refetch (e.g., re-sync a year of Gmail) | Changed/new cards detected by mtime/size                                                      | Incremental  |
 
 The composite B-tree index on `(activity_at, uid)` is maintained automatically by Postgres on every insert — no post-load pass, no reassignment, no maintenance. New cards are immediately queryable via `temporal_neighbors` without any additional work.
 
@@ -1753,15 +1831,15 @@ The composite B-tree index on `(activity_at, uid)` is maintained automatically b
 
 ## Summary Table
 
-| Phase | What                                                                                                          | Touches Vault | Touches Postgres | Rebuild Cost  | Embed Cost  | LLM Cost  |
-| ----- | ------------------------------------------------------------------------------------------------------------- | :-----------: | :--------------: | :-----------: | :---------: | :-------: |
-| 0     | Test infrastructure + rebuild verification (seed slice, fixtures, health-check, cache fixes, migration infra) |   test only   |    test only     |   test only   |      0      |     0     |
-| 1     | Schema + data model (37 types, temporal spine, infra tables)                                                  |       0       |        0         |       0       |      0      |     0     |
-| 2     | Extractor framework + all extractors                                                                          |       0       |        0         |       0       |      0      |     0     |
-| 3     | Run extractors (vault writes)                                                                                 |    **yes**    |        0         |       0       |      0      |     0     |
-| 4     | **ONE full rebuild**                                                                                          |       0       |     **yes**      |    **1x**     |      0      |     0     |
-| 5     | **ONE full embedding pass**                                                                                   |       0       |     **yes**      |       0       |   **1x**    |     0     |
-| 6     | LLM enrichment                                                                                                |  incremental  |   incremental    |  incremental  | incremental |  **1x**   |
-| 7     | Knowledge cache                                                                                               |  incremental  |   incremental    |       0       |      0      |  partial  |
-| 8     | Maintenance automation + tool enhancements (confidence, gap detection, agent prompt guide)                     |  incremental  |   incremental    |       0       |      0      |     0     |
-| 9     | Secure deployment & remote access                                                                             |       0       |      remote      | **1x remote** |      0      |     0     |
+| Phase | What                                                                                                          | Touches Vault | Touches Postgres | Rebuild Cost  | Embed Cost  | LLM Cost |
+| ----- | ------------------------------------------------------------------------------------------------------------- | :-----------: | :--------------: | :-----------: | :---------: | :------: |
+| 0     | Test infrastructure + rebuild verification (seed slice, fixtures, health-check, cache fixes, migration infra) |   test only   |    test only     |   test only   |      0      |    0     |
+| 1     | Schema + data model (37 types, temporal spine, infra tables)                                                  |       0       |        0         |       0       |      0      |    0     |
+| 2     | Extractor framework + all extractors                                                                          |       0       |        0         |       0       |      0      |    0     |
+| 3     | Run extractors (vault writes)                                                                                 |    **yes**    |        0         |       0       |      0      |    0     |
+| 4     | **ONE full rebuild**                                                                                          |       0       |     **yes**      |    **1x**     |      0      |    0     |
+| 5     | **ONE full embedding pass**                                                                                   |       0       |     **yes**      |       0       |   **1x**    |    0     |
+| 6     | LLM enrichment                                                                                                |  incremental  |   incremental    |  incremental  | incremental |  **1x**  |
+| 7     | Knowledge cache                                                                                               |  incremental  |   incremental    |       0       |      0      | partial  |
+| 8     | Maintenance automation + tool enhancements (confidence, gap detection, agent prompt guide)                    |  incremental  |   incremental    |       0       |      0      |    0     |
+| 9     | Secure deployment & remote access                                                                             |       0       |      remote      | **1x remote** |      0      |    0     |

@@ -9,15 +9,18 @@ import math
 import os
 import resource
 import shutil
+import tempfile
 import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from hfa.vault import ParsedNoteRecord, extract_wikilinks, iter_note_paths, read_note_file
+from hfa.vault import (ParsedNoteRecord, extract_wikilinks, iter_note_paths,
+                       read_note_file)
 
 from .index_store import PostgresArchiveIndex, get_index_dsn
 from .seed_links import compute_link_quality_gate, run_seed_link_backfill
+from .vault_cache import VaultScanCache
 
 DEFAULT_BENCHMARK_SOURCE_VAULT = Path(
     os.environ.get(
@@ -140,7 +143,8 @@ def _select_candidate_paths(
     heaps: dict[str, list[tuple[int, str]]] = defaultdict(list)
     counts_by_top_level: dict[str, int] = defaultdict(int)
 
-    for rel_path in iter_note_paths(source_vault):
+    path_cache = VaultScanCache.build_or_load(source_vault, tier=1, progress_every=0)
+    for rel_path in (Path(p) for p in path_cache.all_rel_paths()):
         top_level = _top_level(rel_path)
         score = _stable_score(rel_path)
         counts_by_top_level[top_level] += 1
@@ -296,7 +300,23 @@ def benchmark_rebuild(
     }
 
 
-def _count_cards_with_nonempty_field(vault: Path, top_level: str, field_name: str) -> int:
+def _count_cards_with_nonempty_field(
+    vault: Path,
+    top_level: str,
+    field_name: str,
+    *,
+    cache: VaultScanCache | None = None,
+) -> int:
+    if cache is not None and cache.tier() >= 1:
+        count = 0
+        for rel_path, fm in cache.all_frontmatters():
+            parts = Path(rel_path).parts
+            if not parts or parts[0] != top_level:
+                continue
+            value = fm.get(field_name)
+            if value not in ("", [], None, 0, False):
+                count += 1
+        return count
     count = 0
     for rel_path in iter_note_paths(vault):
         if not rel_path.parts or rel_path.parts[0] != top_level:
@@ -308,41 +328,108 @@ def _count_cards_with_nonempty_field(vault: Path, top_level: str, field_name: st
     return count
 
 
-def _cleaning_snapshot(vault: Path) -> dict[str, int]:
-    orphan_metrics = _orphan_metrics(vault)
+def _cleaning_snapshot(vault: Path, *, cache: VaultScanCache | None = None) -> dict[str, int]:
+    if cache is None:
+        try:
+            cache = VaultScanCache.build_or_load(vault, tier=2)
+        except Exception:
+            cache = None
+    orphan_metrics = _orphan_metrics(vault, cache=cache)
     return {
         "orphaned_wikilinks": orphan_metrics["orphaned_wikilinks"],
         "repairable_orphaned_wikilinks": orphan_metrics["repairable_orphaned_wikilinks"],
         "sample_omitted_target_orphans": orphan_metrics["sample_omitted_target_orphans"],
-        "email_messages_with_thread": _count_cards_with_nonempty_field(vault, "Email", "thread"),
-        "email_messages_with_people": _count_cards_with_nonempty_field(vault, "Email", "people"),
-        "email_messages_with_calendar_events": _count_cards_with_nonempty_field(vault, "Email", "calendar_events"),
-        "email_messages_with_attachments": _count_cards_with_nonempty_field(vault, "Email", "attachments"),
-        "email_threads_with_messages": _count_cards_with_nonempty_field(vault, "EmailThreads", "messages"),
-        "email_threads_with_people": _count_cards_with_nonempty_field(vault, "EmailThreads", "people"),
-        "email_threads_with_calendar_events": _count_cards_with_nonempty_field(
-            vault, "EmailThreads", "calendar_events"
+        "email_messages_with_thread": _count_cards_with_nonempty_field(vault, "Email", "thread", cache=cache),
+        "email_messages_with_people": _count_cards_with_nonempty_field(vault, "Email", "people", cache=cache),
+        "email_messages_with_calendar_events": _count_cards_with_nonempty_field(
+            vault, "Email", "calendar_events", cache=cache
         ),
-        "imessage_messages_with_thread": _count_cards_with_nonempty_field(vault, "IMessage", "thread"),
-        "imessage_messages_with_people": _count_cards_with_nonempty_field(vault, "IMessage", "people"),
-        "imessage_threads_with_messages": _count_cards_with_nonempty_field(vault, "IMessageThreads", "messages"),
-        "imessage_threads_with_people": _count_cards_with_nonempty_field(vault, "IMessageThreads", "people"),
-        "calendar_events_with_source_messages": _count_cards_with_nonempty_field(vault, "Calendar", "source_messages"),
-        "calendar_events_with_source_threads": _count_cards_with_nonempty_field(vault, "Calendar", "source_threads"),
-        "calendar_events_with_people": _count_cards_with_nonempty_field(vault, "Calendar", "people"),
-        "photos_with_people": _count_cards_with_nonempty_field(vault, "Photos", "people"),
+        "email_messages_with_attachments": _count_cards_with_nonempty_field(vault, "Email", "attachments", cache=cache),
+        "email_threads_with_messages": _count_cards_with_nonempty_field(vault, "EmailThreads", "messages", cache=cache),
+        "email_threads_with_people": _count_cards_with_nonempty_field(vault, "EmailThreads", "people", cache=cache),
+        "email_threads_with_calendar_events": _count_cards_with_nonempty_field(
+            vault, "EmailThreads", "calendar_events", cache=cache
+        ),
+        "imessage_messages_with_thread": _count_cards_with_nonempty_field(vault, "IMessage", "thread", cache=cache),
+        "imessage_messages_with_people": _count_cards_with_nonempty_field(vault, "IMessage", "people", cache=cache),
+        "imessage_threads_with_messages": _count_cards_with_nonempty_field(
+            vault, "IMessageThreads", "messages", cache=cache
+        ),
+        "imessage_threads_with_people": _count_cards_with_nonempty_field(vault, "IMessageThreads", "people", cache=cache),
+        "calendar_events_with_source_messages": _count_cards_with_nonempty_field(
+            vault, "Calendar", "source_messages", cache=cache
+        ),
+        "calendar_events_with_source_threads": _count_cards_with_nonempty_field(
+            vault, "Calendar", "source_threads", cache=cache
+        ),
+        "calendar_events_with_people": _count_cards_with_nonempty_field(vault, "Calendar", "people", cache=cache),
+        "photos_with_people": _count_cards_with_nonempty_field(vault, "Photos", "people", cache=cache),
     }
 
 
-def _orphan_metrics(vault: Path) -> dict[str, int]:
+def _orphan_metrics(vault: Path, *, cache: VaultScanCache | None = None) -> dict[str, int]:
     manifest = _load_benchmark_manifest(vault)
     source_vault_text = str(manifest.get("source_vault", "") or "").strip()
     source_known: set[str] = set()
     if source_vault_text:
         source_vault = Path(source_vault_text)
         if source_vault.exists():
+            # Walk-only (stems); do not open vault scan cache here — it would persist under
+            # source_vault/_meta/ and surprise callers (e.g. slice-seed --no-cache tests).
             source_known = {path.stem for path in iter_note_paths(source_vault)}
+
+    if cache is not None and cache.tier() >= 2:
+        known = cache.all_stems()
+        known_uids = set(cache.uid_to_rel_path().keys())
+        normalized_known = {item.replace(" ", "-").lower() for item in known}
+        total = 0
+        repairable = 0
+        sample_omitted = 0
+        for rel_path, wikilinks in cache.all_wikilinks():
+            fm = cache.frontmatter_for_rel_path(rel_path)
+            for slug in wikilinks:
+                if slug in known or slug in known_uids:
+                    continue
+                total += 1
+                if slug.replace(" ", "-").lower() in normalized_known:
+                    repairable += 1
+                elif source_known and slug in source_known:
+                    sample_omitted += 1
+            for value in fm.values():
+                if isinstance(value, str) and value.startswith("[[") and value.endswith("]]"):
+                    slug = value[2:-2].split("|", 1)[0].strip()
+                    if slug and slug not in known and slug not in known_uids:
+                        total += 1
+                        if slug.replace(" ", "-").lower() in normalized_known:
+                            repairable += 1
+                        elif source_known and slug in source_known:
+                            sample_omitted += 1
+                elif isinstance(value, list):
+                    for item in value:
+                        if isinstance(item, str) and item.startswith("[[") and item.endswith("]]"):
+                            slug = item[2:-2].split("|", 1)[0].strip()
+                            if slug and slug not in known and slug not in known_uids:
+                                total += 1
+                                if slug.replace(" ", "-").lower() in normalized_known:
+                                    repairable += 1
+                                elif source_known and slug in source_known:
+                                    sample_omitted += 1
+        return {
+            "orphaned_wikilinks": total,
+            "repairable_orphaned_wikilinks": repairable,
+            "sample_omitted_target_orphans": sample_omitted,
+        }
+
     known = {path.stem for path in iter_note_paths(vault)}
+    known_uids: set[str] = set()
+    for rel_path in iter_note_paths(vault):
+        try:
+            note = read_note_file(vault / rel_path, vault_root=vault)
+        except FileNotFoundError:
+            continue
+        u = str(note.frontmatter.get("uid", "") or "").strip()
+        if u:
+            known_uids.add(u)
     normalized_known = {item.replace(" ", "-").lower() for item in known}
     total = 0
     repairable = 0
@@ -350,16 +437,17 @@ def _orphan_metrics(vault: Path) -> dict[str, int]:
     for rel_path in iter_note_paths(vault):
         note = read_note_file(vault / rel_path, vault_root=vault)
         for slug in extract_wikilinks(note.body):
-            if slug not in known:
-                total += 1
-                if slug.replace(" ", "-").lower() in normalized_known:
-                    repairable += 1
-                elif source_known and slug in source_known:
-                    sample_omitted += 1
+            if slug in known or slug in known_uids:
+                continue
+            total += 1
+            if slug.replace(" ", "-").lower() in normalized_known:
+                repairable += 1
+            elif source_known and slug in source_known:
+                sample_omitted += 1
         for value in note.frontmatter.values():
             if isinstance(value, str) and value.startswith("[[") and value.endswith("]]"):
                 slug = value[2:-2].split("|", 1)[0].strip()
-                if slug and slug not in known:
+                if slug and slug not in known and slug not in known_uids:
                     total += 1
                     if slug.replace(" ", "-").lower() in normalized_known:
                         repairable += 1
@@ -369,7 +457,7 @@ def _orphan_metrics(vault: Path) -> dict[str, int]:
                 for item in value:
                     if isinstance(item, str) and item.startswith("[[") and item.endswith("]]"):
                         slug = item[2:-2].split("|", 1)[0].strip()
-                        if slug and slug not in known:
+                        if slug and slug not in known and slug not in known_uids:
                             total += 1
                             if slug.replace(" ", "-").lower() in normalized_known:
                                 repairable += 1
@@ -488,3 +576,73 @@ def benchmark_seed_links(
         "max_rss": int(usage.ru_maxrss),
         "pid": os.getpid(),
     }
+
+
+def _analyze_scaling(results: list[dict[str, Any]]) -> dict[str, Any]:
+    flags: list[str] = []
+    if len(results) >= 2:
+        t0 = float(results[0].get("metrics", {}).get("total_seconds", 0) or 0)
+        t1 = float(results[-1].get("metrics", {}).get("total_seconds", 0) or 0)
+        if t0 > 0 and t1 / t0 > 5:
+            flags.append("SUPERLINEAR_WARNING")
+    return {"flags": flags}
+
+
+def benchmark_multi_size(
+    source_vault: Path,
+    sizes: list[float],
+    schema_prefix: str,
+    profile: str = "local-laptop",
+) -> dict[str, Any]:
+    """Run rebuild at multiple slice sizes; include max_rss and scaling hints."""
+    results: list[dict[str, Any]] = []
+    for idx, pct in enumerate(sizes):
+        out = Path(tempfile.mkdtemp(prefix="ppa-bench-"))
+        try:
+            build_benchmark_sample(
+                source_vault=source_vault,
+                output_vault=out,
+                sample_percent=pct,
+                max_notes=50_000,
+            )
+            sch = f"{schema_prefix}_{idx}"
+            br = benchmark_rebuild(vault=out, schema=sch, profile=profile)
+            results.append({"slice_percent": pct, **br})
+        finally:
+            shutil.rmtree(out, ignore_errors=True)
+    prev_path = Path(os.environ.get("PPA_BENCHMARK_PREVIOUS_JSON", "") or "")
+    regression_flags: list[str] = []
+    if prev_path.is_file():
+        try:
+            prev = json.loads(prev_path.read_text(encoding="utf-8"))
+            psec = float(prev.get("metrics", {}).get("total_seconds", 0) or 0)
+            for r in results:
+                csec = float(r.get("metrics", {}).get("total_seconds", 0) or 0)
+                if psec > 0 and csec > psec * 1.15:
+                    regression_flags.append(f"slow_vs_previous:{csec}>{psec}")
+        except (OSError, json.JSONDecodeError):
+            pass
+    return {
+        "results": results,
+        "scaling_analysis": _analyze_scaling(results),
+        "regression_flags": regression_flags,
+    }
+
+
+def benchmark_worker_sweep(
+    vault: Path,
+    schema: str,
+    worker_counts: list[int],
+    profile: str = "local-laptop",
+) -> dict[str, Any]:
+    out: list[dict[str, Any]] = []
+    for w in worker_counts:
+        out.append(
+            benchmark_rebuild(
+                vault=vault,
+                schema=f"{schema}_w{w}",
+                profile=profile,
+                workers=w,
+            )
+        )
+    return {"results": out}

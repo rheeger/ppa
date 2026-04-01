@@ -1,0 +1,13 @@
+{
+  "fts_queries": [],
+  "temporal_queries": [],
+  "graph_queries": [],
+  "structural_invariants": {
+    "zero_orphaned_wikilinks": true,
+    "zero_orphaned_person_refs": true,
+    "all_edge_rules_fire": true,
+    "all_cards_have_summary": true,
+    "all_cards_have_activity_at": true
+  },
+  "card_counts_by_type": {}
+}

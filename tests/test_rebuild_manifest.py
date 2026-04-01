@@ -96,7 +96,7 @@ def test_classify_unchanged_noop() -> None:
     assert counters["unchanged"] == 1
 
 
-def test_classify_person_change_escalates_full() -> None:
+def test_person_change_returns_person_triggered_mode() -> None:
     versions = (8, 4, 1)
     from archive_mcp.index_store import _frontmatter_hash_stable
 
@@ -119,14 +119,91 @@ def test_classify_person_change_escalates_full() -> None:
         projection_registry_version=versions[2],
         index_schema_version=versions[0],
     )
-    mode, _, _, _ = _classify_manifest_rebuild_delta(
+    mode, mat, purge, _ = _classify_manifest_rebuild_delta(
         [row],
         manifest_by_path={"People/x.md": m},
         file_stats={"People/x.md": (1, 1)},
         versions=versions,
         duplicate_uid_count=0,
     )
+    assert mode == "person_triggered"
+    assert "p1" in mat
+
+
+def test_content_hash_detects_body_change_same_mtime(tmp_path: Path) -> None:
+    """With verify_hash, body-only change vs manifest content_hash forces materialize."""
+    from unittest.mock import MagicMock, patch
+
+    from archive_mcp.index_store import _frontmatter_hash_stable
+
+    versions = (8, 4, 1)
+    row = _row("doc/a.md", "u1", "document")
+    m = NoteManifestRow(
+        rel_path="doc/a.md",
+        card_uid="u1",
+        slug="a",
+        content_hash="c" * 64,
+        frontmatter_hash=_frontmatter_hash_stable(row.frontmatter),
+        file_size=10,
+        mtime_ns=1,
+        card_type="document",
+        typed_projection="documents",
+        people_json="[]",
+        orgs_json="[]",
+        scan_version=1,
+        chunk_schema_version=versions[1],
+        projection_registry_version=versions[2],
+        index_schema_version=versions[0],
+    )
+    fake_note = MagicMock()
+    fake_note.body = "different body so hash mismatches manifest"
+    with patch("archive_mcp.scanner.read_note_file", return_value=fake_note):
+        mode, mat, purge, _ = _classify_manifest_rebuild_delta(
+            [row],
+            manifest_by_path={"doc/a.md": m},
+            file_stats={"doc/a.md": (1, 10)},
+            versions=versions,
+            duplicate_uid_count=0,
+            verify_hash=True,
+            vault=tmp_path,
+        )
     assert mode == "full"
+    assert not mat and not purge
+
+
+def test_content_hash_off_by_default_unchanged() -> None:
+    from archive_mcp.index_store import _frontmatter_hash_stable
+
+    versions = (8, 4, 1)
+    row = _row("doc/a.md", "u1", "document")
+    m = NoteManifestRow(
+        rel_path="doc/a.md",
+        card_uid="u1",
+        slug="a",
+        content_hash="wrong_but_ignored",
+        frontmatter_hash=_frontmatter_hash_stable(row.frontmatter),
+        file_size=10,
+        mtime_ns=1,
+        card_type="document",
+        typed_projection="documents",
+        people_json="[]",
+        orgs_json="[]",
+        scan_version=1,
+        chunk_schema_version=versions[1],
+        projection_registry_version=versions[2],
+        index_schema_version=versions[0],
+    )
+    mode, mat, _, counters = _classify_manifest_rebuild_delta(
+        [row],
+        manifest_by_path={"doc/a.md": m},
+        file_stats={"doc/a.md": (1, 10)},
+        versions=versions,
+        duplicate_uid_count=0,
+        verify_hash=False,
+        vault=None,
+    )
+    assert mode == "noop"
+    assert counters.get("unchanged") == 1
 
 
 def test_vault_fingerprint_stable(tmp_path: Path) -> None:

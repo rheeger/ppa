@@ -318,7 +318,13 @@ def _materialize_row(
     for source in card.source:
         batch.add("card_sources", (card.uid, source))
     for person in getattr(card, "people", []):
-        batch.add("card_people", (card.uid, person))
+        ps = str(person).strip()
+        resolved_path = _resolve_person_reference(person_lookup, ps)
+        if resolved_path and resolved_path in path_to_uid:
+            person_key = str(path_to_uid[resolved_path])
+        else:
+            person_key = ps
+        batch.add("card_people", (card.uid, person_key))
     for org in getattr(card, "orgs", []):
         batch.add("card_orgs", (card.uid, org))
     typed_projection = projection_for_card_type(card.type)

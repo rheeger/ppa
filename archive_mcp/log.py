@@ -18,10 +18,20 @@ from __future__ import annotations
 
 import logging
 import sys
+from pathlib import Path
 from typing import Final
 
 _PPA_LOGGER_NAME: Final = "ppa"
 _CONFIGURED = False
+_FILE_HANDLER_PATH: Path | None = None
+
+
+class _FlushingFileHandler(logging.FileHandler):
+    """Flush after each record so long-running jobs show up in ``tail -f`` / editors immediately."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        super().emit(record)
+        self.flush()
 
 
 def configure_logging(verbose: bool = False) -> None:
@@ -40,3 +50,21 @@ def configure_logging(verbose: bool = False) -> None:
     root_ppa.addHandler(handler)
     root_ppa.propagate = False
     _CONFIGURED = True
+
+
+def attach_file_log(path: Path) -> None:
+    """Append duplicate ``ppa.*`` log lines to *path* (same format as stderr).
+
+    Idempotent per path: calling twice with the same path does not add a second handler.
+    Parent directories are created when missing.
+    """
+    global _FILE_HANDLER_PATH
+    path = Path(path).resolve()
+    if _FILE_HANDLER_PATH == path:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    root_ppa = logging.getLogger(_PPA_LOGGER_NAME)
+    handler = _FlushingFileHandler(path, encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s [%(name)s] %(levelname)s %(message)s"))
+    root_ppa.addHandler(handler)
+    _FILE_HANDLER_PATH = path

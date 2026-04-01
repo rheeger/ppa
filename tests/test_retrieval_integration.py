@@ -4,15 +4,12 @@ from __future__ import annotations
 
 import json
 import math
-import socket
-import subprocess
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
-from psycopg import connect
 
 from archive_mcp.benchmark import (
     BENCHMARK_PROFILES,
@@ -32,16 +29,8 @@ from archive_mcp.server import (
     archive_vector_search,
 )
 from hfa.provenance import ProvenanceEntry
-from hfa.schema import (
-    CalendarEventCard,
-    EmailMessageCard,
-    EmailThreadCard,
-    MeetingTranscriptCard,
-    PersonCard,
-)
+from hfa.schema import CalendarEventCard, EmailMessageCard, EmailThreadCard, MeetingTranscriptCard, PersonCard
 from hfa.vault import write_card
-
-PGVECTOR_IMAGE = "pgvector/pgvector:pg14"
 
 
 class SemanticFixtureProvider:
@@ -95,32 +84,6 @@ class SlowSemanticFixtureProvider(SemanticFixtureProvider):
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
         time.sleep(self.delay_seconds)
         return super().embed_texts(texts)
-
-
-def _docker_available() -> bool:
-    try:
-        subprocess.run(["docker", "info"], check=True, capture_output=True, text=True)
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        return False
-    return True
-
-
-def _pick_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
-
-
-def _wait_for_postgres(dsn: str, *, timeout_seconds: float = 45.0) -> None:
-    deadline = time.time() + timeout_seconds
-    while time.time() < deadline:
-        try:
-            with connect(dsn) as conn:
-                conn.execute("SELECT 1")
-            return
-        except Exception:
-            time.sleep(1.0)
-    raise RuntimeError(f"Timed out waiting for Postgres at {dsn}")
 
 
 def _common_provenance(source: str, *fields: str) -> dict[str, ProvenanceEntry]:
@@ -457,47 +420,6 @@ def _seed_live_vault(vault: Path) -> None:
     )
 
 
-@pytest.fixture(scope="session")
-def pgvector_dsn() -> str:
-    if not _docker_available():
-        pytest.skip("Docker is required for live Postgres retrieval tests")
-    container_name = f"ppa-test-{uuid.uuid4().hex[:10]}"
-    port = _pick_port()
-    dsn = f"postgresql://archive:archive@127.0.0.1:{port}/archive"
-    subprocess.run(
-        [
-            "docker",
-            "run",
-            "--rm",
-            "-d",
-            "--name",
-            container_name,
-            "-e",
-            "POSTGRES_USER=archive",
-            "-e",
-            "POSTGRES_PASSWORD=archive",
-            "-e",
-            "POSTGRES_DB=archive",
-            "-p",
-            f"127.0.0.1:{port}:5432",
-            PGVECTOR_IMAGE,
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    try:
-        _wait_for_postgres(dsn)
-        yield dsn
-    finally:
-        subprocess.run(
-            ["docker", "rm", "-f", container_name],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-
-
 @pytest.fixture
 def live_archive(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pgvector_dsn: str
@@ -800,6 +722,7 @@ def test_type_aware_chunk_builder_emits_stable_chunk_types():
     } <= git_message_chunks
 
 
+@pytest.mark.integration
 def test_live_postgres_rebuild_graph_and_lexical_search(live_archive):
     vault, index, _provider = live_archive
     rebuilt = archive_rebuild_indexes()
@@ -820,6 +743,7 @@ def test_live_postgres_rebuild_graph_and_lexical_search(live_archive):
     assert "MeetingTranscripts/board-dinner-transcript.md" in event_graph
 
 
+@pytest.mark.integration
 def test_live_postgres_lexical_candidates_fts_and_exact(live_archive):
     """Exercise _lexical_candidates SQL directly against real Postgres.
 
@@ -844,6 +768,7 @@ def test_live_postgres_lexical_candidates_fts_and_exact(live_archive):
     assert int(exact_jane["slug_exact"]) == 1 or int(exact_jane["person_exact"]) == 1
 
 
+@pytest.mark.integration
 def test_live_postgres_vector_search_groups_to_card_level_and_supports_filters(
     live_archive,
 ):
@@ -875,6 +800,7 @@ def test_live_postgres_vector_search_groups_to_card_level_and_supports_filters(
     assert "Email/board-dinner-thread.md" not in filtered
 
 
+@pytest.mark.integration
 def test_live_postgres_embed_pending_supports_concurrent_claims(live_archive, monkeypatch: pytest.MonkeyPatch):
     _vault, index, _provider = live_archive
     index.rebuild()
@@ -905,6 +831,7 @@ def test_live_postgres_embed_pending_supports_concurrent_claims(live_archive, mo
     assert int(final_status["pending_chunk_count"]) == 0
 
 
+@pytest.mark.integration
 def test_live_postgres_hybrid_search_prefers_exact_anchor_and_boosts_graph_neighbors(
     live_archive,
 ):
@@ -936,6 +863,7 @@ def test_live_postgres_hybrid_search_prefers_exact_anchor_and_boosts_graph_neigh
     assert "provenance_bias=" in hybrid_result
 
 
+@pytest.mark.integration
 def test_benchmark_sample_builder_preserves_notes_and_manifest(tmp_path: Path, live_archive):
     vault, _index, _provider = live_archive
     output_vault = tmp_path / "sample-vault"
@@ -954,6 +882,7 @@ def test_benchmark_sample_builder_preserves_notes_and_manifest(tmp_path: Path, l
     assert copied_notes
 
 
+@pytest.mark.integration
 def test_benchmark_sample_builder_supports_percent_limit(tmp_path: Path, live_archive):
     vault, _index, _provider = live_archive
     output_vault = tmp_path / "sample-vault-percent"
@@ -1033,6 +962,7 @@ def test_benchmark_sample_builder_dedupes_duplicate_uids(tmp_path: Path):
     assert len(copied_notes) == 1
 
 
+@pytest.mark.integration
 def test_benchmark_rebuild_returns_metrics(live_archive):
     vault, index, _provider = live_archive
 
@@ -1052,6 +982,7 @@ def test_benchmark_rebuild_returns_metrics(live_archive):
     assert result["metrics"]["load_seconds"] >= 0
 
 
+@pytest.mark.integration
 def test_benchmark_seed_links_returns_metrics(live_archive, monkeypatch: pytest.MonkeyPatch):
     vault, index, _provider = live_archive
 

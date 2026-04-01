@@ -1,0 +1,8 @@
+{
+  "vault_commit": "",
+  "snapshot_date": "2026-03-31",
+  "seed_uids_by_type": {},
+  "cluster_cap": 200,
+  "min_cards_per_type": 1,
+  "target_percent": 5
+}

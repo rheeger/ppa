@@ -49,9 +49,7 @@ from .chunk_builders import (  # noqa: F401 — re-exported for backward compat
 from .chunking import render_chunks_for_card  # noqa: F401
 from .embedder import EmbedderMixin
 from .explain import projection_explain_payload  # noqa: F401
-from .features import (
-    TIMELINE_FIELDS,  # noqa: F401
-)
+from .features import TIMELINE_FIELDS  # noqa: F401
 from .index_config import (  # noqa: F401 — re-exported for backward compat
     CARD_TYPE_PRIORS,
     CHUNK_SCHEMA_VERSION,
@@ -108,6 +106,7 @@ from .index_config import (  # noqa: F401 — re-exported for backward compat
     get_rebuild_progress_every,
     get_rebuild_resume,
     get_rebuild_staging_mode,
+    get_rebuild_verify_hash,
     get_rebuild_workers,
     get_seed_frozen_enabled,
     get_vector_dimension,
@@ -130,7 +129,7 @@ from .loader import (  # noqa: F401 — re-exported for backward compat
     _sanitize_copy_value,
     get_rebuild_flush_caps,
 )
-from .materializer import (  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat
+from .materializer import (  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat
     EXTERNAL_ID_TARGET_PREFIX,
     _append_edge,
     _body_wikilinks,

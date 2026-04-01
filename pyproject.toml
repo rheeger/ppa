@@ -41,3 +41,9 @@ ignore = ["E501"]
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["archive_mcp*", "hfa*", "archive_sync*", "archive_doctor*", "ppa_google_auth*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: requires a running Postgres instance",
+    "slow: long-running tests (>30 seconds)",
+]

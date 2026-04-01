@@ -9,10 +9,15 @@ from collections.abc import Iterable
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from hfa.schema import BaseCard, validate_card_permissive
-from hfa.vault import iter_note_paths, read_note_file, read_note_frontmatter_file
+
+if TYPE_CHECKING:
+    from .vault_cache import VaultScanCache
+
+from hfa.vault import (iter_note_paths, read_note_file,
+                       read_note_frontmatter_file)
 
 from .index_config import HASH_SUFFIX_RE, SCAN_MANIFEST_VERSION
 from .projections.registry import projection_for_card_type
@@ -182,6 +187,8 @@ def _classify_manifest_rebuild_delta(
     file_stats: dict[str, tuple[int, int]],
     versions: tuple[int, int, int],
     duplicate_uid_count: int,
+    verify_hash: bool = False,
+    vault: Path | None = None,
 ) -> tuple[str, set[str], set[str], dict[str, int]]:
     """Return rebuild_mode, materialize_uids, purge_uids, counters (new/changed/unchanged/deleted)."""
     if duplicate_uid_count > 0:
@@ -227,9 +234,21 @@ def _classify_manifest_rebuild_delta(
             materialize_uids.add(uid)
             counters["changed"] += 1
             continue
+        if verify_hash and vault is not None:
+            try:
+                body = read_note_file(vault / row.rel_path, vault_root=vault).body
+            except OSError:
+                materialize_uids.add(uid)
+                counters["changed"] += 1
+                continue
+            disk_hash = _content_hash(row.frontmatter, body)
+            if disk_hash != m.content_hash:
+                materialize_uids.add(uid)
+                counters["changed"] += 1
+                continue
         counters["unchanged"] += 1
     if any(row.card.type == "person" and str(row.card.uid) in materialize_uids for row in rows):
-        return "full", set(), set(), counters
+        return "person_triggered", materialize_uids, purge_uids, counters
     if not purge_uids and not materialize_uids:
         return "noop", set(), set(), counters
     if len(materialize_uids) >= len(rows) and not purge_uids:
@@ -242,11 +261,16 @@ def _build_manifest_rows_from_canonical(
     vault: Path,
     file_stats: dict[str, tuple[int, int]],
     versions: tuple[int, int, int],
+    *,
+    cache: VaultScanCache | None = None,
 ) -> list[NoteManifestRow]:
     out: list[NoteManifestRow] = []
     for row in rows:
-        body = read_note_file(vault / row.rel_path, vault_root=vault).body
-        ch = _content_hash(row.frontmatter, body)
+        if cache is not None and cache.tier() >= 2:
+            ch = cache.content_hash_for_rel_path(row.rel_path)
+        else:
+            body = read_note_file(vault / row.rel_path, vault_root=vault).body
+            ch = _content_hash(row.frontmatter, body)
         out.append(_note_manifest_row_from_materialized(row, stats=file_stats, content_hash=ch, versions=versions))
     return out
 
@@ -257,48 +281,90 @@ def _collect_canonical_rows(
     workers: int = 1,
     executor_kind: str = "thread",
     progress_every: int = 0,
+    cache: VaultScanCache | None = None,
 ) -> tuple[list[CanonicalRow], dict[str, str], int, list[tuple[Any, ...]], str, dict[str, tuple[int, int]]]:
     from .loader import _log_rebuild_step, _RebuildProgressReporter
 
-    _log_rebuild_step(1, 6, "discover canonical note paths", f"vault={vault}")
-    rel_paths = [rel_path.as_posix() for rel_path in iter_note_paths(vault)]
-    file_stats, vault_fingerprint = _vault_paths_and_fingerprint(vault, rel_paths)
-    _log_rebuild_step(1, 6, "discover canonical note paths complete", f"notes={len(rel_paths)}")
-    scan_reporter = _RebuildProgressReporter(
-        step_number=2,
-        total_steps=6,
-        stage="scan",
-        total_items=len(rel_paths),
-        progress_every=progress_every,
-        started_at=time.time(),
-    )
-    rows_by_uid: dict[str, CanonicalRow] = {}
-    anonymous_rows: list[CanonicalRow] = []
-    slug_map: dict[str, str] = {}
-    duplicate_uid_count = 0
-    duplicate_uid_groups: dict[str, list[CanonicalRow]] = {}
-    for row in _iter_canonical_rows(
-        vault,
-        rel_paths=rel_paths,
-        workers=workers,
-        executor_kind=executor_kind,
-        reporter=scan_reporter,
-    ):
-        uid = str(row.card.uid).strip()
-        if uid:
-            existing = rows_by_uid.get(uid)
-            if existing is None:
-                rows_by_uid[uid] = row
+    if cache is not None and cache.tier() >= 1:
+        _log_rebuild_step(1, 6, "discover canonical note paths", f"vault={vault} (from cache)")
+        rel_paths = cache.all_rel_paths()
+        file_stats = cache.file_stats()
+        vault_fingerprint = cache.vault_fingerprint()
+        _log_rebuild_step(1, 6, "discover canonical note paths complete", f"notes={len(rel_paths)}")
+        scan_reporter = _RebuildProgressReporter(
+            step_number=2,
+            total_steps=6,
+            stage="scan",
+            total_items=len(rel_paths),
+            progress_every=progress_every,
+            started_at=time.time(),
+        )
+        rows_by_uid: dict[str, CanonicalRow] = {}
+        anonymous_rows: list[CanonicalRow] = []
+        slug_map: dict[str, str] = {}
+        duplicate_uid_count = 0
+        duplicate_uid_groups: dict[str, list[CanonicalRow]] = {}
+        for index, rel_path in enumerate(rel_paths, start=1):
+            frontmatter = cache.frontmatter_for_rel_path(rel_path)
+            card = validate_card_permissive(frontmatter)
+            row = CanonicalRow(rel_path=rel_path, frontmatter=frontmatter, card=card)
+            uid = str(row.card.uid).strip()
+            if uid:
+                existing = rows_by_uid.get(uid)
+                if existing is None:
+                    rows_by_uid[uid] = row
+                else:
+                    duplicate_uid_count += 1
+                    group = duplicate_uid_groups.setdefault(uid, [existing])
+                    group.append(row)
+                    preferred = min(group, key=lambda item: _row_sort_key(item.rel_path))
+                    rows_by_uid[uid] = preferred
             else:
-                duplicate_uid_count += 1
-                group = duplicate_uid_groups.setdefault(uid, [existing])
-                group.append(row)
-                preferred = min(group, key=lambda item: _row_sort_key(item.rel_path))
-                rows_by_uid[uid] = preferred
-        else:
-            anonymous_rows.append(row)
-        _register_slug(slug_map, row.rel_path)
-    rows = list(rows_by_uid.values()) + anonymous_rows
+                anonymous_rows.append(row)
+            _register_slug(slug_map, row.rel_path)
+            scan_reporter.update(index)
+        scan_reporter.complete(len(rel_paths))
+        rows = list(rows_by_uid.values()) + anonymous_rows
+    else:
+        _log_rebuild_step(1, 6, "discover canonical note paths", f"vault={vault}")
+        rel_paths = [rel_path.as_posix() for rel_path in iter_note_paths(vault)]
+        file_stats, vault_fingerprint = _vault_paths_and_fingerprint(vault, rel_paths)
+        _log_rebuild_step(1, 6, "discover canonical note paths complete", f"notes={len(rel_paths)}")
+        scan_reporter = _RebuildProgressReporter(
+            step_number=2,
+            total_steps=6,
+            stage="scan",
+            total_items=len(rel_paths),
+            progress_every=progress_every,
+            started_at=time.time(),
+        )
+        rows_by_uid = {}
+        anonymous_rows = []
+        slug_map = {}
+        duplicate_uid_count = 0
+        duplicate_uid_groups = {}
+        for row in _iter_canonical_rows(
+            vault,
+            rel_paths=rel_paths,
+            workers=workers,
+            executor_kind=executor_kind,
+            reporter=scan_reporter,
+        ):
+            uid = str(row.card.uid).strip()
+            if uid:
+                existing = rows_by_uid.get(uid)
+                if existing is None:
+                    rows_by_uid[uid] = row
+                else:
+                    duplicate_uid_count += 1
+                    group = duplicate_uid_groups.setdefault(uid, [existing])
+                    group.append(row)
+                    preferred = min(group, key=lambda item: _row_sort_key(item.rel_path))
+                    rows_by_uid[uid] = preferred
+            else:
+                anonymous_rows.append(row)
+            _register_slug(slug_map, row.rel_path)
+        rows = list(rows_by_uid.values()) + anonymous_rows
     rows.sort(key=lambda item: item.rel_path)
     duplicate_uid_rows: list[tuple[Any, ...]] = []
     for uid, group in duplicate_uid_groups.items():

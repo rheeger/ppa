@@ -10,13 +10,9 @@ import os
 import sys
 from pathlib import Path
 
-from .benchmark import (
-    BENCHMARK_PROFILES,
-    DEFAULT_BENCHMARK_SOURCE_VAULT,
-    benchmark_rebuild,
-    benchmark_seed_links,
-    build_benchmark_sample,
-)
+from .benchmark import (BENCHMARK_PROFILES, DEFAULT_BENCHMARK_SOURCE_VAULT,
+                        benchmark_multi_size, benchmark_rebuild,
+                        benchmark_seed_links, build_benchmark_sample)
 from .commands import admin as admin_cmd
 from .commands import explain
 from .commands import graph as graph_cmd
@@ -110,6 +106,18 @@ _SEED_LINK_COMMANDS = frozenset(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Archive MCP server and index maintenance")
     parser.add_argument("-v", "--verbose", action="store_true", help="DEBUG logging on stderr")
+    parser.add_argument(
+        "--log-file",
+        default="",
+        metavar="PATH",
+        help="Append duplicate ppa.* logs to PATH (same format as stderr; optional retention artifact)",
+    )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        default=False,
+        help="Skip vault scan cache; always read files from disk (slower but guaranteed fresh)",
+    )
     subparsers = parser.add_subparsers(dest="command")
 
     serve_parser = subparsers.add_parser("serve", help="Start MCP server (stdio)")
@@ -218,6 +226,60 @@ def main() -> None:
     seed_bench_parser.add_argument("--modules", default="")
     seed_bench_parser.add_argument("--no-rebuild-first", action="store_true")
 
+    slice_parser = subparsers.add_parser("slice-seed", help="Generate a stratified test slice from a seed vault")
+    slice_parser.add_argument("--config", required=True, help="Path to slice_config.json")
+    slice_parser.add_argument("--output", required=True, help="Output directory for the slice vault")
+    slice_parser.add_argument("--source-vault", default="", help="Source vault (overrides PPA_BENCHMARK_SOURCE_VAULT)")
+    slice_parser.add_argument(
+        "--build-image",
+        action="store_true",
+        help="Build a Docker image containing the slice for CI",
+    )
+    slice_parser.add_argument(
+        "--image-tag",
+        default="",
+        help="Docker image tag (default: ppa-test-slice:<snapshot_date>)",
+    )
+    slice_parser.add_argument(
+        "--progress-every",
+        type=int,
+        default=5000,
+        metavar="N",
+        help="Log scan/copy progress every N notes or files (default: 5000; use 500–2000 for noisy feedback)",
+    )
+    slice_parser.add_argument(
+        "--target-percent",
+        type=float,
+        default=None,
+        metavar="PCT",
+        help="Override slice_config.json target_percent (e.g. 0.5 for a tiny smoke slice)",
+    )
+    slice_parser.add_argument(
+        "--cluster-cap",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Override slice_config.json cluster_cap",
+    )
+
+    health_check_parser = subparsers.add_parser("health-check", help="Structural and behavioral index checks")
+    health_check_parser.add_argument("--dsn", default="", help="Override PPA_INDEX_DSN")
+    health_check_parser.add_argument("--manifest", default="", help="Path to slice_manifest.json")
+    health_check_parser.add_argument("--report-format", choices=["json", "md", "both"], default="both")
+    health_check_parser.add_argument("--report-dir", default=".", help="Directory for report files")
+
+    bench_multi_parser = subparsers.add_parser("benchmark", help="Multi-size performance benchmark")
+    bench_multi_parser.add_argument(
+        "--slice-percent",
+        type=float,
+        action="append",
+        dest="slice_percents",
+        required=True,
+    )
+    bench_multi_parser.add_argument("--output", required=True, help="Output directory for JSON results")
+    bench_multi_parser.add_argument("--profile", default="local-laptop")
+    bench_multi_parser.add_argument("--schema-prefix", default="archive_bench_multi")
+
     migrate_parser = subparsers.add_parser("migrate")
     migrate_parser.add_argument(
         "--dry-run",
@@ -296,6 +358,11 @@ def main() -> None:
         args.tunnel = ""
     # Stderr-only logging for all subcommands; keep stdout for MCP JSON-RPC / CLI JSON. See archive_mcp/log.py.
     configure_logging(verbose=args.verbose)
+    log_file = str(getattr(args, "log_file", "") or "").strip()
+    if log_file:
+        from .log import attach_file_log
+
+        attach_file_log(Path(log_file))
     if args.command == "mcp-config":
         _emit_mcp_config()
         return
@@ -517,6 +584,7 @@ def main() -> None:
     if args.command == "rebuild-indexes":
         try:
             store = resolve_store()
+            store.index._no_cache = bool(getattr(args, "no_cache", False))
             result = admin_cmd.rebuild_indexes(
                 store=store,
                 logger=_cli_log,
@@ -527,6 +595,7 @@ def main() -> None:
                 executor_kind=args.executor_kind,
                 force_full=bool(getattr(args, "force_full_rebuild", False)),
                 disable_manifest_cache=bool(getattr(args, "disable_manifest_cache", False)),
+                no_cache=bool(getattr(args, "no_cache", False)),
             )
             _print_json(result)
         except PpaError as exc:
@@ -766,6 +835,81 @@ def main() -> None:
                 indent=2,
             )
         )
+        return
+    if args.command == "slice-seed":
+        from .test_slice import (build_slice_docker_image, load_slice_config,
+                                 slice_seed_vault)
+
+        cfg = load_slice_config(Path(args.config))
+        if args.target_percent is not None:
+            cfg.target_percent = float(args.target_percent)
+        if args.cluster_cap is not None:
+            cfg.cluster_cap = int(args.cluster_cap)
+        src = Path(args.source_vault or os.environ.get("PPA_BENCHMARK_SOURCE_VAULT", str(DEFAULT_BENCHMARK_SOURCE_VAULT)))
+        out = Path(args.output)
+        res = slice_seed_vault(
+            src,
+            out,
+            cfg,
+            progress_every=int(args.progress_every),
+            no_cache=bool(getattr(args, "no_cache", False)),
+        )
+        tag = str(args.image_tag or "").strip()
+        if not tag:
+            tag = f"ppa-test-slice:{cfg.snapshot_date or 'latest'}"
+        if args.build_image:
+            build_slice_docker_image(out, tag)
+        payload = {
+            "total_source_cards": res.total_source_cards,
+            "selected_card_count": res.selected_card_count,
+            "cards_by_type": res.cards_by_type,
+            "orphaned_wikilinks": res.orphaned_wikilinks,
+            "docker_tag": tag if args.build_image else "",
+        }
+        print(json.dumps(payload, indent=2, default=str))
+        return
+    if args.command == "health-check":
+        from .commands import health_check as health_check_cmd
+        from .index_config import get_index_dsn
+        from .index_store import PostgresArchiveIndex
+
+        dsn = str(args.dsn or get_index_dsn() or "")
+        if not dsn:
+            print("PPA_INDEX_DSN is required", file=sys.stderr)
+            raise SystemExit(1)
+        vault = Path(os.environ.get("PPA_PATH", "."))
+        schema = os.environ.get("PPA_INDEX_SCHEMA", "archive_mcp")
+        index = PostgresArchiveIndex(vault, dsn=dsn)
+        index.schema = schema
+        manifest: dict = {}
+        if args.manifest:
+            manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
+        with index._connect() as conn:
+            structural = health_check_cmd.run_structural_checks(conn, schema, manifest or None)
+        behavioral = None
+        if manifest:
+            behavioral = health_check_cmd.run_behavioral_checks(index, manifest)
+        health_check_cmd.write_reports(
+            structural,
+            behavioral,
+            report_format=args.report_format,
+            report_dir=args.report_dir,
+        )
+        ok = structural.ok if behavioral is None else structural.ok and behavioral.ok
+        raise SystemExit(0 if ok else 1)
+    if args.command == "benchmark":
+        out_dir = Path(args.output)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        src = Path(os.environ.get("PPA_BENCHMARK_SOURCE_VAULT", str(DEFAULT_BENCHMARK_SOURCE_VAULT)))
+        payload = benchmark_multi_size(
+            src,
+            list(args.slice_percents),
+            schema_prefix=str(args.schema_prefix),
+            profile=str(args.profile),
+        )
+        out_path = out_dir / "benchmark-multi.json"
+        out_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+        print(json.dumps({"written": str(out_path)}, indent=2))
         return
     if args.command == "migrate":
         store = resolve_store()

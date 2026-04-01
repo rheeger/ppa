@@ -13,38 +13,28 @@ from .embedding_provider import get_embedding_provider
 from .explain import retrieval_explain_payload, retrieval_explain_payload_v2
 from .features import archive_context, build_context_json, build_context_text
 from .index_config import get_seed_links_enabled
-from .index_store import PostgresArchiveIndex, get_default_embedding_model, get_default_embedding_version
+from .index_store import (PostgresArchiveIndex, get_default_embedding_model,
+                          get_default_embedding_version)
 from .projections.registry import projection_for_card_type
 from .query_planner import build_query_plan, effective_filters_from_plan
 from .reranker import blend_rerank_scores, reranker_for_config
-from .retrieval_pipeline import (
-    PIPELINE_VERSION,
-    HybridFetchInputs,
-    anchor_uids_from_lexical,
-    fuse_and_rank_hybrid,
-    merge_lexical_rows,
-    merge_vector_rows,
-    score_breakdown_for_row,
-)
+from .retrieval_pipeline import (PIPELINE_VERSION, HybridFetchInputs,
+                                 anchor_uids_from_lexical,
+                                 fuse_and_rank_hybrid, merge_lexical_rows,
+                                 merge_vector_rows, score_breakdown_for_row)
 
 _SEED_LINKS_DISABLED = {"error": "Seed links are not enabled. Set PPA_SEED_LINKS_ENABLED=1 to enable."}
 
 
 def _import_seed_links():
-    from .seed_links import (
-        compute_link_quality_gate,
-        get_link_candidate_details,
-        get_seed_scope_rows,
-        get_surface_policy_rows,
-        list_link_candidates,
-        review_link_candidate,
-        run_incremental_link_refresh,
-        run_seed_link_backfill,
-        run_seed_link_enqueue,
-        run_seed_link_promotion_workers,
-        run_seed_link_report,
-        run_seed_link_workers,
-    )
+    from .seed_links import (compute_link_quality_gate,
+                             get_link_candidate_details, get_seed_scope_rows,
+                             get_surface_policy_rows, list_link_candidates,
+                             review_link_candidate,
+                             run_incremental_link_refresh,
+                             run_seed_link_backfill, run_seed_link_enqueue,
+                             run_seed_link_promotion_workers,
+                             run_seed_link_report, run_seed_link_workers)
 
     return {
         "compute_link_quality_gate": compute_link_quality_gate,
@@ -81,6 +71,7 @@ class DefaultArchiveStore(ArchiveStore):
             "executor_kind",
             "force_full",
             "disable_manifest_cache",
+            "no_cache",
         }
         filtered = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
         return self.index.rebuild_with_metrics(**filtered).counts
