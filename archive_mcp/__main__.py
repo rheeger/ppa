@@ -10,9 +10,14 @@ import os
 import sys
 from pathlib import Path
 
-from .benchmark import (BENCHMARK_PROFILES, DEFAULT_BENCHMARK_SOURCE_VAULT,
-                        benchmark_multi_size, benchmark_rebuild,
-                        benchmark_seed_links, build_benchmark_sample)
+from .benchmark import (
+    BENCHMARK_PROFILES,
+    DEFAULT_BENCHMARK_SOURCE_VAULT,
+    benchmark_multi_size,
+    benchmark_rebuild,
+    benchmark_seed_links,
+    build_benchmark_sample,
+)
 from .commands import admin as admin_cmd
 from .commands import explain
 from .commands import graph as graph_cmd
@@ -260,6 +265,13 @@ def main() -> None:
         default=None,
         metavar="N",
         help="Override slice_config.json cluster_cap",
+    )
+    slice_parser.add_argument(
+        "--dangling-rounds",
+        type=int,
+        default=3,
+        metavar="N",
+        help="Resolve dangling wikilinks for up to N rounds after per-seed closure (default: 3)",
     )
 
     health_check_parser = subparsers.add_parser("health-check", help="Structural and behavioral index checks")
@@ -837,8 +849,7 @@ def main() -> None:
         )
         return
     if args.command == "slice-seed":
-        from .test_slice import (build_slice_docker_image, load_slice_config,
-                                 slice_seed_vault)
+        from .test_slice import build_slice_docker_image, load_slice_config, slice_seed_vault
 
         cfg = load_slice_config(Path(args.config))
         if args.target_percent is not None:
@@ -853,6 +864,7 @@ def main() -> None:
             cfg,
             progress_every=int(args.progress_every),
             no_cache=bool(getattr(args, "no_cache", False)),
+            dangling_rounds=int(args.dangling_rounds),
         )
         tag = str(args.image_tag or "").strip()
         if not tag:

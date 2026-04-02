@@ -136,7 +136,7 @@ jobs:
         run: |
           python -m archive_mcp bootstrap-postgres
           python -m archive_mcp rebuild-indexes
-          python -m archive_mcp health-check --manifest tests/slice_manifest.json --report-format both --report-dir /tmp/
+          python -m archive_mcp health-check --manifest tests/slice_manifest_fixture.json --report-format both --report-dir /tmp/
 
   benchmark-nightly:
     runs-on: ubuntu-latest

@@ -132,6 +132,6 @@ def test_incremental_matches_full_after_mutations(
 
     assert snap_incr == snap_full
 
-    manifest = json.loads((Path(__file__).resolve().parent / "slice_manifest.json").read_text(encoding="utf-8"))
+    manifest = json.loads((Path(__file__).resolve().parent / "slice_manifest_fixture.json").read_text(encoding="utf-8"))
     br = run_behavioral_checks(idx, manifest)
     assert br.ok, f"behavioral manifest failed: {br}"

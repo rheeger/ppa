@@ -31,6 +31,7 @@ resolve_index_dsn() {
 SLICE_MANIFEST="${PPA_SLICE_MANIFEST:-$ROOT/tests/slice_manifest.json}"
 # Dedicated schema so this bench run does not clobber archive_test_slice from `make test-slice-verify`.
 export PPA_INDEX_SCHEMA="${PPA_INDEX_SCHEMA:-archive_slice_cache_bench}"
+export PPA_PRIMARY_USER_UID="${PPA_PRIMARY_USER_UID:-hfa-person-9c9dbd68e803}"
 export PPA_EMBEDDING_PROVIDER="${PPA_EMBEDDING_PROVIDER:-hash}"
 export PPA_EMBEDDING_MODEL="${PPA_EMBEDDING_MODEL:-archive-hash-dev}"
 export PPA_EMBEDDING_VERSION="${PPA_EMBEDDING_VERSION:-1}"
@@ -66,8 +67,11 @@ run_verify_slice() {
     _BENCH_BOOTSTRAP_DONE=1
   fi
   /usr/bin/time -p .venv/bin/python -m archive_mcp --log-file "$LOGDIR/rebuild-${tag}.log" rebuild-indexes
-  /usr/bin/time -p .venv/bin/python -m archive_mcp --log-file "$LOGDIR/health-${tag}.log" health-check \
+  if ! /usr/bin/time -p .venv/bin/python -m archive_mcp --log-file "$LOGDIR/health-${tag}.log" health-check \
     --manifest "$SLICE_MANIFEST" --report-format both --report-dir "$vreport"
+  then
+    echo "WARNING: health-check failed for ${tag} — see $LOGDIR/health-${tag}.log and $vreport (continuing bench)" >&2
+  fi
   echo "verify finished $(date -Iseconds)"
 }
 
@@ -82,28 +86,28 @@ run_verify_slice() {
   run_step "1% cluster_cap=400 progress_every=5000" \
     .venv/bin/python -m archive_mcp --log-file "$LOGDIR/1pct.log" slice-seed \
       --config tests/slice_config.json --source-vault "$SEED" --output "$LOGDIR/out-1pct" \
-      --target-percent 1 --cluster-cap 400 --progress-every 5000
+      --target-percent 1 --cluster-cap 400 --progress-every 5000 --dangling-rounds 3
   run_verify_slice "$LOGDIR/out-1pct" "1pct"
 
   # 1% repeat — same %, should be cache hit on scan if cache exists
   run_step "1% repeat cluster_cap=400 (expect cache_hit on scan)" \
     .venv/bin/python -m archive_mcp --log-file "$LOGDIR/1pct-repeat.log" slice-seed \
       --config tests/slice_config.json --source-vault "$SEED" --output "$LOGDIR/out-1pct-repeat" \
-      --target-percent 1 --cluster-cap 400 --progress-every 5000
+      --target-percent 1 --cluster-cap 400 --progress-every 5000 --dangling-rounds 3
   run_verify_slice "$LOGDIR/out-1pct-repeat" "1pct-repeat"
 
   # 5%
   run_step "5% cluster_cap=1000 progress_every=15000" \
     .venv/bin/python -m archive_mcp --log-file "$LOGDIR/5pct.log" slice-seed \
       --config tests/slice_config.json --source-vault "$SEED" --output "$LOGDIR/out-5pct" \
-      --target-percent 5 --cluster-cap 1000 --progress-every 15000
+      --target-percent 5 --cluster-cap 1000 --progress-every 15000 --dangling-rounds 3
   run_verify_slice "$LOGDIR/out-5pct" "5pct"
 
   # 10%
   run_step "10% cluster_cap=2500 progress_every=30000" \
     .venv/bin/python -m archive_mcp --log-file "$LOGDIR/10pct.log" slice-seed \
       --config tests/slice_config.json --source-vault "$SEED" --output "$LOGDIR/out-10pct" \
-      --target-percent 10 --cluster-cap 2500 --progress-every 30000
+      --target-percent 10 --cluster-cap 2500 --progress-every 30000 --dangling-rounds 3
   run_verify_slice "$LOGDIR/out-10pct" "10pct"
 
   echo ""

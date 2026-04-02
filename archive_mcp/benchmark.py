@@ -15,8 +15,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from hfa.vault import (ParsedNoteRecord, extract_wikilinks, iter_note_paths,
-                       read_note_file)
+from hfa.vault import ParsedNoteRecord, extract_wikilinks, iter_note_paths, read_note_file
 
 from .index_store import PostgresArchiveIndex, get_index_dsn
 from .seed_links import compute_link_quality_gate, run_seed_link_backfill
@@ -367,6 +366,78 @@ def _cleaning_snapshot(vault: Path, *, cache: VaultScanCache | None = None) -> d
     }
 
 
+def _normalized_reference_targets(frontmatter: dict[str, Any], rel_path: str) -> set[str]:
+    targets = {Path(rel_path).stem}
+    summary = str(frontmatter.get("summary", "") or "").strip()
+    if summary:
+        targets.add(summary)
+    if str(frontmatter.get("type", "") or "") == "person":
+        for alias in frontmatter.get("aliases", []) or []:
+            alias_text = str(alias).strip()
+            if alias_text:
+                targets.add(alias_text)
+        for email in frontmatter.get("emails", []) or []:
+            email_text = str(email).strip()
+            if email_text:
+                targets.add(email_text)
+    return {item.replace(" ", "-").lower() for item in targets if item}
+
+
+def _is_known_reference(slug: str, *, known: set[str], known_uids: set[str], normalized_known: set[str]) -> bool:
+    if slug in known or slug in known_uids:
+        return True
+    return slug.replace(" ", "-").lower() in normalized_known
+
+
+def _orphan_metrics_from_frontmatters(
+    rel_by_uid: dict[str, Path],
+    frontmatter_by_uid: dict[str, dict[str, Any]],
+) -> dict[str, int]:
+    """Compute orphan counts purely from in-memory frontmatter dicts (no disk I/O).
+
+    Body wikilinks are not checked — only frontmatter relationship fields.
+    This is the fast path used when the slicer already has all frontmatters loaded.
+    """
+    known: set[str] = set()
+    known_uids: set[str] = set(rel_by_uid.keys())
+    normalized_known: set[str] = set()
+    for uid, rel in rel_by_uid.items():
+        stem = rel.stem.strip()
+        if stem:
+            known.add(stem)
+            normalized_known.add(stem.replace(" ", "-").lower())
+    for uid, fm in frontmatter_by_uid.items():
+        if uid not in rel_by_uid:
+            continue
+        rel_path = rel_by_uid[uid].as_posix()
+        normalized_known |= _normalized_reference_targets(fm, rel_path)
+
+    total = 0
+    for uid, fm in frontmatter_by_uid.items():
+        if uid not in rel_by_uid:
+            continue
+        for value in fm.values():
+            if isinstance(value, str) and value.startswith("[[") and value.endswith("]]"):
+                slug = value[2:-2].split("|", 1)[0].strip()
+                if slug and not _is_known_reference(
+                    slug, known=known, known_uids=known_uids, normalized_known=normalized_known
+                ):
+                    total += 1
+            elif isinstance(value, list):
+                for item in value:
+                    if isinstance(item, str) and item.startswith("[[") and item.endswith("]]"):
+                        slug = item[2:-2].split("|", 1)[0].strip()
+                        if slug and not _is_known_reference(
+                            slug, known=known, known_uids=known_uids, normalized_known=normalized_known
+                        ):
+                            total += 1
+    return {
+        "orphaned_wikilinks": total,
+        "repairable_orphaned_wikilinks": 0,
+        "sample_omitted_target_orphans": 0,
+    }
+
+
 def _orphan_metrics(vault: Path, *, cache: VaultScanCache | None = None) -> dict[str, int]:
     manifest = _load_benchmark_manifest(vault)
     source_vault_text = str(manifest.get("source_vault", "") or "").strip()
@@ -382,37 +453,37 @@ def _orphan_metrics(vault: Path, *, cache: VaultScanCache | None = None) -> dict
         known = cache.all_stems()
         known_uids = set(cache.uid_to_rel_path().keys())
         normalized_known = {item.replace(" ", "-").lower() for item in known}
+        for rel_path, frontmatter in cache.all_frontmatters():
+            normalized_known |= _normalized_reference_targets(frontmatter, rel_path)
         total = 0
         repairable = 0
         sample_omitted = 0
         for rel_path, wikilinks in cache.all_wikilinks():
             fm = cache.frontmatter_for_rel_path(rel_path)
             for slug in wikilinks:
-                if slug in known or slug in known_uids:
+                if _is_known_reference(slug, known=known, known_uids=known_uids, normalized_known=normalized_known):
                     continue
                 total += 1
-                if slug.replace(" ", "-").lower() in normalized_known:
-                    repairable += 1
-                elif source_known and slug in source_known:
+                if source_known and slug in source_known:
                     sample_omitted += 1
             for value in fm.values():
                 if isinstance(value, str) and value.startswith("[[") and value.endswith("]]"):
                     slug = value[2:-2].split("|", 1)[0].strip()
-                    if slug and slug not in known and slug not in known_uids:
+                    if slug and not _is_known_reference(
+                        slug, known=known, known_uids=known_uids, normalized_known=normalized_known
+                    ):
                         total += 1
-                        if slug.replace(" ", "-").lower() in normalized_known:
-                            repairable += 1
-                        elif source_known and slug in source_known:
+                        if source_known and slug in source_known:
                             sample_omitted += 1
                 elif isinstance(value, list):
                     for item in value:
                         if isinstance(item, str) and item.startswith("[[") and item.endswith("]]"):
                             slug = item[2:-2].split("|", 1)[0].strip()
-                            if slug and slug not in known and slug not in known_uids:
+                            if slug and not _is_known_reference(
+                                slug, known=known, known_uids=known_uids, normalized_known=normalized_known
+                            ):
                                 total += 1
-                                if slug.replace(" ", "-").lower() in normalized_known:
-                                    repairable += 1
-                                elif source_known and slug in source_known:
+                                if source_known and slug in source_known:
                                     sample_omitted += 1
         return {
             "orphaned_wikilinks": total,
@@ -422,6 +493,7 @@ def _orphan_metrics(vault: Path, *, cache: VaultScanCache | None = None) -> dict
 
     known = {path.stem for path in iter_note_paths(vault)}
     known_uids: set[str] = set()
+    normalized_known = {item.replace(" ", "-").lower() for item in known}
     for rel_path in iter_note_paths(vault):
         try:
             note = read_note_file(vault / rel_path, vault_root=vault)
@@ -430,38 +502,36 @@ def _orphan_metrics(vault: Path, *, cache: VaultScanCache | None = None) -> dict
         u = str(note.frontmatter.get("uid", "") or "").strip()
         if u:
             known_uids.add(u)
-    normalized_known = {item.replace(" ", "-").lower() for item in known}
+        normalized_known |= _normalized_reference_targets(dict(note.frontmatter), rel_path.as_posix())
     total = 0
     repairable = 0
     sample_omitted = 0
     for rel_path in iter_note_paths(vault):
         note = read_note_file(vault / rel_path, vault_root=vault)
         for slug in extract_wikilinks(note.body):
-            if slug in known or slug in known_uids:
+            if _is_known_reference(slug, known=known, known_uids=known_uids, normalized_known=normalized_known):
                 continue
             total += 1
-            if slug.replace(" ", "-").lower() in normalized_known:
-                repairable += 1
-            elif source_known and slug in source_known:
+            if source_known and slug in source_known:
                 sample_omitted += 1
         for value in note.frontmatter.values():
             if isinstance(value, str) and value.startswith("[[") and value.endswith("]]"):
                 slug = value[2:-2].split("|", 1)[0].strip()
-                if slug and slug not in known and slug not in known_uids:
+                if slug and not _is_known_reference(
+                    slug, known=known, known_uids=known_uids, normalized_known=normalized_known
+                ):
                     total += 1
-                    if slug.replace(" ", "-").lower() in normalized_known:
-                        repairable += 1
-                    elif source_known and slug in source_known:
+                    if source_known and slug in source_known:
                         sample_omitted += 1
             elif isinstance(value, list):
                 for item in value:
                     if isinstance(item, str) and item.startswith("[[") and item.endswith("]]"):
                         slug = item[2:-2].split("|", 1)[0].strip()
-                        if slug and slug not in known and slug not in known_uids:
+                        if slug and not _is_known_reference(
+                            slug, known=known, known_uids=known_uids, normalized_known=normalized_known
+                        ):
                             total += 1
-                            if slug.replace(" ", "-").lower() in normalized_known:
-                                repairable += 1
-                            elif source_known and slug in source_known:
+                            if source_known and slug in source_known:
                                 sample_omitted += 1
     return {
         "orphaned_wikilinks": total,

@@ -8,11 +8,10 @@ import stat
 from pathlib import Path
 
 import pytest
-from archive_mcp.scanner import (_build_manifest_rows_from_canonical,
-                                 _collect_canonical_rows)
+
+from archive_mcp.scanner import _build_manifest_rows_from_canonical, _collect_canonical_rows
 from archive_mcp.test_slice import SliceConfig, slice_seed_vault
-from archive_mcp.vault_cache import (CACHE_FILENAME, VaultScanCache,
-                                     _compute_vault_fingerprint)
+from archive_mcp.vault_cache import CACHE_FILENAME, VaultScanCache, _compute_vault_fingerprint
 from hfa.vault import iter_note_paths, read_note_frontmatter_file
 from tests.fixtures import load_fixture_vault
 
@@ -165,8 +164,7 @@ def test_slice_seed_no_cache(tmp_path: Path) -> None:
 
 @pytest.mark.integration
 def test_build_manifest_with_tier2_cache(tmp_path: Path) -> None:
-    from archive_mcp.index_config import (CHUNK_SCHEMA_VERSION,
-                                          INDEX_SCHEMA_VERSION)
+    from archive_mcp.index_config import CHUNK_SCHEMA_VERSION, INDEX_SCHEMA_VERSION
     from archive_mcp.projections.registry import PROJECTION_REGISTRY_VERSION
 
     vault = load_fixture_vault(tmp_path / "vault", include_graphs=True)

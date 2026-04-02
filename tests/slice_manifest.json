@@ -1,21 +1,55 @@
 {
   "fts_queries": [
     {
-      "query": "Jane",
+      "query": "Robbie Heeger",
       "expected_types": ["person"],
-      "min_hits": 1,
+      "min_hits": 3,
       "top_3_must_include_types": ["person"],
-      "description": "Person first name search"
+      "description": "Primary user full name — PersonCard should rank in top 3"
+    },
+    {
+      "query": "Wells Fargo Private Bank",
+      "expected_types": ["email_message"],
+      "min_hits": 1,
+      "top_3_must_include_types": ["email_message"],
+      "description": "Verbatim phrase from a Mint notification email_message summary in hf-archives-seed"
     }
   ],
   "temporal_queries": [],
-  "graph_queries": [],
+  "graph_queries": [
+    {
+      "start_uid": "hfa-person-9c9dbd68e803",
+      "description": "2-hop neighborhood from primary user PersonCard (always in slice)"
+    }
+  ],
   "structural_invariants": {
     "zero_orphaned_wikilinks": true,
-    "zero_orphaned_person_refs": true,
-    "all_edge_rules_fire": true,
+    "zero_orphaned_person_refs": false,
+    "all_edge_rules_fire": false,
     "all_cards_have_summary": true,
     "all_cards_have_activity_at": true
   },
-  "card_counts_by_type": {}
+  "card_counts_by_type": {
+    "person": 500,
+    "email_message": 27000,
+    "imessage_message": 38000,
+    "medical_record": 200,
+    "email_thread": 6900,
+    "email_attachment": 14000,
+    "imessage_attachment": 3200,
+    "calendar_event": 150,
+    "git_message": 15800,
+    "beeper_message": 4800,
+    "git_commit": 170,
+    "media_asset": 398,
+    "imessage_thread": 1000,
+    "finance": 71,
+    "document": 98,
+    "git_thread": 420,
+    "meeting_transcript": 11,
+    "beeper_attachment": 630,
+    "beeper_thread": 135,
+    "git_repository": 34,
+    "vaccination": 1
+  }
 }

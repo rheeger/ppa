@@ -13,8 +13,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from hfa.schema import validate_card_permissive
-from hfa.vault import (extract_wikilinks, iter_note_paths, read_note_file,
-                       read_note_frontmatter_file)
+from hfa.vault import extract_wikilinks, iter_note_paths, read_note_file, read_note_frontmatter_file
 
 logger = logging.getLogger("ppa.vault_cache")
 
@@ -439,6 +438,86 @@ class VaultScanCache:
 
     def all_rel_paths(self) -> list[str]:
         return [str(r[0]) for r in self._conn.execute("SELECT rel_path FROM notes ORDER BY rel_path").fetchall()]
+
+    def slice_lookup_tables(
+        self,
+        *,
+        progress_every: int = 100_000,
+    ) -> tuple[
+        dict[str, list[str]],   # by_type: card_type → [rel_path, ...]
+        dict[str, str],         # rel_by_uid: uid → rel_path
+        dict[str, str],         # uid_by_path: rel_path → uid
+        dict[str, str],         # uid_by_stem: stem/summary/alias → uid
+        dict[str, dict[str, Any]],  # frontmatter_by_uid: uid → parsed frontmatter dict
+    ]:
+        """Build all lookup tables for slice-seed in a single cursor pass.
+
+        Returns string-typed paths (not Path objects) for speed — callers
+        wrap in Path() only when needed for filesystem ops.
+        """
+        by_type: dict[str, list[str]] = {}
+        rel_by_uid: dict[str, str] = {}
+        uid_by_path: dict[str, str] = {}
+        uid_by_stem: dict[str, str] = {}
+        frontmatter_by_uid: dict[str, dict[str, Any]] = {}
+
+        cursor = self._conn.execute(
+            "SELECT uid, rel_path, card_type, frontmatter_json FROM notes WHERE uid != ''"
+        )
+        count = 0
+        t0 = time.monotonic()
+        for uid_raw, rp_raw, ct_raw, fj_raw in cursor:
+            uid = str(uid_raw)
+            rp = str(rp_raw)
+            ct = str(ct_raw)
+            count += 1
+
+            rel_by_uid[uid] = rp
+            uid_by_path[rp] = uid
+
+            if ct:
+                by_type.setdefault(ct, []).append(rp)
+
+            stem = Path(rp).stem.strip()
+            if stem:
+                uid_by_stem.setdefault(stem, uid)
+                norm = stem.replace(" ", "-").lower()
+                uid_by_stem.setdefault(norm, uid)
+
+            fm: dict[str, Any] = {}
+            if fj_raw:
+                fm = json.loads(fj_raw)
+                frontmatter_by_uid[uid] = fm
+
+            summary = str(fm.get("summary", "") or "").strip()
+            if summary:
+                uid_by_stem.setdefault(summary, uid)
+                uid_by_stem.setdefault(summary.replace(" ", "-").lower(), uid)
+
+            if ct == "person":
+                for alias in fm.get("aliases", []) or []:
+                    alias_text = str(alias).strip()
+                    if alias_text:
+                        uid_by_stem.setdefault(alias_text, uid)
+                        uid_by_stem.setdefault(alias_text.replace(" ", "-").lower(), uid)
+                for email in fm.get("emails", []) or []:
+                    email_text = str(email).strip()
+                    if email_text:
+                        uid_by_stem.setdefault(email_text, uid)
+
+            if progress_every > 0 and count % progress_every == 0:
+                elapsed = time.monotonic() - t0
+                logger.info(
+                    "vault-cache slice_lookup rows=%d elapsed=%.1fs rate=%.0f/s",
+                    count, elapsed, count / elapsed if elapsed > 0 else 0,
+                )
+
+        elapsed = time.monotonic() - t0
+        logger.info(
+            "vault-cache slice_lookup_complete rows=%d uid_by_stem=%d frontmatters=%d elapsed=%.1fs",
+            count, len(uid_by_stem), len(frontmatter_by_uid), elapsed,
+        )
+        return by_type, rel_by_uid, uid_by_path, uid_by_stem, frontmatter_by_uid
 
     def body_for_rel_path(self, rel_path: str) -> str:
         row = self._conn.execute(

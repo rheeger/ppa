@@ -19,7 +19,8 @@ structurally complete subset of the real seed vault for integration and behavior
   "seed_uids_by_type": {},
   "cluster_cap": 200,
   "min_cards_per_type": 1,
-  "target_percent": 5
+  "target_percent": 5,
+  "primary_user_uid": "hfa-person-9c9dbd68e803"
 }
 ```
 
@@ -28,13 +29,15 @@ structurally complete subset of the real seed vault for integration and behavior
 - **`min_cards_per_type`** — guarantee at least this many cards of every type.
 - **`seed_uids_by_type`** — optional: pin specific UIDs per type for reproducibility across re-forks.
 - **`vault_commit` / `snapshot_date`** — metadata for provenance tracking.
+- **`primary_user_uid`** — optional PersonCard UID always included as an anchor (overridable with `PPA_PRIMARY_USER_UID`).
 
 ## Behavioral manifests
 
-| File                              | Purpose                                                                                                        |
-| --------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `tests/slice_manifest.json`       | FTS queries, temporal queries, graph queries, structural invariants, card counts (used by `test-slice-verify`) |
-| `tests/slice_manifest.smoke.json` | Structural invariants only, no FTS queries (used by `test-slice-verify-smoke`)                                 |
+| File                                | Purpose                                                                                                    |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `tests/slice_manifest.json`         | Full behavioral + structural checks against a **real** seed slice (`make test-slice-verify`, bench verify) |
+| `tests/slice_manifest.smoke.json`   | Lighter behavioral + structural checks for `make test-slice-verify-smoke`                                  |
+| `tests/slice_manifest_fixture.json` | Queries grounded in `tests/fixtures` — CI `slice-verify` job and `test_rebuild_incremental`                |
 
 Health-check reads the manifest and asserts every check passes after a rebuild.
 

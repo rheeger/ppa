@@ -16,8 +16,7 @@ from hfa.schema import BaseCard, validate_card_permissive
 if TYPE_CHECKING:
     from .vault_cache import VaultScanCache
 
-from hfa.vault import (iter_note_paths, read_note_file,
-                       read_note_frontmatter_file)
+from hfa.vault import iter_note_paths, read_note_file, read_note_frontmatter_file
 
 from .index_config import HASH_SUFFIX_RE, SCAN_MANIFEST_VERSION
 from .projections.registry import projection_for_card_type

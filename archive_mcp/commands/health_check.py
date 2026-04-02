@@ -25,6 +25,7 @@ class StructuralReport:
 class FTSQueryResult:
     query: str
     expected_types: list[str]
+    top_3_must_include_types: list[str]
     min_hits: int
     actual_hits: int
     actual_types_in_top_3: list[str]
@@ -76,6 +77,109 @@ def run_structural_checks(conn: Any, schema: str, manifest: dict[str, Any] | Non
                         {"check": "card_count_by_type", "type": str(t), "detail": f"count {by_type.get(t, 0)} < {min_count}"}
                     )
 
+    invariants = manifest.get("structural_invariants", {}) if manifest else {}
+    if invariants.get("zero_orphaned_wikilinks"):
+        orphan_rows = conn.execute(
+            f"""
+            SELECT e.source_uid, e.target_slug
+            FROM {schema}.edges e
+            WHERE e.edge_type = 'wikilink'
+              AND e.target_uid = ''
+              AND NOT EXISTS (
+                  SELECT 1 FROM {schema}.cards c WHERE c.slug = e.target_slug
+              )
+            """
+        ).fetchall()
+        report.orphan_count = len(orphan_rows)
+        if report.orphan_count > 0:
+            report.ok = False
+            report.orphan_details = [
+                {
+                    "source_uid": str(row["source_uid"] if isinstance(row, dict) else row[0]),
+                    "target_slug": str(row["target_slug"] if isinstance(row, dict) else row[1]),
+                }
+                for row in orphan_rows[:50]
+            ]
+
+    if invariants.get("zero_orphaned_person_refs"):
+        orphan_people = conn.execute(
+            f"""
+            SELECT cp.person, cp.card_uid
+            FROM {schema}.card_people cp
+            WHERE NOT EXISTS (
+                SELECT 1 FROM {schema}.cards c
+                WHERE c.type = 'person'
+                  AND (
+                      c.uid = cp.person OR
+                      c.slug = REPLACE(REPLACE(cp.person, '[[', ''), ']]', '')
+                  )
+            )
+            """
+        ).fetchall()
+        if orphan_people:
+            report.ok = False
+            report.missing_field_entries.append(
+                {
+                    "check": "orphaned_person_refs",
+                    "detail": f"{len(orphan_people)} person references without PersonCards",
+                }
+            )
+
+    if invariants.get("all_edge_rules_fire"):
+        from ..projections.registry import EDGE_RULE_SPECS
+
+        for spec in EDGE_RULE_SPECS:
+            type_count = by_type.get(spec.card_type, 0)
+            if type_count == 0:
+                continue
+            for edge_type in spec.derived_edge_types:
+                if edge_type == "wikilink":
+                    continue
+                count_row = conn.execute(
+                    f"SELECT COUNT(*) FROM {schema}.edges WHERE edge_type = %s",
+                    (edge_type,),
+                ).fetchone()
+                count = int(count_row[0] if not isinstance(count_row, dict) else next(iter(count_row.values())))
+                report.edge_counts_by_rule[edge_type] = count
+                if count == 0:
+                    report.ok = False
+                    report.missing_field_entries.append(
+                        {
+                            "check": "edge_rule_zero",
+                            "type": spec.card_type,
+                            "edge_type": edge_type,
+                            "detail": f"0 edges for {edge_type} (card type {spec.card_type} has {type_count} cards)",
+                        }
+                    )
+
+    if invariants.get("all_cards_have_summary"):
+        empty_summary = conn.execute(
+            f"SELECT COUNT(*) FROM {schema}.cards WHERE summary IS NULL OR summary = ''"
+        ).fetchone()
+        empty_summary_count = int(empty_summary[0] if not isinstance(empty_summary, dict) else next(iter(empty_summary.values())))
+        if empty_summary_count > 0:
+            report.ok = False
+            report.missing_field_entries.append(
+                {
+                    "check": "cards_missing_summary",
+                    "detail": f"{empty_summary_count} cards with empty summary",
+                }
+            )
+
+    if invariants.get("all_cards_have_activity_at"):
+        null_activity = conn.execute(
+            f"SELECT COUNT(*) FROM {schema}.cards WHERE activity_at IS NULL OR activity_at = ''"
+        ).fetchone()
+        null_activity_count = int(null_activity[0] if not isinstance(null_activity, dict) else next(iter(null_activity.values())))
+        if null_activity_count > 0:
+            report.ok = False
+            report.missing_field_entries.append(
+                {
+                    "check": "cards_missing_activity_at",
+                    "detail": f"{null_activity_count} cards with null/empty activity_at",
+                }
+            )
+
     return report
 
 
@@ -85,6 +189,7 @@ def run_behavioral_checks(index: Any, manifest: dict[str, Any]) -> BehavioralRep
     for entry in manifest.get("fts_queries", []) or []:
         query = str(entry.get("query", ""))
         expected_types = list(entry.get("expected_types", []) or [])
+        top_3_must_include_types = list(entry.get("top_3_must_include_types", []) or expected_types)
         min_hits = int(entry.get("min_hits", 1))
         try:
             rows = index.search(query, limit=20)
@@ -98,11 +203,12 @@ def run_behavioral_checks(index: Any, manifest: dict[str, Any]) -> BehavioralRep
         precision = (relevant / total) if total else 0.0
         exp_rel = min(min_hits, max(len(expected_types), 1))
         recall = (relevant / exp_rel) if exp_rel else 0.0
-        passed = len(rows) >= min_hits and any(t in expected_types for t in types[:3])
+        passed = len(rows) >= min_hits and any(t in top_3_must_include_types for t in types[:3])
         report.fts_results.append(
             FTSQueryResult(
                 query=query,
                 expected_types=expected_types,
+                top_3_must_include_types=top_3_must_include_types,
                 min_hits=min_hits,
                 actual_hits=len(rows),
                 actual_types_in_top_3=top3,
@@ -137,8 +243,11 @@ def generate_json_report(structural: StructuralReport, behavioral: BehavioralRep
         "structural": {
             "ok": structural.ok,
             "orphan_count": structural.orphan_count,
+            "orphan_details": structural.orphan_details,
             "duplicate_uids": structural.duplicate_uids,
             "card_counts": structural.card_counts,
+            "edge_counts_by_rule": structural.edge_counts_by_rule,
+            "missing_field_entries": structural.missing_field_entries,
         }
     }
     if behavioral:
@@ -147,26 +256,44 @@ def generate_json_report(structural: StructuralReport, behavioral: BehavioralRep
             "fts": [
                 {
                     "query": r.query,
+                    "top_3_must_include_types": r.top_3_must_include_types,
                     "precision": r.precision,
                     "recall": r.recall,
                     "passed": r.passed,
+                    "actual_types_in_top_3": r.actual_types_in_top_3,
                 }
                 for r in behavioral.fts_results
             ],
+            "graph": behavioral.graph_results,
+            "temporal": behavioral.temporal_results,
         }
     return out
 
 
 def generate_markdown_report(structural: StructuralReport, behavioral: BehavioralReport | None) -> str:
     lines = ["# PPA health check\n", "## Structural\n", f"- ok: {structural.ok}\n"]
+    lines.append(f"- orphan_count: {structural.orphan_count}\n")
     if structural.duplicate_uids:
         lines.append(f"- duplicate UIDs: {', '.join(structural.duplicate_uids)}\n")
+    if structural.edge_counts_by_rule:
+        for edge_type, count in sorted(structural.edge_counts_by_rule.items()):
+            lines.append(f"- edge `{edge_type}`: {count}\n")
+    if structural.missing_field_entries:
+        for entry in structural.missing_field_entries:
+            lines.append(f"- {entry.get('check', 'issue')}: {entry.get('detail', '')}\n")
+    if structural.orphan_details:
+        for entry in structural.orphan_details[:10]:
+            lines.append(
+                f"- orphan: source_uid={entry.get('source_uid', '')} target_slug={entry.get('target_slug', '')}\n"
+            )
     if behavioral:
         lines.append("\n## Behavioral\n")
         for r in behavioral.fts_results:
             lines.append(
-                f"- FTS `{r.query}`: precision={r.precision:.3f} recall={r.recall:.3f} passed={r.passed}\n"
+                f"- FTS `{r.query}`: top3={r.actual_types_in_top_3} precision={r.precision:.3f} recall={r.recall:.3f} passed={r.passed}\n"
             )
+        for result in behavioral.graph_results:
+            lines.append(f"- Graph `{result.get('entry', {}).get('description', '')}`: passed={result.get('passed')}\n")
     return "".join(lines)
 
 

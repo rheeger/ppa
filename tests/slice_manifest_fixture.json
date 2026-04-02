@@ -1,0 +1,34 @@
+{
+  "fts_queries": [
+    {
+      "query": "Robbie Heeger",
+      "expected_types": ["person"],
+      "min_hits": 1,
+      "top_3_must_include_types": ["person"],
+      "description": "Fixture graph person (email_thread_graph/Robbie-Heeger.md)"
+    },
+    {
+      "query": "Q3 Planning",
+      "expected_types": ["email_message"],
+      "min_hits": 1,
+      "top_3_must_include_types": ["email_message"],
+      "description": "Fixture email subject (cards/email_message.md)"
+    },
+    {
+      "query": "Jane Smith",
+      "expected_types": ["person"],
+      "min_hits": 1,
+      "top_3_must_include_types": ["person"],
+      "description": "Second fixture person"
+    }
+  ],
+  "temporal_queries": [],
+  "graph_queries": [
+    {
+      "start_uid": "hfa-email-thread-graph01",
+      "description": "Fixture thread from tests/fixtures/graphs/email_thread_graph/"
+    }
+  ],
+  "structural_invariants": {},
+  "card_counts_by_type": {}
+}

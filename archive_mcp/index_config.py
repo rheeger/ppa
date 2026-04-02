@@ -222,6 +222,10 @@ def get_rebuild_verify_hash() -> bool:
     return _ppa_env_bool("PPA_REBUILD_VERIFY_HASH")
 
 
+def get_primary_user_uid() -> str:
+    return _ppa_env("PPA_PRIMARY_USER_UID", default="")
+
+
 def get_seed_links_enabled() -> bool:
     return _ppa_env_bool("PPA_SEED_LINKS_ENABLED")
 

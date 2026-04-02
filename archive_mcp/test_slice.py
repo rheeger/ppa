@@ -15,8 +15,10 @@ from typing import Any
 
 from hfa.vault import extract_wikilinks, iter_note_paths, read_note_file
 
-from .benchmark import _orphan_metrics, _stable_score
-from .features import RELATIONSHIP_FIELDS
+from .benchmark import (_orphan_metrics, _orphan_metrics_from_frontmatters,
+                        _stable_score)
+from .features import iter_string_values
+from .index_config import get_primary_user_uid
 from .vault_cache import VaultScanCache
 
 logger = logging.getLogger("ppa.slice")
@@ -39,6 +41,7 @@ class SliceConfig:
     cluster_cap: int = 200
     min_cards_per_type: int = 1
     target_percent: float = 5.0
+    primary_user_uid: str = ""
 
 
 @dataclass
@@ -64,58 +67,151 @@ def _rel_paths_by_uid(vault: Path) -> dict[str, Path]:
     return out
 
 
-def _iter_relationship_refs(frontmatter: dict[str, Any]) -> list[str]:
-    refs: list[str] = []
-    for key in RELATIONSHIP_FIELDS:
-        if key not in frontmatter:
+def _normalize_slug(value: str) -> str:
+    return value.strip().replace(" ", "-").lower()
+
+
+def _build_uid_by_stem(vault: Path, rel_by_uid: dict[str, Path]) -> dict[str, str]:
+    """Fallback for non-cached paths (fixture vaults, etc.)."""
+    out: dict[str, str] = {}
+    for uid, rel_path in rel_by_uid.items():
+        stem = rel_path.stem.strip()
+        if not stem:
             continue
-        val = frontmatter[key]
-        if isinstance(val, str):
-            refs.append(val)
-        elif isinstance(val, list):
-            refs.extend(str(x) for x in val)
+        out.setdefault(stem, uid)
+        out.setdefault(_normalize_slug(stem), uid)
+        try:
+            note = read_note_file(vault / rel_path, vault_root=vault)
+        except OSError:
+            continue
+        frontmatter = dict(note.frontmatter)
+        summary = str(frontmatter.get("summary", "") or "").strip()
+        if summary:
+            out.setdefault(summary, uid)
+            out.setdefault(_normalize_slug(summary), uid)
+        if str(frontmatter.get("type", "") or "") == "person":
+            for alias in frontmatter.get("aliases", []) or []:
+                alias_text = str(alias).strip()
+                if alias_text:
+                    out.setdefault(alias_text, uid)
+                    out.setdefault(_normalize_slug(alias_text), uid)
+            for email in frontmatter.get("emails", []) or []:
+                email_text = str(email).strip()
+                if email_text:
+                    out.setdefault(email_text, uid)
+    return out
+
+
+def _resolve_ref_to_uid(ref: str, *, rel_by_uid: dict[str, Path], uid_by_stem: dict[str, str]) -> str | None:
+    text = ref.strip()
+    if not text:
+        return None
+    if text in rel_by_uid:
+        return text
+    if text.startswith("[[") and text.endswith("]]"):
+        text = text[2:-2].split("|", 1)[0].strip()
+        if not text:
+            return None
+    return uid_by_stem.get(text) or uid_by_stem.get(_normalize_slug(text))
+
+
+def _iter_note_refs(frontmatter: dict[str, Any], body: str) -> list[str]:
+    refs: list[str] = []
+    for value in frontmatter.values():
+        for text in iter_string_values(value):
+            s = text.strip()
+            if not s:
+                continue
+            if s.startswith("[[") and s.endswith("]]"):
+                refs.append(s[2:-2].split("|", 1)[0].strip())
+            elif s.startswith("hfa-"):
+                refs.append(s)
+    refs.extend(extract_wikilinks(body))
     return refs
 
 
-def _transitive_closure(
+def _closure_single_seed(
     vault: Path,
-    seeds: set[str],
+    seed_uid: str,
     *,
     rel_by_uid: dict[str, Path],
+    uid_by_stem: dict[str, str],
     cluster_cap: int,
+    already_included: set[str],
+    enforce_cluster_cap: bool = True,
+    frontmatter_by_uid: dict[str, dict[str, Any]] | None = None,
 ) -> set[str] | None:
-    """BFS closure; return None if cluster_cap would be exceeded."""
+    """BFS closure from a single seed; return None if cluster_cap is exceeded.
+
+    When *frontmatter_by_uid* is provided, frontmatter refs are resolved from
+    the in-memory cache (no disk I/O). Body wikilinks are skipped in cached mode
+    — the dangling-reference pass catches any residual orphans.
+    """
     seen: set[str] = set()
-    stack = list(seeds)
+    stack = [seed_uid]
     while stack:
         uid = stack.pop()
-        if uid in seen:
+        if uid in seen or uid in already_included:
             continue
-        if len(seen) >= cluster_cap:
+        if enforce_cluster_cap and len(seen) >= cluster_cap:
             return None
         seen.add(uid)
         rel = rel_by_uid.get(uid)
         if rel is None:
             continue
-        note = read_note_file(vault / rel, vault_root=vault)
-        fm = note.frontmatter
-        for ref in _iter_relationship_refs(dict(fm)):
-            s = ref.strip()
-            if s.startswith("[[") and s.endswith("]]"):
-                slug = s[2:-2].split("|", 1)[0].strip()
-                for cand_uid, cpath in rel_by_uid.items():
-                    if cpath.stem == slug or slug.replace(" ", "-").lower() == cpath.stem.lower():
-                        if cand_uid not in seen:
-                            stack.append(cand_uid)
-            elif s.startswith("hfa-"):
-                if s not in seen:
-                    stack.append(s)
-        for slug in extract_wikilinks(note.body):
-            for cand_uid, cpath in rel_by_uid.items():
-                if cpath.stem == slug or slug.replace(" ", "-").lower() == cpath.stem.lower():
-                    if cand_uid not in seen:
-                        stack.append(cand_uid)
+        if frontmatter_by_uid is not None and uid in frontmatter_by_uid:
+            fm = frontmatter_by_uid[uid]
+            for ref in _iter_note_refs(fm, ""):
+                ref_uid = _resolve_ref_to_uid(ref, rel_by_uid=rel_by_uid, uid_by_stem=uid_by_stem)
+                if ref_uid and ref_uid not in seen and ref_uid not in already_included:
+                    stack.append(ref_uid)
+        else:
+            note = read_note_file(vault / rel, vault_root=vault)
+            for ref in _iter_note_refs(dict(note.frontmatter), note.body):
+                ref_uid = _resolve_ref_to_uid(ref, rel_by_uid=rel_by_uid, uid_by_stem=uid_by_stem)
+                if ref_uid and ref_uid not in seen and ref_uid not in already_included:
+                    stack.append(ref_uid)
     return seen
+
+
+def _resolve_dangling_references(
+    source_vault: Path,
+    accumulated: set[str],
+    rel_by_uid: dict[str, Path],
+    uid_by_stem: dict[str, str],
+    *,
+    max_rounds: int = 3,
+    frontmatter_by_uid: dict[str, dict[str, Any]] | None = None,
+) -> tuple[set[str], int]:
+    added_total = 0
+    for round_idx in range(1, max_rounds + 1):
+        added_this_round: set[str] = set()
+        for uid in sorted(accumulated):
+            rel = rel_by_uid.get(uid)
+            if rel is None:
+                continue
+            if frontmatter_by_uid is not None and uid in frontmatter_by_uid:
+                fm = frontmatter_by_uid[uid]
+                refs = _iter_note_refs(fm, "")
+            else:
+                note = read_note_file(source_vault / rel, vault_root=source_vault)
+                refs = _iter_note_refs(dict(note.frontmatter), note.body)
+            for ref in refs:
+                ref_uid = _resolve_ref_to_uid(ref, rel_by_uid=rel_by_uid, uid_by_stem=uid_by_stem)
+                if ref_uid and ref_uid not in accumulated:
+                    added_this_round.add(ref_uid)
+        if not added_this_round:
+            logger.info("slice-seed dangling_resolve round=%d added=0 — stable", round_idx)
+            break
+        accumulated |= added_this_round
+        added_total += len(added_this_round)
+        logger.info(
+            "slice-seed dangling_resolve round=%d added=%d total=%d",
+            round_idx,
+            len(added_this_round),
+            len(accumulated),
+        )
+    return accumulated, added_total
 
 
 def slice_seed_vault(
@@ -125,6 +221,7 @@ def slice_seed_vault(
     *,
     progress_every: int = 5000,
     no_cache: bool = False,
+    dangling_rounds: int = 3,
 ) -> SliceResult:
     """Produce a relationally complete vault slice.
 
@@ -150,56 +247,140 @@ def slice_seed_vault(
         progress_every=progress_every,
         no_cache=no_cache,
     )
-    by_type = {t: [Path(p) for p in paths] for t, paths in cache.rel_paths_by_type().items()}
-    rel_by_uid = {uid: Path(p) for uid, p in cache.uid_to_rel_path().items()}
-    uid_by_path = {Path(p): uid for p, uid in cache.rel_path_to_uid().items()}
-    n_total = cache.note_count()
-    note_count = n_total
-    scan_s = time.monotonic() - t_scan
     cache_elapsed = time.monotonic() - t_cache
     logger.info(
-        "slice-seed scan cache_hit=%s notes=%d elapsed=%.1fs",
+        "slice-seed cache loaded cache_hit=%s elapsed=%.1fs",
         cache.is_cache_hit,
-        n_total,
         cache_elapsed,
     )
+
+    t_lookup = time.monotonic()
+    n_total = cache.note_count()
+    use_fast_path = cache.is_cache_hit or n_total > 10_000
+    if use_fast_path:
+        by_type_str, rel_by_uid_str, uid_by_path_str, uid_by_stem, frontmatter_by_uid = (
+            cache.slice_lookup_tables(progress_every=100_000)
+        )
+        by_type = {t: [Path(p) for p in paths] for t, paths in by_type_str.items()}
+        rel_by_uid: dict[str, Path] = {uid: Path(p) for uid, p in rel_by_uid_str.items()}
+        uid_by_path: dict[str | Path, str] = {}
+        for rp_s, uid_s in uid_by_path_str.items():
+            uid_by_path[rp_s] = uid_s
+            uid_by_path[Path(rp_s)] = uid_s
+    else:
+        by_type = {t: [Path(p) for p in paths] for t, paths in cache.rel_paths_by_type().items()}
+        rel_by_uid = {uid: Path(p) for uid, p in cache.uid_to_rel_path().items()}
+        uid_by_path = {Path(p): uid for p, uid in cache.rel_path_to_uid().items()}
+        uid_by_stem = _build_uid_by_stem(source_vault, rel_by_uid)
+        frontmatter_by_uid = None
+
+    lookup_s = time.monotonic() - t_lookup
     total = sum(len(v) for v in by_type.values())
     logger.info(
-        "slice-seed scan_complete notes_read=%d typed_cards=%d unique_uids=%d elapsed=%s",
-        note_count,
+        "slice-seed scan_complete notes=%d typed_cards=%d unique_uids=%d lookup_elapsed=%s total_scan=%s",
+        n_total,
         total,
         len(rel_by_uid),
-        _format_mins_secs(scan_s),
+        _format_mins_secs(lookup_s),
+        _format_mins_secs(time.monotonic() - t_scan),
     )
 
-    seeds: set[str] = set()
-    for card_type, paths in by_type.items():
-        n = max(
+    primary_user_uid = str(config.primary_user_uid or get_primary_user_uid() or "").strip()
+    expanded: set[str] = set()
+    selected_seeds: set[str] = set()
+    dropped_seeds: set[str] = set()
+    seed_count = 0
+    t_closure = time.monotonic()
+
+    def _accept_seed(seed_uid: str, *, mandatory: bool = False) -> bool:
+        nonlocal seed_count, expanded, selected_seeds, dropped_seeds
+        if seed_uid in selected_seeds:
+            return True
+        closure = _closure_single_seed(
+            source_vault,
+            seed_uid,
+            rel_by_uid=rel_by_uid,
+            uid_by_stem=uid_by_stem,
+            cluster_cap=config.cluster_cap,
+            already_included=expanded,
+            enforce_cluster_cap=not mandatory,
+            frontmatter_by_uid=frontmatter_by_uid,
+        )
+        if closure is None:
+            dropped_seeds.add(seed_uid)
+            return False
+        expanded |= closure
+        selected_seeds.add(seed_uid)
+        seed_count += 1
+        return True
+
+    if primary_user_uid and primary_user_uid in rel_by_uid:
+        logger.info("slice-seed primary_user_uid=%s (guaranteed anchor)", primary_user_uid)
+        if not _accept_seed(primary_user_uid, mandatory=True):
+            logger.warning("slice-seed primary_user_uid=%s exceeded cluster_cap but was retained", primary_user_uid)
+
+    type_idx = 0
+    total_types = len(by_type)
+    for card_type in sorted(by_type):
+        type_idx += 1
+        paths = by_type[card_type]
+        desired = max(
             config.min_cards_per_type,
             min(len(paths), max(1, int(len(paths) * (config.target_percent / 100.0)))),
         )
-        n = min(n, len(paths))
-        ordered = sorted(paths, key=lambda p: _stable_score(p))
+        desired = min(desired, len(paths))
         if config.seed_uids_by_type.get(card_type):
-            want = {u for u in config.seed_uids_by_type[card_type] if u in rel_by_uid}
-            seeds |= want
+            candidates = [uid for uid in config.seed_uids_by_type[card_type] if uid in rel_by_uid]
         else:
-            seeds |= {uid_by_path[p] for p in ordered[:n] if uid_by_path.get(p)}
+            ordered = sorted(paths, key=lambda p: _stable_score(p))
+            candidates = [uid_by_path[p] for p in ordered if uid_by_path.get(p)]
+        accepted = 0
+        for candidate_uid in candidates:
+            if accepted >= desired:
+                break
+            if candidate_uid == primary_user_uid:
+                accepted += 1
+                continue
+            if _accept_seed(candidate_uid):
+                accepted += 1
+        elapsed_closure = time.monotonic() - t_closure
+        logger.info(
+            "slice-seed type_done [%d/%d] type=%s desired=%d accepted=%d seeds_total=%d expanded=%d dropped=%d elapsed=%s",
+            type_idx,
+            total_types,
+            card_type,
+            desired,
+            accepted,
+            seed_count,
+            len(expanded),
+            len(dropped_seeds),
+            _format_mins_secs(elapsed_closure),
+        )
 
-    logger.info("slice-seed seeds_selected count=%d (before closure)", len(seeds))
-
-    closure_raw = _transitive_closure(
-        source_vault,
-        seeds,
-        rel_by_uid=rel_by_uid,
-        cluster_cap=config.cluster_cap,
+    logger.info(
+        "slice-seed seeds_selected count=%d expanded=%d (before dangling resolution) closure_elapsed=%s",
+        seed_count,
+        len(expanded),
+        _format_mins_secs(time.monotonic() - t_closure),
     )
-    hit_cap = closure_raw is None
-    expanded = closure_raw if closure_raw is not None else set(seeds)
-    if not expanded:
-        expanded = set(seeds)
 
-    logger.info("slice-seed closure cards_in_slice=%d hit_cluster_cap=%s", len(expanded), hit_cap)
+    if not expanded:
+        expanded = set(selected_seeds)
+    expanded, dangling_added = _resolve_dangling_references(
+        source_vault,
+        expanded,
+        rel_by_uid,
+        uid_by_stem,
+        max_rounds=max(0, int(dangling_rounds)),
+        frontmatter_by_uid=frontmatter_by_uid,
+    )
+    logger.info(
+        "slice-seed closure cards_in_slice=%d dropped_seeds=%d dangling_added=%d total_closure=%s",
+        len(expanded),
+        len(dropped_seeds),
+        dangling_added,
+        _format_mins_secs(time.monotonic() - t_closure),
+    )
 
     t_copy = time.monotonic()
     expanded_list = list(expanded)
@@ -231,6 +412,17 @@ def slice_seed_vault(
     copy_s = time.monotonic() - t_copy
     logger.info("slice-seed copy_complete files=%d elapsed=%s", n_copy, _format_mins_secs(copy_s))
 
+    # Pre-build tier-2 cache so downstream rebuild-indexes hits immediately
+    t_precache = time.monotonic()
+    logger.info("slice-seed pre-building tier-2 vault cache for output dir")
+    VaultScanCache.build_or_load(
+        output_dir, tier=2, progress_every=progress_every, no_cache=False,
+    )
+    logger.info(
+        "slice-seed tier-2 cache ready elapsed=%s",
+        _format_mins_secs(time.monotonic() - t_precache),
+    )
+
     # Minimal _meta for downstream tools
     meta = output_dir / "_meta"
     meta.mkdir(parents=True, exist_ok=True)
@@ -243,25 +435,37 @@ def slice_seed_vault(
 
     counts: dict[str, int] = {}
     for uid in expanded:
-        rel = rel_by_uid.get(uid)
-        if rel is None:
-            continue
-        fm = cache.frontmatter_for_rel_path(rel.as_posix())
-        t = str(fm.get("type", "") or "unknown")
+        if frontmatter_by_uid and uid in frontmatter_by_uid:
+            t = str(frontmatter_by_uid[uid].get("type", "") or "unknown")
+        else:
+            rel = rel_by_uid.get(uid)
+            if rel is None:
+                continue
+            fm = cache.frontmatter_for_rel_path(rel.as_posix())
+            t = str(fm.get("type", "") or "unknown")
         counts[t] = counts.get(t, 0) + 1
 
-    om = _orphan_metrics(output_dir)
-    logger.info(
+    t_orphan = time.monotonic()
+    if frontmatter_by_uid:
+        slice_fm = {uid: frontmatter_by_uid[uid] for uid in expanded if uid in frontmatter_by_uid}
+        slice_rel = {uid: rel_by_uid[uid] for uid in expanded if uid in rel_by_uid}
+        om = _orphan_metrics_from_frontmatters(slice_rel, slice_fm)
+    else:
+        om = _orphan_metrics(output_dir)
+    orphaned = int(om.get("orphaned_wikilinks", 0))
+    logger.info("slice-seed orphan_metrics orphaned=%d elapsed=%s", orphaned, _format_mins_secs(time.monotonic() - t_orphan))
+    log_fn = logger.warning if orphaned > 0 else logger.info
+    log_fn(
         "slice-seed done selected_card_count=%d orphaned_wikilinks=%d total_wall=%s",
         len(expanded),
-        int(om.get("orphaned_wikilinks", 0)),
+        orphaned,
         _format_mins_secs(time.monotonic() - t_scan),
     )
     return SliceResult(
         total_source_cards=total,
         selected_card_count=len(expanded),
         cards_by_type=counts,
-        orphaned_wikilinks=int(om.get("orphaned_wikilinks", 0)),
+        orphaned_wikilinks=orphaned,
         config=config,
     )
 
@@ -275,6 +479,7 @@ def load_slice_config(path: Path) -> SliceConfig:
         cluster_cap=int(data.get("cluster_cap", 200)),
         min_cards_per_type=int(data.get("min_cards_per_type", 1)),
         target_percent=float(data.get("target_percent", 5.0)),
+        primary_user_uid=str(data.get("primary_user_uid", "") or ""),
     )
 
 
