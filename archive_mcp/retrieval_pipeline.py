@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 # Shared with index_store ranking; keep in sync with CARD_TYPE_PRIORS there.
+from .index_config import _format_activity_at
 from .index_store import CARD_TYPE_PRIORS
 
 PIPELINE_VERSION = "2026.03.19.hfa1"
@@ -59,12 +60,12 @@ def _card_type_prior(card_type: str) -> float:
 
 
 def _apply_recency_boost(rows: list[dict[str, Any]], *, key_name: str) -> None:
-    dated = [row for row in rows if str(row.get("activity_at", "")).strip()]
+    dated = [row for row in rows if _format_activity_at(row.get("activity_at")).strip()]
     if not dated:
         return
     ordered = sorted(
         dated,
-        key=lambda row: (str(row.get("activity_at", "")), str(row.get("rel_path", ""))),
+        key=lambda row: (_format_activity_at(row.get("activity_at")), str(row.get("rel_path", ""))),
         reverse=True,
     )
     total = max(len(ordered) - 1, 1)
@@ -129,7 +130,7 @@ def fuse_lexical_vector_rows(
             "rel_path": str(row["rel_path"]),
             "summary": str(row["summary"]),
             "type": str(row["type"]),
-            "activity_at": str(row.get("activity_at", "")),
+            "activity_at": _format_activity_at(row.get("activity_at")),
             "preview": str(row["summary"])[:160],
             "matched_by": "lexical",
             "lexical_score": float(row["lexical_score"]),
@@ -152,7 +153,7 @@ def fuse_lexical_vector_rows(
                 "rel_path": str(row["rel_path"]),
                 "summary": str(row["summary"]),
                 "type": str(row["type"]),
-                "activity_at": str(row.get("activity_at", "")),
+                "activity_at": _format_activity_at(row.get("activity_at")),
                 "preview": str(row["preview"]),
                 "matched_by": "vector",
                 "lexical_score": 0.0,

@@ -5,6 +5,21 @@ VAULT="${1:-${PPA_PATH:-/srv/hfa-secure/vault}}"
 PYTHON="${PYTHON:-python3}"
 
 mkdir -p "$VAULT/People" "$VAULT/Finance" "$VAULT/Photos" "$VAULT/_meta" "$VAULT/_templates" "$VAULT/Attachments"
+mkdir -p "$VAULT/Transactions/MealOrders"
+mkdir -p "$VAULT/Transactions/Groceries"
+mkdir -p "$VAULT/Transactions/Rides"
+mkdir -p "$VAULT/Transactions/Flights"
+mkdir -p "$VAULT/Transactions/Accommodations"
+mkdir -p "$VAULT/Transactions/CarRentals"
+mkdir -p "$VAULT/Transactions/Purchases"
+mkdir -p "$VAULT/Transactions/Shipments"
+mkdir -p "$VAULT/Transactions/Subscriptions"
+mkdir -p "$VAULT/Transactions/EventTickets"
+mkdir -p "$VAULT/Transactions/Payroll"
+mkdir -p "$VAULT/Entities/Places"
+mkdir -p "$VAULT/Entities/Organizations"
+mkdir -p "$VAULT/Knowledge"
+mkdir -p "$VAULT/Agent"
 
 "$PYTHON" - "$VAULT" <<'PY'
 import json

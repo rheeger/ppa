@@ -11,6 +11,7 @@ import json
 import os
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from hfa.schema import DETERMINISTIC_ONLY, LLM_ELIGIBLE
@@ -28,9 +29,9 @@ def _ppa_env(canonical: str, default: str = "") -> str:
 # Schema / chunk / manifest version constants
 # ---------------------------------------------------------------------------
 
-INDEX_SCHEMA_VERSION = 8
-CHUNK_SCHEMA_VERSION = 4
-MANIFEST_SCHEMA_VERSION = 1
+INDEX_SCHEMA_VERSION = 9
+CHUNK_SCHEMA_VERSION = 5
+MANIFEST_SCHEMA_VERSION = 2
 SCAN_MANIFEST_VERSION = 1
 DEFAULT_POSTGRES_SCHEMA = "archive_mcp"
 DEFAULT_VECTOR_DIMENSION = 1536
@@ -75,6 +76,21 @@ CARD_TYPE_PRIORS = {
     "email_attachment": 0.03,
     "imessage_attachment": 0.03,
     "beeper_attachment": 0.03,
+    "meal_order": 0.06,
+    "grocery_order": 0.06,
+    "ride": 0.06,
+    "flight": 0.07,
+    "accommodation": 0.07,
+    "car_rental": 0.06,
+    "purchase": 0.06,
+    "shipment": 0.05,
+    "subscription": 0.06,
+    "event_ticket": 0.07,
+    "payroll": 0.05,
+    "place": 0.08,
+    "organization": 0.08,
+    "knowledge": 0.03,
+    "observation": 0.03,
 }
 
 PROJECTIONS_BY_LOAD_ORDER = tuple(sorted(PROJECTION_REGISTRY, key=lambda projection: projection.load_order))
@@ -104,6 +120,10 @@ def get_index_dsn() -> str:
 
 def get_index_schema() -> str:
     return _ppa_env("PPA_INDEX_SCHEMA", default=DEFAULT_POSTGRES_SCHEMA)
+
+
+def get_default_timezone() -> str:
+    return _ppa_env("PPA_DEFAULT_TIMEZONE", default="UTC")
 
 
 def get_vector_dimension() -> int:
@@ -284,17 +304,31 @@ def _card_type_prior(card_type: str) -> float:
     return CARD_TYPE_PRIORS.get(card_type, 0.02)
 
 
-def _activity_date(value: str) -> str:
-    return value[:10] if value else ""
+def _format_activity_at(value: Any) -> str:
+    """Format activity_at for display (TIMESTAMPTZ from psycopg or legacy string)."""
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value).strip()
+
+
+def _activity_date(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d")
+    raw = str(value).strip()
+    return raw[:10] if raw else ""
 
 
 def _apply_recency_boost(rows: list[dict[str, Any]], *, key_name: str) -> None:
-    dated = [row for row in rows if str(row.get("activity_at", "")).strip()]
+    dated = [row for row in rows if _format_activity_at(row.get("activity_at")).strip()]
     if not dated:
         return
     ordered = sorted(
         dated,
-        key=lambda row: (str(row.get("activity_at", "")), str(row.get("rel_path", ""))),
+        key=lambda row: (_format_activity_at(row.get("activity_at")), str(row.get("rel_path", ""))),
         reverse=True,
     )
     total = max(len(ordered) - 1, 1)

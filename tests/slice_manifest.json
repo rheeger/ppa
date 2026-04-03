@@ -15,7 +15,13 @@
       "description": "Verbatim phrase from a Mint notification email_message summary in hf-archives-seed"
     }
   ],
-  "temporal_queries": [],
+  "temporal_queries": [
+    {
+      "phase": "post-phase-3",
+      "description": "temporal_neighbors + new-type FTS — activate after seed has derived cards",
+      "note": "health-check currently no-ops temporal entries; Phase 3+ will assert forward/backward/during legs"
+    }
+  ],
   "graph_queries": [
     {
       "start_uid": "hfa-person-9c9dbd68e803",

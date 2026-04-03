@@ -9,17 +9,11 @@ from threading import Lock
 from typing import Any
 
 from .features import build_context_prefix_for_embed_row
-from .index_config import (
-    CHUNK_SCHEMA_VERSION,
-    EmbeddingBatchResult,
-    _vector_literal,
-    embed_defer_vector_index,
-    get_embed_batch_size,
-    get_embed_concurrency,
-    get_embed_max_retries,
-    get_embed_progress_every,
-    get_embed_write_batch_size,
-)
+from .index_config import (CHUNK_SCHEMA_VERSION, EmbeddingBatchResult,
+                           _vector_literal, embed_defer_vector_index,
+                           get_embed_batch_size, get_embed_concurrency,
+                           get_embed_max_retries, get_embed_progress_every,
+                           get_embed_write_batch_size)
 from .loader import _chunked, _log_rebuild_step, _RebuildProgressReporter
 
 logger = logging.getLogger("ppa.embedder")
@@ -96,7 +90,7 @@ class EmbedderMixin:
                 card_uid TEXT NOT NULL PRIMARY KEY,
                 card_type TEXT NOT NULL DEFAULT '',
                 summary TEXT NOT NULL DEFAULT '',
-                activity_at TEXT NOT NULL DEFAULT '',
+                activity_at TIMESTAMPTZ,
                 sources_agg TEXT NOT NULL DEFAULT '',
                 people_agg TEXT NOT NULL DEFAULT '',
                 orgs_agg TEXT NOT NULL DEFAULT ''
@@ -111,7 +105,7 @@ class EmbedderMixin:
                 card.uid,
                 card.type,
                 card.summary,
-                COALESCE(card.activity_at, ''),
+                card.activity_at,
                 COALESCE(src.sources_agg, ''),
                 COALESCE(ppl.people_agg, ''),
                 COALESCE(org.orgs_agg, '')

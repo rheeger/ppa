@@ -10,26 +10,18 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
-
-from archive_mcp.benchmark import (
-    BENCHMARK_PROFILES,
-    benchmark_rebuild,
-    benchmark_seed_links,
-    build_benchmark_sample,
-    resolve_benchmark_profile,
-)
+from archive_mcp.benchmark import (BENCHMARK_PROFILES, benchmark_rebuild,
+                                   benchmark_seed_links,
+                                   build_benchmark_sample,
+                                   resolve_benchmark_profile)
 from archive_mcp.chunking import render_chunks_for_card
 from archive_mcp.index_store import PostgresArchiveIndex
-from archive_mcp.server import (
-    archive_embed_pending,
-    archive_graph,
-    archive_hybrid_search,
-    archive_rebuild_indexes,
-    archive_search,
-    archive_vector_search,
-)
+from archive_mcp.server import (archive_embed_pending, archive_graph,
+                                archive_hybrid_search, archive_rebuild_indexes,
+                                archive_search, archive_vector_search)
 from hfa.provenance import ProvenanceEntry
-from hfa.schema import CalendarEventCard, EmailMessageCard, EmailThreadCard, MeetingTranscriptCard, PersonCard
+from hfa.schema import (CalendarEventCard, EmailMessageCard, EmailThreadCard,
+                        MeetingTranscriptCard, PersonCard)
 from hfa.vault import write_card
 
 
@@ -727,7 +719,7 @@ def test_live_postgres_rebuild_graph_and_lexical_search(live_archive):
     vault, index, _provider = live_archive
     rebuilt = archive_rebuild_indexes()
     assert "cards: 8" in rebuilt
-    assert index.status()["chunk_schema_version"] == "4"
+    assert index.status()["chunk_schema_version"] == "5"
 
     lexical = archive_search("Jane Smith", limit=3).splitlines()
     assert lexical[0].startswith("- People/jane-smith.md")

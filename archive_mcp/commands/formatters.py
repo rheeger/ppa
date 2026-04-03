@@ -13,12 +13,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from archive_mcp.index_config import _activity_date
+
 
 def format_search_line(row: dict) -> str:
     """Render a search/query result row with type, date, and fuller summary."""
     rel_path = row.get("rel_path", "")
     card_type = row.get("type", "")
-    date = str(row.get("activity_at", ""))[:10]
+    date = _activity_date(row.get("activity_at"))
     summary = str(row.get("summary", ""))[:200]
     meta = ", ".join(part for part in [card_type, date] if part)
     return f"- {rel_path} [{meta}]: {summary}"
@@ -457,7 +459,7 @@ def format_vector_search(model: str, version: int, rows: list[dict]) -> str:
     lines = [f"Vector matches for {model} v{version}:"]
     for row in rows:
         card_type = str(row.get("type", ""))
-        date = str(row.get("activity_at", ""))[:10]
+        date = _activity_date(row.get("activity_at"))
         summary = str(row.get("summary", ""))[:200]
         lines.append(
             f"- {row['rel_path']} [{card_type}, {date}] matched_by={row['matched_by']} score={float(row['score']):.4f} "
@@ -476,7 +478,7 @@ def format_hybrid_search(query: str, rows: list[dict]) -> str:
     lines = [f"Hybrid matches for '{query}':"]
     for row in rows:
         card_type = str(row.get("type", ""))
-        date = str(row.get("activity_at", ""))[:10]
+        date = _activity_date(row.get("activity_at"))
         graph_hops = f" graph_hops={row['graph_hops']}" if row.get("graph_hops") else ""
         chunk = ""
         if int(row.get("chunk_index", -1)) >= 0 and str(row.get("chunk_type", "")):

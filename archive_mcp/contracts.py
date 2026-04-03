@@ -74,6 +74,7 @@ class CardTypeRegistration:
     edge_rules: tuple[DeclEdgeRule, ...]
     chunk_builder_name: str | None
     chunk_types: tuple[str, ...]
+    quality_critical_fields: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

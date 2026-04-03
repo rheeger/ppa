@@ -10,14 +10,9 @@ import os
 import sys
 from pathlib import Path
 
-from .benchmark import (
-    BENCHMARK_PROFILES,
-    DEFAULT_BENCHMARK_SOURCE_VAULT,
-    benchmark_multi_size,
-    benchmark_rebuild,
-    benchmark_seed_links,
-    build_benchmark_sample,
-)
+from .benchmark import (BENCHMARK_PROFILES, DEFAULT_BENCHMARK_SOURCE_VAULT,
+                        benchmark_multi_size, benchmark_rebuild,
+                        benchmark_seed_links, build_benchmark_sample)
 from .commands import admin as admin_cmd
 from .commands import explain
 from .commands import graph as graph_cmd
@@ -323,6 +318,17 @@ def main() -> None:
     timeline_parser.add_argument("--start", dest="start_date", default="")
     timeline_parser.add_argument("--end", dest="end_date", default="")
     timeline_parser.add_argument("--limit", type=int, default=20)
+    tn_parser = subparsers.add_parser("temporal-neighbors", help="Cards near a timestamp (JSON)")
+    tn_parser.add_argument("timestamp")
+    tn_parser.add_argument("--direction", default="both", choices=("forward", "backward", "both"))
+    tn_parser.add_argument("--limit", type=int, default=20)
+    tn_parser.add_argument("--type", dest="type_filter", default="")
+    tn_parser.add_argument("--source", dest="source_filter", default="")
+    tn_parser.add_argument("--person", dest="people_filter", default="")
+    kn_parser = subparsers.add_parser("knowledge", help="Knowledge card for domain or search fallback (JSON)")
+    kn_parser.add_argument("domain")
+    kn_parser.add_argument("--fallback-query", dest="fallback_query", default="")
+    kn_parser.add_argument("--limit", type=int, default=5)
     subparsers.add_parser("stats", help="Vault/index stats (JSON)")
     subparsers.add_parser("validate", help="Validate all vault cards (JSON)")
     subparsers.add_parser("duplicates", help="Dedup candidates from _meta (JSON)")
@@ -446,6 +452,37 @@ def main() -> None:
             out = graph_cmd.timeline(
                 start_date=args.start_date,
                 end_date=args.end_date,
+                limit=args.limit,
+                store=store,
+                logger=_cli_log,
+            )
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "temporal-neighbors":
+        try:
+            store = resolve_store()
+            out = graph_cmd.temporal_neighbors(
+                args.timestamp,
+                direction=args.direction,
+                limit=args.limit,
+                type_filter=args.type_filter,
+                source_filter=args.source_filter,
+                people_filter=args.people_filter,
+                store=store,
+                logger=_cli_log,
+            )
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "knowledge":
+        try:
+            store = resolve_store()
+            out = graph_cmd.knowledge_domain(
+                args.domain,
+                fallback_query=args.fallback_query,
                 limit=args.limit,
                 store=store,
                 logger=_cli_log,
@@ -849,7 +886,8 @@ def main() -> None:
         )
         return
     if args.command == "slice-seed":
-        from .test_slice import build_slice_docker_image, load_slice_config, slice_seed_vault
+        from .test_slice import (build_slice_docker_image, load_slice_config,
+                                 slice_seed_vault)
 
         cfg = load_slice_config(Path(args.config))
         if args.target_percent is not None:

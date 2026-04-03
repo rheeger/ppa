@@ -2,32 +2,23 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from .explain import (
-    projection_explain_payload,
-    projection_inventory_payload,
-    projection_status_payload,
-)
-from .index_config import (
-    VECTOR_CANDIDATE_MULTIPLIER,
-    _apply_recency_boost,
-    _card_type_prior,
-    _coerce_source_fields,
-    _field_provenance_bonus,
-    _field_provenance_label,
-    _vector_literal,
-    get_seed_links_enabled,
-)
+from .explain import (projection_explain_payload, projection_inventory_payload,
+                      projection_status_payload)
+from .features import parse_timestamp_to_utc
+from .index_config import (VECTOR_CANDIDATE_MULTIPLIER, _apply_recency_boost,
+                           _card_type_prior, _coerce_source_fields,
+                           _field_provenance_bonus, _field_provenance_label,
+                           _format_activity_at, _vector_literal,
+                           get_seed_links_enabled)
 from .materializer import _normalize_exact_text, _normalize_slug
-from .projections.registry import (
-    PROJECTION_REGISTRY,
-    TYPED_PROJECTIONS,
-    projection_for_card_type,
-)
+from .projections.registry import (PROJECTION_REGISTRY, TYPED_PROJECTIONS,
+                                   projection_for_card_type)
 
 logger = logging.getLogger("ppa.index_query")
 
@@ -181,11 +172,17 @@ class QueryMixin:
             )
             params.append(org_filter)
         if start_date:
-            clauses.append(f"LEFT({alias}.activity_at, 10) >= %s")
-            params.append(start_date)
+            sd = start_date.strip()
+            if len(sd) == 10 and sd[4:5] == "-" and sd[7:8] == "-":
+                sd = f"{sd}T00:00:00+00:00"
+            clauses.append(f"{alias}.activity_at >= %s::timestamptz")
+            params.append(sd)
         if end_date:
-            clauses.append(f"LEFT({alias}.activity_at, 10) <= %s")
-            params.append(end_date)
+            ed = end_date.strip()
+            if len(ed) == 10 and ed[4:5] == "-" and ed[7:8] == "-":
+                ed = f"{ed}T23:59:59.999999+00:00"
+            clauses.append(f"{alias}.activity_at <= %s::timestamptz")
+            params.append(ed)
         return clauses, params
 
     @staticmethod
@@ -210,7 +207,7 @@ class QueryMixin:
         return (
             -exact,
             -float(row.get("lexical_score", 0.0)),
-            str(row.get("activity_at", "")),
+            _format_activity_at(row.get("activity_at")),
             str(row.get("rel_path", "")),
         )
 
@@ -395,7 +392,7 @@ class QueryMixin:
                     "rel_path": str(row["rel_path"]),
                     "summary": str(row["summary"]),
                     "type": str(row["type"]),
-                    "activity_at": str(row.get("activity_at", "")),
+                    "activity_at": _format_activity_at(row.get("activity_at")),
                     "matched_by": "vector",
                     "matched_chunk_count": 0,
                     "similarity": similarity,
@@ -824,6 +821,193 @@ class QueryMixin:
                 or int(row.get("person_exact", 0))
             )
         return rows
+
+    def temporal_neighbors(
+        self,
+        timestamp: str,
+        *,
+        direction: str = "both",
+        limit: int = 20,
+        type_filter: str = "",
+        source_filter: str = "",
+        people_filter: str = "",
+    ) -> dict[str, Any]:
+        """Cards near a point in time: forward (after), backward (before), and interval overlap."""
+        self.ensure_ready()
+        cleaned = (timestamp or "").strip()
+        ts = parse_timestamp_to_utc(cleaned)
+        if ts is None:
+            return {"ok": False, "error": "invalid_timestamp", "timestamp": timestamp, "results": []}
+        ts_sql = ts.isoformat()
+        clauses, params = self._filter_clauses(
+            alias="c",
+            type_filter=type_filter,
+            source_filter=source_filter,
+            people_filter=people_filter,
+        )
+        where_sql = " AND ".join(clauses)
+        per_leg = max(limit, 1)
+        collected: dict[str, dict[str, Any]] = {}
+
+        def ingest(rows: list[Any], leg: str) -> None:
+            for row in rows:
+                d = dict(row)
+                d["leg"] = leg
+                uid = str(d.get("uid", ""))
+                if not uid:
+                    continue
+                if uid not in collected:
+                    collected[uid] = d
+
+        with self._connect() as conn:
+            if direction in ("forward", "both"):
+                sql = f"""
+                    SELECT c.uid, c.rel_path, c.summary, c.type, c.activity_at, c.activity_end_at
+                    FROM {self.schema}.cards c
+                    WHERE {where_sql}
+                      AND c.activity_at IS NOT NULL
+                      AND c.activity_at >= %s::timestamptz
+                    ORDER BY c.activity_at ASC, c.uid ASC
+                    LIMIT %s
+                """
+                ingest(
+                    conn.execute(sql, [*params, ts_sql, per_leg]).fetchall(),
+                    "forward",
+                )
+            if direction in ("backward", "both"):
+                sql = f"""
+                    SELECT c.uid, c.rel_path, c.summary, c.type, c.activity_at, c.activity_end_at
+                    FROM {self.schema}.cards c
+                    WHERE {where_sql}
+                      AND c.activity_at IS NOT NULL
+                      AND c.activity_at <= %s::timestamptz
+                    ORDER BY c.activity_at DESC, c.uid ASC
+                    LIMIT %s
+                """
+                ingest(
+                    conn.execute(sql, [*params, ts_sql, per_leg]).fetchall(),
+                    "backward",
+                )
+            sql_during = f"""
+                SELECT c.uid, c.rel_path, c.summary, c.type, c.activity_at, c.activity_end_at
+                FROM {self.schema}.cards c
+                WHERE {where_sql}
+                  AND c.activity_at IS NOT NULL
+                  AND c.activity_at <= %s::timestamptz
+                  AND (c.activity_end_at IS NULL OR c.activity_end_at >= %s::timestamptz)
+                ORDER BY c.activity_at ASC, c.uid ASC
+                LIMIT %s
+            """
+            ingest(
+                conn.execute(sql_during, [*params, ts_sql, ts_sql, per_leg]).fetchall(),
+                "during",
+            )
+
+        merged = sorted(
+            collected.values(),
+            key=lambda r: (_format_activity_at(r.get("activity_at")), str(r.get("uid", ""))),
+        )
+        out = merged[: max(limit, 1)]
+        for row in out:
+            row["activity_at"] = _format_activity_at(row.get("activity_at"))
+            row["activity_end_at"] = _format_activity_at(row.get("activity_end_at"))
+        return {"ok": True, "timestamp": cleaned, "count": len(out), "results": out}
+
+    def _is_knowledge_stale_with_conn(self, conn, card_uid: str) -> bool:
+        """True if knowledge card's input_watermark is older than latest ingestion for depends_on types."""
+        row = conn.execute(
+            f"""
+            SELECT depends_on_types_json, input_watermark
+            FROM {self.schema}.knowledge_cards
+            WHERE card_uid = %s
+            """,
+            (card_uid,),
+        ).fetchone()
+        if row is None:
+            return True
+        raw_types = row["depends_on_types_json"] if isinstance(row, dict) else row[0]
+        watermark = str(row["input_watermark"] if isinstance(row, dict) else row[1] or "").strip()
+        if isinstance(raw_types, list):
+            depends = raw_types
+        elif isinstance(raw_types, str):
+            try:
+                depends = json.loads(raw_types)
+            except json.JSONDecodeError:
+                depends = []
+        else:
+            depends = list(raw_types or [])
+        if not depends:
+            return False
+        wm_ts = parse_timestamp_to_utc(watermark) if watermark else None
+        for ct in depends:
+            ct_s = str(ct).strip()
+            if not ct_s:
+                continue
+            agg = conn.execute(
+                f"""
+                SELECT MAX(i.logged_at) AS mx
+                FROM {self.schema}.ingestion_log i
+                JOIN {self.schema}.cards c ON c.uid = i.card_uid
+                WHERE c.type = %s
+                """,
+                (ct_s,),
+            ).fetchone()
+            mx = agg["mx"] if isinstance(agg, dict) else (agg[0] if agg else None)
+            if mx is None:
+                continue
+            if wm_ts is None:
+                return True
+            if mx > wm_ts:
+                return True
+        return False
+
+    def is_knowledge_stale(self, card_uid: str) -> bool:
+        self.ensure_ready()
+        with self._connect() as conn:
+            return self._is_knowledge_stale_with_conn(conn, card_uid)
+
+    def knowledge_for_domain(
+        self,
+        domain: str,
+        *,
+        fallback_query: str = "",
+        limit: int = 5,
+    ) -> dict[str, Any]:
+        """Return freshest non-stale knowledge row for domain, or lexical search fallback."""
+        self.ensure_ready()
+        cleaned = (domain or "").strip()
+        if not cleaned:
+            return {"ok": False, "error": "empty_domain"}
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT card_uid, domain, standing_query, input_watermark, summary, activity_at
+                FROM {self.schema}.knowledge_cards
+                WHERE domain = %s
+                ORDER BY activity_at DESC NULLS LAST
+                LIMIT %s
+                """,
+                (cleaned, max(limit, 1) * 5),
+            ).fetchall()
+            for row in rows:
+                d = dict(row)
+                uid = str(d.get("card_uid", ""))
+                if not uid or self._is_knowledge_stale_with_conn(conn, uid):
+                    continue
+                d["activity_at"] = _format_activity_at(d.get("activity_at"))
+                d["ok"] = True
+                d["stale"] = False
+                d["fallback"] = False
+                return d
+        fq = (fallback_query or cleaned).strip()
+        if fq:
+            return {
+                "ok": True,
+                "fallback": True,
+                "stale": True,
+                "rows": self.search(fq, limit=max(limit, 1)),
+            }
+        return {"ok": True, "fallback": True, "stale": True, "rows": []}
 
     def duplicate_uid_rows(self, *, limit: int = 20) -> list[dict[str, Any]]:
         self.ensure_ready()

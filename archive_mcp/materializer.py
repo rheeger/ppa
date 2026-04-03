@@ -14,7 +14,8 @@ from hfa.vault import extract_wikilinks, read_note_file
 
 from .card_registry import REGISTRATION_BY_CARD_TYPE
 from .chunking import render_chunks_for_card
-from .features import TIMELINE_FIELDS, card_activity_at, iter_external_ids
+from .features import (TIMELINE_FIELDS, card_activity_at, card_activity_end_at,
+                       iter_external_ids, parse_timestamp_to_utc)
 from .projections.base import ProjectionRowBuffer, build_projection_row
 from .projections.registry import projection_for_card_type
 from .scanner import CanonicalRow
@@ -54,8 +55,27 @@ def _coerce_string_list(value: Any) -> list[str]:
     return list(_iter_string_values(value))
 
 
+def _dedupe_row_key(row: tuple[Any, ...]) -> tuple[Any, ...]:
+    """Build a hashable key; lists (e.g. TEXT[] cells) are normalized to tuple."""
+    key: list[Any] = []
+    for cell in row:
+        if isinstance(cell, list):
+            key.append(tuple(cell))
+        else:
+            key.append(cell)
+    return tuple(key)
+
+
 def _dedupe_rows(rows: list[tuple[Any, ...]]) -> list[tuple[Any, ...]]:
-    return list(dict.fromkeys(rows))
+    seen: set[tuple[Any, ...]] = set()
+    out: list[tuple[Any, ...]] = []
+    for row in rows:
+        k = _dedupe_row_key(row)
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(row)
+    return out
 
 
 def _build_search_text(frontmatter: dict[str, Any], body: str) -> str:
@@ -275,6 +295,38 @@ def _build_edges(
     return edges
 
 
+def _compute_quality_score(
+    card_type: str,
+    frontmatter: dict[str, Any],
+    *,
+    body: str,
+    summary: str,
+) -> tuple[float, list[str]]:
+    registration = REGISTRATION_BY_CARD_TYPE.get(card_type)
+    critical = registration.quality_critical_fields if registration else ()
+    flags: list[str] = []
+    if not critical:
+        score = 0.5
+    else:
+        filled = 0
+        for field in critical:
+            value = frontmatter.get(field)
+            empty = value is None or value == "" or value == [] or value == {}
+            if empty:
+                flags.append(f"missing:{field}")
+            else:
+                filled += 1
+        score = filled / len(critical) if critical else 0.5
+    body_stripped = body.strip()
+    if len(body_stripped) > 80:
+        score = min(1.0, score + 0.08)
+    elif len(body_stripped) > 20:
+        score = min(1.0, score + 0.04)
+    if summary.strip():
+        score = min(1.0, score + 0.04)
+    return round(float(score), 4), flags
+
+
 def _materialize_row(
     row: CanonicalRow,
     *,
@@ -282,6 +334,7 @@ def _materialize_row(
     slug_map: dict[str, str],
     path_to_uid: dict[str, str],
     person_lookup: dict[str, str],
+    batch_id: str = "",
 ) -> ProjectionRowBuffer:
     from .index_config import CHUNK_SCHEMA_VERSION
 
@@ -291,8 +344,16 @@ def _materialize_row(
     body = read_note_file(Path(vault_root) / rel_path, vault_root=vault_root).body
     search_text = _build_search_text(frontmatter, body)
     content_hash_val = _content_hash(frontmatter, body)
-    activity_at = card_activity_at(frontmatter)
+    activity_raw = card_activity_at(frontmatter)
+    activity_at = parse_timestamp_to_utc(activity_raw)
+    activity_end_raw = card_activity_end_at(card.type, frontmatter)
+    activity_end_at = parse_timestamp_to_utc(activity_end_raw)
     timeline_values = {field: str(frontmatter.get(field, "") or "") for field in TIMELINE_FIELDS}
+    quality_score, quality_flag_list = _compute_quality_score(
+        card.type, frontmatter, body=body, summary=card.summary
+    )
+    quality_flags_for_row: list[str] = list(quality_flag_list)
+    source_adapter = str(card.source[0]).strip() if card.source else ""
 
     batch = ProjectionRowBuffer()
     batch.add(
@@ -307,14 +368,21 @@ def _materialize_row(
             timeline_values["created"],
             timeline_values["updated"],
             activity_at,
+            activity_end_at,
             timeline_values["sent_at"],
             timeline_values["start_at"],
             timeline_values["first_message_at"],
             timeline_values["last_message_at"],
+            quality_score,
+            quality_flags_for_row,
+            0,
+            "none",
+            None,
             content_hash_val,
             search_text,
         ),
     )
+    batch.ingestion_log_rows.append((card.uid, "created", source_adapter, batch_id))
     for source in card.source:
         batch.add("card_sources", (card.uid, source))
     for person in getattr(card, "people", []):
@@ -394,6 +462,7 @@ def _materialize_row_batch(
     slug_map: dict[str, str],
     path_to_uid: dict[str, str],
     person_lookup: dict[str, str],
+    batch_id: str = "",
 ) -> ProjectionRowBuffer:
     batch = ProjectionRowBuffer()
     for row in rows:
@@ -404,6 +473,7 @@ def _materialize_row_batch(
                 slug_map=slug_map,
                 path_to_uid=path_to_uid,
                 person_lookup=person_lookup,
+                batch_id=batch_id,
             )
         )
     return batch

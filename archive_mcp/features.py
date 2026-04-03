@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
+
+from dateutil import parser as dateutil_parser
 
 from .contracts import ArchiveContext
 
@@ -39,6 +43,9 @@ EXTERNAL_ID_FIELDS = {
     "review_commit_sha": "github_commit",
     "original_commit_sha": "github_commit",
     "encounter_source_id": "medical_encounter",
+    "confirmation_code": "booking",
+    "tracking_number": "shipping",
+    "order_number": "purchase",
 }
 EXTERNAL_ID_LIST_FIELDS = {
     "invite_ical_uids": "calendar",
@@ -61,6 +68,16 @@ TIMELINE_FIELDS = (
     "occurred_at",
     "recorded_at",
     "committed_at",
+    "departure_at",
+    "arrival_at",
+    "pickup_at",
+    "dropoff_at",
+    "check_in",
+    "check_out",
+    "pay_date",
+    "shipped_at",
+    "event_at",
+    "activity_end_at",
 )
 RELATIONSHIP_FIELDS = (
     "people",
@@ -75,7 +92,42 @@ RELATIONSHIP_FIELDS = (
     "thread",
     "message",
     "repository",
+    "source_email",
+    "linked_purchase",
+    "evidence_uids",
 )
+
+
+_ACTIVITY_END_AT_FIELD_MAP: dict[str, str] = {
+    "flight": "arrival_at",
+    "accommodation": "check_out",
+    "car_rental": "dropoff_at",
+    "calendar_event": "end_at",
+    "meeting_transcript": "end_at",
+    "ride": "dropoff_at",
+}
+
+
+def parse_timestamp_to_utc(value: str) -> datetime | None:
+    """Parse an ISO-like timestamp string to timezone-aware UTC datetime."""
+    if not value or not str(value).strip():
+        return None
+    try:
+        dt = dateutil_parser.isoparse(str(value).strip())
+        if dt.tzinfo is None:
+            from archive_mcp.index_config import get_default_timezone
+
+            dt = dt.replace(tzinfo=ZoneInfo(get_default_timezone()))
+        return dt.astimezone(timezone.utc)
+    except (ValueError, TypeError):
+        return None
+
+
+def card_activity_end_at(card_type: str, frontmatter: dict[str, Any]) -> str:
+    field_name = _ACTIVITY_END_AT_FIELD_MAP.get(card_type)
+    if not field_name:
+        return ""
+    return str(frontmatter.get(field_name, "") or "").strip()
 
 
 def iter_string_values(value: Any) -> list[str]:
@@ -123,6 +175,12 @@ def card_activity_at(frontmatter: dict[str, Any]) -> str:
         "captured_at",
         "committed_at",
         "occurred_at",
+        "departure_at",
+        "pickup_at",
+        "check_in",
+        "pay_date",
+        "shipped_at",
+        "event_at",
         "updated",
         "created",
         "first_message_at",
@@ -244,13 +302,16 @@ def _split_pipe_agg(value: Any) -> tuple[str, ...]:
 
 def build_context_prefix_for_embed_row(row: dict[str, Any]) -> str:
     """Prefix chunk text at embed time using joined card metadata (index_store batch rows)."""
+    from archive_mcp.index_config import _format_activity_at
+
+    act = row.get("activity_at")
     ctx = build_context_json(
         card_type=str(row.get("ctype", "") or row.get("type", "") or ""),
         summary=str(row.get("summary", "") or ""),
         source_labels=_split_pipe_agg(row.get("sources_agg")),
         people=_split_pipe_agg(row.get("people_agg")),
         orgs=_split_pipe_agg(row.get("orgs_agg")),
-        time_span=(str(row.get("activity_at", "") or "").strip(),) if row.get("activity_at") else (),
+        time_span=(_format_activity_at(act),) if act is not None and act != "" else (),
         provenance_bias=0.0,
     )
     text = build_context_text(ctx)

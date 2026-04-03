@@ -7,11 +7,13 @@ are still defined here since they are card-type-independent.
 
 from __future__ import annotations
 
-from archive_mcp.card_registry import CARD_TYPE_REGISTRATIONS, _int, _json, _text
-from archive_mcp.contracts import ChunkRuleSpec, EdgeRuleSpec, ProjectionSpec
+from archive_mcp.card_registry import (CARD_TYPE_REGISTRATIONS, _float, _int,
+                                       _json, _text, _timestamptz)
+from archive_mcp.contracts import (ChunkRuleSpec, EdgeRuleSpec,
+                                   ProjectionColumnSpec, ProjectionSpec)
 from archive_mcp.projections.base import SHARED_TYPED_COLUMNS
 
-PROJECTION_REGISTRY_VERSION = 1
+PROJECTION_REGISTRY_VERSION = 2
 TYPED_PROJECTION_VERSION = 1
 
 
@@ -34,11 +36,25 @@ GENERIC_PROJECTIONS: tuple[ProjectionSpec, ...] = (
             _text("source_id", nullable=False),
             _text("created", nullable=False, indexed=True),
             _text("updated", nullable=False),
-            _text("activity_at", nullable=False, indexed=True),
+            _timestamptz("activity_at", indexed=True),
+            _timestamptz("activity_end_at", indexed=True),
             _text("sent_at", nullable=False),
             _text("start_at", nullable=False),
             _text("first_message_at", nullable=False),
             _text("last_message_at", nullable=False),
+            _float("quality_score", nullable=False, default=0.0),
+            ProjectionColumnSpec(
+                "quality_flags",
+                "TEXT[]",
+                nullable=False,
+                indexed=False,
+                source_field="quality_flags",
+                value_mode="text_array",
+                default="",
+            ),
+            _int("enrichment_version", nullable=False, default=0),
+            _text("enrichment_status", nullable=False, default="none"),
+            _timestamptz("last_enriched_at"),
             _text("content_hash", nullable=False),
             _text("search_text", nullable=False),
         ),

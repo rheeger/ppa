@@ -6,47 +6,27 @@ import json
 import sys
 from pathlib import Path
 
-import pytest
-
 import archive_mcp.__main__ as archive_main
 import archive_mcp.commands._resolve as resolve_mod
 import archive_mcp.commands.seed_links as seed_links_cmd
 import archive_mcp.server as archive_server
+import pytest
 from archive_mcp.commands._resolve import get_index
-from archive_mcp.embedding_provider import (
-    HashEmbeddingProvider,
-    OpenAIEmbeddingProvider,
-    _resolve_openai_api_key,
-    _resolve_service_account_token,
-    get_embedding_provider,
-)
+from archive_mcp.embedding_provider import (HashEmbeddingProvider,
+                                            OpenAIEmbeddingProvider,
+                                            _resolve_openai_api_key,
+                                            _resolve_service_account_token,
+                                            get_embedding_provider)
 from archive_mcp.index_store import PostgresArchiveIndex
 from archive_mcp.server import (  # type: ignore[import-not-found]
-    archive_bootstrap_postgres,
-    archive_duplicate_uids,
-    archive_duplicates,
-    archive_embed_pending,
-    archive_embedding_backlog,
-    archive_embedding_status,
-    archive_graph,
-    archive_hybrid_search,
-    archive_index_status,
-    archive_link_candidate,
-    archive_link_candidates,
-    archive_link_quality_gate,
-    archive_person,
-    archive_query,
-    archive_read,
-    archive_rebuild_indexes,
-    archive_review_link_candidate,
-    archive_search,
-    archive_seed_link_backfill,
-    archive_seed_link_surface,
-    archive_stats,
-    archive_timeline,
-    archive_validate,
-    archive_vector_search,
-)
+    archive_bootstrap_postgres, archive_duplicate_uids, archive_duplicates,
+    archive_embed_pending, archive_embedding_backlog, archive_embedding_status,
+    archive_graph, archive_hybrid_search, archive_index_status,
+    archive_link_candidate, archive_link_candidates, archive_link_quality_gate,
+    archive_person, archive_query, archive_read, archive_rebuild_indexes,
+    archive_review_link_candidate, archive_search, archive_seed_link_backfill,
+    archive_seed_link_surface, archive_stats, archive_timeline,
+    archive_validate, archive_vector_search)
 from hfa.provenance import ProvenanceEntry
 from hfa.schema import FinanceCard, PersonCard
 from hfa.vault import write_card
@@ -138,7 +118,7 @@ class FakeIndex:
         return {
             "embedding_model": embedding_model,
             "embedding_version": embedding_version,
-            "chunk_schema_version": 4,
+            "chunk_schema_version": 5,
             "chunk_count": 4,
             "embedded_chunk_count": 2,
             "pending_chunk_count": 2,
@@ -168,7 +148,7 @@ class FakeIndex:
             "provider": getattr(provider, "name", "unknown"),
             "embedding_model": embedding_model,
             "embedding_version": embedding_version,
-            "chunk_schema_version": 4,
+            "chunk_schema_version": 5,
             "batch_size": 2,
             "failed": 0,
             "embedded": min(limit, 2),
@@ -643,7 +623,7 @@ def test_postgres_bootstrap_prepares_pgvector_ready_schema(tmp_vault, monkeypatc
 def test_archive_embedding_status_and_backlog(tmp_vault, fake_index):
     status = archive_embedding_status(embedding_model="test-embed", embedding_version=1)
     assert "embedding_model: test-embed" in status
-    assert "chunk_schema_version: 4" in status
+    assert "chunk_schema_version: 5" in status
     assert "pending_chunk_count: 2" in status
 
     backlog = archive_embedding_backlog(limit=3, embedding_model="test-embed", embedding_version=1)

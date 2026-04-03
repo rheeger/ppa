@@ -14,34 +14,24 @@ from functools import partial
 from itertools import islice
 from typing import Any
 
-from .index_config import (
-    CHUNK_SCHEMA_VERSION,
-    INDEX_SCHEMA_VERSION,
-    MANIFEST_SCHEMA_VERSION,
-    PROJECTIONS_BY_LOAD_ORDER,
-    get_force_full_rebuild,
-    get_rebuild_batch_size,
-    get_rebuild_commit_interval,
-    get_rebuild_executor,
-    get_rebuild_progress_every,
-    get_rebuild_resume,
-    get_rebuild_staging_mode,
-    get_rebuild_verify_hash,
-    get_rebuild_workers,
-    get_seed_frozen_enabled,
-    manifest_cache_disabled,
-)
-from .materializer import _build_person_lookup, _materialize_row_batch, _resolve_person_reference
+from .index_config import (CHUNK_SCHEMA_VERSION, INDEX_SCHEMA_VERSION,
+                           MANIFEST_SCHEMA_VERSION, PROJECTIONS_BY_LOAD_ORDER,
+                           get_force_full_rebuild, get_rebuild_batch_size,
+                           get_rebuild_commit_interval, get_rebuild_executor,
+                           get_rebuild_progress_every, get_rebuild_resume,
+                           get_rebuild_staging_mode, get_rebuild_verify_hash,
+                           get_rebuild_workers, get_seed_frozen_enabled,
+                           manifest_cache_disabled)
+from .materializer import (_build_person_lookup, _materialize_row_batch,
+                           _resolve_person_reference)
 from .projections.base import ProjectionRowBuffer
-from .projections.registry import PROJECTION_REGISTRY, PROJECTION_REGISTRY_VERSION, TYPED_PROJECTIONS
-from .scanner import (
-    CanonicalRow,
-    NoteManifestRow,
-    _build_manifest_rows_from_canonical,
-    _classify_manifest_rebuild_delta,
-    _collect_canonical_rows,
-    _row_sort_key,
-)
+from .projections.registry import (PROJECTION_REGISTRY,
+                                   PROJECTION_REGISTRY_VERSION,
+                                   TYPED_PROJECTIONS)
+from .scanner import (CanonicalRow, NoteManifestRow,
+                      _build_manifest_rows_from_canonical,
+                      _classify_manifest_rebuild_delta,
+                      _collect_canonical_rows, _row_sort_key)
 from .vault_cache import VaultScanCache
 
 logger = logging.getLogger("ppa.loader")
@@ -82,6 +72,7 @@ def _try_resume_checkpoint(conn: Any, schema: str, run_id: str) -> tuple[str | N
 PROJECTION_COLUMNS_BY_TABLE = {
     projection.table_name: tuple(column.name for column in projection.columns) for projection in PROJECTION_REGISTRY
 }
+PROJECTION_COLUMNS_BY_TABLE["ingestion_log"] = ("card_uid", "action", "source_adapter", "batch_id")
 PROJECTION_NAMES = tuple(projection.table_name for projection in PROJECTION_REGISTRY)
 TYPED_PROJECTION_TABLES = tuple(projection.table_name for projection in TYPED_PROJECTIONS)
 
@@ -362,6 +353,13 @@ class LoaderMixin:
                 conn,
                 projection.table_name,
                 buffer.rows_for(projection.table_name),
+                dest_suffix=dest_suffix,
+            )
+        if buffer.ingestion_log_rows:
+            self._copy_rows(
+                conn,
+                "ingestion_log",
+                buffer.ingestion_log_rows,
                 dest_suffix=dest_suffix,
             )
         return counts
@@ -711,6 +709,7 @@ class LoaderMixin:
             slug_map=slug_map,
             path_to_uid=path_to_uid,
             person_lookup=person_lookup,
+            batch_id=run_id,
         )
 
         def _consume_materialized_batches() -> Iterable[ProjectionRowBuffer]:

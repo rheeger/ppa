@@ -11,7 +11,9 @@ from typing import Any
 from hfa.schema import DETERMINISTIC_ONLY
 
 _PROVENANCE_RE = re.compile(r"\n?<!-- provenance\n(.*?)\n-->\s*", re.DOTALL)
-PROVENANCE_EXEMPT_FIELDS = frozenset({"uid", "type", "source", "source_id", "created", "updated", "people", "orgs"})
+PROVENANCE_EXEMPT_FIELDS = frozenset(
+    {"uid", "type", "source", "source_id", "created", "updated", "people", "orgs", "source_email"}
+)
 
 
 @dataclass

@@ -6,7 +6,8 @@ import re
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (BaseModel, ConfigDict, Field, field_validator,
+                      model_validator)
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 PARTIAL_DATE_RE = re.compile(r"^(?:\d{4}-\d{2}|\d{2}-\d{2}|\d{4}-\d{2}-\d{2})$")
@@ -328,6 +329,99 @@ DETERMINISTIC_ONLY = frozenset(
         "original_position",
         "original_commit_sha",
         "diff_hunk",
+        # Phase 1 derived / entity / system card types (deterministic extraction)
+        "restaurant",
+        "airline",
+        "confirmation_code",
+        "tracking_number",
+        "service_name",
+        "employer",
+        "pickup_location",
+        "dropoff_location",
+        "fare",
+        "tip",
+        "nightly_rate",
+        "total_cost",
+        "order_number",
+        "pay_date",
+        "gross_amount",
+        "net_amount",
+        "deductions_json",
+        "evidence_uids",
+        "depends_on_types",
+        "standing_query",
+        "input_watermark",
+        "observation_type",
+        "confidence",
+        "valid_from",
+        "valid_until",
+        "billing_cycle",
+        "event_type",
+        "event_at",
+        "venue",
+        "venue_address",
+        "barcode_url",
+        "property_name",
+        "property_type",
+        "fare_class",
+        "fare_amount",
+        "booking_source",
+        "passengers",
+        "vehicle_class",
+        "shipping_cost",
+        "shipping_address",
+        "payment_method",
+        "linked_purchase",
+        "estimated_delivery",
+        "delivered_at",
+        "origin_airport",
+        "destination_airport",
+        "departure_at",
+        "arrival_at",
+        "pickup_at",
+        "dropoff_at",
+        "check_in",
+        "check_out",
+        "ride_type",
+        "distance_miles",
+        "duration_minutes",
+        "driver_name",
+        "vehicle",
+        "carrier",
+        "shipped_at",
+        "pay_period_start",
+        "pay_period_end",
+        "place_type",
+        "org_type",
+        "relationship",
+        "first_seen",
+        "last_seen",
+        "refresh_interval_days",
+        "freshness_date",
+        "mode",
+        "delivery_address",
+        "delivery_fee",
+        "store",
+        "items",
+        "subtotal",
+        "total",
+        "tax",
+        "seat",
+        "quantity",
+        "price",
+        "plan_name",
+        "guests",
+        "source_email",
+        "event_name",
+        "vendor",
+        "currency",
+        "name",
+        "address",
+        "city",
+        "state",
+        "country",
+        "domain",
+        "websites",
     }
 )
 
@@ -1766,6 +1860,523 @@ class GitMessageCard(BaseCard):
         return self
 
 
+class MealOrderCard(BaseCard):
+    type: Literal["meal_order"] = "meal_order"
+    service: str = ""
+    restaurant: str = ""
+    items: list[dict[str, Any]] = Field(default_factory=list)
+    subtotal: float = 0.0
+    total: float = 0.0
+    tip: float = 0.0
+    delivery_fee: float = 0.0
+    tax: float = 0.0
+    mode: str = ""
+    delivery_address: str = ""
+    source_email: str = ""
+
+    @field_validator(
+        "service",
+        "restaurant",
+        "mode",
+        "delivery_address",
+        "source_email",
+    )
+    @classmethod
+    def clean_meal_order_strings(cls, value: str) -> str:
+        return _clean_string(value)
+
+    @model_validator(mode="after")
+    def meal_order_summary_fallback(self) -> MealOrderCard:
+        if not self.summary:
+            if self.service and self.restaurant:
+                self.summary = f"{self.service} order from {self.restaurant}"
+            else:
+                self.summary = self.source_id
+        self.summary = _clean_string(self.summary)
+        return self
+
+
+class GroceryOrderCard(BaseCard):
+    type: Literal["grocery_order"] = "grocery_order"
+    service: str = ""
+    store: str = ""
+    items: list[dict[str, Any]] = Field(default_factory=list)
+    subtotal: float = 0.0
+    total: float = 0.0
+    delivery_fee: float = 0.0
+    delivery_address: str = ""
+    source_email: str = ""
+
+    @field_validator("service", "store", "delivery_address", "source_email")
+    @classmethod
+    def clean_grocery_order_strings(cls, value: str) -> str:
+        return _clean_string(value)
+
+    @model_validator(mode="after")
+    def grocery_order_summary_fallback(self) -> GroceryOrderCard:
+        if not self.summary:
+            if self.service and self.store:
+                self.summary = f"{self.service} order from {self.store}"
+            else:
+                self.summary = self.source_id
+        self.summary = _clean_string(self.summary)
+        return self
+
+
+class RideCard(BaseCard):
+    type: Literal["ride"] = "ride"
+    service: str = ""
+    ride_type: str = ""
+    pickup_location: str = ""
+    dropoff_location: str = ""
+    pickup_at: str = ""
+    dropoff_at: str = ""
+    fare: float = 0.0
+    tip: float = 0.0
+    distance_miles: float = 0.0
+    duration_minutes: float = 0.0
+    driver_name: str = ""
+    vehicle: str = ""
+    source_email: str = ""
+
+    @field_validator(
+        "service",
+        "ride_type",
+        "pickup_location",
+        "dropoff_location",
+        "pickup_at",
+        "dropoff_at",
+        "driver_name",
+        "vehicle",
+        "source_email",
+    )
+    @classmethod
+    def clean_ride_strings(cls, value: str) -> str:
+        return _clean_string(value)
+
+    @model_validator(mode="after")
+    def ride_summary_fallback(self) -> RideCard:
+        if not self.summary:
+            if self.service and self.pickup_location and self.dropoff_location:
+                self.summary = f"{self.service} from {self.pickup_location} to {self.dropoff_location}"
+            else:
+                self.summary = self.source_id
+        self.summary = _clean_string(self.summary)
+        return self
+
+
+class FlightCard(BaseCard):
+    type: Literal["flight"] = "flight"
+    airline: str = ""
+    confirmation_code: str = ""
+    origin_airport: str = ""
+    destination_airport: str = ""
+    departure_at: str = ""
+    arrival_at: str = ""
+    fare_class: str = ""
+    seat: str = ""
+    fare_amount: float = 0.0
+    booking_source: str = ""
+    passengers: list[str] = Field(default_factory=list)
+    source_email: str = ""
+
+    @field_validator(
+        "airline",
+        "confirmation_code",
+        "origin_airport",
+        "destination_airport",
+        "departure_at",
+        "arrival_at",
+        "fare_class",
+        "seat",
+        "booking_source",
+        "source_email",
+    )
+    @classmethod
+    def clean_flight_strings(cls, value: str) -> str:
+        return _clean_string(value)
+
+    @model_validator(mode="after")
+    def flight_summary_fallback(self) -> FlightCard:
+        self.passengers = _dedupe_preserve_order([_clean_string(p) for p in self.passengers if _clean_string(p)])
+        if not self.summary:
+            if self.airline and self.origin_airport and self.destination_airport:
+                self.summary = f"{self.airline} {self.origin_airport} to {self.destination_airport}"
+            else:
+                self.summary = self.source_id
+        self.summary = _clean_string(self.summary)
+        return self
+
+
+class AccommodationCard(BaseCard):
+    type: Literal["accommodation"] = "accommodation"
+    property_name: str = ""
+    property_type: str = ""
+    address: str = ""
+    check_in: str = ""
+    check_out: str = ""
+    confirmation_code: str = ""
+    nightly_rate: float = 0.0
+    total_cost: float = 0.0
+    guests: list[str] = Field(default_factory=list)
+    booking_source: str = ""
+    source_email: str = ""
+
+    @field_validator(
+        "property_name",
+        "property_type",
+        "address",
+        "check_in",
+        "check_out",
+        "confirmation_code",
+        "booking_source",
+        "source_email",
+    )
+    @classmethod
+    def clean_accommodation_strings(cls, value: str) -> str:
+        return _clean_string(value)
+
+    @model_validator(mode="after")
+    def accommodation_summary_fallback(self) -> AccommodationCard:
+        self.guests = _dedupe_preserve_order([_clean_string(g) for g in self.guests if _clean_string(g)])
+        if not self.summary:
+            if self.property_name and self.check_in and self.check_out:
+                self.summary = f"{self.property_name} {self.check_in} to {self.check_out}"
+            else:
+                self.summary = self.source_id
+        self.summary = _clean_string(self.summary)
+        return self
+
+
+class CarRentalCard(BaseCard):
+    type: Literal["car_rental"] = "car_rental"
+    company: str = ""
+    pickup_location: str = ""
+    dropoff_location: str = ""
+    pickup_at: str = ""
+    dropoff_at: str = ""
+    vehicle_class: str = ""
+    confirmation_code: str = ""
+    total_cost: float = 0.0
+    source_email: str = ""
+
+    @field_validator(
+        "company",
+        "pickup_location",
+        "dropoff_location",
+        "pickup_at",
+        "dropoff_at",
+        "vehicle_class",
+        "confirmation_code",
+        "source_email",
+    )
+    @classmethod
+    def clean_car_rental_strings(cls, value: str) -> str:
+        return _clean_string(value)
+
+    @model_validator(mode="after")
+    def car_rental_summary_fallback(self) -> CarRentalCard:
+        if not self.summary:
+            date_part = self.pickup_at[:10] if len(self.pickup_at) >= 10 else self.pickup_at
+            if self.company and date_part:
+                self.summary = f"{self.company} rental {date_part}"
+            elif self.company:
+                self.summary = self.company
+            else:
+                self.summary = self.source_id
+        self.summary = _clean_string(self.summary)
+        return self
+
+
+class PurchaseCard(BaseCard):
+    type: Literal["purchase"] = "purchase"
+    vendor: str = ""
+    items: list[dict[str, Any]] = Field(default_factory=list)
+    subtotal: float = 0.0
+    total: float = 0.0
+    tax: float = 0.0
+    shipping_cost: float = 0.0
+    shipping_address: str = ""
+    order_number: str = ""
+    payment_method: str = ""
+    source_email: str = ""
+
+    @field_validator("vendor", "shipping_address", "order_number", "payment_method", "source_email")
+    @classmethod
+    def clean_purchase_strings(cls, value: str) -> str:
+        return _clean_string(value)
+
+    @model_validator(mode="after")
+    def purchase_summary_fallback(self) -> PurchaseCard:
+        if not self.summary:
+            if self.vendor and self.order_number:
+                self.summary = f"{self.vendor} order {self.order_number}"
+            else:
+                self.summary = self.source_id
+        self.summary = _clean_string(self.summary)
+        return self
+
+
+class ShipmentCard(BaseCard):
+    type: Literal["shipment"] = "shipment"
+    carrier: str = ""
+    tracking_number: str = ""
+    shipped_at: str = ""
+    estimated_delivery: str = ""
+    delivered_at: str = ""
+    origin: str = ""
+    destination: str = ""
+    linked_purchase: str = ""
+    source_email: str = ""
+
+    @field_validator(
+        "carrier",
+        "tracking_number",
+        "shipped_at",
+        "estimated_delivery",
+        "delivered_at",
+        "origin",
+        "destination",
+        "linked_purchase",
+        "source_email",
+    )
+    @classmethod
+    def clean_shipment_strings(cls, value: str) -> str:
+        return _clean_string(value)
+
+    @model_validator(mode="after")
+    def shipment_summary_fallback(self) -> ShipmentCard:
+        if not self.summary:
+            if self.carrier and self.tracking_number:
+                self.summary = f"{self.carrier} {self.tracking_number}"
+            else:
+                self.summary = self.source_id
+        self.summary = _clean_string(self.summary)
+        return self
+
+
+class SubscriptionCard(BaseCard):
+    type: Literal["subscription"] = "subscription"
+    service_name: str = ""
+    plan_name: str = ""
+    price: float = 0.0
+    currency: str = "USD"
+    billing_cycle: str = ""
+    event_type: str = ""
+    event_at: str = ""
+    source_email: str = ""
+
+    @field_validator(
+        "service_name",
+        "plan_name",
+        "currency",
+        "billing_cycle",
+        "event_type",
+        "event_at",
+        "source_email",
+    )
+    @classmethod
+    def clean_subscription_strings(cls, value: str) -> str:
+        return _clean_string(value)
+
+    @model_validator(mode="after")
+    def subscription_summary_fallback(self) -> SubscriptionCard:
+        if not self.summary:
+            if self.service_name and self.event_type:
+                self.summary = f"{self.service_name} {self.event_type}"
+            else:
+                self.summary = self.source_id
+        self.summary = _clean_string(self.summary)
+        return self
+
+
+class EventTicketCard(BaseCard):
+    type: Literal["event_ticket"] = "event_ticket"
+    event_name: str = ""
+    venue: str = ""
+    venue_address: str = ""
+    event_at: str = ""
+    section: str = ""
+    seat: str = ""
+    price: float = 0.0
+    quantity: int = 1
+    barcode_url: str = ""
+    confirmation_code: str = ""
+    source_email: str = ""
+
+    @field_validator(
+        "event_name",
+        "venue",
+        "venue_address",
+        "event_at",
+        "section",
+        "seat",
+        "barcode_url",
+        "confirmation_code",
+        "source_email",
+    )
+    @classmethod
+    def clean_event_ticket_strings(cls, value: str) -> str:
+        return _clean_string(value)
+
+    @model_validator(mode="after")
+    def event_ticket_summary_fallback(self) -> EventTicketCard:
+        if not self.summary:
+            if self.event_name and self.venue:
+                self.summary = f"{self.event_name} at {self.venue}"
+            else:
+                self.summary = self.source_id
+        self.summary = _clean_string(self.summary)
+        return self
+
+
+class PayrollCard(BaseCard):
+    type: Literal["payroll"] = "payroll"
+    employer: str = ""
+    pay_date: str = ""
+    pay_period_start: str = ""
+    pay_period_end: str = ""
+    gross_amount: float = 0.0
+    net_amount: float = 0.0
+    deductions_json: list[dict[str, Any]] = Field(default_factory=list)
+    currency: str = "USD"
+    source_email: str = ""
+
+    @field_validator(
+        "employer",
+        "pay_date",
+        "pay_period_start",
+        "pay_period_end",
+        "currency",
+        "source_email",
+    )
+    @classmethod
+    def clean_payroll_strings(cls, value: str) -> str:
+        return _clean_string(value)
+
+    @model_validator(mode="after")
+    def payroll_summary_fallback(self) -> PayrollCard:
+        if not self.summary:
+            if self.employer and self.pay_date:
+                self.summary = f"{self.employer} pay {self.pay_date}"
+            else:
+                self.summary = self.source_id
+        self.summary = _clean_string(self.summary)
+        return self
+
+
+class PlaceCard(BaseCard):
+    type: Literal["place"] = "place"
+    name: str = ""
+    address: str = ""
+    city: str = ""
+    state: str = ""
+    country: str = ""
+    latitude: float = 0.0
+    longitude: float = 0.0
+    place_type: str = ""
+    first_seen: str = ""
+    last_seen: str = ""
+
+    @field_validator("name", "address", "city", "state", "country", "place_type", "first_seen", "last_seen")
+    @classmethod
+    def clean_place_strings(cls, value: str) -> str:
+        return _clean_string(value)
+
+    @model_validator(mode="after")
+    def place_summary_fallback(self) -> PlaceCard:
+        if not self.summary:
+            self.summary = self.name or self.address or self.source_id
+        self.summary = _clean_string(self.summary)
+        return self
+
+
+class OrganizationCard(BaseCard):
+    type: Literal["organization"] = "organization"
+    name: str = ""
+    org_type: str = ""
+    domain: str = ""
+    relationship: str = ""
+    first_seen: str = ""
+    last_seen: str = ""
+    websites: list[str] = Field(default_factory=list)
+
+    @field_validator("name", "org_type", "domain", "relationship", "first_seen", "last_seen")
+    @classmethod
+    def clean_organization_strings(cls, value: str) -> str:
+        return _clean_string(value)
+
+    @field_validator("websites")
+    @classmethod
+    def dedupe_org_websites(cls, value: list[str]) -> list[str]:
+        return _dedupe_preserve_order([_clean_string(w) for w in value if _clean_string(w)])
+
+    @model_validator(mode="after")
+    def organization_summary_fallback(self) -> OrganizationCard:
+        if not self.summary:
+            self.summary = self.name or self.source_id
+        self.summary = _clean_string(self.summary)
+        return self
+
+
+class KnowledgeCard(BaseCard):
+    type: Literal["knowledge"] = "knowledge"
+    domain: str = ""
+    standing_query: str = ""
+    depends_on_types: list[str] = Field(default_factory=list)
+    refresh_interval_days: int = 7
+    freshness_date: str = ""
+    input_watermark: str = ""
+
+    @field_validator("domain", "standing_query", "freshness_date", "input_watermark")
+    @classmethod
+    def clean_knowledge_strings(cls, value: str) -> str:
+        return _clean_string(value)
+
+    @field_validator("depends_on_types")
+    @classmethod
+    def dedupe_depends_on_types(cls, value: list[str]) -> list[str]:
+        return _dedupe_preserve_order([_clean_string(t) for t in value if _clean_string(t)])
+
+    @model_validator(mode="after")
+    def knowledge_summary_fallback(self) -> KnowledgeCard:
+        if not self.summary:
+            q = self.standing_query[:80] if self.standing_query else ""
+            self.summary = f"{self.domain}: {q}" if self.domain else (q or self.source_id)
+        self.summary = _clean_string(self.summary)
+        return self
+
+
+class ObservationCard(BaseCard):
+    type: Literal["observation"] = "observation"
+    domain: str = ""
+    observation_type: str = ""
+    confidence: float = 0.0
+    evidence_uids: list[str] = Field(default_factory=list)
+    valid_from: str = ""
+    valid_until: str = ""
+
+    @field_validator("domain", "observation_type", "valid_from", "valid_until")
+    @classmethod
+    def clean_observation_strings(cls, value: str) -> str:
+        return _clean_string(value)
+
+    @field_validator("evidence_uids")
+    @classmethod
+    def dedupe_evidence_uids(cls, value: list[str]) -> list[str]:
+        return _dedupe_preserve_order([_clean_string(u) for u in value if _clean_string(u)])
+
+    @model_validator(mode="after")
+    def observation_summary_fallback(self) -> ObservationCard:
+        if not self.summary:
+            if self.observation_type and self.domain:
+                self.summary = f"{self.observation_type}: {self.domain}"
+            else:
+                self.summary = self.source_id
+        self.summary = _clean_string(self.summary)
+        return self
+
+
 CARD_TYPES: dict[str, type[BaseCard]] = {
     "person": PersonCard,
     "finance": FinanceCard,
@@ -1788,6 +2399,21 @@ CARD_TYPES: dict[str, type[BaseCard]] = {
     "git_commit": GitCommitCard,
     "git_thread": GitThreadCard,
     "git_message": GitMessageCard,
+    "meal_order": MealOrderCard,
+    "grocery_order": GroceryOrderCard,
+    "ride": RideCard,
+    "flight": FlightCard,
+    "accommodation": AccommodationCard,
+    "car_rental": CarRentalCard,
+    "purchase": PurchaseCard,
+    "shipment": ShipmentCard,
+    "subscription": SubscriptionCard,
+    "event_ticket": EventTicketCard,
+    "payroll": PayrollCard,
+    "place": PlaceCard,
+    "organization": OrganizationCard,
+    "knowledge": KnowledgeCard,
+    "observation": ObservationCard,
 }
 
 
@@ -1849,6 +2475,7 @@ def get_card_type_spec(card_type: str):
 def iter_card_type_specs():
     """Return all canonical card contracts in registry order."""
 
-    from hfa.card_contracts import iter_card_type_specs as _iter_card_type_specs
+    from hfa.card_contracts import \
+        iter_card_type_specs as _iter_card_type_specs
 
     return _iter_card_type_specs()

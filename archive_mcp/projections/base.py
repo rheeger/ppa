@@ -6,14 +6,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from archive_mcp.contracts import ProjectionColumnSpec, ProjectionSpec
-from archive_mcp.features import (
-    card_activity_at,
-    external_ids_by_provider,
-    iter_string_values,
-    json_text,
-    primary_person,
-    relationship_payload,
-)
+from archive_mcp.features import (card_activity_at, external_ids_by_provider,
+                                  iter_string_values, json_text,
+                                  parse_timestamp_to_utc, primary_person,
+                                  relationship_payload)
 from hfa.schema import BaseCard
 
 SHARED_TYPED_COLUMNS: tuple[ProjectionColumnSpec, ...] = (
@@ -34,7 +30,7 @@ SHARED_TYPED_COLUMNS: tuple[ProjectionColumnSpec, ...] = (
     ),
     ProjectionColumnSpec("source_id", "TEXT", nullable=False, source_field="source_id", indexed=True),
     ProjectionColumnSpec(
-        "activity_at", "TEXT", nullable=False, source_field="activity_at", indexed=True, value_mode="activity_at"
+        "activity_at", "TIMESTAMPTZ", nullable=True, source_field="activity_at", indexed=True, value_mode="activity_at"
     ),
     ProjectionColumnSpec(
         "external_ids_json",
@@ -63,6 +59,7 @@ SHARED_TYPED_COLUMNS: tuple[ProjectionColumnSpec, ...] = (
 @dataclass(slots=True)
 class ProjectionRowBuffer:
     rows_by_table: dict[str, list[tuple[Any, ...]]] = field(default_factory=dict)
+    ingestion_log_rows: list[tuple[Any, ...]] = field(default_factory=list)
 
     def add(self, table_name: str, row: tuple[Any, ...]) -> None:
         self.rows_by_table.setdefault(table_name, []).append(row)
@@ -70,9 +67,11 @@ class ProjectionRowBuffer:
     def extend(self, other: "ProjectionRowBuffer") -> None:
         for table_name, rows in other.rows_by_table.items():
             self.rows_by_table.setdefault(table_name, []).extend(rows)
+        self.ingestion_log_rows.extend(other.ingestion_log_rows)
 
     def clear(self) -> None:
         self.rows_by_table.clear()
+        self.ingestion_log_rows.clear()
 
     def rows_for(self, table_name: str) -> list[tuple[Any, ...]]:
         return self.rows_by_table.get(table_name, [])
@@ -105,7 +104,8 @@ def _column_value(
         sources = iter_string_values(frontmatter.get("source", []))
         return sources[0] if sources else ""
     if column.value_mode == "activity_at":
-        return card_activity_at(frontmatter)
+        raw = card_activity_at(frontmatter)
+        return parse_timestamp_to_utc(raw)
     if column.value_mode == "primary_person":
         return primary_person(frontmatter.get(column.source_field or column.name, []))
     if column.value_mode == "external_ids_json":

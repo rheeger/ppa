@@ -36,7 +36,8 @@ from .commands import status as status_cmd
 from .commands._resolve import resolve_index, resolve_store
 from .errors import InvalidInputError, PpaError, SeedLinksDisabledError
 from .index_config import get_seed_links_enabled
-from .index_store import get_default_embedding_model, get_default_embedding_version
+from .index_store import (get_default_embedding_model,
+                          get_default_embedding_version)
 
 _SEED_LINKS_DISABLED_MSG = "Seed links are not enabled. Set PPA_SEED_LINKS_ENABLED=1 to enable."
 
@@ -83,6 +84,8 @@ _TOOL_PROFILES: dict[str, set[str] | None] = {
         "archive_graph",
         "archive_person",
         "archive_timeline",
+        "archive_temporal_neighbors",
+        "archive_knowledge",
         "archive_stats",
         "archive_vector_search",
         "archive_hybrid_search",
@@ -301,6 +304,62 @@ def archive_timeline(start_date: str = "", end_date: str = "", limit: int = 20) 
         return out
     except PpaError as exc:
         return _ppa_err("archive_timeline", exc)
+
+
+@mcp.tool()
+def archive_temporal_neighbors(
+    timestamp: str,
+    direction: str = "both",
+    limit: int = 20,
+    type_filter: str = "",
+    source_filter: str = "",
+    people_filter: str = "",
+) -> str:
+    """Cards near a point in time (before, after, or spanning the timestamp)."""
+
+    profile_error = _tool_profile_error("archive_temporal_neighbors")
+    if profile_error:
+        return profile_error
+    t0 = _log_tool_call("archive_temporal_neighbors", timestamp=timestamp, direction=direction, limit=limit)
+    try:
+        store = resolve_store()
+        result = graph_cmd.temporal_neighbors(
+            timestamp,
+            direction=direction,
+            limit=limit,
+            type_filter=type_filter,
+            source_filter=source_filter,
+            people_filter=people_filter,
+            store=store,
+            logger=_log,
+        )
+        _log_tool_done("archive_temporal_neighbors", t0, count=result.get("count", 0))
+        return json.dumps(result, indent=2)
+    except PpaError as exc:
+        return _ppa_err("archive_temporal_neighbors", exc)
+
+
+@mcp.tool()
+def archive_knowledge(domain: str, fallback_query: str = "", limit: int = 5) -> str:
+    """Freshest non-stale knowledge card for a domain, or lexical search fallback."""
+
+    profile_error = _tool_profile_error("archive_knowledge")
+    if profile_error:
+        return profile_error
+    t0 = _log_tool_call("archive_knowledge", domain=domain, limit=limit)
+    try:
+        store = resolve_store()
+        result = graph_cmd.knowledge_domain(
+            domain,
+            fallback_query=fallback_query,
+            limit=limit,
+            store=store,
+            logger=_log,
+        )
+        _log_tool_done("archive_knowledge", t0, fallback=bool(result.get("fallback")))
+        return json.dumps(result, indent=2)
+    except PpaError as exc:
+        return _ppa_err("archive_knowledge", exc)
 
 
 @mcp.tool()

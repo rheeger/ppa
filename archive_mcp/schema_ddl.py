@@ -5,10 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from .index_config import (
-    CHUNK_SCHEMA_VERSION,
-    get_seed_links_enabled,
-)
+from .index_config import CHUNK_SCHEMA_VERSION, get_seed_links_enabled
 from .loader import PROJECTION_NAMES
 from .migrate import MigrationRunner
 from .projections.registry import TYPED_PROJECTIONS
@@ -31,6 +28,10 @@ class SchemaDDLMixin:
             return f" DEFAULT {'TRUE' if bool(value) else 'FALSE'}"
         if sql_type in {"INTEGER", "DOUBLE PRECISION"}:
             return f" DEFAULT {value}"
+        if sql_type == "TIMESTAMPTZ":
+            return ""
+        if sql_type == "TEXT[]":
+            return " DEFAULT '{}'::text[]"
         if value in (None, ""):
             return " DEFAULT ''"
         escaped = str(value).replace("'", "''")
@@ -88,11 +89,17 @@ class SchemaDDLMixin:
                 source_id TEXT NOT NULL DEFAULT '',
                 created TEXT NOT NULL DEFAULT '',
                 updated TEXT NOT NULL DEFAULT '',
-                activity_at TEXT NOT NULL DEFAULT '',
+                activity_at TIMESTAMPTZ,
+                activity_end_at TIMESTAMPTZ,
                 sent_at TEXT NOT NULL DEFAULT '',
                 start_at TEXT NOT NULL DEFAULT '',
                 first_message_at TEXT NOT NULL DEFAULT '',
                 last_message_at TEXT NOT NULL DEFAULT '',
+                quality_score DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+                quality_flags TEXT[] NOT NULL DEFAULT '{{}}',
+                enrichment_version INTEGER NOT NULL DEFAULT 0,
+                enrichment_status TEXT NOT NULL DEFAULT 'none',
+                last_enriched_at TIMESTAMPTZ,
                 content_hash TEXT NOT NULL,
                 search_text TEXT NOT NULL DEFAULT '',
                 search_document tsvector GENERATED ALWAYS AS (
@@ -105,7 +112,12 @@ class SchemaDDLMixin:
             conn.execute(f"CREATE INDEX IF NOT EXISTS idx_cards_slug ON {self.schema}.cards(slug)")
             conn.execute(f"CREATE INDEX IF NOT EXISTS idx_cards_type ON {self.schema}.cards(type)")
             conn.execute(f"CREATE INDEX IF NOT EXISTS idx_cards_created ON {self.schema}.cards(created)")
-            conn.execute(f"CREATE INDEX IF NOT EXISTS idx_cards_activity_at ON {self.schema}.cards(activity_at)")
+            conn.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_cards_activity_at_uid ON {self.schema}.cards(activity_at, uid)"
+            )
+            conn.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_cards_activity_end_at ON {self.schema}.cards(activity_end_at)"
+            )
             conn.execute(
                 f"CREATE INDEX IF NOT EXISTS idx_cards_search_document ON {self.schema}.cards USING GIN(search_document)"
             )
@@ -291,6 +303,59 @@ class SchemaDDLMixin:
             f"""
             INSERT INTO {self.schema}.rebuild_checkpoint (id) VALUES (1)
             ON CONFLICT (id) DO NOTHING
+            """
+        )
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {self.schema}.ingestion_log (
+                id BIGSERIAL PRIMARY KEY,
+                card_uid TEXT NOT NULL,
+                action TEXT NOT NULL,
+                source_adapter TEXT NOT NULL,
+                batch_id TEXT NOT NULL DEFAULT '',
+                logged_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        if ensure_indexes:
+            conn.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_ingestion_log_logged_at ON {self.schema}.ingestion_log(logged_at)"
+            )
+            conn.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_ingestion_log_card_uid ON {self.schema}.ingestion_log(card_uid)"
+            )
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {self.schema}.enrichment_queue (
+                id BIGSERIAL PRIMARY KEY,
+                card_uid TEXT NOT NULL,
+                task_type TEXT NOT NULL,
+                priority INTEGER NOT NULL DEFAULT 100,
+                status TEXT NOT NULL DEFAULT 'pending',
+                queued_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                claimed_at TIMESTAMPTZ,
+                completed_at TIMESTAMPTZ,
+                error_message TEXT DEFAULT '',
+                attempts INTEGER DEFAULT 0
+            )
+            """
+        )
+        if ensure_indexes:
+            conn.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_eq_status_priority ON {self.schema}.enrichment_queue(status, priority)"
+            )
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {self.schema}.retrieval_gaps (
+                id BIGSERIAL PRIMARY KEY,
+                query_text TEXT NOT NULL,
+                gap_type TEXT NOT NULL,
+                detail TEXT NOT NULL DEFAULT '',
+                card_uid TEXT DEFAULT '',
+                detected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                resolved BOOLEAN NOT NULL DEFAULT FALSE,
+                resolved_at TIMESTAMPTZ
+            )
             """
         )
         conn.execute(
@@ -540,6 +605,13 @@ class SchemaDDLMixin:
         return runner.status()
 
     def _clear(self, conn) -> None:
-        table_names = ["embeddings", *PROJECTION_NAMES, "meta"]
+        table_names = [
+            "embeddings",
+            *PROJECTION_NAMES,
+            "meta",
+            "ingestion_log",
+            "enrichment_queue",
+            "retrieval_gaps",
+        ]
         qualified = ", ".join(f"{self.schema}.{table_name}" for table_name in table_names)
         conn.execute(f"TRUNCATE TABLE {qualified} RESTART IDENTITY CASCADE")

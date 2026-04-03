@@ -13,38 +13,28 @@ from .embedding_provider import get_embedding_provider
 from .explain import retrieval_explain_payload, retrieval_explain_payload_v2
 from .features import archive_context, build_context_json, build_context_text
 from .index_config import get_seed_links_enabled
-from .index_store import PostgresArchiveIndex, get_default_embedding_model, get_default_embedding_version
+from .index_store import (PostgresArchiveIndex, get_default_embedding_model,
+                          get_default_embedding_version)
 from .projections.registry import projection_for_card_type
 from .query_planner import build_query_plan, effective_filters_from_plan
 from .reranker import blend_rerank_scores, reranker_for_config
-from .retrieval_pipeline import (
-    PIPELINE_VERSION,
-    HybridFetchInputs,
-    anchor_uids_from_lexical,
-    fuse_and_rank_hybrid,
-    merge_lexical_rows,
-    merge_vector_rows,
-    score_breakdown_for_row,
-)
+from .retrieval_pipeline import (PIPELINE_VERSION, HybridFetchInputs,
+                                 anchor_uids_from_lexical,
+                                 fuse_and_rank_hybrid, merge_lexical_rows,
+                                 merge_vector_rows, score_breakdown_for_row)
 
 _SEED_LINKS_DISABLED = {"error": "Seed links are not enabled. Set PPA_SEED_LINKS_ENABLED=1 to enable."}
 
 
 def _import_seed_links():
-    from .seed_links import (
-        compute_link_quality_gate,
-        get_link_candidate_details,
-        get_seed_scope_rows,
-        get_surface_policy_rows,
-        list_link_candidates,
-        review_link_candidate,
-        run_incremental_link_refresh,
-        run_seed_link_backfill,
-        run_seed_link_enqueue,
-        run_seed_link_promotion_workers,
-        run_seed_link_report,
-        run_seed_link_workers,
-    )
+    from .seed_links import (compute_link_quality_gate,
+                             get_link_candidate_details, get_seed_scope_rows,
+                             get_surface_policy_rows, list_link_candidates,
+                             review_link_candidate,
+                             run_incremental_link_refresh,
+                             run_seed_link_backfill, run_seed_link_enqueue,
+                             run_seed_link_promotion_workers,
+                             run_seed_link_report, run_seed_link_workers)
 
     return {
         "compute_link_quality_gate": compute_link_quality_gate,
@@ -148,6 +138,34 @@ class DefaultArchiveStore(ArchiveStore):
 
     def timeline(self, *, start_date: str = "", end_date: str = "", limit: int = 20) -> dict[str, Any]:
         return {"rows": self.index.timeline(start_date=start_date, end_date=end_date, limit=limit)}
+
+    def temporal_neighbors(
+        self,
+        timestamp: str,
+        *,
+        direction: str = "both",
+        limit: int = 20,
+        type_filter: str = "",
+        source_filter: str = "",
+        people_filter: str = "",
+    ) -> dict[str, Any]:
+        return self.index.temporal_neighbors(
+            timestamp,
+            direction=direction,
+            limit=limit,
+            type_filter=type_filter,
+            source_filter=source_filter,
+            people_filter=people_filter,
+        )
+
+    def knowledge_for_domain(
+        self,
+        domain: str,
+        *,
+        fallback_query: str = "",
+        limit: int = 5,
+    ) -> dict[str, Any]:
+        return self.index.knowledge_for_domain(domain, fallback_query=fallback_query, limit=limit)
 
     def vector_search(self, query: str, **kwargs) -> dict[str, Any]:
         model = kwargs.get("embedding_model", "") or get_default_embedding_model()

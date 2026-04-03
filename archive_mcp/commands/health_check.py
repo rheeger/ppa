@@ -168,7 +168,7 @@ def run_structural_checks(conn: Any, schema: str, manifest: dict[str, Any] | Non
 
     if invariants.get("all_cards_have_activity_at"):
         null_activity = conn.execute(
-            f"SELECT COUNT(*) FROM {schema}.cards WHERE activity_at IS NULL OR activity_at = ''"
+            f"SELECT COUNT(*) FROM {schema}.cards WHERE activity_at IS NULL"
         ).fetchone()
         null_activity_count = int(null_activity[0] if not isinstance(null_activity, dict) else next(iter(null_activity.values())))
         if null_activity_count > 0:

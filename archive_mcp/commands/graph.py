@@ -44,3 +44,42 @@ def timeline(
     rows = result.get("rows") or []
     logger.info("timeline_done result_count=%s", len(rows))
     return result
+
+
+def temporal_neighbors(
+    timestamp: str,
+    *,
+    direction: str = "both",
+    limit: int = 20,
+    type_filter: str = "",
+    source_filter: str = "",
+    people_filter: str = "",
+    store: DefaultArchiveStore,
+    logger: logging.Logger,
+) -> dict[str, Any]:
+    logger.info("temporal_neighbors_start ts=%r direction=%s", timestamp, direction)
+    result = store.temporal_neighbors(
+        timestamp,
+        direction=direction,
+        limit=limit,
+        type_filter=type_filter,
+        source_filter=source_filter,
+        people_filter=people_filter,
+    )
+    n = len(result.get("results") or [])
+    logger.info("temporal_neighbors_done count=%s", n)
+    return result
+
+
+def knowledge_domain(
+    domain: str,
+    *,
+    fallback_query: str = "",
+    limit: int = 5,
+    store: DefaultArchiveStore,
+    logger: logging.Logger,
+) -> dict[str, Any]:
+    logger.info("knowledge_domain_start domain=%r", domain)
+    result = store.knowledge_for_domain(domain, fallback_query=fallback_query, limit=limit)
+    logger.info("knowledge_domain_done ok=%s fallback=%s", result.get("ok"), result.get("fallback"))
+    return result
