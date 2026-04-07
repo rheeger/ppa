@@ -1,0 +1,322 @@
+{
+  "provider": "Uber_eats",
+  "extractor_id": "uber_eats",
+  "vault_note": "Holdouts bootstrapped from extractor output on 10pct; re-verify manually.",
+  "holdout_emails": [
+    {
+      "uid": "hfa-email-message-616d2f01b9d8",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "service": "Uber Eats",
+            "total": 59.34,
+            "subtotal": 49.65
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-f897e0b4f95c",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "service": "Uber Eats",
+            "total": 21.62,
+            "subtotal": 17.5
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-141c2a3058a3",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "service": "Uber Eats",
+            "total": 53.24,
+            "subtotal": 49.8
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-95cb7a28ad78",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "service": "Uber Eats",
+            "total": 23.0,
+            "subtotal": 15.4
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-a675408ef2bd",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "restaurant": "Mixt - Valencia",
+            "service": "Uber Eats",
+            "total": 26.45,
+            "subtotal": 15.4
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-b967e1d4b2ee",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "restaurant": "Elaine’s Kitchen",
+            "service": "Uber Eats",
+            "total": 59.56,
+            "subtotal": 49.8
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-0e1816367778",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "restaurant": "NoVY Restaurant",
+            "service": "Uber Eats",
+            "total": 60.23,
+            "subtotal": 48.3
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-121e8c30ce51",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "service": "Uber Eats",
+            "total": 54.49,
+            "subtotal": 48.3
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-2ad2f642af62",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "restaurant": "Mixt - Valencia",
+            "service": "Uber Eats",
+            "total": 6.52,
+            "subtotal": 16.62
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-4a6a8b2811aa",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "service": "Uber Eats",
+            "total": 45.35,
+            "subtotal": 37.9
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-5c30f5d8f5aa",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "service": "Uber Eats",
+            "total": 69.6,
+            "subtotal": 54.75
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-8995b3e38171",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "service": "Uber Eats",
+            "total": 53.94,
+            "subtotal": 37.9
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-8eaa9614bebe",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "service": "Uber Eats",
+            "total": 3.07,
+            "subtotal": 16.62
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-fa762f46c681",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "service": "Uber Eats",
+            "total": 59.39,
+            "subtotal": 54.75
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-26c568f83ab3",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "restaurant": "Chicken Stop (Fort Greene)",
+            "service": "Uber Eats",
+            "total": 27.21
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-02aac88619dc",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "service": "Uber Eats",
+            "total": 27.7
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-07147e39be70",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "service": "Uber Eats",
+            "total": 22.48
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-37fd197cb65e",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "service": "Uber Eats",
+            "total": 34.86
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-6aefc1694add",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "service": "Uber Eats",
+            "total": 29.75
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-80e8e63b7d91",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "service": "Uber Eats",
+            "total": 38.3
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-bc1f8da254e8",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "service": "Uber Eats",
+            "total": 26.57
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-bcb0dde1d0e4",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "service": "Uber Eats",
+            "total": 32.2
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-516c91fcb839",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-241c14993ed8",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-30fe1245396e",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-b5171eba5058",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-0313df3101ca",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-5880b6f20e3e",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-d182593ee814",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-e5bcc1746f25",
+      "expected_cards": []
+    }
+  ]
+}

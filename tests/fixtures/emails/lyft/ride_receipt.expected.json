@@ -1,0 +1,11 @@
+{
+  "cards": [
+    {
+      "type": "ride",
+      "service": "Lyft",
+      "pickup_location": "60 Earhart Dr, Newark, NJ",
+      "dropoff_location": "186 Washington Park, Brooklyn, NY",
+      "fare": 81.82
+    }
+  ]
+}

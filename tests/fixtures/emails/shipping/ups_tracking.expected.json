@@ -1,0 +1,10 @@
+{
+  "cards": [
+    {
+      "type": "shipment",
+      "carrier": "UPS",
+      "tracking_number": "1Z89Y9F00392152289",
+      "delivered_at": "Saturday 12/20/2025 12:50 PM"
+    }
+  ]
+}

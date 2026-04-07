@@ -1,0 +1,58 @@
+{
+  "provider": "Instacart",
+  "extractor_id": "instacart",
+  "vault_note": "Holdouts bootstrapped from extractor output on 10pct; re-verify manually.",
+  "holdout_emails": [
+    {
+      "uid": "hfa-email-message-601492a7f5ef",
+      "expected_cards": [
+        {
+          "type": "grocery_order",
+          "fields": {
+            "service": "Instacart",
+            "store": "Wegmans",
+            "total": 148.89
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-6b60f283dd3a",
+      "expected_cards": [
+        {
+          "type": "grocery_order",
+          "fields": {
+            "service": "Instacart",
+            "store": "Stop & Shop",
+            "total": 188.03
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-653d1a09287e",
+      "expected_cards": [
+        {
+          "type": "grocery_order",
+          "fields": {
+            "service": "Instacart",
+            "store": "Wegmans",
+            "total": 100.89
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-c046c5f9bde2",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-7ad3ddd48dd1",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-97df45c61f9e",
+      "expected_cards": []
+    }
+  ]
+}

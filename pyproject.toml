@@ -12,6 +12,7 @@ dependencies = [
   "mcp>=1.0",
   "psycopg[binary]>=3.2",
   "python-dateutil>=2.8",
+  "html2text>=2024.2.26",
 ]
 
 [project.scripts]
@@ -44,6 +45,7 @@ where = ["."]
 include = ["archive_mcp*", "hfa*", "archive_sync*", "archive_doctor*", "ppa_google_auth*"]
 
 [tool.pytest.ini_options]
+pythonpath = ["."]
 markers = [
     "integration: requires a running Postgres instance",
     "slow: long-running tests (>30 seconds)",

@@ -1,0 +1,38 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Extractor Ground Truth",
+  "description": "Holdout email annotations for extractor verification (EDL Phase 5)",
+  "type": "object",
+  "required": ["provider", "extractor_id", "holdout_emails"],
+  "properties": {
+    "provider": {"type": "string", "description": "Provider name (e.g., DoorDash)"},
+    "extractor_id": {"type": "string", "description": "Extractor module name (e.g., doordash)"},
+    "holdout_emails": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["uid", "expected_cards"],
+        "properties": {
+          "uid": {"type": "string", "description": "Source email UID (hfa-email-message-...)"},
+          "expected_cards": {
+            "type": "array",
+            "description": "Expected extraction output. Empty array = email should NOT produce a card.",
+            "items": {
+              "type": "object",
+              "required": ["type", "fields"],
+              "properties": {
+                "type": {"type": "string", "description": "Expected card type (e.g., meal_order)"},
+                "fields": {
+                  "type": "object",
+                  "description": "Expected field values. Only include fields that should be populated.",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

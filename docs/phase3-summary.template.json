@@ -1,0 +1,20 @@
+{
+  "phase": 3,
+  "completion_date": "YYYY-MM-DD",
+  "extraction_metrics": {},
+  "promotion_result": {},
+  "entity_resolution": {},
+  "validation": { "errors": 0 },
+  "idempotency": { "new_cards_on_rerun": 0 },
+  "seed_slice": { "types_covered": 36, "total_cards_in_slice": "" },
+  "test_suite": {
+    "test_unit": "pass",
+    "test_slice_verify": "pass",
+    "health_check": "pass"
+  },
+  "performance": {
+    "benchmark_5pct_seconds": "",
+    "full_run_seconds": "",
+    "ratio": ""
+  }
+}

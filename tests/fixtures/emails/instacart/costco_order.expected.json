@@ -1,0 +1,10 @@
+{
+  "cards": [
+    {
+      "type": "grocery_order",
+      "service": "Instacart",
+      "store": "Wegmans",
+      "total": 184.53
+    }
+  ]
+}

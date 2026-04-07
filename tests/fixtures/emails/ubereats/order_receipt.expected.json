@@ -1,0 +1,10 @@
+{
+  "cards": [
+    {
+      "type": "meal_order",
+      "service": "Uber Eats",
+      "restaurant": "MIXT - Valencia",
+      "total": 30.23
+    }
+  ]
+}

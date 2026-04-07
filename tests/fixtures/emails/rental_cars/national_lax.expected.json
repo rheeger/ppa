@@ -1,0 +1,11 @@
+{
+  "cards": [
+    {
+      "type": "car_rental",
+      "company": "National",
+      "confirmation_code": "1591335071",
+      "pickup_at": "December 25, 2025",
+      "total_cost": 450.0
+    }
+  ]
+}

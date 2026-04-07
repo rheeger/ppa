@@ -109,18 +109,19 @@ These decision rules govern the entire vision. When executing any phase, defer t
 
 Detailed, step-by-step **execution plans** for each phase live under **`~/.cursor/plans/`** (same filenames on any machine with Cursor). Open in the editor or link from here:
 
-| Phase                    | Execution plan                                                                                                           |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
-| 0 — Test infrastructure  | [`phase_0_execution_plan_61b73684.plan.md`](file:///Users/rheeger/.cursor/plans/phase_0_execution_plan_61b73684.plan.md) |
-| 1 — Schema & data model  | [`phase_1_execution_plan_f2f5802d.plan.md`](file:///Users/rheeger/.cursor/plans/phase_1_execution_plan_f2f5802d.plan.md) |
-| 2 — Extractors           | [`phase_2_execution_plan_50a42c00.plan.md`](file:///Users/rheeger/.cursor/plans/phase_2_execution_plan_50a42c00.plan.md) |
-| 3 — Full extraction      | [`phase_3_execution_plan_49b4bd6d.plan.md`](file:///Users/rheeger/.cursor/plans/phase_3_execution_plan_49b4bd6d.plan.md) |
-| 4 — ONE full rebuild     | [`phase_4_execution_plan_3156f3e2.plan.md`](file:///Users/rheeger/.cursor/plans/phase_4_execution_plan_3156f3e2.plan.md) |
-| 5 — Embedding pass       | [`phase_5_embedding_pass_17a0e872.plan.md`](file:///Users/rheeger/.cursor/plans/phase_5_embedding_pass_17a0e872.plan.md) |
-| 6 — LLM enrichment       | [`phase_6_llm_enrichment_f286b0bd.plan.md`](file:///Users/rheeger/.cursor/plans/phase_6_llm_enrichment_f286b0bd.plan.md) |
-| 7 — Knowledge cache      | [`phase_7_execution_plan_b4b2c2ef.plan.md`](file:///Users/rheeger/.cursor/plans/phase_7_execution_plan_b4b2c2ef.plan.md) |
-| 8 — Maintenance & tools  | [`phase_8_execution_plan_a16ec5dc.plan.md`](file:///Users/rheeger/.cursor/plans/phase_8_execution_plan_a16ec5dc.plan.md) |
-| 9 — Production on Arnold | [`phase_9_execution_plan_794d5d32.plan.md`](file:///Users/rheeger/.cursor/plans/phase_9_execution_plan_794d5d32.plan.md) |
+| Phase                       | Execution plan                                                                                                                                             |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0 — Test infrastructure     | [`phase_0_execution_plan_61b73684.plan.md`](file:///Users/rheeger/.cursor/plans/phase_0_execution_plan_61b73684.plan.md)                                   |
+| 1 — Schema & data model     | [`phase_1_execution_plan_f2f5802d.plan.md`](file:///Users/rheeger/.cursor/plans/phase_1_execution_plan_f2f5802d.plan.md)                                   |
+| 2 — Extractors              | [`phase_2_execution_plan_50a42c00.plan.md`](file:///Users/rheeger/.cursor/plans/phase_2_execution_plan_50a42c00.plan.md)                                   |
+| 2.5 — Extractor methodology | [`phase_2.5_extractor_methodology_rebuild_a7e3f1c2.plan.md`](file:///Users/rheeger/.cursor/plans/phase_2.5_extractor_methodology_rebuild_a7e3f1c2.plan.md) |
+| 3 — Full extraction         | [`phase_3_execution_plan_49b4bd6d.plan.md`](file:///Users/rheeger/.cursor/plans/phase_3_execution_plan_49b4bd6d.plan.md)                                   |
+| 4 — ONE full rebuild        | [`phase_4_execution_plan_3156f3e2.plan.md`](file:///Users/rheeger/.cursor/plans/phase_4_execution_plan_3156f3e2.plan.md)                                   |
+| 5 — Embedding pass          | [`phase_5_embedding_pass_17a0e872.plan.md`](file:///Users/rheeger/.cursor/plans/phase_5_embedding_pass_17a0e872.plan.md)                                   |
+| 6 — LLM enrichment          | [`phase_6_llm_enrichment_f286b0bd.plan.md`](file:///Users/rheeger/.cursor/plans/phase_6_llm_enrichment_f286b0bd.plan.md)                                   |
+| 7 — Knowledge cache         | [`phase_7_execution_plan_b4b2c2ef.plan.md`](file:///Users/rheeger/.cursor/plans/phase_7_execution_plan_b4b2c2ef.plan.md)                                   |
+| 8 — Maintenance & tools     | [`phase_8_execution_plan_a16ec5dc.plan.md`](file:///Users/rheeger/.cursor/plans/phase_8_execution_plan_a16ec5dc.plan.md)                                   |
+| 9 — Production on Arnold    | [`phase_9_execution_plan_794d5d32.plan.md`](file:///Users/rheeger/.cursor/plans/phase_9_execution_plan_794d5d32.plan.md)                                   |
 
 Each phase section below includes a direct **Execution plan** link in its heading block.
 
@@ -898,13 +899,58 @@ _Vault integrity:_
 
 ---
 
+## Phase 2.5: Extractor Methodology and Quality Rebuild
+
+**Execution plan:** [`phase_2.5_extractor_methodology_rebuild_a7e3f1c2.plan.md`](file:///Users/rheeger/.cursor/plans/phase_2.5_extractor_methodology_rebuild_a7e3f1c2.plan.md)
+
+**What it is:** A rigorous, agent-executable methodology for building email extractors, proven on two providers, then applied to rebuild all Tier 1-3 extractors to production quality.
+
+**Why it exists:** Phase 2 delivered the extraction framework and initial extractors, but parsers were built against imagined email formats rather than empirically discovered patterns from real vault data. Quality reports across 1%/5%/10% slices revealed systemic problems: 0% item population on meal orders, Prop 65 warnings as restaurant names, host reviews as Airbnb property names, non-IATA airport codes on flights, ~9% DoorDash yield. Test fixtures were synthetic plaintext that confirmed the imagination rather than testing real parsing paths. The extractors work structurally (zero errors, provenance correct, staging pipeline sound) but produce garbage content.
+
+**The Extractor Development Lifecycle (EDL):** A five-phase process encoded as an agent skill (`ppa/.cursor/skills/extractor-dev/SKILL.md`) that any agent can follow mechanically:
+
+1. **Census** — Scan the vault for all emails from a sender domain. Categorize by type (receipt, promo, account). Determine which are extractable and what volume to expect. Tooling: `ppa sender-census`.
+2. **Template Era Discovery** — Sample receipt-type emails across the full date range. Examine raw HTML and `clean_email_body` output side-by-side. Identify structural breakpoints where the email template changed. Tooling: `ppa template-sampler`.
+3. **Anchor and Field Mapping** — For each template era, examine 10-15 real emails. Map each target field: what anchor text precedes it, what boundary marks its end, what format the value takes, what false positives exist. Produce an extractor spec document.
+4. **Implementation** — Write the extractor from the spec, not from imagination. Update test fixtures from real vault emails. Integrate inline field validation to reject garbage values during extraction.
+5. **Verification** — Run against the 10% slice. Generate quality reports. Compare to baseline. Gate on improvement.
+
+**Inline field validation:** A shared `validate_field(card_type, field_name, value)` function integrated into `base.py` that rejects garbage values at extraction time rather than flagging them in post-hoc reports. Restaurants containing URLs are rejected. Airport codes not in the IATA set are rejected. Confirmation codes that are common English words are rejected. This is the last line of defense: even if a parser has a bug, the card won't ship with a Prop 65 warning as the restaurant name.
+
+**Proof cases:** DoorDash and Airbnb are rebuilt first using the full EDL to prove the methodology. After both succeed and the skill is iterated based on lessons learned, the remaining 8 Tier 1-3 extractors are rebuilt.
+
+**Definition of Done:**
+
+_Methodology:_
+
+- EDL agent skill exists with phases, spec template, and field validation docs
+- `ppa sender-census` and `ppa template-sampler` CLI commands work
+- Inline field validation runs during extraction
+- Skill iterated based on two proof cases
+
+_Extractor quality (10% slice, compared to pre-2.5 baseline):_
+
+- `meal_order` items population > 0% (was 0%)
+- `meal_order` restaurant has zero URL/footer noise (was ~40%)
+- `accommodation` check_in/check_out > 50% with real dates (was ~30% with garbage)
+- `flight` airport codes are valid IATA (was ~0% valid)
+- `car_rental` pickup_at > 30% (was ~5%)
+- `ride` weak_pickup/dropoff < 10% (was ~21%)
+
+_Stability:_
+
+- Phase 0 test suite passes with updated real-email fixtures
+- Every Tier 1-3 extractor has a spec document and tests asserting concrete field values
+
+---
+
 ## Phase 3: Full Extraction Run + Vault Promotion
 
 **Execution plan:** [`phase_3_execution_plan_49b4bd6d.plan.md`](file:///Users/rheeger/.cursor/plans/phase_3_execution_plan_49b4bd6d.plan.md)
 
-**What it is:** The final production-scale extraction run across the full vault, entity resolution, and validation. By the time this phase starts, all extractors have been individually developed, tested, and run against staging in the Phase 2 loop. Phase 3 is the batch run at full scale.
+**What it is:** The final production-scale extraction run across the full vault, entity resolution, and validation. By the time this phase starts, all extractors have been rebuilt via the Phase 2.5 EDL process and verified against quality baselines. Phase 3 is the batch run at full scale.
 
-**Why it's still its own phase:** Individual extractors were run against staging during Phase 2, but the full vault run at scale — all extractors, all ~461K emails, with parallelism — is a distinct operation. Entity resolution across the full derived card set (not just per-extractor batches) may produce different clustering results. And the final vault state needs comprehensive validation before the Phase 4 rebuild.
+**Why it's still its own phase:** Individual extractors were developed in Phase 2 and quality-rebuilt in Phase 2.5, but the full vault run at scale — all extractors, all ~461K emails, with parallelism — is a distinct operation. Entity resolution across the full derived card set (not just per-extractor batches) may produce different clustering results. And the final vault state needs comprehensive validation (including quality report comparison against the Phase 2.5 baseline) before the Phase 4 rebuild.
 
 **Logging:** Same as Phase 2; full-scale **`extract-emails`** and **`resolve-entities`** require **`--log-file`** artifacts for postmortems. Runner metrics (matched, extracted, yield, errors, wall-clock) must remain visible in logs.
 

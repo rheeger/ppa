@@ -15,13 +15,7 @@
       "description": "Verbatim phrase from a Mint notification email_message summary in hf-archives-seed"
     }
   ],
-  "temporal_queries": [
-    {
-      "phase": "post-phase-3",
-      "description": "temporal_neighbors + new-type FTS — activate after seed has derived cards",
-      "note": "health-check currently no-ops temporal entries; Phase 3+ will assert forward/backward/during legs"
-    }
-  ],
+  "temporal_queries": [],
   "graph_queries": [
     {
       "start_uid": "hfa-person-9c9dbd68e803",
@@ -56,6 +50,21 @@
     "beeper_attachment": 630,
     "beeper_thread": 135,
     "git_repository": 34,
-    "vaccination": 1
+    "vaccination": 1,
+    "meal_order": 0,
+    "grocery_order": 0,
+    "ride": 0,
+    "flight": 0,
+    "accommodation": 0,
+    "car_rental": 0,
+    "purchase": 0,
+    "shipment": 0,
+    "subscription": 0,
+    "event_ticket": 0,
+    "payroll": 0,
+    "place": 0,
+    "organization": 0,
+    "knowledge": 0,
+    "observation": 0
   }
 }

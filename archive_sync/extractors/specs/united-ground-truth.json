@@ -1,0 +1,359 @@
+{
+  "provider": "United",
+  "extractor_id": "united",
+  "vault_note": "Holdouts bootstrapped from extractor output on 10pct; re-verify manually.",
+  "holdout_emails": [
+    {
+      "uid": "hfa-email-message-4083cd510f40",
+      "expected_cards": [
+        {
+          "type": "flight",
+          "fields": {
+            "airline": "United",
+            "confirmation_code": "G0NM8E",
+            "origin_airport": "LAX",
+            "destination_airport": "SFO"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-9af749398736",
+      "expected_cards": [
+        {
+          "type": "flight",
+          "fields": {
+            "airline": "United",
+            "confirmation_code": "G0NM8E",
+            "origin_airport": "LAX",
+            "destination_airport": "SFO"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-375e010ae29d",
+      "expected_cards": [
+        {
+          "type": "flight",
+          "fields": {
+            "airline": "United",
+            "confirmation_code": "Q8NCBS",
+            "origin_airport": "PHL",
+            "destination_airport": "LAX"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-8d0ef5fb52de",
+      "expected_cards": [
+        {
+          "type": "flight",
+          "fields": {
+            "airline": "United",
+            "confirmation_code": "Q8NCBS",
+            "origin_airport": "LAX",
+            "destination_airport": "PHL"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-6478a75f1c65",
+      "expected_cards": [
+        {
+          "type": "flight",
+          "fields": {
+            "airline": "United",
+            "confirmation_code": "AW7DDY",
+            "origin_airport": "SFO",
+            "destination_airport": "SFO",
+            "fare_amount": 808.38
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-af86821ddb1a",
+      "expected_cards": [
+        {
+          "type": "flight",
+          "fields": {
+            "airline": "United",
+            "confirmation_code": "AE48L7",
+            "origin_airport": "SFO",
+            "destination_airport": "BOS",
+            "fare_amount": 441.86
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-bfddd3dac790",
+      "expected_cards": [
+        {
+          "type": "flight",
+          "fields": {
+            "airline": "United",
+            "confirmation_code": "AE48L7",
+            "origin_airport": "SFO",
+            "destination_airport": "BOS",
+            "fare_amount": 441.86
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-171825c8748b",
+      "expected_cards": [
+        {
+          "type": "flight",
+          "fields": {
+            "airline": "United",
+            "confirmation_code": "L5QBW6",
+            "origin_airport": "SFO",
+            "destination_airport": "EZE"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-2e062c42dde2",
+      "expected_cards": [
+        {
+          "type": "flight",
+          "fields": {
+            "airline": "United",
+            "confirmation_code": "M6NTJN",
+            "origin_airport": "EZE",
+            "destination_airport": "SFO"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-2ef11c9b2f70",
+      "expected_cards": [
+        {
+          "type": "flight",
+          "fields": {
+            "airline": "United",
+            "confirmation_code": "MYG0MP",
+            "origin_airport": "SFO",
+            "destination_airport": "ORD",
+            "fare_amount": 391.6
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-eea8cb61abbf",
+      "expected_cards": [
+        {
+          "type": "flight",
+          "fields": {
+            "airline": "United",
+            "confirmation_code": "E8JH89",
+            "origin_airport": "EWR",
+            "destination_airport": "MEX",
+            "fare_amount": 751.0
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-fe8ebec4b515",
+      "expected_cards": [
+        {
+          "type": "flight",
+          "fields": {
+            "airline": "United",
+            "confirmation_code": "E8JH89",
+            "origin_airport": "EWR",
+            "destination_airport": "MEX",
+            "fare_amount": 751.0
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-dbbe3c80d3cc",
+      "expected_cards": [
+        {
+          "type": "flight",
+          "fields": {
+            "airline": "United",
+            "confirmation_code": "GF8XTF",
+            "origin_airport": "SFO",
+            "destination_airport": "EWR",
+            "fare_amount": 776.0
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-f8dea3fc7cc6",
+      "expected_cards": [
+        {
+          "type": "flight",
+          "fields": {
+            "airline": "United",
+            "confirmation_code": "FWLV4M",
+            "origin_airport": "SFO",
+            "destination_airport": "SFO",
+            "fare_amount": 723.72
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-0cbe11af3386",
+      "expected_cards": [
+        {
+          "type": "flight",
+          "fields": {
+            "airline": "United",
+            "confirmation_code": "MX0471",
+            "origin_airport": "EWR",
+            "destination_airport": "SFO",
+            "fare_amount": 656.6
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-2f31d1c0f000",
+      "expected_cards": [
+        {
+          "type": "flight",
+          "fields": {
+            "airline": "United",
+            "confirmation_code": "MX96WC",
+            "origin_airport": "EWR",
+            "destination_airport": "SFO",
+            "fare_amount": 1744.73
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-335aca44c1a2",
+      "expected_cards": [
+        {
+          "type": "flight",
+          "fields": {
+            "airline": "United",
+            "confirmation_code": "MYDMV0",
+            "origin_airport": "LAX",
+            "destination_airport": "SFO",
+            "fare_amount": 104.19
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-8ac266831a88",
+      "expected_cards": [
+        {
+          "type": "flight",
+          "fields": {
+            "airline": "United",
+            "confirmation_code": "H1D8HE",
+            "origin_airport": "LAX",
+            "destination_airport": "EWR"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-43bee0769186",
+      "expected_cards": [
+        {
+          "type": "flight",
+          "fields": {
+            "airline": "United",
+            "confirmation_code": "HMHDPN",
+            "origin_airport": "LAX",
+            "destination_airport": "SFO"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-462860629b47",
+      "expected_cards": [
+        {
+          "type": "flight",
+          "fields": {
+            "airline": "United",
+            "confirmation_code": "HMHDPN",
+            "origin_airport": "LAX",
+            "destination_airport": "SFO"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-56791b190ceb",
+      "expected_cards": [
+        {
+          "type": "flight",
+          "fields": {
+            "airline": "United",
+            "confirmation_code": "HMHDPN",
+            "origin_airport": "LAX",
+            "destination_airport": "SFO"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-817a98610bd7",
+      "expected_cards": [
+        {
+          "type": "flight",
+          "fields": {
+            "airline": "United",
+            "confirmation_code": "B5H3JL",
+            "origin_airport": "SFO",
+            "destination_airport": "JFK",
+            "fare_amount": 701.8
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-a38308f3ab48",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-3b7e9e753fff",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-82c3469e8394",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-daf0bd6f380e",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-26302728cac4",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-93b7f1aa3344",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-d975f7f75691",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-2cbe1c23de4f",
+      "expected_cards": []
+    }
+  ]
+}

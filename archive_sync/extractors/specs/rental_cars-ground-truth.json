@@ -1,0 +1,151 @@
+{
+  "provider": "Rental_cars",
+  "extractor_id": "rental_cars",
+  "vault_note": "Holdouts bootstrapped from extractor output on 10pct; re-verify manually.",
+  "holdout_emails": [
+    {
+      "uid": "hfa-email-message-6b280c8e7a1e",
+      "expected_cards": [
+        {
+          "type": "car_rental",
+          "fields": {
+            "company": "National",
+            "confirmation_code": "1151150851"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-92cf57d72a28",
+      "expected_cards": [
+        {
+          "type": "car_rental",
+          "fields": {
+            "company": "National",
+            "confirmation_code": "1151150851"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-32d47433ae07",
+      "expected_cards": [
+        {
+          "type": "car_rental",
+          "fields": {
+            "company": "National",
+            "confirmation_code": "1664360407",
+            "pickup_at": "July 30, 2024"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-abb327ff17d1",
+      "expected_cards": [
+        {
+          "type": "car_rental",
+          "fields": {
+            "company": "National",
+            "confirmation_code": "1664360407"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-5f8be5684c6c",
+      "expected_cards": [
+        {
+          "type": "car_rental",
+          "fields": {
+            "company": "National",
+            "confirmation_code": "1163638511"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-5fab73a04050",
+      "expected_cards": [
+        {
+          "type": "car_rental",
+          "fields": {
+            "company": "National",
+            "confirmation_code": "1881264760",
+            "pickup_at": "July 4, 2021"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-d5284fa69d41",
+      "expected_cards": [
+        {
+          "type": "car_rental",
+          "fields": {
+            "company": "National",
+            "confirmation_code": "1100884967"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-07c387566ab3",
+      "expected_cards": [
+        {
+          "type": "car_rental",
+          "fields": {
+            "company": "National",
+            "confirmation_code": "1591335071",
+            "pickup_at": "December 25, 2025"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-24d3e2ba3ed3",
+      "expected_cards": [
+        {
+          "type": "car_rental",
+          "fields": {
+            "company": "National",
+            "confirmation_code": "1646083935",
+            "pickup_at": "February 24, 2023"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-72a708e066ed",
+      "expected_cards": [
+        {
+          "type": "car_rental",
+          "fields": {
+            "company": "National",
+            "confirmation_code": "1177578825"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-ec091b7663ef",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-3a19a05c5417",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-73a815fdb8a6",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-9ea37a830623",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-f38fa9f2aaa3",
+      "expected_cards": []
+    }
+  ]
+}

@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
-from hfa.provenance import ProvenanceEntry, read_provenance, strip_provenance, validate_provenance, write_provenance
+from hfa.provenance import (ProvenanceEntry, read_provenance, strip_provenance,
+                            validate_provenance, write_provenance)
 from hfa.schema import BaseCard, card_to_frontmatter, validate_card_strict
 from hfa.yaml_parser import parse_frontmatter, render_card
 
@@ -119,6 +120,25 @@ def iter_parsed_notes(vault: str | Path) -> Iterator[ParsedNoteRecord]:
 
     vault = Path(vault)
     for rel_path in iter_note_paths(vault):
+        path = vault / rel_path
+        try:
+            yield read_note_file(path, vault_root=vault)
+        except FileNotFoundError:
+            continue
+
+
+def iter_email_message_notes(vault: str | Path) -> Iterator[ParsedNoteRecord]:
+    """Yield parsed notes only under ``Email/`` (the ``email_message`` card family).
+
+    Skips walking unrelated trees — use this for sender-census, template-sampler, and
+    other tools that only care about inbound mail. Callers should still filter by
+    ``frontmatter["type"] == "email_message"`` if the vault can contain other types under ``Email/``.
+    """
+
+    vault = Path(vault)
+    for rel_path in iter_note_paths(vault):
+        if not rel_path.parts or rel_path.parts[0] != "Email":
+            continue
         path = vault / rel_path
         try:
             yield read_note_file(path, vault_root=vault)

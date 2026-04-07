@@ -1,0 +1,271 @@
+{
+  "provider": "Shipping",
+  "extractor_id": "shipping",
+  "vault_note": "Holdouts bootstrapped from extractor output on 10pct; re-verify manually.",
+  "holdout_emails": [
+    {
+      "uid": "hfa-email-message-820394dd236d",
+      "expected_cards": [
+        {
+          "type": "shipment",
+          "fields": {
+            "carrier": "UPS",
+            "tracking_number": "1ZA406960305581643"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-e0f28dffccb0",
+      "expected_cards": [
+        {
+          "type": "shipment",
+          "fields": {
+            "carrier": "UPS",
+            "tracking_number": "1Z687R2F0314147588"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-2b05af5aea20",
+      "expected_cards": [
+        {
+          "type": "shipment",
+          "fields": {
+            "carrier": "UPS",
+            "tracking_number": "1Z37641X0324753860"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-3131d5ba098a",
+      "expected_cards": [
+        {
+          "type": "shipment",
+          "fields": {
+            "carrier": "UPS",
+            "tracking_number": "1Z6Y654R1338946649"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-67214a1c9ed5",
+      "expected_cards": [
+        {
+          "type": "shipment",
+          "fields": {
+            "carrier": "UPS",
+            "tracking_number": "1ZX07Y270374347903"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-44e861cea278",
+      "expected_cards": [
+        {
+          "type": "shipment",
+          "fields": {
+            "carrier": "UPS",
+            "tracking_number": "1Z90WV170331126344"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-602cf2022e8b",
+      "expected_cards": [
+        {
+          "type": "shipment",
+          "fields": {
+            "carrier": "UPS",
+            "tracking_number": "1Z90WV170320302736"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-73c905205adb",
+      "expected_cards": [
+        {
+          "type": "shipment",
+          "fields": {
+            "carrier": "UPS",
+            "tracking_number": "1Z90WV170321662122"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-9c38bfdb3026",
+      "expected_cards": [
+        {
+          "type": "shipment",
+          "fields": {
+            "carrier": "UPS",
+            "tracking_number": "1Z90WV170329032959"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-9c463e1362e4",
+      "expected_cards": [
+        {
+          "type": "shipment",
+          "fields": {
+            "carrier": "UPS",
+            "tracking_number": "1Z90WV170329032959"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-a227a0b5cd4f",
+      "expected_cards": [
+        {
+          "type": "shipment",
+          "fields": {
+            "carrier": "UPS",
+            "tracking_number": "1Z90WV170320302736"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-ae1f4cd2c758",
+      "expected_cards": [
+        {
+          "type": "shipment",
+          "fields": {
+            "carrier": "UPS",
+            "tracking_number": "1Z90WV170321662122"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-c98845e1a001",
+      "expected_cards": [
+        {
+          "type": "shipment",
+          "fields": {
+            "carrier": "UPS",
+            "tracking_number": "1Z90WV170320302736"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-d5acb775e045",
+      "expected_cards": [
+        {
+          "type": "shipment",
+          "fields": {
+            "carrier": "UPS",
+            "tracking_number": "1Z90WV170321662122"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-d786d06985f3",
+      "expected_cards": [
+        {
+          "type": "shipment",
+          "fields": {
+            "carrier": "UPS",
+            "tracking_number": "1Z90WV170331126344"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-8f4400f27fc3",
+      "expected_cards": [
+        {
+          "type": "shipment",
+          "fields": {
+            "carrier": "UPS",
+            "tracking_number": "1Z965EW40328874733"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-f4bd5e76b726",
+      "expected_cards": [
+        {
+          "type": "shipment",
+          "fields": {
+            "carrier": "UPS",
+            "tracking_number": "1Z84W8820372410205"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-93e7aa4e52f5",
+      "expected_cards": [
+        {
+          "type": "shipment",
+          "fields": {
+            "carrier": "UPS",
+            "tracking_number": "1Z687R2F0394469161"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-df755e6e34b1",
+      "expected_cards": [
+        {
+          "type": "shipment",
+          "fields": {
+            "carrier": "UPS",
+            "tracking_number": "1Z7X3W68A892324204"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-f8287d237f75",
+      "expected_cards": [
+        {
+          "type": "shipment",
+          "fields": {
+            "carrier": "UPS",
+            "tracking_number": "1Z81WV380300326771"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-0a7f88f045a5",
+      "expected_cards": [
+        {
+          "type": "shipment",
+          "fields": {
+            "carrier": "UPS",
+            "tracking_number": "1Z813YX70320937775"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-0ee3c091688a",
+      "expected_cards": [
+        {
+          "type": "shipment",
+          "fields": {
+            "carrier": "UPS",
+            "tracking_number": "1Z161Y6V4294216963"
+          }
+        }
+      ]
+    }
+  ]
+}

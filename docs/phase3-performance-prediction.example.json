@@ -1,0 +1,8 @@
+{
+  "benchmark_percent": 5,
+  "benchmark_time_seconds": 45.2,
+  "projected_full_time_seconds": 904,
+  "projected_full_time_human": "~15 minutes",
+  "workers": 4,
+  "date": "2026-04-01"
+}

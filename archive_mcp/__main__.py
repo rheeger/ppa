@@ -370,6 +370,110 @@ def main() -> None:
         help="Index and runtime status as JSON (same as archive_status_json MCP tool)",
     )
 
+    extract_parser = subparsers.add_parser("extract-emails", help="Extract derived cards from email bodies")
+    extract_parser.add_argument("--sender", default="", help="Filter to single extractor id (e.g. doordash)")
+    extract_parser.add_argument("--dry-run", action="store_true")
+    extract_parser.add_argument("--limit", type=int, default=0, help="Max matched emails to process (0 = no cap)")
+    extract_parser.add_argument("--staging-dir", default="", help="Write to staging instead of vault")
+    extract_parser.add_argument("--workers", type=int, default=4)
+    extract_parser.add_argument("--batch-size", type=int, default=500)
+    extract_parser.add_argument(
+        "--full-report",
+        action="store_true",
+        help="After extraction, log staging summary to stderr (requires --staging-dir)",
+    )
+    extract_parser.add_argument(
+        "--limit-vault-percent",
+        type=float,
+        default=0.0,
+        help="Deterministic sample: process ~N%% of email_message cards (0 = full vault)",
+    )
+    extract_parser.add_argument(
+        "--progress-every",
+        type=int,
+        default=5000,
+        help="Log scan/extract progress every N emails or work items",
+    )
+
+    census_parser = subparsers.add_parser("sender-census", help="Discover email types from a sender domain")
+    census_parser.add_argument("--domain", required=True, help="Sender domain (e.g., doordash.com)")
+    census_parser.add_argument(
+        "--sample",
+        type=int,
+        default=100,
+        help="Stratified sample size for example subjects (full domain list is always scanned)",
+    )
+    census_parser.add_argument(
+        "--detail-rows",
+        dest="detail_rows",
+        type=int,
+        default=8,
+        help="Max rows per category in Sample Emails section (default: 8)",
+    )
+    census_parser.add_argument(
+        "--top-from",
+        dest="top_from",
+        type=int,
+        default=30,
+        help="List top N from_email addresses by count (0=omit section)",
+    )
+    census_parser.add_argument(
+        "--top-exact-subjects",
+        dest="top_exact_subjects",
+        type=int,
+        default=40,
+        help="List top N exact subject lines by count (0=omit)",
+    )
+    census_parser.add_argument(
+        "--top-subject-shapes",
+        dest="top_subject_shapes",
+        type=int,
+        default=40,
+        help="List top N normalized subject shapes (0=omit)",
+    )
+    census_parser.add_argument(
+        "--no-keyword-hits",
+        dest="no_keyword_hits",
+        action="store_true",
+        help="Omit subject keyword hit counts",
+    )
+    census_parser.add_argument("--out", default="", help="Write output to file (default: stdout)")
+    census_parser.add_argument("--vault", default="", help="Vault path (default: PPA_PATH)")
+
+    sampler_parser = subparsers.add_parser("template-sampler", help="Sample email bodies by year for template era discovery")
+    sampler_parser.add_argument("--domain", default="", help="Sender domain (e.g., doordash.com); required unless --batch")
+    sampler_parser.add_argument("--category", default="", help="Filter by subject keyword (e.g., receipt)")
+    sampler_parser.add_argument("--per-year", dest="per_year", type=int, default=3)
+    sampler_parser.add_argument("--out-dir", dest="out_dir", default="", help="Output root; required unless --batch")
+    sampler_parser.add_argument(
+        "--batch",
+        default="",
+        help="JSON file: array of {name,domain,category?,out_dir} jobs — one Email/ walk, multiple outputs",
+    )
+    sampler_parser.add_argument("--vault", default="", help="Vault path (default: PPA_PATH)")
+
+    resolve_parser = subparsers.add_parser("resolve-entities", help="Create Place/Org links from derived cards")
+    resolve_parser.add_argument("--dry-run", action="store_true")
+    resolve_parser.add_argument(
+        "--type",
+        dest="entity_type",
+        choices=["place", "org", "person", "all"],
+        default="all",
+    )
+    resolve_parser.add_argument(
+        "--report-dir",
+        default="",
+        help="Write entity-resolution-report.json and entity-resolution-spot-check.md here",
+    )
+
+    staging_report_parser = subparsers.add_parser("staging-report", help="Inspect extraction staging output")
+    staging_report_parser.add_argument("--staging-dir", required=True, help="Path to staging directory")
+    staging_report_parser.add_argument("--json", action="store_true", help="Output JSON on stdout")
+
+    promote_parser = subparsers.add_parser("promote-staging", help="Move staged derived cards into the vault")
+    promote_parser.add_argument("--staging-dir", required=True, help="Path to staging directory")
+    promote_parser.add_argument("--dry-run", action="store_true")
+
     parser.set_defaults(command="serve")
     args = parser.parse_args()
     if args.command == "serve" and not hasattr(args, "tunnel"):
@@ -504,6 +608,152 @@ def main() -> None:
             vault = resolve_store().vault
             out = status_cmd.validate(vault=vault, logger=_cli_log)
             _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "sender-census":
+        try:
+            from .commands._resolve import resolve_vault
+            from .commands.census import run_sender_census
+
+            vp = str(getattr(args, "vault", "") or "").strip() or str(resolve_vault())
+            out_path = str(getattr(args, "out", "") or "").strip()
+            text = run_sender_census(
+                vault_path=vp,
+                domain=str(args.domain),
+                sample_size=int(args.sample),
+                out_path=out_path,
+                detail_rows_per_category=int(getattr(args, "detail_rows", 8) or 8),
+                top_from_addresses=int(getattr(args, "top_from", 0) or 0),
+                top_exact_subjects=int(getattr(args, "top_exact_subjects", 0) or 0),
+                top_subject_shapes=int(getattr(args, "top_subject_shapes", 0) or 0),
+                include_keyword_hits=not bool(getattr(args, "no_keyword_hits", False)),
+            )
+            if not out_path:
+                print(text)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "template-sampler":
+        try:
+            from .commands._resolve import resolve_vault
+            from .commands.template_sampler import (
+                run_template_sampler, run_template_sampler_from_batch_file)
+
+            vp = str(getattr(args, "vault", "") or "").strip() or str(resolve_vault())
+            batch = str(getattr(args, "batch", "") or "").strip()
+            if batch:
+                dom = str(getattr(args, "domain", "") or "").strip()
+                odir = str(getattr(args, "out_dir", "") or "").strip()
+                cat = str(getattr(args, "category", "") or "").strip()
+                if dom or odir or cat:
+                    _cli_fail(
+                        PpaError("--batch cannot be combined with --domain, --out-dir, or --category")
+                    )
+                result = run_template_sampler_from_batch_file(
+                    vault_path=vp,
+                    batch_path=batch,
+                    per_year=int(getattr(args, "per_year", 3)),
+                    base_dir=Path.cwd(),
+                )
+            else:
+                dom = str(getattr(args, "domain", "") or "").strip()
+                odir = str(getattr(args, "out_dir", "") or "").strip()
+                if not dom or not odir:
+                    _cli_fail(PpaError("--domain and --out-dir are required unless --batch is set"))
+                result = run_template_sampler(
+                    vault_path=vp,
+                    domain=dom,
+                    category=str(getattr(args, "category", "") or ""),
+                    per_year=int(getattr(args, "per_year", 3)),
+                    out_dir=odir,
+                )
+            _print_json(result)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "extract-emails":
+        try:
+            from archive_sync.extractors.registry import build_default_registry
+            from archive_sync.extractors.runner import ExtractionRunner
+
+            from .commands._resolve import resolve_vault
+
+            vault = str(resolve_vault())
+            registry = build_default_registry()
+            vp = float(getattr(args, "limit_vault_percent", 0.0) or 0.0)
+            runner = ExtractionRunner(
+                vault_path=vault,
+                registry=registry,
+                staging_dir=(str(args.staging_dir).strip() or None),
+                workers=int(args.workers),
+                batch_size=int(args.batch_size),
+                dry_run=bool(args.dry_run),
+                sender_filter=(str(args.sender).strip().lower() or None),
+                limit=(int(args.limit) if int(args.limit) > 0 else None),
+                progress_every=int(getattr(args, "progress_every", 5000) or 5000),
+                vault_percent=(vp if vp > 0 else None),
+            )
+            metrics = runner.run()
+            _print_json(metrics.to_dict())
+            if bool(getattr(args, "full_report", False)) and str(getattr(args, "staging_dir", "") or "").strip():
+                from .commands.staging import emit_full_staging_report
+
+                emit_full_staging_report(str(args.staging_dir).strip())
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "resolve-entities":
+        try:
+            from archive_sync.extractors.entity_resolution import \
+                run_entity_resolution
+
+            from .commands._resolve import resolve_vault
+
+            vault = str(resolve_vault())
+            out = run_entity_resolution(
+                vault,
+                entity_filter=str(args.entity_type),
+                dry_run=bool(args.dry_run),
+                report_dir=str(getattr(args, "report_dir", "") or "").strip(),
+            )
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "staging-report":
+        try:
+            from .commands.staging import (format_staging_report_markdown,
+                                           staging_report,
+                                           staging_report_to_jsonable)
+
+            report = staging_report(str(args.staging_dir))
+            if bool(getattr(args, "json", False)):
+                _print_json(staging_report_to_jsonable(report))
+            else:
+                from archive_sync.extractors.field_metrics import \
+                    compute_field_population
+
+                fp = compute_field_population(Path(str(args.staging_dir)))
+                print(format_staging_report_markdown(report, field_population=fp), file=sys.stderr)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "promote-staging":
+        try:
+            import dataclasses
+
+            from archive_sync.extractors.promoter import promote_staging
+
+            from .commands._resolve import resolve_vault
+
+            vault = str(resolve_vault())
+            result = promote_staging(
+                vault_path=vault,
+                staging_dir=str(args.staging_dir),
+                dry_run=bool(getattr(args, "dry_run", False)),
+            )
+            _print_json(dataclasses.asdict(result))
         except PpaError as exc:
             _cli_fail(exc)
         return

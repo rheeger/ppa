@@ -1,14 +1,7 @@
-from hfa.vault import (
-    extract_wikilinks,
-    iter_note_paths,
-    iter_notes,
-    iter_parsed_notes,
-    parse_note_content,
-    read_note,
-    read_note_by_uid,
-    read_note_frontmatter_file,
-    write_card,
-)
+from hfa.vault import (extract_wikilinks, iter_email_message_notes,
+                       iter_note_paths, iter_notes, iter_parsed_notes,
+                       parse_note_content, read_note, read_note_by_uid,
+                       read_note_frontmatter_file, write_card)
 
 
 def test_write_card_and_read_back(tmp_vault, sample_person_card, sample_person_provenance):
@@ -70,6 +63,22 @@ def test_iter_note_paths_and_iter_parsed_notes_use_single_visible_note(
     assert [str(note.rel_path) for note in parsed_notes] == ["People/jane-smith.md"]
     assert parsed_notes[0].body == "hello"
     assert parsed_notes[0].frontmatter["summary"] == "Jane Smith"
+
+
+def test_iter_email_message_notes_only_email_dir(tmp_vault):
+    (tmp_vault / "Email").mkdir(parents=True)
+    (tmp_vault / "Email" / "a.md").write_text(
+        "---\nuid: hfa-email-message-x\ntype: email_message\nsource: [gmail]\nsource_id: x\n"
+        "created: 2024-01-01\nupdated: 2024-01-01\nfrom_email: a@x.com\nsubject: hi\nsent_at: 2024-01-01\n---\n",
+        encoding="utf-8",
+    )
+    (tmp_vault / "People" / "p.md").write_text(
+        "---\nuid: hfa-person-y\ntype: person\nsource: [x]\nsource_id: y\n"
+        "created: 2024-01-01\nupdated: 2024-01-01\n---\n",
+        encoding="utf-8",
+    )
+    paths = [str(n.rel_path) for n in iter_email_message_notes(tmp_vault)]
+    assert paths == ["Email/a.md"]
 
 
 def test_parse_note_content_extracts_provenance(sample_person_provenance):

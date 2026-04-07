@@ -1,0 +1,11 @@
+{
+  "cards": [
+    {
+      "type": "ride",
+      "service": "Uber",
+      "pickup_location": "155 W 65th St, New York, NY 10023",
+      "dropoff_location": "187 Washington Park, Brooklyn, NY 11205",
+      "fare": 67.64
+    }
+  ]
+}

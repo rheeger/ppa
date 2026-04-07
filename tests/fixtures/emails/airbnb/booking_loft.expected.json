@@ -1,0 +1,13 @@
+{
+  "cards": [
+    {
+      "type": "accommodation",
+      "property_name": "Charming Stockbridge Cabin",
+      "confirmation_code": "HM9TP2EZNM",
+      "total_cost": 3634.68,
+      "booking_source": "Airbnb",
+      "check_in": "July 26, 2020",
+      "check_out": "August 7, 2020"
+    }
+  ]
+}

@@ -5,6 +5,8 @@ DOCKER_COMPOSE ?= docker compose --env-file $(PG_ENV_FILE) -f $(COMPOSE_FILE)
 
 PPA_PATH ?= /Users/rheeger/Archive/production/hf-archives
 PPA_BENCHMARK_SOURCE_VAULT ?= /Users/rheeger/Archive/seed/hf-archives-seed-20260307-235127
+# Gitignored vault trees from make slice-local-* (see .slices/README.md)
+SLICES_LOCAL_DIR ?= .slices
 # Same vault/schema as run-local-seed-mcp.sh (derived index in Postgres schema archive_seed)
 PPA_SEED_VAULT ?= $(PPA_BENCHMARK_SOURCE_VAULT)
 PPA_SEED_INDEX_SCHEMA ?= archive_seed
@@ -53,7 +55,20 @@ PG_RESTORE_JOBS ?= 32
 PG_DUMP_FAST ?= 0
 PG_DUMP_JOBS ?= 0
 
-.PHONY: install pg-up pg-down pg-logs pg-psql dump-schema dump-seed-schema dump-seed-schema-fast dump-seed-schema-stream-arnold pipe-restore-seed-arnold scp-restore-seed-arnold dump-and-scp-restore-seed-arnold watch-scp-restore-continue-hfa bootstrap-postgres bootstrap-seed-postgres rebuild-indexes rebuild-seed-indexes index-status index-status-seed embed-pending migrate migrate-seed migrate-dry-run migration-status migration-status-seed build-benchmark-sample benchmark-rebuild benchmark-seed-links smoke smoke-queries arnold-smoke test-unit test-integration test-slice test-slice-smoke test-slice-verify test-slice-verify-smoke verify-incremental benchmark-1pct benchmark-5pct health-check
+DOMAIN ?= example.com
+CATEGORY ?=
+# Expansive sender-census against PPA_SEED_VAULT (full Email/ walk; override SAMPLE + DETAIL).
+SENDER_CENSUS_SAMPLE ?= 2000
+SENDER_CENSUS_DETAIL ?= 40
+SENDER_CENSUS_TOP_FROM ?= 60
+SENDER_CENSUS_TOP_EXACT ?= 60
+SENDER_CENSUS_TOP_SHAPES ?= 60
+# Step 11a template-sampler on full seed → specs/samples_seed/ (very long wall time).
+STEP_11A_PER_YEAR_SEED ?= 15
+# Step 11a on 10pct slice (override per-year without exporting env).
+STEP_11A_PER_YEAR ?= 5
+
+.PHONY: install pg-up pg-down pg-logs pg-psql dump-schema dump-seed-schema dump-seed-schema-fast dump-seed-schema-stream-arnold pipe-restore-seed-arnold scp-restore-seed-arnold dump-and-scp-restore-seed-arnold watch-scp-restore-continue-hfa bootstrap-postgres bootstrap-seed-postgres rebuild-indexes rebuild-seed-indexes index-status index-status-seed embed-pending migrate migrate-seed migrate-dry-run migration-status migration-status-seed build-benchmark-sample benchmark-rebuild benchmark-seed-links smoke smoke-queries arnold-smoke test-unit test-integration test-slice test-slice-smoke test-slice-verify test-slice-verify-10pct test-slice-verify-smoke verify-incremental benchmark-1pct benchmark-5pct health-check extract-emails-staging extract-emails-full extract-benchmark extract-dry-run staging-report promote-staging promote-staging-dry-run resolve-entities resolve-entities-full clean-phase3-derived clean-phase3-derived-slices clean-phase3-derived-local-slices extract-emails-slice-smoke extract-emails-slice-full slice-local-1pct slice-local-5pct slice-local-10pct slice-local-all clean-ppa-machine-artifacts clean-ppa-machine-artifacts-dry-run clean-ppa-local-slices extract-emails-1pct-slice extract-emails-5pct-slice extract-emails-10pct-slice extraction-quality-reports sender-census template-sampler sender-census-slice-smoke template-sampler-slice-smoke step-11a-template-samplers sender-census-seed step-11a-template-samplers-seed step-11d-slice-yield-report
 
 install:
 	$(PYTHON) -m pip install -e .
@@ -278,6 +293,34 @@ test-slice-smoke:
 		--source-vault "$(PPA_BENCHMARK_SOURCE_VAULT)" \
 		--progress-every 2000
 
+# Local 1% / 5% / 10% slices under $(SLICES_LOCAL_DIR)/ (gitignored); configs tests/slice_config.{1,5,10}pct.json
+slice-local-1pct:
+	@mkdir -p $(SLICES_LOCAL_DIR)/1pct
+	$(PYTHON) -m archive_mcp slice-seed \
+		--config tests/slice_config.1pct.json \
+		--output $(SLICES_LOCAL_DIR)/1pct \
+		--source-vault "$(PPA_BENCHMARK_SOURCE_VAULT)" \
+		--progress-every 5000
+
+slice-local-5pct:
+	@mkdir -p $(SLICES_LOCAL_DIR)/5pct
+	$(PYTHON) -m archive_mcp slice-seed \
+		--config tests/slice_config.5pct.json \
+		--output $(SLICES_LOCAL_DIR)/5pct \
+		--source-vault "$(PPA_BENCHMARK_SOURCE_VAULT)" \
+		--progress-every 15000
+
+slice-local-10pct:
+	@mkdir -p $(SLICES_LOCAL_DIR)/10pct
+	$(PYTHON) -m archive_mcp slice-seed \
+		--config tests/slice_config.10pct.json \
+		--output $(SLICES_LOCAL_DIR)/10pct \
+		--source-vault "$(PPA_BENCHMARK_SOURCE_VAULT)" \
+		--progress-every 30000
+
+slice-local-all: slice-local-1pct slice-local-5pct slice-local-10pct
+	@echo "Local slices under $(CURDIR)/$(SLICES_LOCAL_DIR)/{1pct,5pct,10pct}"
+
 test-slice-verify:
 	@PPA_INDEX_DSN="$$( $(LOCAL_PPA_INDEX_DSN_CMD) )"; \
 	PPA_PATH=/tmp/ppa-test-slice \
@@ -297,6 +340,29 @@ test-slice-verify:
 	PPA_PATH=/tmp/ppa-test-slice \
 	PPA_INDEX_DSN="$$PPA_INDEX_DSN" \
 	PPA_INDEX_SCHEMA=archive_test_slice \
+	$(PYTHON) -m archive_mcp health-check --manifest tests/slice_manifest.json --report-format both
+
+# Same as test-slice-verify but vault = gitignored .slices/10pct (no slice-seed to /tmp). Requires slice-local-10pct + pg-up.
+test-slice-verify-10pct:
+	@test -d "$(CURDIR)/$(SLICES_LOCAL_DIR)/10pct" || { echo "Missing $(SLICES_LOCAL_DIR)/10pct — run: make slice-local-10pct"; exit 1; }
+	@PPA_INDEX_DSN="$$( $(LOCAL_PPA_INDEX_DSN_CMD) )"; \
+	PPA_PATH="$(CURDIR)/$(SLICES_LOCAL_DIR)/10pct" \
+	PPA_INDEX_DSN="$$PPA_INDEX_DSN" \
+	PPA_INDEX_SCHEMA=archive_test_slice_10pct \
+	PPA_EMBEDDING_PROVIDER=hash \
+	PPA_EMBEDDING_MODEL=archive-hash-dev \
+	PPA_EMBEDDING_VERSION=1 \
+	$(PYTHON) -m archive_mcp bootstrap-postgres && \
+	PPA_PATH="$(CURDIR)/$(SLICES_LOCAL_DIR)/10pct" \
+	PPA_INDEX_DSN="$$PPA_INDEX_DSN" \
+	PPA_INDEX_SCHEMA=archive_test_slice_10pct \
+	PPA_EMBEDDING_PROVIDER=hash \
+	PPA_EMBEDDING_MODEL=archive-hash-dev \
+	PPA_EMBEDDING_VERSION=1 \
+	$(PYTHON) -m archive_mcp rebuild-indexes && \
+	PPA_PATH="$(CURDIR)/$(SLICES_LOCAL_DIR)/10pct" \
+	PPA_INDEX_DSN="$$PPA_INDEX_DSN" \
+	PPA_INDEX_SCHEMA=archive_test_slice_10pct \
 	$(PYTHON) -m archive_mcp health-check --manifest tests/slice_manifest.json --report-format both
 
 # Rebuild + health-check on smoke slice output (run test-slice-smoke first). Uses separate schema from full slice.
@@ -347,3 +413,137 @@ health-check:
 	PPA_INDEX_DSN="$$PPA_INDEX_DSN" \
 	PPA_INDEX_SCHEMA=$(PPA_INDEX_SCHEMA) \
 	$(PYTHON) -m archive_mcp health-check
+
+# Remove Phase-3 email-derived cards from seed or slice vaults (MealOrders, Rides, …; Entities/Places, Organizations).
+clean-phase3-derived:
+	bash scripts/clean-phase3-derived-dirs.sh "$(PPA_PATH)"
+
+# Same cleanup for default Makefile slice outputs (paths only; no-op if missing).
+clean-phase3-derived-slices:
+	bash scripts/clean-phase3-derived-dirs.sh /tmp/ppa-test-slice-smoke /tmp/ppa-test-slice
+
+clean-phase3-derived-local-slices:
+	bash scripts/clean-phase3-derived-dirs.sh \
+		"$(CURDIR)/$(SLICES_LOCAL_DIR)/1pct" \
+		"$(CURDIR)/$(SLICES_LOCAL_DIR)/5pct" \
+		"$(CURDIR)/$(SLICES_LOCAL_DIR)/10pct"
+
+# Remove /tmp slice vaults, extract staging, bench dirs (see scripts/clean-ppa-machine-artifacts.sh --help).
+clean-ppa-machine-artifacts:
+	bash scripts/clean-ppa-machine-artifacts.sh
+
+clean-ppa-machine-artifacts-dry-run:
+	bash scripts/clean-ppa-machine-artifacts.sh --dry-run
+
+# Deletes .slices/{1pct,5pct,10pct} only (multi-GB). Seed vault untouched.
+clean-ppa-local-slices:
+	bash scripts/clean-ppa-machine-artifacts.sh --remove-local-slices
+
+# Extract from local stratified slices (see .slices/README.md). Cleans Phase-3 dirs on that slice first.
+extract-emails-1pct-slice:
+	bash scripts/clean-phase3-derived-dirs.sh "$(CURDIR)/$(SLICES_LOCAL_DIR)/1pct"
+	PPA_PATH="$(CURDIR)/$(SLICES_LOCAL_DIR)/1pct" $(PYTHON) -m archive_mcp --log-file logs/extract-1pct-slice.log extract-emails \
+		--staging-dir _staging-1pct/ --workers 8 --full-report
+
+extract-emails-5pct-slice:
+	bash scripts/clean-phase3-derived-dirs.sh "$(CURDIR)/$(SLICES_LOCAL_DIR)/5pct"
+	PPA_PATH="$(CURDIR)/$(SLICES_LOCAL_DIR)/5pct" $(PYTHON) -m archive_mcp --log-file logs/extract-5pct-slice.log extract-emails \
+		--staging-dir _staging-5pct/ --workers 8 --full-report
+
+extract-emails-10pct-slice:
+	bash scripts/clean-phase3-derived-dirs.sh "$(CURDIR)/$(SLICES_LOCAL_DIR)/10pct"
+	PPA_PATH="$(CURDIR)/$(SLICES_LOCAL_DIR)/10pct" $(PYTHON) -m archive_mcp --log-file logs/extract-10pct-slice.log extract-emails \
+		--staging-dir _staging-10pct/ --workers 8 --full-report
+
+# Regenerate markdown quality reports (requires matching _staging-*pct/ from extract-emails-*pct-slice).
+extraction-quality-reports:
+	$(PYTHON) scripts/generate_extraction_quality_report.py --staging-dir _staging-1pct --label 1pct --out docs/reports/extraction-quality/1pct.md --problem-samples 8 --clean-samples 4
+	$(PYTHON) scripts/generate_extraction_quality_report.py --staging-dir _staging-5pct --label 5pct --out docs/reports/extraction-quality/5pct.md --problem-samples 8 --clean-samples 4
+	$(PYTHON) scripts/generate_extraction_quality_report.py --staging-dir _staging-10pct --label 10pct --out docs/reports/extraction-quality/10pct.md --problem-samples 8 --clean-samples 4
+
+# EDL Phase 1–2: taxonomy + per-year template samples (set DOMAIN=, optional CATEGORY=, PPA_PATH=).
+sender-census:
+	PPA_PATH=$(PPA_PATH) $(PYTHON) -m archive_mcp sender-census --domain $(DOMAIN) --sample 100
+
+template-sampler:
+	PPA_PATH=$(PPA_PATH) $(PYTHON) -m archive_mcp template-sampler \
+		--domain $(DOMAIN) --category $(CATEGORY) --per-year 3 --out-dir /tmp/era-samples/$(DOMAIN)
+
+# Fast EDL smoke: use gitignored .slices/10pct (same tree as extract-emails-10pct-slice). DOMAIN= required.
+sender-census-slice-smoke:
+	@test -d "$(CURDIR)/$(SLICES_LOCAL_DIR)/10pct" || { echo "Missing $(SLICES_LOCAL_DIR)/10pct — run: make slice-local-10pct"; exit 1; }
+	PPA_PATH="$(CURDIR)/$(SLICES_LOCAL_DIR)/10pct" $(PYTHON) -m archive_mcp sender-census --domain $(DOMAIN) --sample 50
+
+template-sampler-slice-smoke:
+	@test -d "$(CURDIR)/$(SLICES_LOCAL_DIR)/10pct" || { echo "Missing $(SLICES_LOCAL_DIR)/10pct — run: make slice-local-10pct"; exit 1; }
+	PPA_PATH="$(CURDIR)/$(SLICES_LOCAL_DIR)/10pct" $(PYTHON) -m archive_mcp template-sampler \
+		--domain $(DOMAIN) --category $(CATEGORY) --per-year 2 --out-dir /tmp/era-samples-smoke/$(DOMAIN)
+
+# Phase 2.5 Step 11a: all Tier 1–3 template-samplers → archive_sync/extractors/specs/samples/<provider>/ (long-running).
+step-11a-template-samplers:
+	PER_YEAR="$(STEP_11A_PER_YEAR)" $(CURDIR)/scripts/run_step_11a_template_samplers.sh
+
+# Sender census on full seed vault (same Email/ walk as slice; counts are always totals). DOMAIN= required.
+# Optional: CENSUS_OUT=…  SENDER_CENSUS_SAMPLE=5000  SENDER_CENSUS_TOP_EXACT=80  etc.
+sender-census-seed:
+	@test -n "$(DOMAIN)" && [ "$(DOMAIN)" != "example.com" ] || { echo >&2 "Usage: make sender-census-seed DOMAIN=amazon.com [CENSUS_OUT=archive_sync/extractors/specs/foo-census-seed.md]"; exit 1; }
+	@test -d "$(PPA_SEED_VAULT)" || { echo >&2 "Missing PPA_SEED_VAULT: $(PPA_SEED_VAULT)"; exit 1; }
+	PPA_PATH="$(PPA_SEED_VAULT)" $(PYTHON) -m archive_mcp sender-census \
+		--domain $(DOMAIN) --sample $(SENDER_CENSUS_SAMPLE) --detail-rows $(SENDER_CENSUS_DETAIL) \
+		--top-from $(SENDER_CENSUS_TOP_FROM) \
+		--top-exact-subjects $(SENDER_CENSUS_TOP_EXACT) \
+		--top-subject-shapes $(SENDER_CENSUS_TOP_SHAPES) \
+		$(if $(CENSUS_OUT),--out $(CENSUS_OUT),)
+
+# Step 11a batch on full seed → archive_sync/extractors/specs/samples_seed/<provider>/ (one walk; often 30–90+ min).
+# Phase 11b–11c: cite paths under samples_seed/ in provider specs. See specs/samples_seed/README.md
+# Override: STEP_11A_PER_YEAR_SEED=20
+step-11a-template-samplers-seed:
+	@test -d "$(PPA_SEED_VAULT)" || { echo >&2 "Missing PPA_SEED_VAULT: $(PPA_SEED_VAULT)"; exit 1; }
+	RUN_ON_SEED=1 SEED_VAULT="$(PPA_SEED_VAULT)" PER_YEAR="$(STEP_11A_PER_YEAR_SEED)" $(CURDIR)/scripts/run_step_11a_template_samplers.sh
+
+# Phase 2.5 Step 11d: one dry-run pass, per-extractor matched/extracted/yield (default: .slices/10pct). Long-running.
+STEP_11D_VAULT ?= $(CURDIR)/$(SLICES_LOCAL_DIR)/10pct
+step-11d-slice-yield-report:
+	@test -d "$(STEP_11D_VAULT)" || { echo "Missing $(STEP_11D_VAULT) — run: make slice-local-10pct"; exit 1; }
+	$(PYTHON) scripts/step_11d_slice_yield_report.py --vault "$(STEP_11D_VAULT)"
+
+# Extract from smoke slice → /tmp (run test-slice-smoke first). Cleans slice derived dirs first.
+extract-emails-slice-smoke: clean-phase3-derived-slices
+	PPA_PATH=/tmp/ppa-test-slice-smoke $(PYTHON) -m archive_mcp extract-emails \
+		--staging-dir /tmp/ppa-slice-smoke-extract-staging --workers 4 --full-report
+
+# Extract from full 5% slice → /tmp (run test-slice first). Cleans slice derived dirs first.
+extract-emails-slice-full: clean-phase3-derived-slices
+	PPA_PATH=/tmp/ppa-test-slice $(PYTHON) -m archive_mcp extract-emails \
+		--staging-dir /tmp/ppa-slice-full-extract-staging --workers 4 --full-report
+
+extract-emails-staging:
+	PPA_PATH=$(PPA_PATH) $(PYTHON) -m archive_mcp extract-emails \
+		--staging-dir _staging/ --workers 4
+
+extract-emails-full:
+	PPA_PATH=$(PPA_PATH) $(PYTHON) -m archive_mcp extract-emails \
+		--staging-dir _staging/ --workers 8 --full-report
+
+extract-benchmark:
+	PPA_PATH=$(PPA_PATH) $(PYTHON) -m archive_mcp extract-emails \
+		--staging-dir /tmp/extract-bench/ --workers 4 --limit-vault-percent 5
+
+extract-dry-run:
+	PPA_PATH=$(PPA_PATH) $(PYTHON) -m archive_mcp extract-emails --dry-run
+
+staging-report:
+	$(PYTHON) -m archive_mcp staging-report --staging-dir _staging/
+
+promote-staging:
+	PPA_PATH=$(PPA_PATH) $(PYTHON) -m archive_mcp promote-staging --staging-dir _staging/
+
+promote-staging-dry-run:
+	PPA_PATH=$(PPA_PATH) $(PYTHON) -m archive_mcp promote-staging --staging-dir _staging/ --dry-run
+
+resolve-entities:
+	PPA_PATH=$(PPA_PATH) $(PYTHON) -m archive_mcp resolve-entities
+
+resolve-entities-full:
+	PPA_PATH=$(PPA_PATH) $(PYTHON) -m archive_mcp resolve-entities --report-dir _reports/

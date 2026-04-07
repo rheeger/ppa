@@ -31,3 +31,11 @@ class SeedLinksDisabledError(PpaError):
 
 class InvalidInputError(PpaError):
     """Caller input could not be parsed or validated."""
+
+
+class ExtractionError(PpaError):
+    """Email extraction pipeline error."""
+
+
+class EntityResolutionError(PpaError):
+    """Entity resolution error."""

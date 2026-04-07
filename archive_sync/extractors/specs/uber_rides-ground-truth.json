@@ -1,0 +1,343 @@
+{
+  "provider": "Uber_rides",
+  "extractor_id": "uber_rides",
+  "vault_note": "Holdouts bootstrapped from extractor output on 10pct; re-verify manually.",
+  "holdout_emails": [
+    {
+      "uid": "hfa-email-message-2046a512b095",
+      "expected_cards": [
+        {
+          "type": "ride",
+          "fields": {
+            "service": "Uber",
+            "pickup_location": "2231 Chestnut Street, San Francisco, CA",
+            "dropoff_location": "1901-1999 Scott Street, San Francisco, CA",
+            "fare": 7.17
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-b9ba5260399a",
+      "expected_cards": [
+        {
+          "type": "ride",
+          "fields": {
+            "service": "Uber",
+            "pickup_location": "821 Divisadero Street, San Francisco, CA",
+            "dropoff_location": "1853 Scott Street, San Francisco, CA",
+            "fare": 6.4
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-24c0b9b3a626",
+      "expected_cards": [
+        {
+          "type": "ride",
+          "fields": {
+            "service": "Uber",
+            "pickup_location": "2572 Pine Street, San Francisco, CA",
+            "dropoff_location": "17 Grove Street, San Francisco, CA",
+            "fare": 10.76
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-3fcfe6d3ff6e",
+      "expected_cards": [
+        {
+          "type": "ride",
+          "fields": {
+            "service": "Uber",
+            "pickup_location": "103 Polk Street, San Francisco, CA",
+            "dropoff_location": "2578 Pine Street, San Francisco, CA",
+            "fare": 9.85
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-4e39b556a996",
+      "expected_cards": [
+        {
+          "type": "ride",
+          "fields": {
+            "service": "Uber",
+            "pickup_location": "400-448 Pine Street, San Francisco, CA",
+            "dropoff_location": "2609 Pine Street, San Francisco, CA",
+            "fare": 9.51
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-700f0bfddc80",
+      "expected_cards": [
+        {
+          "type": "ride",
+          "fields": {
+            "service": "Uber",
+            "pickup_location": "2572 Pine Street, San Francisco, CA",
+            "dropoff_location": "611-633 Jones Street, San Francisco, CA",
+            "fare": 8.91
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-c84993a9cb38",
+      "expected_cards": [
+        {
+          "type": "ride",
+          "fields": {
+            "service": "Uber",
+            "fare": 10.8
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-f68c8228f50e",
+      "expected_cards": [
+        {
+          "type": "ride",
+          "fields": {
+            "service": "Uber",
+            "pickup_location": "750 Taylor Street, San Francisco, CA",
+            "dropoff_location": "720 Gough Street, San Francisco, CA",
+            "fare": 13.84
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-8c32182c88ee",
+      "expected_cards": [
+        {
+          "type": "ride",
+          "fields": {
+            "service": "Uber",
+            "pickup_location": "200 McAllister Street, UC Hastings College of the Law, San Francisco, CA",
+            "dropoff_location": "2558,2556,2554 Pine Street, San Francisco, CA",
+            "fare": 7.63
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-a3ce79cc2371",
+      "expected_cards": [
+        {
+          "type": "ride",
+          "fields": {
+            "service": "Uber",
+            "pickup_location": "2572 Pine Street, San Francisco, CA",
+            "dropoff_location": "850 Montgomery Street, San Francisco, CA",
+            "fare": 9.38
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-d0cb4ffd680f",
+      "expected_cards": [
+        {
+          "type": "ride",
+          "fields": {
+            "service": "Uber",
+            "pickup_location": "737 Geary Street, San Francisco, CA",
+            "dropoff_location": "2572-2578 Pine Street, San Francisco, CA",
+            "fare": 26.43
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-d63246043359",
+      "expected_cards": [
+        {
+          "type": "ride",
+          "fields": {
+            "service": "Uber",
+            "fare": 35.14
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-0e8a0da4d98a",
+      "expected_cards": [
+        {
+          "type": "ride",
+          "fields": {
+            "service": "Uber",
+            "pickup_location": "2517 Pine Street, San Francisco, CA",
+            "dropoff_location": "702 14th Street, San Francisco, CA",
+            "fare": 14.44
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-25e9e44ae87c",
+      "expected_cards": [
+        {
+          "type": "ride",
+          "fields": {
+            "service": "Uber",
+            "pickup_location": "1000 Steiner Street, San Francisco, CA",
+            "dropoff_location": "2572 Pine Street, San Francisco, CA",
+            "fare": 5.26
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-3020ea8d8608",
+      "expected_cards": [
+        {
+          "type": "ride",
+          "fields": {
+            "service": "Uber",
+            "pickup_location": "2590 Pine Street, San Francisco, CA",
+            "dropoff_location": "1271 McAllister Street, San Francisco, CA",
+            "fare": 9.16
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-4011ffcfdc5e",
+      "expected_cards": [
+        {
+          "type": "ride",
+          "fields": {
+            "service": "Uber",
+            "pickup_location": "241 Duboce Avenue, San Francisco, CA",
+            "dropoff_location": "1301-1325 McAllister Street, San Francisco, CA",
+            "fare": 6.12
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-452af14d0742",
+      "expected_cards": [
+        {
+          "type": "ride",
+          "fields": {
+            "service": "Uber",
+            "pickup_location": "376 Brannan Street, San Francisco, CA",
+            "dropoff_location": "2685 Pine Street, San Francisco, CA",
+            "fare": 8.88
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-58d8515783e9",
+      "expected_cards": [
+        {
+          "type": "ride",
+          "fields": {
+            "service": "Uber",
+            "pickup_location": "2572 Pine Street, San Francisco, CA",
+            "dropoff_location": "1322 McAllister Street, San Francisco, CA",
+            "fare": 9.16
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-a92729e92f7f",
+      "expected_cards": [
+        {
+          "type": "ride",
+          "fields": {
+            "service": "Uber",
+            "pickup_location": "Pickup Location",
+            "dropoff_location": "1269-1299 Leavenworth Street, San Francisco, CA",
+            "fare": 11.8
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-cd1ce792a7e8",
+      "expected_cards": [
+        {
+          "type": "ride",
+          "fields": {
+            "service": "Uber",
+            "pickup_location": "1268-1298 Leavenworth Street, San Francisco, CA",
+            "dropoff_location": "1862 Divisadero Street, San Francisco, CA",
+            "fare": 7.14
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-27d8c05c2752",
+      "expected_cards": [
+        {
+          "type": "ride",
+          "fields": {
+            "service": "Uber",
+            "pickup_location": "875-899 Bush Street, San Francisco, CA",
+            "dropoff_location": "1300-1326 El Camino Real, San Francisco, CA",
+            "fare": 8.5
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-4c286350614d",
+      "expected_cards": [
+        {
+          "type": "ride",
+          "fields": {
+            "service": "Uber",
+            "pickup_location": "1001 Lincoln Way, San Francisco, CA",
+            "dropoff_location": "890-898 Bush Street, San Francisco, CA",
+            "fare": 22.02
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-14c5df734a09",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-164dfd3a4b8f",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-a32e20f9eddb",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-12a1b7505aee",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-59d229fcf3eb",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-5cbba523a7a1",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-6a87de166837",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-8c5f48e7b9e9",
+      "expected_cards": []
+    }
+  ]
+}

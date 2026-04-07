@@ -1,0 +1,97 @@
+{
+  "provider": "Lyft",
+  "extractor_id": "lyft",
+  "vault_note": "Holdouts bootstrapped from extractor output on 10pct; re-verify manually.",
+  "holdout_emails": [
+    {
+      "uid": "hfa-email-message-f8768ca16762",
+      "expected_cards": [
+        {
+          "type": "ride",
+          "fields": {
+            "service": "Lyft",
+            "pickup_location": "425 Main St, San Francisco, CA 94105",
+            "dropoff_location": "2924 23rd St, San Francisco, CA 94110",
+            "fare": 27.29
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-42c197772bfa",
+      "expected_cards": [
+        {
+          "type": "ride",
+          "fields": {
+            "service": "Lyft",
+            "pickup_location": "2027 13th St, Boulder, CO",
+            "dropoff_location": "316 Chautauqua Park, Boulder, CO",
+            "fare": 11.48
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-907d3a9092be",
+      "expected_cards": [
+        {
+          "type": "ride",
+          "fields": {
+            "service": "Lyft",
+            "pickup_location": "3 La Guardia Airport Hangar 122, Flushing, NY",
+            "dropoff_location": "185 Washington Park, Brooklyn, NY",
+            "fare": 38.56
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-aff82c327297",
+      "expected_cards": [
+        {
+          "type": "ride",
+          "fields": {
+            "service": "Lyft",
+            "pickup_location": "21600 Olive Ave, Cupertino, CA",
+            "dropoff_location": "2633 16th Ave, San Francisco, CA",
+            "fare": 70.24
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-f6c61efa42ae",
+      "expected_cards": [
+        {
+          "type": "ride",
+          "fields": {
+            "service": "Lyft",
+            "pickup_location": "460 11th Ave, New York, NY",
+            "dropoff_location": "105 Crosby St, New York, NY",
+            "fare": 28.99
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-dd819fbbc3d0",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-0e938daedf6b",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-c3096fc2b2e5",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-d0c514466c56",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-96d7e5153eda",
+      "expected_cards": []
+    }
+  ]
+}

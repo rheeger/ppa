@@ -1,0 +1,328 @@
+{
+  "provider": "Doordash",
+  "extractor_id": "doordash",
+  "vault_note": "Holdouts bootstrapped from extractor output on 10pct; re-verify manually.",
+  "holdout_emails": [
+    {
+      "uid": "hfa-email-message-2ae4c5cb2e3a",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "restaurant": "Em Vietnamese Bistro",
+            "service": "DoorDash",
+            "total": 34.81
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-0622975bfb9a",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "restaurant": "Super Burrito",
+            "service": "DoorDash",
+            "total": 28.93
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-26f0aaad9e5f",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "restaurant": "5ive Spice",
+            "service": "DoorDash",
+            "total": 49.68
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-46179b97b774",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "restaurant": "750 Myrtle Diner",
+            "service": "DoorDash",
+            "total": 33.49
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-64b66b92a455",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "restaurant": "Taim Mediterranean Kitchen",
+            "service": "DoorDash",
+            "total": 26.59
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-6aa115b26789",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "restaurant": "Mile End Delicatessen",
+            "service": "DoorDash",
+            "total": 39.55
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-0a1737b0cbdb",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "restaurant": "Five Guys Burgers & Fries",
+            "service": "DoorDash",
+            "total": 33.87
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-0bab3bfae8b0",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "restaurant": "Em Vietnamese Bistro",
+            "service": "DoorDash",
+            "total": 49.56
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-1e838536b814",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "restaurant": "Glin",
+            "service": "DoorDash",
+            "total": 24.05
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-bdbeae981271",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "restaurant": "Homemade by Miriam",
+            "service": "DoorDash",
+            "total": 22.36
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-dbdbd3291d7e",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "restaurant": "Masti Indian Grill",
+            "service": "DoorDash",
+            "total": 52.1
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-2cfa313ba3e4",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "restaurant": "Souvla",
+            "service": "DoorDash",
+            "total": 24.15,
+            "subtotal": 16.5
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-f7f287591db3",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "restaurant": "Purple Rice",
+            "service": "DoorDash",
+            "total": 53.13,
+            "subtotal": 38.0
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-22c1f4ca01a2",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "restaurant": "Homemade by Miriam",
+            "service": "DoorDash",
+            "total": 26.49
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-909f977d816b",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "restaurant": "Chuko",
+            "service": "DoorDash",
+            "total": 78.07
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-aa20f718c313",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "restaurant": "Masti Indian Grill",
+            "service": "DoorDash",
+            "total": 46.52
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-ddd7274311fa",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "restaurant": "Mile End Delicatessen",
+            "service": "DoorDash",
+            "total": 50.11
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-7058163a1218",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "restaurant": "Farmhouse Kitchen Thai Cuisine",
+            "service": "DoorDash",
+            "total": 87.86,
+            "subtotal": 67.65
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-da8f1f3fe21e",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "restaurant": "Beit Rima",
+            "service": "DoorDash",
+            "total": 33.27
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-e92534906e72",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "restaurant": "Souvla",
+            "service": "DoorDash",
+            "total": 33.83
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-ac0ec825d20e",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "restaurant": "pays a commission to DoorDash on this order",
+            "service": "DoorDash",
+            "total": 35.48
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-b71652275232",
+      "expected_cards": [
+        {
+          "type": "meal_order",
+          "fields": {
+            "restaurant": "tanglad",
+            "service": "DoorDash",
+            "total": 30.78
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-b93445c91d1c",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-dd4481e16efb",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-0635ed94926d",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-20c1902ff513",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-5e9d3779be48",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-b1fcf360a2e2",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-fd8edc414949",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-991ab8bb26cd",
+      "expected_cards": []
+    }
+  ]
+}

@@ -7,6 +7,24 @@ ppa.json
 # Operator logs
 logs/
 
+# Local stratified slices (slice-seed output from make slice-local-*; large vault trees)
+.slices/1pct/
+.slices/5pct/
+.slices/10pct/
+
+# Staging extraction output (derived cards from extract-emails runs)
+_staging/
+_staging-1pct/
+_staging-5pct/
+_staging-10pct/
+
+# Extraction reports
+_reports/
+
+# Template sampler output (regenerated via make step-11a-*)
+archive_sync/extractors/specs/samples/
+archive_sync/extractors/specs/samples_seed/
+
 # Python / tooling
 .venv/
 __pycache__/

@@ -1,0 +1,74 @@
+[
+  {
+    "name": "doordash",
+    "domain": "doordash.com",
+    "category": "order",
+    "out_dir": "archive_sync/extractors/specs/samples/doordash"
+  },
+  {
+    "name": "ubereats",
+    "domain": "uber.com",
+    "category": "uber eats",
+    "out_dir": "archive_sync/extractors/specs/samples/ubereats"
+  },
+  {
+    "name": "uber_rides",
+    "domain": "uber.com",
+    "category": "trip",
+    "out_dir": "archive_sync/extractors/specs/samples/uber_rides"
+  },
+  {
+    "name": "airbnb",
+    "domain": "airbnb.com",
+    "category": "",
+    "out_dir": "archive_sync/extractors/specs/samples/airbnb"
+  },
+  {
+    "name": "united",
+    "domain": "united.com",
+    "category": "",
+    "out_dir": "archive_sync/extractors/specs/samples/united"
+  },
+  {
+    "name": "instacart",
+    "domain": "instacartemail.com",
+    "category": "",
+    "out_dir": "archive_sync/extractors/specs/samples/instacart"
+  },
+  {
+    "name": "instacart_com",
+    "domain": "instacart.com",
+    "category": "",
+    "out_dir": "archive_sync/extractors/specs/samples/instacart"
+  },
+  {
+    "name": "ups",
+    "domain": "ups.com",
+    "category": "",
+    "out_dir": "archive_sync/extractors/specs/samples/ups"
+  },
+  {
+    "name": "fedex",
+    "domain": "fedex.com",
+    "category": "",
+    "out_dir": "archive_sync/extractors/specs/samples/fedex"
+  },
+  {
+    "name": "national",
+    "domain": "nationalcar.com",
+    "category": "",
+    "out_dir": "archive_sync/extractors/specs/samples/national"
+  },
+  {
+    "name": "amazon",
+    "domain": "amazon.com",
+    "category": "order",
+    "out_dir": "archive_sync/extractors/specs/samples/amazon"
+  },
+  {
+    "name": "lyft",
+    "domain": "lyftmail.com",
+    "category": "",
+    "out_dir": "archive_sync/extractors/specs/samples/lyft"
+  }
+]

@@ -43,11 +43,15 @@ Health-check reads the manifest and asserts every check passes after a rebuild.
 
 ## Where slices are saved
 
-| Make target        | Output directory                | Notes                             |
-| ------------------ | ------------------------------- | --------------------------------- |
-| `test-slice`       | `/tmp/ppa-test-slice`           | Full 5% slice from real seed      |
-| `test-slice-smoke` | `/tmp/ppa-test-slice-smoke`     | Tiny 0.5% slice for fast feedback |
-| Manual CLI         | Whatever you pass to `--output` | e.g. `/tmp/ppa-test-slice-seed`   |
+| Make target                           | Output directory                  | Notes                                           |
+| ------------------------------------- | --------------------------------- | ----------------------------------------------- |
+| `test-slice`                          | `/tmp/ppa-test-slice`             | Full 5% slice from real seed                    |
+| `test-slice-smoke`                    | `/tmp/ppa-test-slice-smoke`       | Tiny 0.5% slice for fast feedback               |
+| `slice-local-1pct` / `5pct` / `10pct` | `ppa/.slices/1pct` … (gitignored) | Persisted local copies; see `.slices/README.md` |
+| `slice-local-all`                     | all three under `.slices/`        | Runs 1% then 5% then 10% (long)                 |
+| Manual CLI                            | Whatever you pass to `--output`   | e.g. `/tmp/ppa-test-slice-seed`                 |
+
+Configs for local 1/5/10%: `tests/slice_config.1pct.json`, `slice_config.5pct.json`, `slice_config.10pct.json` (`cluster_cap` matches `scripts/run_slice_cache_bench.sh`).
 
 Slice output is a **flat directory of vault-format `.md` files** — it can be pointed at by
 `PPA_PATH` for any PPA command (`rebuild-indexes`, `health-check`, `benchmark`, etc.).

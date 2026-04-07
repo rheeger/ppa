@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from datetime import datetime, timezone
 
@@ -449,6 +450,71 @@ def cmd_apple_health(args):
         verbose=args.verbose,
         progress_every=args.progress_every,
     )
+
+
+def cmd_extract_emails(args):
+    import logging
+
+    from archive_mcp.log import configure_logging
+    from archive_sync.extractors.registry import build_default_registry
+    from archive_sync.extractors.runner import ExtractionRunner
+
+    configure_logging(verbose=bool(getattr(args, "verbose", False)))
+    log = logging.getLogger("ppa.archive_sync.extract")
+    registry = build_default_registry()
+    staging = str(getattr(args, "staging_dir", "") or "").strip() or None
+    raw_sender = str(getattr(args, "sender", "") or "").strip()
+    sender_f = raw_sender.lower() if raw_sender else None
+    vp = float(getattr(args, "limit_vault_percent", 0.0) or 0.0)
+    runner = ExtractionRunner(
+        vault_path=args.vault,
+        registry=registry,
+        staging_dir=staging,
+        workers=int(getattr(args, "workers", 4)),
+        batch_size=int(getattr(args, "batch_size", 500)),
+        dry_run=bool(args.dry_run),
+        sender_filter=sender_f,
+        limit=(int(args.limit) if int(getattr(args, "limit", 0) or 0) > 0 else None),
+        progress_every=int(getattr(args, "progress_every", 5000) or 5000),
+        vault_percent=(vp if vp > 0 else None),
+    )
+    metrics = runner.run()
+    log.info("extract-emails finished: %s", metrics.to_dict())
+    print(json.dumps(metrics.to_dict(), indent=2))
+    if bool(getattr(args, "full_report", False)) and staging:
+        from archive_mcp.commands.staging import emit_full_staging_report
+
+        emit_full_staging_report(staging)
+
+
+def cmd_resolve_entities(args):
+    from archive_mcp.log import configure_logging
+    from archive_sync.extractors.entity_resolution import run_entity_resolution
+
+    configure_logging(verbose=bool(getattr(args, "verbose", False)))
+    out = run_entity_resolution(
+        args.vault,
+        entity_filter=str(getattr(args, "entity_type", "all")),
+        dry_run=bool(args.dry_run),
+        report_dir=str(getattr(args, "report_dir", "") or "").strip(),
+    )
+    print(json.dumps(out, indent=2))
+
+
+def cmd_promote_staging(args):
+    import dataclasses
+    import json
+
+    from archive_mcp.log import configure_logging
+    from archive_sync.extractors.promoter import promote_staging
+
+    configure_logging(verbose=bool(getattr(args, "verbose", False)))
+    res = promote_staging(
+        vault_path=args.vault,
+        staging_dir=str(args.staging_dir),
+        dry_run=bool(getattr(args, "dry_run", False)),
+    )
+    print(json.dumps(dataclasses.asdict(res), indent=2, default=str))
 
 
 def cmd_beeper(args):
@@ -910,6 +976,50 @@ def main():
     )
     p_apple_health.add_argument("--dry-run", action="store_true")
     p_apple_health.set_defaults(func=cmd_apple_health)
+
+    p_extract = sub.add_parser("extract-emails", help="Extract derived cards from email_message bodies")
+    p_extract.add_argument("--sender", default="", help="Filter to single extractor id (e.g. doordash)")
+    p_extract.add_argument("--dry-run", action="store_true")
+    p_extract.add_argument("--limit", type=int, default=0, help="Max matched emails (0 = no cap)")
+    p_extract.add_argument("--staging-dir", default="", help="Write to staging directory instead of vault")
+    p_extract.add_argument("--workers", type=int, default=4)
+    p_extract.add_argument("--batch-size", type=int, default=500)
+    p_extract.add_argument(
+        "--full-report",
+        action="store_true",
+        help="After extraction, log staging summary to stderr (requires --staging-dir)",
+    )
+    p_extract.add_argument(
+        "--limit-vault-percent",
+        type=float,
+        default=0.0,
+        help="Deterministic sample: process ~N%% of email_message cards (0 = full vault)",
+    )
+    p_extract.add_argument("--progress-every", type=int, default=5000, help="Progress log interval")
+    p_extract.add_argument("--verbose", action="store_true")
+    p_extract.set_defaults(func=cmd_extract_emails)
+
+    p_resolve_ent = sub.add_parser("resolve-entities", help="Place/Org/Person resolution from derived cards")
+    p_resolve_ent.add_argument("--dry-run", action="store_true")
+    p_resolve_ent.add_argument(
+        "--type",
+        dest="entity_type",
+        choices=["place", "org", "person", "all"],
+        default="all",
+    )
+    p_resolve_ent.add_argument(
+        "--report-dir",
+        default="",
+        help="Write entity-resolution-report.json and entity-resolution-spot-check.md here",
+    )
+    p_resolve_ent.add_argument("--verbose", action="store_true")
+    p_resolve_ent.set_defaults(func=cmd_resolve_entities)
+
+    p_promote = sub.add_parser("promote-staging", help="Promote staged derived cards into the vault")
+    p_promote.add_argument("--staging-dir", required=True)
+    p_promote.add_argument("--dry-run", action="store_true")
+    p_promote.add_argument("--verbose", action="store_true")
+    p_promote.set_defaults(func=cmd_promote_staging)
 
     p_beeper = sub.add_parser("beeper")
     p_beeper.add_argument("--db-path", default=None, help="Optional path to BeeperTexts index.db")

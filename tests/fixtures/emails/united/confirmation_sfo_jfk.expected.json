@@ -1,0 +1,12 @@
+{
+  "cards": [
+    {
+      "type": "flight",
+      "airline": "United",
+      "confirmation_code": "ABC7YZ",
+      "origin_airport": "EWR",
+      "destination_airport": "SFO",
+      "fare_amount": 289.0
+    }
+  ]
+}

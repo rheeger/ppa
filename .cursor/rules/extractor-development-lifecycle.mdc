@@ -1,0 +1,7 @@
+---
+description: Extractor development — see the full EDL skill
+alwaysApply: true
+---
+# Extractor Development Lifecycle
+
+Use the comprehensive EDL agent skill at `.cursor/skills/extractor-dev/SKILL.md` for all extractor work. The five-phase process (Census → Template Eras → Field Mapping → Implementation → Verification) is mandatory for creating or modifying any extractor under `archive_sync/extractors/`.

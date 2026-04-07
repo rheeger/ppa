@@ -1,0 +1,13 @@
+{
+  "cards": [
+    {
+      "type": "meal_order",
+      "service": "DoorDash",
+      "restaurant": "Burma Love",
+      "total": 44.06,
+      "subtotal": 36.0,
+      "tax": 3.06,
+      "tip": 5.0
+    }
+  ]
+}

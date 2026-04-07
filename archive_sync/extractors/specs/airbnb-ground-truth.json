@@ -1,0 +1,323 @@
+{
+  "provider": "Airbnb",
+  "extractor_id": "airbnb",
+  "vault_note": "Holdouts bootstrapped from extractor output on 10pct; re-verify manually.",
+  "holdout_emails": [
+    {
+      "uid": "hfa-email-message-545bd837a469",
+      "expected_cards": [
+        {
+          "type": "accommodation",
+          "fields": {
+            "property_name": "page for details and",
+            "booking_source": "Airbnb",
+            "confirmation_code": "24329714"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-1fdacb6644f1",
+      "expected_cards": [
+        {
+          "type": "accommodation",
+          "fields": {
+            "property_name": "July 26, 2020",
+            "booking_source": "Airbnb",
+            "confirmation_code": "43714961"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-0df01f586bf1",
+      "expected_cards": [
+        {
+          "type": "accommodation",
+          "fields": {
+            "property_name": "Downtown Austin for Mar 23 - 25, 2018",
+            "booking_source": "Airbnb",
+            "confirmation_code": "464621174"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-520aa1a13c8a",
+      "expected_cards": [
+        {
+          "type": "accommodation",
+          "fields": {
+            "property_name": "Downtown Austin for Mar 23 - 25, 2018",
+            "booking_source": "Airbnb",
+            "confirmation_code": "464621174"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-61f0b5cdd77c",
+      "expected_cards": [
+        {
+          "type": "accommodation",
+          "fields": {
+            "booking_source": "Airbnb",
+            "confirmation_code": "1525553111"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-401470c037c8",
+      "expected_cards": [
+        {
+          "type": "accommodation",
+          "fields": {
+            "property_name": "September 23, 2021",
+            "booking_source": "Airbnb",
+            "confirmation_code": "17037578"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-796389922c8d",
+      "expected_cards": [
+        {
+          "type": "accommodation",
+          "fields": {
+            "property_name": "September 30, 2021",
+            "booking_source": "Airbnb",
+            "confirmation_code": "46356316"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-a94fffb6d1a7",
+      "expected_cards": [
+        {
+          "type": "accommodation",
+          "fields": {
+            "property_name": "Aptos - Thursday, September 30, 2021 - Sunday, October 03, 2021",
+            "booking_source": "Airbnb",
+            "confirmation_code": "RNWB58MX"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-d73a4071ffda",
+      "expected_cards": [
+        {
+          "type": "accommodation",
+          "fields": {
+            "property_name": "YOU LOVE",
+            "booking_source": "Airbnb",
+            "confirmation_code": "GETAWAYS"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-dcbe2be6d72e",
+      "expected_cards": [
+        {
+          "type": "accommodation",
+          "fields": {
+            "property_name": "TURNKEY VACATION RENTALS’S PLACE?",
+            "booking_source": "Airbnb"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-421cfa4eea66",
+      "expected_cards": [
+        {
+          "type": "accommodation",
+          "fields": {
+            "property_name": "23, 2021",
+            "booking_source": "Airbnb",
+            "confirmation_code": "953820768"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-5004b7a077d7",
+      "expected_cards": [
+        {
+          "type": "accommodation",
+          "fields": {
+            "property_name": "23, 2021",
+            "booking_source": "Airbnb",
+            "confirmation_code": "953820768"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-598a0e028d26",
+      "expected_cards": [
+        {
+          "type": "accommodation",
+          "fields": {
+            "property_name": "23, 2021",
+            "booking_source": "Airbnb",
+            "confirmation_code": "953820768"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-8db62b3c6e46",
+      "expected_cards": [
+        {
+          "type": "accommodation",
+          "fields": {
+            "property_name": "23, 2021",
+            "booking_source": "Airbnb",
+            "confirmation_code": "953820768"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-979d2f014d6b",
+      "expected_cards": [
+        {
+          "type": "accommodation",
+          "fields": {
+            "property_name": "23, 2021",
+            "booking_source": "Airbnb",
+            "confirmation_code": "953820768"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-af5bd7c75971",
+      "expected_cards": [
+        {
+          "type": "accommodation",
+          "fields": {
+            "property_name": "23, 2021",
+            "booking_source": "Airbnb",
+            "confirmation_code": "953820768"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-b6d8ea278565",
+      "expected_cards": [
+        {
+          "type": "accommodation",
+          "fields": {
+            "property_name": "10 MINS FROM TOWN for May 28 - 31, 2021",
+            "booking_source": "Airbnb",
+            "confirmation_code": "963645066"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-dd813403fc3e",
+      "expected_cards": [
+        {
+          "type": "accommodation",
+          "fields": {
+            "property_name": "23, 2021",
+            "booking_source": "Airbnb",
+            "confirmation_code": "953820768"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-f45cf8e77d9f",
+      "expected_cards": [
+        {
+          "type": "accommodation",
+          "fields": {
+            "property_name": "23, 2021",
+            "booking_source": "Airbnb",
+            "confirmation_code": "953820768"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-fd56e10042e0",
+      "expected_cards": [
+        {
+          "type": "accommodation",
+          "fields": {
+            "property_name": "23, 2021",
+            "booking_source": "Airbnb",
+            "confirmation_code": "986085228392"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-4ccd8153caae",
+      "expected_cards": [
+        {
+          "type": "accommodation",
+          "fields": {
+            "property_name": "Manual to you via the \"messages\" portion of Airbnb within the week of your trip. Please also download the Airbnb App for the easiest way to communicate with us before and during your stay.",
+            "booking_source": "Airbnb",
+            "confirmation_code": "24985384"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-7dc23a1b3a24",
+      "expected_cards": [
+        {
+          "type": "accommodation",
+          "fields": {
+            "property_name": "Mar 14",
+            "booking_source": "Airbnb",
+            "confirmation_code": "2394348729"
+          }
+        }
+      ]
+    },
+    {
+      "uid": "hfa-email-message-b5ffb28e8191",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-12f48a6523bd",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-c233fc4119f9",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-81bc26bf5c19",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-118416d25213",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-3b30394a0a7b",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-3b8099f8c74f",
+      "expected_cards": []
+    },
+    {
+      "uid": "hfa-email-message-76a0e32c0a38",
+      "expected_cards": []
+    }
+  ]
+}

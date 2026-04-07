@@ -509,6 +509,7 @@ class BaseCard(BaseModel):
     source_id: str
     created: str
     updated: str
+    extraction_confidence: float | None = None
     summary: str = ""
     tags: list[str] = Field(default_factory=list)
     people: list[str] = Field(default_factory=list)
