@@ -17,7 +17,8 @@ from __future__ import annotations
 
 import re
 from functools import lru_cache
-from typing import Any
+
+from ppa_google_auth import INTERNAL_DOMAINS
 
 # ---------------------------------------------------------------------------
 # Transactional sender domains → card_types fast-track
@@ -299,19 +300,6 @@ PERSONAL_DOMAINS: frozenset[str] = frozenset(
 )
 
 # ---------------------------------------------------------------------------
-# User's own / work domains — person-to-person work mail, skip by default.
-# Add your org domains here so threads from coworkers don't waste LLM triage.
-# ---------------------------------------------------------------------------
-
-USER_WORK_DOMAINS: frozenset[str] = frozenset(
-    {
-        "endaoment.org",
-        "heegerassociates.com",
-        "givingtree.tech",
-    }
-)
-
-# ---------------------------------------------------------------------------
 # Known-noise domains — always skip, no LLM triage needed
 # ---------------------------------------------------------------------------
 
@@ -518,6 +506,8 @@ def _email_domain(from_email: str) -> str:
 def classify_thread_prefilter(
     from_emails: list[str],
     subjects: list[str],
+    *,
+    user_domains: frozenset[str] | None = None,
 ) -> tuple[str, list[str]]:
     """Classify a thread before any LLM call.
 
@@ -526,7 +516,15 @@ def classify_thread_prefilter(
     - ``"fast_track"`` — known transactional sender; ``card_types`` populated
     - ``"skip"`` — known noise / personal / work mail; ``card_types`` empty
     - ``"triage"`` — unknown; needs LLM triage; ``card_types`` empty
+
+    ``user_domains`` — org/work domains treated like personal for the
+    all-personal-senders heuristic (coworker threads). Defaults to
+    ``INTERNAL_DOMAINS`` from ``ppa_google_auth`` when omitted.
     """
+
+    work_domains: frozenset[str] = (
+        user_domains if user_domains is not None else frozenset(INTERNAL_DOMAINS)
+    )
 
     merged_types: list[str] = []
     has_transactional = False
@@ -553,7 +551,7 @@ def classify_thread_prefilter(
                     merged_types.append(t)
             continue
 
-        if dom in PERSONAL_DOMAINS or dom in USER_WORK_DOMAINS:
+        if dom in PERSONAL_DOMAINS or dom in work_domains:
             continue
 
         has_personal_only = False

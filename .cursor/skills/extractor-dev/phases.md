@@ -337,7 +337,7 @@ Run a **staging extract** (not dry-run) to get field population rates:
 
 ```bash
 make extract-emails-10pct-slice
-# Check _staging-10pct/_metrics.json -> field_population block
+# Check _artifacts/_staging-10pct/_metrics.json -> field_population block
 ```
 
 The `field_population` section in `_metrics.json` reports the fraction of extracted cards

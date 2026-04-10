@@ -5,7 +5,7 @@ Uses CRITICAL_FIELDS predicates from field_metrics plus light heuristics for
 common failure modes. Run from repo `ppa/` with the project venv active:
 
   .venv/bin/python scripts/generate_extraction_quality_report.py \\
-    --staging-dir _staging-5pct --label 5pct --out logs/extraction-quality-5pct.md
+    --staging-dir _artifacts/_staging-5pct --label 5pct --out logs/extraction-quality-5pct.md
 """
 from __future__ import annotations
 

@@ -1,6 +1,6 @@
 # Extraction quality — local slices (1% / 5% / 10%)
 
-Runs use `PPA_PATH=ppa/.slices/{1pct,5pct,10pct}`, staging under `_staging-{1,5,10}pct/`, Phase-3 derived dirs cleaned on each slice before extract. **Volume “expected” columns in the deep reports are calibrated for full seed runs**, not stratified slices — treat LOW/HIGH there as informational.
+Runs use `PPA_PATH=ppa/.slices/{1pct,5pct,10pct}`, staging under `_artifacts/_staging-{1,5,10}pct/`, Phase-3 derived dirs cleaned on each slice before extract. **Volume “expected” columns in the deep reports are calibrated for full seed runs**, not stratified slices — treat LOW/HIGH there as informational.
 
 ## Run summary
 
@@ -23,7 +23,7 @@ Regenerate after a new extract:
 ```bash
 cd ppa
 .venv/bin/python scripts/generate_extraction_quality_report.py \
-  --staging-dir _staging-10pct --label 10pct --out docs/reports/extraction-quality/10pct.md \
+  --staging-dir _artifacts/_staging-10pct --label 10pct --out docs/reports/extraction-quality/10pct.md \
   --problem-samples 10 --clean-samples 5
 ```
 
@@ -43,5 +43,5 @@ cd ppa
 
 ## Artifacts
 
-- Staging: `_staging-1pct/`, `_staging-5pct/`, `_staging-10pct/` (each has `_metrics.json`).
+- Staging: `_artifacts/_staging-1pct/`, `_artifacts/_staging-5pct/`, `_artifacts/_staging-10pct/` (each has `_metrics.json`).
 - Generator: `scripts/generate_extraction_quality_report.py`.

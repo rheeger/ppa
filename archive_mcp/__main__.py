@@ -10,8 +10,8 @@ import os
 import sys
 from pathlib import Path
 
-from archive_sync.llm_enrichment.defaults import (DEFAULT_ENRICH_EXTRACT_MODEL,
-                                                  DEFAULT_ENRICH_TRIAGE_MODEL)
+from archive_sync.llm_enrichment.defaults import (
+    DEFAULT_ENRICH_CARD_GEMINI_MODEL, DEFAULT_ENRICH_EXTRACT_MODEL)
 
 from .benchmark import (BENCHMARK_PROFILES, DEFAULT_BENCHMARK_SOURCE_VAULT,
                         benchmark_multi_size, benchmark_rebuild,
@@ -402,7 +402,7 @@ def main() -> None:
         "enrich-emails",
         help="LLM extraction from known-sender email threads (Phase 2.75 — no triage, writes staging)",
     )
-    enrich_parser.add_argument("--staging-dir", default="_staging-llm", help="Output directory for derived cards")
+    enrich_parser.add_argument("--staging-dir", default="_artifacts/_staging-llm", help="Output directory for derived cards")
     enrich_parser.add_argument(
         "--provider",
         default="ollama",
@@ -431,6 +431,16 @@ def main() -> None:
         help="Concurrent extraction threads (default 4; gemini handles high concurrency natively)",
     )
     enrich_parser.add_argument(
+        "--classify-workers",
+        type=int,
+        default=0,
+        metavar="N",
+        help=(
+            "Parallel Stage-1 classify threads (0 = auto: Gemini capped at 10, Ollama extract_workers×3). "
+            "Lower this if you see empty Gemini responses / 429s."
+        ),
+    )
+    enrich_parser.add_argument(
         "--progress-every",
         type=int,
         default=25,
@@ -443,7 +453,7 @@ def main() -> None:
     )
     enrich_parser.add_argument(
         "--cache-db",
-        default="_enrichment_cache.db",
+        default="_artifacts/_enrichment_cache.db",
         help="SQLite inference cache path (set empty to disable)",
     )
     enrich_parser.add_argument("--run-id", default="", help="Run id for cache + card comments")
@@ -466,13 +476,215 @@ def main() -> None:
     )
     enrich_parser.add_argument(
         "--classify-index-db",
-        default="_classify_index.db",
+        default="_artifacts/_classify_index.db",
         help="Persistent thread classification index path (stores classify results for reuse)",
     )
     enrich_parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Run triage + extraction but do not write cards",
+    )
+
+    enrich_cards_parser = subparsers.add_parser(
+        "enrich-cards",
+        help="Phase 2.875 vault card enrichment (LLM summaries, entity + match staging)",
+    )
+    enrich_cards_parser.add_argument(
+        "--workflow",
+        default="email_thread",
+        help="Workflow name: email_thread, imessage_thread, beeper_thread, finance, calendar_event, document",
+    )
+    enrich_cards_parser.add_argument("--vault", default="", help="Vault path (default: PPA_PATH)")
+    enrich_cards_parser.add_argument(
+        "--staging-dir",
+        default="_artifacts/_staging-enrichment",
+        help="entity_mentions.jsonl, match_candidates.jsonl, _metrics.json",
+    )
+    enrich_cards_parser.add_argument(
+        "--provider",
+        default="gemini",
+        choices=["ollama", "gemini"],
+        help="LLM provider",
+    )
+    enrich_cards_parser.add_argument(
+        "--model",
+        default="",
+        help=f"Model id (default: {DEFAULT_ENRICH_CARD_GEMINI_MODEL} for gemini, Gemma default for ollama)",
+    )
+    enrich_cards_parser.add_argument(
+        "--base-url",
+        default="http://localhost:11434",
+        help="Ollama base URL (ignored for gemini)",
+    )
+    enrich_cards_parser.add_argument(
+        "--cache-db",
+        default="_artifacts/_enrichment_cache.db",
+        help="SQLite inference cache (empty string to disable)",
+    )
+    enrich_cards_parser.add_argument("--run-id", default="", help="Run id for cache + metrics")
+    enrich_cards_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "Do not write vault cards or entity/match JSONL. Still calls the LLM; writes "
+            "llm_enrichment_preview.jsonl + _metrics.json under --staging-dir. Does not write "
+            "inference cache entries (so previews do not pollute the cache)."
+        ),
+    )
+    enrich_cards_parser.add_argument("--progress-every", type=int, default=1)
+    enrich_cards_parser.add_argument(
+        "--vault-percent",
+        type=float,
+        default=0.0,
+        help="Process ~N%% of cards by uid hash (0 = all)",
+    )
+    enrich_cards_parser.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        metavar="N",
+        help=(
+            "Stop after N successful enrichments (valid LLM JSON + counted). "
+            "Use e.g. 25 for a preview batch before scaling up. 0 = no cap."
+        ),
+    )
+    enrich_cards_parser.add_argument(
+        "--workers",
+        type=int,
+        default=24,
+        metavar="W",
+        help=(
+            "Parallelism: overlapping Gemini calls and (for imessage/beeper) parallel eligibility "
+            "stub resolution. Ignored when --limit is set (preview runs stay sequential). Default 24."
+        ),
+    )
+    enrich_cards_parser.add_argument(
+        "--classify-index-db",
+        default="_artifacts/_classify_index.db",
+        metavar="PATH",
+        help=(
+            "Phase 2.75 thread classification SQLite (if this path exists, skip threads indexed as "
+            "noise/marketing/automated; empty string to disable)"
+        ),
+    )
+    enrich_cards_parser.add_argument(
+        "--uid-filter-file",
+        default="",
+        metavar="PATH",
+        help=(
+            "Only process email_thread cards whose uid appears in this file (one uid per line; "
+            "# comments ok). Use after curating a subset to re-run or iterate on prompts."
+        ),
+    )
+    enrich_cards_parser.add_argument(
+        "--no-skip-populated",
+        action="store_true",
+        help="Re-run even when thread_summary (or document description) is already populated",
+    )
+
+    extract_doc_parser = subparsers.add_parser(
+        "extract-document-text",
+        help="Re-extract document card bodies with markitdown (RTF/plain binary fixes)",
+    )
+    extract_doc_parser.add_argument("--vault", default="", help="Vault path (default: PPA_PATH)")
+    extract_doc_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be converted without writing vault cards",
+    )
+    extract_doc_parser.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Max eligible cards to process (0 = no cap)",
+    )
+
+    enrich_orch_parser = subparsers.add_parser(
+        "enrich",
+        help="Full vault enrichment orchestrator (extract-document-text → enrich-emails → enrich-cards × 4)",
+    )
+    enrich_orch_parser.add_argument(
+        "--vault",
+        required=True,
+        metavar="PATH",
+        help="Vault path (required — no PPA_PATH fallback)",
+    )
+    enrich_orch_parser.add_argument(
+        "--run-id",
+        default="",
+        help="Run id for cache + manifest (default: enrich-YYYYMMDD-xxxxxxxx)",
+    )
+    enrich_orch_parser.add_argument(
+        "--run-dir",
+        default="",
+        metavar="PATH",
+        help="Run output root (default: _artifacts/_enrichment-runs/{run_id}/)",
+    )
+    enrich_orch_parser.add_argument(
+        "--provider",
+        default="gemini",
+        choices=["ollama", "gemini"],
+        help="LLM provider for enrichment steps",
+    )
+    enrich_orch_parser.add_argument(
+        "--model",
+        default="",
+        help=f"Model for enrich-cards workflows (default: {DEFAULT_ENRICH_CARD_GEMINI_MODEL} for gemini)",
+    )
+    enrich_orch_parser.add_argument(
+        "--enrich-emails-model",
+        default="",
+        help="Model for enrich-emails classify+extract (default: gemini-2.5-flash-lite for gemini)",
+    )
+    enrich_orch_parser.add_argument(
+        "--base-url",
+        default="http://localhost:11434",
+        help="Ollama base URL (ignored for gemini)",
+    )
+    enrich_orch_parser.add_argument("--workers", type=int, default=24, help="Parallel workers for enrich-cards")
+    enrich_orch_parser.add_argument(
+        "--enrich-emails-workers",
+        type=int,
+        default=8,
+        help="Concurrent threads for enrich-emails",
+    )
+    enrich_orch_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Pass dry-run through all steps (no vault writes; enrich-cards skips cache writes)",
+    )
+    enrich_orch_parser.add_argument(
+        "--steps",
+        default="",
+        help="Comma-separated step keys (default: all). Example: enrich_email_thread,enrich_document",
+    )
+    enrich_orch_parser.add_argument(
+        "--checkpoint-every",
+        type=int,
+        default=500,
+        metavar="N",
+        help="Write _metrics_checkpoint.json every N processed eligible cards per enrich-cards step (0=off)",
+    )
+    enrich_orch_parser.add_argument(
+        "--cache-db",
+        default="",
+        metavar="PATH",
+        help="Inference cache SQLite path (default: {run_dir}/cache.db)",
+    )
+    enrich_orch_parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Reserved for manifest resume (same effect as reusing --run-id with existing run-dir)",
+    )
+    enrich_orch_parser.add_argument(
+        "--skip-populated",
+        action="store_true",
+        default=False,
+        help=(
+            "For enrich-cards steps: skip cards that already have thread_summary / tags / descriptions "
+            "(saves API spend). Default is off — live runs re-enrich populated cards."
+        ),
     )
 
     census_parser = subparsers.add_parser("sender-census", help="Discover email types from a sender domain")
@@ -801,7 +1013,7 @@ def main() -> None:
                 ext_model = "gemini-2.5-flash" if prov == "gemini" else DEFAULT_ENRICH_EXTRACT_MODEL
             runner = LlmEnrichmentRunner(
                 vault_path=vault,
-                staging_dir=str(getattr(args, "staging_dir", "_staging-llm") or "_staging-llm"),
+                staging_dir=str(getattr(args, "staging_dir", "_artifacts/_staging-llm") or "_artifacts/_staging-llm"),
                 extract_model=ext_model,
                 classify_model=str(getattr(args, "classify_model", "") or "").strip(),
                 provider_kind=prov,
@@ -828,6 +1040,119 @@ def main() -> None:
         except RuntimeError as exc:
             print(str(exc), file=sys.stderr)
             raise SystemExit(1) from exc
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "enrich-cards":
+        try:
+            from archive_sync.llm_enrichment.card_enrichment_runner import \
+                CardEnrichmentRunner
+
+            from .commands._resolve import resolve_vault
+
+            vault_arg = str(getattr(args, "vault", "") or "").strip()
+            vault = Path(vault_arg) if vault_arg else resolve_vault()
+            cache_raw = str(getattr(args, "cache_db", "") or "").strip()
+            cache_db = Path(cache_raw) if cache_raw else None
+            prov = str(getattr(args, "provider", "gemini") or "gemini").strip()
+            model = str(getattr(args, "model", "") or "").strip()
+            if not model:
+                model = (
+                    DEFAULT_ENRICH_CARD_GEMINI_MODEL
+                    if prov == "gemini"
+                    else DEFAULT_ENRICH_EXTRACT_MODEL
+                )
+            vp = float(getattr(args, "vault_percent", 0.0) or 0.0)
+            lim = int(getattr(args, "limit", 0) or 0)
+            uid_filter_path = str(getattr(args, "uid_filter_file", "") or "").strip()
+            workers = max(1, int(getattr(args, "workers", 24)))
+            classify_raw = str(getattr(args, "classify_index_db", "") or "").strip()
+            classify_index_db = Path(classify_raw) if classify_raw else None
+            runner = CardEnrichmentRunner(
+                vault_path=vault,
+                workflow=str(getattr(args, "workflow", "email_thread") or "email_thread"),
+                provider_kind=prov,
+                model=model,
+                base_url=str(getattr(args, "base_url", "http://localhost:11434") or "http://localhost:11434"),
+                cache_db=cache_db,
+                run_id=str(getattr(args, "run_id", "") or ""),
+                staging_dir=Path(
+                    str(getattr(args, "staging_dir", "_artifacts/_staging-enrichment") or "_artifacts/_staging-enrichment")
+                ),
+                dry_run=bool(getattr(args, "dry_run", False)),
+                progress_every=max(1, int(getattr(args, "progress_every", 1) or 1)),
+                vault_percent=(vp if vp > 0 else None),
+                limit=(lim if lim > 0 else None),
+                skip_populated=not bool(getattr(args, "no_skip_populated", False)),
+                workers=workers,
+                uid_filter_file=Path(uid_filter_path) if uid_filter_path else None,
+                classify_index_db=classify_index_db,
+            )
+            metrics = runner.run()
+            _print_json(metrics.to_dict())
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            raise SystemExit(1) from exc
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "extract-document-text":
+        try:
+            from archive_sync.llm_enrichment.document_text_extractor import \
+                run_document_text_extraction
+
+            from .commands._resolve import resolve_vault
+
+            vault_arg = str(getattr(args, "vault", "") or "").strip()
+            vault = Path(vault_arg) if vault_arg else resolve_vault()
+            lim = int(getattr(args, "limit", 0) or 0)
+            out = run_document_text_extraction(
+                vault,
+                dry_run=bool(getattr(args, "dry_run", False)),
+                limit=(lim if lim > 0 else None),
+            )
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "enrich":
+        try:
+            from archive_sync.llm_enrichment.enrichment_orchestrator import (
+                EnrichmentOrchestrator, default_run_id)
+
+            vault = Path(str(getattr(args, "vault", "") or "").strip())
+            run_id = str(getattr(args, "run_id", "") or "").strip() or default_run_id()
+            run_dir_raw = str(getattr(args, "run_dir", "") or "").strip()
+            run_dir = Path(run_dir_raw) if run_dir_raw else Path("_artifacts") / "_enrichment-runs" / run_id
+            cache_raw = str(getattr(args, "cache_db", "") or "").strip()
+            cache_db = Path(cache_raw) if cache_raw else run_dir / "cache.db"
+            steps_raw = str(getattr(args, "steps", "") or "").strip()
+            enabled = frozenset(s.strip() for s in steps_raw.split(",")) if steps_raw else None
+            prov = str(getattr(args, "provider", "gemini") or "gemini").strip()
+            model = str(getattr(args, "model", "") or "").strip()
+            if not model:
+                model = DEFAULT_ENRICH_CARD_GEMINI_MODEL if prov == "gemini" else DEFAULT_ENRICH_EXTRACT_MODEL
+            enrich_emails_model = str(getattr(args, "enrich_emails_model", "") or "").strip()
+            if not enrich_emails_model:
+                enrich_emails_model = "gemini-2.5-flash-lite" if prov == "gemini" else DEFAULT_ENRICH_EXTRACT_MODEL
+            orch = EnrichmentOrchestrator(
+                vault_path=vault,
+                run_id=run_id,
+                run_dir=run_dir,
+                provider=prov,
+                model=model,
+                enrich_emails_model=enrich_emails_model,
+                base_url=str(getattr(args, "base_url", "http://localhost:11434") or "http://localhost:11434"),
+                dry_run=bool(getattr(args, "dry_run", False)),
+                workers=int(getattr(args, "workers", 24) or 24),
+                enrich_emails_workers=int(getattr(args, "enrich_emails_workers", 8) or 8),
+                checkpoint_every=int(getattr(args, "checkpoint_every", 500)),
+                cache_db=cache_db,
+                enabled_steps=enabled,
+                skip_populated=bool(getattr(args, "skip_populated", False)),
+            )
+            manifest = orch.run()
+            _print_json(manifest.to_jsonable())
         except PpaError as exc:
             _cli_fail(exc)
         return

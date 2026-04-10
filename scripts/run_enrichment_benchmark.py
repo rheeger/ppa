@@ -16,9 +16,9 @@ Gemma 4 sizes on Ollama map to ``e2b``, ``e4b``, ``26b``, ``31b`` — see ``docs
 Run from ``ppa/`` with Ollama up::
 
   .venv/bin/python scripts/run_enrichment_benchmark.py \\
-    --ground-truth _benchmark/enrichment_ground_truth_10pct.json \\
+    --ground-truth _artifacts/_benchmark/enrichment_ground_truth_10pct.json \\
     --models gemma4:31b \\
-    --output _benchmark/results/
+    --output _artifacts/_benchmark/results/
 
 Use ``--limit-positives`` / ``--limit-negatives`` for a short smoke run.
 """
@@ -312,9 +312,9 @@ def run_benchmark_for_model(
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--ground-truth", type=Path, default=Path("_benchmark/enrichment_ground_truth_10pct.json"))
+    ap.add_argument("--ground-truth", type=Path, default=Path("_artifacts/_benchmark/enrichment_ground_truth_10pct.json"))
     ap.add_argument("--vault", type=Path, default=None, help="Override meta.vault in JSON")
-    ap.add_argument("--output", type=Path, default=Path("_benchmark/results"))
+    ap.add_argument("--output", type=Path, default=Path("_artifacts/_benchmark/results"))
     ap.add_argument(
         "--models",
         type=str,

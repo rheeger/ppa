@@ -233,7 +233,7 @@ Never assume `- Item x2 $12.00`. Always check sampler output.
 ### Measurement: yield vs field population
 
 - **`make step-11d-slice-yield-report`** = dry-run, funnel health (matched vs extracted count). Fast (~13min) but does NOT measure field quality.
-- **`make extract-emails-10pct-slice`** = real staging extract that writes cards AND computes `field_population` in `_staging-10pct/_metrics.json`. This measures the v2vision quality gates.
+- **`make extract-emails-10pct-slice`** = real staging extract that writes cards AND computes `field_population` in `_artifacts/_staging-10pct/_metrics.json`. This measures the v2vision quality gates.
 - **Always run the staging extract** before declaring a provider done -- yield can be 100% while critical fields are empty.
 - The `field_population` block maps `{card_type: {field: rate}}` using critical-field definitions in `field_metrics.py`.
 

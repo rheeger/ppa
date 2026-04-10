@@ -50,5 +50,5 @@ Use **`gemma4:e2b`** if you need minimum triage latency; use **`gemma4:26b`** fo
 ## Benchmarks
 
 - **Single model:** `make run-enrichment-benchmark` (override `STEP9_MODELS`).
-- **Full Gemma 4 matrix:** `make run-enrichment-benchmark-matrix` — then `make aggregate-benchmark-results` → `_benchmark/results/index.md`.
+- **Full Gemma 4 matrix:** `make run-enrichment-benchmark-matrix` — then `make aggregate-benchmark-results` → `_artifacts/_benchmark/results/index.md`.
 - **Model choice doc:** `docs/phase275-step10-model-selection.md` (Step 10 / 10b).

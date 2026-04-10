@@ -4,8 +4,8 @@ Staging runs are **environment-specific**. To measure live yield against a seed 
 
 ```bash
 export PPA_PATH=/path/to/seed/vault
-ppa extract-emails --sender doordash --staging-dir _staging/ --workers 4 --log-file logs/extract-doordash.log
-# Inspect _staging/, then delete when done (promotion to production vault is Phase 3).
+ppa extract-emails --sender doordash --staging-dir _artifacts/_staging/ --workers 4 --log-file logs/extract-doordash.log
+# Inspect _artifacts/_staging/, then delete when done (promotion to production vault is Phase 3).
 ```
 
 Repeat per extractor (`uber_eats`, `uber_rides`, `amazon`, `instacart`, `shipping`, `lyft`, `united`, `airbnb`, `rental_cars`, `doordash`).

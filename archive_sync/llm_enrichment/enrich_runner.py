@@ -12,7 +12,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import threading
 import time
 import uuid
@@ -22,7 +21,6 @@ from pathlib import Path
 from typing import Any
 
 from archive_mcp.vault_cache import VaultScanCache
-from archive_sync.adapters.base import deterministic_provenance
 from archive_sync.extractors.registry import (ExtractorRegistry,
                                               build_default_registry)
 from archive_sync.extractors.runner import (derive_output_rel_path,
@@ -46,6 +44,7 @@ from archive_sync.llm_enrichment.threads import (ThreadDocument, ThreadStub,
 from hfa.llm_provider import GeminiProvider, OllamaProvider
 from hfa.schema import CARD_TYPES, BaseCard, validate_card_strict
 from hfa.vault import write_card
+from ppa_google_auth import INTERNAL_DOMAINS
 
 log = logging.getLogger("ppa.llm_enrichment.enrich_runner")
 
@@ -216,7 +215,7 @@ def _llm_provenance(
     model_id: str,
     run_id: str,
     content_hash: str = "",
-) -> dict[str, "ProvenanceEntry"]:
+) -> dict[str, Any]:
     """Provenance with LLM model + run_id populated (richer than deterministic_provenance)."""
 
     from hfa.provenance import PROVENANCE_EXEMPT_FIELDS, ProvenanceEntry
@@ -284,7 +283,9 @@ def _gate_thread(
     # No known transactional match — check if it's known noise or needs classify
     from_emails = [s.from_email for s in group if s.from_email]
     subjects = [s.subject for s in group if s.subject]
-    pf_decision, _ = classify_thread_prefilter(from_emails, subjects)
+    pf_decision, _ = classify_thread_prefilter(
+        from_emails, subjects, user_domains=frozenset(INTERNAL_DOMAINS)
+    )
     if pf_decision == "skip":
         return "skip", []
     return "classify", []
@@ -587,7 +588,11 @@ class LlmEnrichmentRunner:
                         metrics.stage1_transactional, metrics.stage1_skip, elapsed,
                     )
 
-            log.info("stage1 starting: %d threads, %d classify_workers", len(needs_classify), self.classify_workers)
+            log.info(
+                "stage1 starting: %d threads, %d classify_workers",
+                len(combined_classify),
+                self.classify_workers,
+            )
 
             if self.classify_workers <= 1:
                 for item in combined_classify:

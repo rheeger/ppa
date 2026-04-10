@@ -38,7 +38,7 @@ class LLMProvider(Protocol):
 
 
 _DEFAULT_HTTP_TIMEOUT: float = 30.0
-_LLM_HTTP_TIMEOUT: float = 600.0
+_LLM_HTTP_TIMEOUT: float = 60.0
 
 _llm_log = logging.getLogger("ppa.llm_provider")
 
@@ -63,14 +63,22 @@ def _post_json(
             with request.urlopen(req, timeout=timeout) as response:
                 return json.loads(response.read().decode("utf-8"))
         except error.HTTPError as exc:
-            if exc.code in (429, 503) and attempt < _MAX_RETRIES:
+            if exc.code in (429, 500, 502, 503) and attempt < _MAX_RETRIES:
                 wait = _RETRY_BASE_WAIT * (2 ** attempt) + _random.uniform(0.5, 2.0)
                 _llm_log.info("%d retry %d/%d in %.1fs", exc.code, attempt + 1, _MAX_RETRIES, wait)
                 time.sleep(wait)
                 continue
             _llm_log.warning("_post_json failed url=%s: %s", url, exc)
             return None
-        except (error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        except json.JSONDecodeError as exc:
+            _llm_log.warning("_post_json json-decode url=%s: %s", url, exc)
+            return None
+        except (OSError, error.URLError) as exc:
+            if attempt < _MAX_RETRIES:
+                wait = _RETRY_BASE_WAIT * (2 ** attempt) + _random.uniform(0.5, 2.0)
+                _llm_log.info("network retry %d/%d in %.1fs: %s", attempt + 1, _MAX_RETRIES, wait, exc)
+                time.sleep(wait)
+                continue
             _llm_log.warning("_post_json failed url=%s: %s", url, exc)
             return None
     return None
@@ -162,6 +170,9 @@ class GeminiProvider:
         r = LLMResponse(content=content, parsed_json=parsed, model=use_model,
                         prompt_tokens=pt, completion_tokens=ct, latency_ms=latency_ms)
         if r.parsed_json is not None:
+            return r
+
+        if not content:
             return r
 
         retry_contents = contents + [
@@ -265,6 +276,8 @@ def _parse_json_from_model_text(text: str) -> dict[str, Any] | None:
         out = json.loads(raw)
     except json.JSONDecodeError:
         return None
+    if isinstance(out, list) and out and isinstance(out[0], dict):
+        out = out[0]
     return out if isinstance(out, dict) else None
 
 

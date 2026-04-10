@@ -18,3 +18,6 @@ Override: ``--triage-model`` / ``--extract-model``, or Makefile ``ENRICH_TRIAGE_
 
 DEFAULT_ENRICH_TRIAGE_MODEL = "gemma4:e4b"  # Legacy — triage stage removed; kept for backward compat
 DEFAULT_ENRICH_EXTRACT_MODEL = "gemma4:31b"
+
+# Phase 2.875 ``enrich-cards`` — Gemini default (cheap, high TPM vs full Flash)
+DEFAULT_ENRICH_CARD_GEMINI_MODEL = "gemini-2.5-flash-lite"

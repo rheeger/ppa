@@ -1,0 +1,50 @@
+You are analyzing a financial transaction from a personal archive. The `counterparty` field is often a **bank/processor descriptor**, not a clean merchant name. Decode it before you classify.
+
+Return a single JSON object (no markdown fences).
+
+## A) Common prefixes (strip mentally; use the real brand for entity_mentions.name)
+
+- **DoorDash:** `Dd `, `DD *`, `Dd *`, or contains `doordash` — **merchant**; sub-merchant after `doordash` when visible, else entity "DoorDash".
+- **Instacart:** `Ic*`, `IC*` + Instacart — **merchant**.
+- **Stripe / card-present:** leading **`Sp `** + merchant name — **merchant**; **entity name = text after `Sp `** (not "Sp").
+- **Square / Toast / etc.:** `SQ *`, `TST *`, `Tbl*` — **merchant**; seller fragment after prefix when present.
+- **Squarespace / SaaS billing:** `Sqsp*`, `SQSP`, `Worksp` in same line as `Sqsp` — **merchant** or **subscription**; entity name **"Squarespace"** (do not output "Worksp" as the brand).
+- **Marketplace:** `Mp ` + location blob — **merchant**; simplify name; drop location codes when noise.
+- **Amazon:** `Amazon`, `AMZN MKTP*…`, `Amazon Prime` — **merchant** or **subscription**; strip `AMZN MKTP*` junk from keywords.
+- **Uber / Lyft:** **merchant**.
+- **Apple / Google billing:** often **subscription** or **merchant** for digital goods.
+- **Telco / ISP:** `Spectrum`, `Vzwrlss*bill`, `Comcast`, `Xfinity` — usually **subscription**.
+- **PayPal / Venmo / Zelle:** **person** for paying an individual; **merchant** for clear business names.
+
+## B) Money movement vs fees (important)
+
+- **Between accounts / wires / ACH / bill pay boilerplate** (`Online Transfer Ref #…`, `Wt `, `FED#`, `Zelle To …` with long Ref narrative): **transfer** or **person** (Zelle/Venmo to a named individual), not merchant.
+- **Interest, finance charges, late fees, foreign transaction fee, purchase interest** (issuer-side, not a purchase at a store): **not** "transfer" unless money is moving between your accounts. Prefer **merchant** with `entity_mentions` naming the **issuer** (bank/card) if inferable from the string; otherwise one **organization** mention with a generic label like `"Credit card interest"` or `"Card fee"` and low confidence.
+- **ATM / withdrawal** — treat as **transfer** for counterparty_type when the line is clearly cash/ATM; **email_match** null.
+
+## C) Short or single-word counterparties (restaurants vs P2P)
+
+- Many **restaurants, cafés, and local shops** appear as a **single name** (e.g. "Margot", "Olea") with no "Inc." — that is usually **merchant** (`entity_mentions`: **organization**), not a person.
+- Use the **Category** and **Parent category** lines in the input (e.g. F&D, Restaurants, Groceries, Shopping): if they point at **spend at a business**, classify **merchant** even when the counterparty looks like a first name.
+- Reserve **person** for **P2P rails** or clear person-payment strings: **Venmo**, **Zelle To …**, **Cash App**, **PayPal** to an individual, or an obvious **Firstname Lastname** P2P pattern — not for bare business names that happen to look like people’s names.
+
+## D) Noisy strings
+
+- **`Blvd *…`** — storefront / restaurant; **merchant**.
+- **`Ref #`**, masked cards — put clutter in `context.raw_descriptor`; keep `name` clean.
+- Strip emoji from `name` when possible; keep raw in `context`.
+
+## Fields
+
+1. **counterparty_type** — one of: `person` | `merchant` | `subscription` | `transfer` | `government` | `employer` | `""`.
+
+2. **entity_mentions** — 0–3 items. **Every item MUST include `"type"`: `"person"` | `"organization"` | `"place"`** (required for downstream staging). Also include `"name"` and optional `"confidence"`, `"context"` (`rails`, `raw_descriptor`).
+
+3. **email_match** — non-null only for **merchant / subscription** purchases that might have a receipt email; **null** for transfers, ATM, P2P, interest/fee-only lines, and bill-pay boilerplate.
+
+   `{"counterparty_keywords": ["..."], "amount": <number>, "date_range": ["YYYY-MM-DD", "YYYY-MM-DD"]}`
+
+If nothing meaningful: `counterparty_type` "", `entity_mentions` [], `email_match` null.
+
+Example (structure only):
+{"counterparty_type": "merchant", "entity_mentions": [{"type": "organization", "name": "Squarespace", "confidence": 0.85, "context": {"rails": "sqsp", "raw_descriptor": "Sqsp* Worksp#..."}}], "email_match": null}

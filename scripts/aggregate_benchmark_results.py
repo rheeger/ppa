@@ -3,7 +3,7 @@
 
 Run from ``ppa/`` after ``run_enrichment_benchmark.py``::
 
-  .venv/bin/python scripts/aggregate_benchmark_results.py --results-dir _benchmark/results
+  .venv/bin/python scripts/aggregate_benchmark_results.py --results-dir _artifacts/_benchmark/results
 
 Writes ``<results-dir>/index.md`` with a sortable comparison of all completed runs.
 """
@@ -25,7 +25,7 @@ def _load_scores(path: Path) -> dict[str, Any] | None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--results-dir", type=Path, default=Path("_benchmark/results"))
+    ap.add_argument("--results-dir", type=Path, default=Path("_artifacts/_benchmark/results"))
     args = ap.parse_args()
 
     root = args.results_dir.resolve()
@@ -75,7 +75,7 @@ def main() -> None:
         "",
         "1. Pick **triage** candidate: high `Positives` recall (low triage FN), low `Neg FP rate`.",
         "2. Pick **extraction** candidate: high `Mean field match`, high `Schema OK cards`.",
-        "3. Record choices in `docs/phase275-step10-model-selection.md` (copy to `_benchmark/model_selection.md` if you want a local scratch file).",
+        "3. Record choices in `docs/phase275-step10-model-selection.md` (copy to `_artifacts/_benchmark/model_selection.md` if you want a local scratch file).",
         "4. Proceed to **Step 10b** human approval before long pilot runs.",
         "",
     ]

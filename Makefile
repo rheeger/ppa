@@ -69,7 +69,7 @@ STEP_11A_PER_YEAR_SEED ?= 15
 # Step 11a on 10pct slice (override per-year without exporting env).
 STEP_11A_PER_YEAR ?= 5
 
-.PHONY: install pg-up pg-down pg-logs pg-psql dump-schema dump-seed-schema dump-seed-schema-fast dump-seed-schema-stream-arnold pipe-restore-seed-arnold scp-restore-seed-arnold dump-and-scp-restore-seed-arnold watch-scp-restore-continue-hfa bootstrap-postgres bootstrap-seed-postgres rebuild-indexes rebuild-seed-indexes index-status index-status-seed embed-pending migrate migrate-seed migrate-dry-run migration-status migration-status-seed build-benchmark-sample benchmark-rebuild benchmark-seed-links smoke smoke-queries arnold-smoke test-unit ollama-llm-smoke llm-enrichment-6b-smoke test-integration test-slice test-slice-smoke test-slice-verify test-slice-verify-10pct test-slice-verify-smoke verify-incremental benchmark-1pct benchmark-5pct health-check extract-emails-staging extract-emails-full extract-benchmark extract-dry-run enrich-emails-staging build-enrichment-benchmark build-enrichment-benchmark-smoke build-enrichment-benchmark-1pct build-enrichment-benchmark-5pct build-enrichment-benchmark-10pct build-enrichment-benchmark-slices build-enrichment-benchmark-slices-all step8b-review-packet run-enrichment-benchmark run-enrichment-benchmark-matrix aggregate-benchmark-results staging-report promote-staging promote-staging-dry-run resolve-entities resolve-entities-full clean-phase3-derived clean-phase3-derived-slices clean-phase3-derived-local-slices extract-emails-slice-smoke extract-emails-slice-full slice-local-1pct slice-local-5pct slice-local-10pct slice-local-all clean-ppa-machine-artifacts clean-ppa-machine-artifacts-dry-run clean-ppa-local-slices extract-emails-1pct-slice extract-emails-5pct-slice extract-emails-10pct-slice extraction-quality-reports sender-census template-sampler sender-census-slice-smoke template-sampler-slice-smoke step-11a-template-samplers sender-census-seed step-11a-template-samplers-seed step-11d-slice-yield-report
+.PHONY: install pg-up pg-down pg-logs pg-psql dump-schema dump-seed-schema dump-seed-schema-fast dump-seed-schema-stream-arnold pipe-restore-seed-arnold scp-restore-seed-arnold dump-and-scp-restore-seed-arnold watch-scp-restore-continue-hfa bootstrap-postgres bootstrap-seed-postgres rebuild-indexes rebuild-seed-indexes index-status index-status-seed embed-pending migrate migrate-seed migrate-dry-run migration-status migration-status-seed build-benchmark-sample benchmark-rebuild benchmark-seed-links smoke smoke-queries arnold-smoke test-unit ollama-llm-smoke llm-enrichment-6b-smoke test-integration test-slice test-slice-smoke test-slice-verify test-slice-verify-10pct test-slice-verify-smoke verify-incremental benchmark-1pct benchmark-5pct health-check extract-emails-staging extract-emails-full extract-benchmark extract-dry-run enrich-emails-staging enrich-emails-gemini enrich-cards-gemini-1pct enrich-cards-gemini-1pct-preview build-enrichment-benchmark build-enrichment-benchmark-smoke build-enrichment-benchmark-1pct build-enrichment-benchmark-5pct build-enrichment-benchmark-10pct build-enrichment-benchmark-slices build-enrichment-benchmark-slices-all step8b-review-packet run-enrichment-benchmark run-enrichment-benchmark-matrix aggregate-benchmark-results staging-report promote-staging promote-staging-dry-run resolve-entities resolve-entities-full clean-phase3-derived clean-phase3-derived-slices clean-phase3-derived-local-slices extract-emails-slice-smoke extract-emails-slice-full slice-local-1pct slice-local-5pct slice-local-10pct slice-local-all clean-ppa-machine-artifacts clean-ppa-machine-artifacts-dry-run clean-ppa-local-slices extract-emails-1pct-slice extract-emails-5pct-slice extract-emails-10pct-slice extraction-quality-reports sender-census template-sampler sender-census-slice-smoke template-sampler-slice-smoke step-11a-template-samplers sender-census-seed step-11a-template-samplers-seed step-11d-slice-yield-report
 
 install:
 	$(PYTHON) -m pip install -e .
@@ -452,28 +452,28 @@ clean-ppa-local-slices:
 # Extract from local stratified slices (see .slices/README.md). Cleans Phase-3 dirs on that slice first.
 extract-emails-1pct-slice:
 	bash scripts/clean-phase3-derived-dirs.sh "$(CURDIR)/$(SLICES_LOCAL_DIR)/1pct"
-	rm -rf _staging-1pct/
+	rm -rf _artifacts/_staging-1pct/
 	PPA_PATH="$(CURDIR)/$(SLICES_LOCAL_DIR)/1pct" $(PYTHON) -m archive_mcp --log-file logs/extract-1pct-slice.log extract-emails \
-		--staging-dir _staging-1pct/ --workers 8 --full-report
+		--staging-dir _artifacts/_staging-1pct/ --workers 8 --full-report
 
 extract-emails-5pct-slice:
 	bash scripts/clean-phase3-derived-dirs.sh "$(CURDIR)/$(SLICES_LOCAL_DIR)/5pct"
-	rm -rf _staging-5pct/
+	rm -rf _artifacts/_staging-5pct/
 	PPA_PATH="$(CURDIR)/$(SLICES_LOCAL_DIR)/5pct" $(PYTHON) -m archive_mcp --log-file logs/extract-5pct-slice.log extract-emails \
-		--staging-dir _staging-5pct/ --workers 8 --full-report
+		--staging-dir _artifacts/_staging-5pct/ --workers 8 --full-report
 
 extract-emails-10pct-slice:
 	bash scripts/clean-phase3-derived-dirs.sh "$(CURDIR)/$(SLICES_LOCAL_DIR)/10pct"
-	rm -rf _staging-10pct/
+	rm -rf _artifacts/_staging-10pct/
 	PPA_PATH="$(CURDIR)/$(SLICES_LOCAL_DIR)/10pct" $(PYTHON) -m archive_mcp --log-file logs/extract-10pct-slice.log extract-emails \
-		--staging-dir _staging-10pct/ --workers 8 --full-report
+		--staging-dir _artifacts/_staging-10pct/ --workers 8 --full-report
 
-# Regenerate markdown quality reports (requires matching _staging-*pct/ from extract-emails-*pct-slice).
+# Regenerate markdown quality reports (requires matching _artifacts/_staging-*pct/ from extract-emails-*pct-slice).
 # --vault must be the slice tree so round-trip checks resolve source_email UIDs (not repo root).
 extraction-quality-reports:
-	$(PYTHON) scripts/generate_extraction_quality_report.py --staging-dir _staging-1pct --vault "$(CURDIR)/$(SLICES_LOCAL_DIR)/1pct" --label 1pct --out docs/reports/extraction-quality/1pct.md --problem-samples 8 --clean-samples 4
-	$(PYTHON) scripts/generate_extraction_quality_report.py --staging-dir _staging-5pct --vault "$(CURDIR)/$(SLICES_LOCAL_DIR)/5pct" --label 5pct --out docs/reports/extraction-quality/5pct.md --problem-samples 8 --clean-samples 4
-	$(PYTHON) scripts/generate_extraction_quality_report.py --staging-dir _staging-10pct --vault "$(CURDIR)/$(SLICES_LOCAL_DIR)/10pct" --label 10pct --out docs/reports/extraction-quality/10pct.md --problem-samples 8 --clean-samples 4
+	$(PYTHON) scripts/generate_extraction_quality_report.py --staging-dir _artifacts/_staging-1pct --vault "$(CURDIR)/$(SLICES_LOCAL_DIR)/1pct" --label 1pct --out docs/reports/extraction-quality/1pct.md --problem-samples 8 --clean-samples 4
+	$(PYTHON) scripts/generate_extraction_quality_report.py --staging-dir _artifacts/_staging-5pct --vault "$(CURDIR)/$(SLICES_LOCAL_DIR)/5pct" --label 5pct --out docs/reports/extraction-quality/5pct.md --problem-samples 8 --clean-samples 4
+	$(PYTHON) scripts/generate_extraction_quality_report.py --staging-dir _artifacts/_staging-10pct --vault "$(CURDIR)/$(SLICES_LOCAL_DIR)/10pct" --label 10pct --out docs/reports/extraction-quality/10pct.md --problem-samples 8 --clean-samples 4
 
 # EDL Phase 1–2: taxonomy + per-year template samples (set DOMAIN=, optional CATEGORY=, PPA_PATH=).
 sender-census:
@@ -534,11 +534,11 @@ extract-emails-slice-full: clean-phase3-derived-slices
 
 extract-emails-staging:
 	PPA_PATH=$(PPA_PATH) $(PYTHON) -m archive_mcp extract-emails \
-		--staging-dir _staging/ --workers 4
+		--staging-dir _artifacts/_staging/ --workers 4
 
 extract-emails-full:
 	PPA_PATH=$(PPA_PATH) $(PYTHON) -m archive_mcp extract-emails \
-		--staging-dir _staging/ --workers 8 --full-report
+		--staging-dir _artifacts/_staging/ --workers 8 --full-report
 
 extract-benchmark:
 	PPA_PATH=$(PPA_PATH) $(PYTHON) -m archive_mcp extract-emails \
@@ -547,73 +547,101 @@ extract-benchmark:
 extract-dry-run:
 	PPA_PATH=$(PPA_PATH) $(PYTHON) -m archive_mcp extract-emails --dry-run
 
-# Phase 2.75 LLM pipeline — writes _staging-llm/. Provider: ollama (local) or gemini (API).
+# Phase 2.75 LLM pipeline — writes _artifacts/_staging-llm/. Provider: ollama (local) or gemini (API).
 ENRICH_PROVIDER ?= ollama
 ENRICH_EXTRACT_MODEL ?= gemma4:31b
 ENRICH_WORKERS ?= 4
 enrich-emails-staging:
 	PPA_PATH=$(PPA_PATH) $(PYTHON) -m archive_mcp --log-file logs/enrich-emails.log enrich-emails \
-		--staging-dir _staging-llm/ --cache-db _enrichment_cache.db --progress-every 25 --full-report \
+		--staging-dir _artifacts/_staging-llm/ --cache-db _artifacts/_enrichment_cache.db --progress-every 25 --full-report \
 		--provider "$(ENRICH_PROVIDER)" --extract-model "$(ENRICH_EXTRACT_MODEL)" --workers $(ENRICH_WORKERS)
 
 # Gemini API variant — pulls key from 1Password via op CLI. Default model: gemini-2.0-flash.
 enrich-emails-gemini:
 	GEMINI_API_KEY=$$(op read '$(PPA_GEMINI_API_KEY_OP_REF)') \
 	PPA_PATH=$(PPA_PATH) $(PYTHON) -m archive_mcp --log-file logs/enrich-emails-gemini.log enrich-emails \
-		--staging-dir _staging-llm/ --cache-db _enrichment_cache.db --progress-every 25 --full-report \
+		--staging-dir _artifacts/_staging-llm/ --cache-db _artifacts/_enrichment_cache.db --progress-every 25 --full-report \
 		--provider gemini --workers 8
 
-# Phase 2.75 Step 8 — ground truth JSON from regex staging + vault (writes gitignored _benchmark/).
+# Phase 2.875 — LLM summaries + entity/match staging on stratified 1% slice (same tree as extract-emails-1pct-slice).
+# Default model: gemini-2.5-flash-lite (see archive_sync/llm_enrichment/defaults.py). ~2k gated email_thread cards → long wall time.
+# Use parallel workers only when --limit is unset (see enrich-cards --help).
+ENRICH_CARDS_STAGING_DIR ?= _artifacts/_staging-enrichment-1pct
+ENRICH_CARDS_WORKERS ?= 8
+enrich-cards-gemini-1pct:
+	GEMINI_API_KEY=$$(op read '$(PPA_GEMINI_API_KEY_OP_REF)') \
+	PPA_PATH="$(CURDIR)/$(SLICES_LOCAL_DIR)/1pct" $(PYTHON) -m archive_mcp --log-file logs/enrich-cards-gemini-1pct.log enrich-cards \
+		--workflow email_thread \
+		--staging-dir $(ENRICH_CARDS_STAGING_DIR) \
+		--cache-db _artifacts/_enrichment_cache.db \
+		--classify-index-db _artifacts/_classify_index.db \
+		--progress-every 25 \
+		--workers $(ENRICH_CARDS_WORKERS) \
+		--provider gemini
+
+# Preview: first 25 successful enrichments (sequential). Review staging + phase_2.875_step2b_review.md then scale up or use --uid-filter-file.
+enrich-cards-gemini-1pct-preview:
+	GEMINI_API_KEY=$$(op read '$(PPA_GEMINI_API_KEY_OP_REF)') \
+	PPA_PATH="$(CURDIR)/$(SLICES_LOCAL_DIR)/1pct" $(PYTHON) -m archive_mcp --log-file logs/enrich-cards-gemini-1pct-preview.log enrich-cards \
+		--workflow email_thread \
+		--staging-dir _artifacts/_staging-enrichment-1pct-preview \
+		--cache-db _artifacts/_enrichment_cache.db \
+		--classify-index-db _artifacts/_classify_index.db \
+		--progress-every 1 \
+		--limit 25 \
+		--provider gemini
+
+# Phase 2.75 Step 8 — ground truth JSON from regex staging + vault (writes gitignored _artifacts/_benchmark/).
 # Vault must be the same tree as extract-emails for that staging (so source_email UIDs resolve).
 # Always smoke-test 1pct before 5pct/10pct/full seed — Email/ walks are expensive on huge vaults.
 build-enrichment-benchmark:
 	$(PYTHON) scripts/build_enrichment_benchmark.py \
-		--staging-dir _staging/ \
+		--staging-dir _artifacts/_staging/ \
 		--vault "$(PPA_PATH)" \
-		--out _benchmark/enrichment_ground_truth.json
+		--out _artifacts/_benchmark/enrichment_ground_truth.json
 
 # Default Step 8 check: smallest slice only (override STEP8_MIN_POSITIVE_1PCT=200 to require ≥200 on 1pct).
 STEP8_MIN_POSITIVE_1PCT ?= 1
 
 build-enrichment-benchmark-smoke: build-enrichment-benchmark-1pct
 
-# Same Step 8 against slice stagings: _staging-Npct must come from extract-emails-Npct-slice against .slices/Npct.
-# If you never ran the 5pct extractor, _staging-5pct/ is empty/stale — skip build-enrichment-benchmark-5pct.
+# Same Step 8 against slice stagings: _artifacts/_staging-Npct must come from extract-emails-Npct-slice against .slices/Npct.
+# If you never ran the 5pct extractor, _artifacts/_staging-5pct/ is empty/stale — skip build-enrichment-benchmark-5pct.
 build-enrichment-benchmark-1pct:
 	$(PYTHON) scripts/build_enrichment_benchmark.py \
-		--staging-dir _staging-1pct/ \
+		--staging-dir _artifacts/_staging-1pct/ \
 		--vault "$(CURDIR)/$(SLICES_LOCAL_DIR)/1pct" \
-		--out _benchmark/enrichment_ground_truth_1pct.json \
+		--out _artifacts/_benchmark/enrichment_ground_truth_1pct.json \
 		--min-positive-cards $(STEP8_MIN_POSITIVE_1PCT)
 
 build-enrichment-benchmark-5pct:
 	$(PYTHON) scripts/build_enrichment_benchmark.py \
-		--staging-dir _staging-5pct/ \
+		--staging-dir _artifacts/_staging-5pct/ \
 		--vault "$(CURDIR)/$(SLICES_LOCAL_DIR)/5pct" \
-		--out _benchmark/enrichment_ground_truth_5pct.json
+		--out _artifacts/_benchmark/enrichment_ground_truth_5pct.json
 
 # Typical workflow when only 1pct + 10pct extract runs exist (no 5pct staging).
 build-enrichment-benchmark-slices: build-enrichment-benchmark-1pct build-enrichment-benchmark-10pct
 
 build-enrichment-benchmark-10pct:
 	$(PYTHON) scripts/build_enrichment_benchmark.py \
-		--staging-dir _staging-10pct/ \
+		--staging-dir _artifacts/_staging-10pct/ \
 		--vault "$(CURDIR)/$(SLICES_LOCAL_DIR)/10pct" \
-		--out _benchmark/enrichment_ground_truth_10pct.json
+		--out _artifacts/_benchmark/enrichment_ground_truth_10pct.json
 
 # All three slice stagings — only if you ran extract-emails-{1,5,10}pct-slice for each.
 build-enrichment-benchmark-slices-all: build-enrichment-benchmark-1pct build-enrichment-benchmark-5pct build-enrichment-benchmark-10pct
 
 # Phase 2.75 Step 8b — markdown review packet from ground truth (next step: human APPROVE / FIX before Step 9).
-STEP8B_GROUND_TRUTH ?= _benchmark/enrichment_ground_truth_10pct.json
+STEP8B_GROUND_TRUTH ?= _artifacts/_benchmark/enrichment_ground_truth_10pct.json
 step8b-review-packet:
-	$(PYTHON) scripts/prepare_step8b_human_review.py --ground-truth "$(STEP8B_GROUND_TRUTH)" --out _benchmark/step8b_review_packet.md
+	$(PYTHON) scripts/prepare_step8b_human_review.py --ground-truth "$(STEP8B_GROUND_TRUTH)" --out _artifacts/_benchmark/step8b_review_packet.md
 
 # Phase 2.75 Step 9 — LLM vs ground truth (Ollama). Gemma 4 only: gemma4:e2b,e4b,26b,31b (see docs/gemma4-local-models.md).
 STEP9_MODELS ?= gemma4:31b
 # Full matrix for Step 10 (long run — days on full ground truth; use LIMIT args for smoke).
 STEP9_MATRIX_MODELS ?= gemma4:e2b,gemma4:e4b,gemma4:26b,gemma4:31b
-STEP9_OUT ?= _benchmark/results
+STEP9_OUT ?= _artifacts/_benchmark/results
 run-enrichment-benchmark:
 	$(PYTHON) scripts/run_enrichment_benchmark.py \
 		--ground-truth "$(STEP8B_GROUND_TRUTH)" \
@@ -631,16 +659,16 @@ aggregate-benchmark-results:
 	$(PYTHON) scripts/aggregate_benchmark_results.py --results-dir "$(STEP9_OUT)"
 
 staging-report:
-	$(PYTHON) -m archive_mcp staging-report --staging-dir _staging/
+	$(PYTHON) -m archive_mcp staging-report --staging-dir _artifacts/_staging/
 
 promote-staging:
-	PPA_PATH=$(PPA_PATH) $(PYTHON) -m archive_mcp promote-staging --staging-dir _staging/
+	PPA_PATH=$(PPA_PATH) $(PYTHON) -m archive_mcp promote-staging --staging-dir _artifacts/_staging/
 
 promote-staging-dry-run:
-	PPA_PATH=$(PPA_PATH) $(PYTHON) -m archive_mcp promote-staging --staging-dir _staging/ --dry-run
+	PPA_PATH=$(PPA_PATH) $(PYTHON) -m archive_mcp promote-staging --staging-dir _artifacts/_staging/ --dry-run
 
 resolve-entities:
 	PPA_PATH=$(PPA_PATH) $(PYTHON) -m archive_mcp resolve-entities
 
 resolve-entities-full:
-	PPA_PATH=$(PPA_PATH) $(PYTHON) -m archive_mcp resolve-entities --report-dir _reports/
+	PPA_PATH=$(PPA_PATH) $(PYTHON) -m archive_mcp resolve-entities --report-dir _artifacts/_reports/

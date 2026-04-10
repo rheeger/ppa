@@ -18,6 +18,12 @@ _TRACKING_PIXEL = re.compile(r"<img[^>]+(?:width|height)\s*=\s*[\"']?1[\"']?[^>]
 _ZERO_WIDTH = re.compile(r"[\u200b\u200c\u200d\ufeff\u034f]+")
 _MULTI_BLANK = re.compile(r"\n{3,}")
 _PROVENANCE_COMMENT = re.compile(r"<!--\s*provenance.*?-->", re.S | re.I)
+# Gmail / Apple Mail style: new content above "On … wrote:" then quoted thread
+_ON_WROTE_SPLIT = re.compile(r"\nOn .{12,2000}?\n?\s*wrote:\s*\n", re.IGNORECASE)
+_OUTLOOK_ORIGINAL = re.compile(
+    r"\n-{5,}\s*(?:Original Message|Forwarded message)\s*-{5,}\s*\n",
+    re.IGNORECASE,
+)
 
 
 def _strip_non_provenance_comments(html: str) -> str:
@@ -30,6 +36,23 @@ def _strip_non_provenance_comments(html: str) -> str:
         return ""
 
     return re.sub(r"<!--.*?-->", repl, html, flags=re.S)
+
+
+def strip_reply_artifacts(text: str) -> str:
+    """Drop nested reply / forward scaffolding so long threads spend tokens on new content.
+
+    Conservative: only removes blocks after common delimiters (On … wrote, Original Message).
+    """
+    if not text or len(text) < 80:
+        return text
+    out = text
+    m = _OUTLOOK_ORIGINAL.search(out)
+    if m:
+        out = out[: m.start()].rstrip()
+    m = _ON_WROTE_SPLIT.search(out)
+    if m:
+        out = out[: m.start()].rstrip()
+    return out
 
 
 def clean_email_body(raw_body: str) -> str:

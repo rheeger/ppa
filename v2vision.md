@@ -109,20 +109,22 @@ These decision rules govern the entire vision. When executing any phase, defer t
 
 Detailed, step-by-step **execution plans** for each phase live under **`~/.cursor/plans/`** (same filenames on any machine with Cursor). Open in the editor or link from here:
 
-| Phase                           | Execution plan                                                                                                                                             |
-| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0 — Test infrastructure         | [`phase_0_execution_plan_61b73684.plan.md`](file:///Users/rheeger/.cursor/plans/phase_0_execution_plan_61b73684.plan.md)                                   |
-| 1 — Schema & data model         | [`phase_1_execution_plan_f2f5802d.plan.md`](file:///Users/rheeger/.cursor/plans/phase_1_execution_plan_f2f5802d.plan.md)                                   |
-| 2 — Extractors                  | [`phase_2_execution_plan_50a42c00.plan.md`](file:///Users/rheeger/.cursor/plans/phase_2_execution_plan_50a42c00.plan.md)                                   |
-| 2.5 — Extractor methodology     | [`phase_2.5_extractor_methodology_rebuild_a7e3f1c2.plan.md`](file:///Users/rheeger/.cursor/plans/phase_2.5_extractor_methodology_rebuild_a7e3f1c2.plan.md) |
-| 3 — Full extraction             | [`phase_3_execution_plan_49b4bd6d.plan.md`](file:///Users/rheeger/.cursor/plans/phase_3_execution_plan_49b4bd6d.plan.md)                                   |
-| 3.5 — archive_crate Rust engine | [`phase_3.5_archive_crate_execution_plan.plan.md`](file:///Users/rheeger/.cursor/plans/phase_3.5_archive_crate_execution_plan.plan.md)                     |
-| 4 — ONE full rebuild            | [`phase_4_execution_plan_3156f3e2.plan.md`](file:///Users/rheeger/.cursor/plans/phase_4_execution_plan_3156f3e2.plan.md)                                   |
-| 5 — Embedding pass              | [`phase_5_embedding_pass_17a0e872.plan.md`](file:///Users/rheeger/.cursor/plans/phase_5_embedding_pass_17a0e872.plan.md)                                   |
-| 6 — LLM enrichment              | [`phase_6_llm_enrichment_f286b0bd.plan.md`](file:///Users/rheeger/.cursor/plans/phase_6_llm_enrichment_f286b0bd.plan.md)                                   |
-| 7 — Knowledge cache             | [`phase_7_execution_plan_b4b2c2ef.plan.md`](file:///Users/rheeger/.cursor/plans/phase_7_execution_plan_b4b2c2ef.plan.md)                                   |
-| 8 — Maintenance & tools         | [`phase_8_execution_plan_a16ec5dc.plan.md`](file:///Users/rheeger/.cursor/plans/phase_8_execution_plan_a16ec5dc.plan.md)                                   |
-| 9 — Production on Arnold        | [`phase_9_execution_plan_794d5d32.plan.md`](file:///Users/rheeger/.cursor/plans/phase_9_execution_plan_794d5d32.plan.md)                                   |
+| Phase                                          | Execution plan                                                                                                                                                             |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0 — Test infrastructure                        | [`phase_0_execution_plan_61b73684.plan.md`](file:///Users/rheeger/.cursor/plans/phase_0_execution_plan_61b73684.plan.md)                                                   |
+| 1 — Schema & data model                        | [`phase_1_execution_plan_f2f5802d.plan.md`](file:///Users/rheeger/.cursor/plans/phase_1_execution_plan_f2f5802d.plan.md)                                                   |
+| 2 — Extractors                                 | [`phase_2_execution_plan_50a42c00.plan.md`](file:///Users/rheeger/.cursor/plans/phase_2_execution_plan_50a42c00.plan.md)                                                   |
+| 2.5 — Extractor methodology                    | [`phase_2.5_extractor_methodology_rebuild_a7e3f1c2.plan.md`](file:///Users/rheeger/.cursor/plans/phase_2.5_extractor_methodology_rebuild_a7e3f1c2.plan.md)                 |
+| 2.75 — LLM email enrichment pipeline           | [`phase_2.75_llm_email_enrichment_pipeline_b8f4a2d1.plan.md`](file:///Users/rheeger/.cursor/plans/phase_2.75_llm_email_enrichment_pipeline_b8f4a2d1.plan.md)               |
+| 2.875 — Vault enrichment & cross-card linking  | [`phase_2.875_vault_enrichment_cross_card_linking_c7e1d4a3.plan.md`](file:///Users/rheeger/.cursor/plans/phase_2.875_vault_enrichment_cross_card_linking_c7e1d4a3.plan.md) |
+| 3 — Validation, promotion & local finalization | [`phase_3_execution_plan_49b4bd6d.plan.md`](file:///Users/rheeger/.cursor/plans/phase_3_execution_plan_49b4bd6d.plan.md)                                                   |
+| 3.5 — archive_crate Rust engine                | [`phase_3.5_ppa_crate_execution_plan.plan.md`](file:///Users/rheeger/.cursor/plans/phase_3.5_ppa_crate_execution_plan.plan.md)                                             |
+| 4 — ONE full rebuild                           | [`phase_4_execution_plan_3156f3e2.plan.md`](file:///Users/rheeger/.cursor/plans/phase_4_execution_plan_3156f3e2.plan.md)                                                   |
+| 5 — Embedding pass                             | [`phase_5_embedding_pass_17a0e872.plan.md`](file:///Users/rheeger/.cursor/plans/phase_5_embedding_pass_17a0e872.plan.md)                                                   |
+| 6 — LLM enrichment                             | [`phase_6_llm_enrichment_f286b0bd.plan.md`](file:///Users/rheeger/.cursor/plans/phase_6_llm_enrichment_f286b0bd.plan.md)                                                   |
+| 7 — Knowledge cache                            | [`phase_7_execution_plan_b4b2c2ef.plan.md`](file:///Users/rheeger/.cursor/plans/phase_7_execution_plan_b4b2c2ef.plan.md)                                                   |
+| 8 — Maintenance & tools                        | [`phase_8_execution_plan_a16ec5dc.plan.md`](file:///Users/rheeger/.cursor/plans/phase_8_execution_plan_a16ec5dc.plan.md)                                                   |
+| 9 — Production on Arnold                       | [`phase_9_execution_plan_794d5d32.plan.md`](file:///Users/rheeger/.cursor/plans/phase_9_execution_plan_794d5d32.plan.md)                                                   |
 
 Each phase section below includes a direct **Execution plan** link in its heading block.
 
@@ -850,11 +852,11 @@ Each extractor follows this cycle (combining the old Phase 2 "build" and Phase 3
 
 1. **Build** the extractor module with template versions and parsers.
 2. **Unit test** against seed fixtures (at least 2 eras).
-3. **Run against staging:** `ppa extract-emails --sender <name> --staging-dir _staging/ --workers 4`
+3. **Run against staging:** `ppa extract-emails --sender <name> --staging-dir _artifacts/_staging/ --workers 4`
 4. **Inspect staging output.** Spot-check 10+ cards. Verify item parsing, body text readability, timestamps, entity references, provenance.
 5. **Check yield rate.** If < 10% of matched emails produce valid cards, investigate — is it a template issue, an HTML-stripping issue, or a sender pattern mismatch?
 6. **Fix bugs, re-run.** Repeat until output quality is acceptable.
-7. **Promote to vault:** Move files from `_staging/` to vault directories per Phase 1c conventions.
+7. **Promote to vault:** Move files from `_artifacts/_staging/` to vault directories per Phase 1c conventions.
 8. **Run entity resolution:** `ppa resolve-entities` for the newly promoted cards.
 9. **Validate:** `ppa validate` reports zero errors.
 10. **Move to next extractor.**
@@ -945,61 +947,6 @@ _Stability:_
 
 ---
 
-## Phase 3: Full Extraction Run + Vault Promotion
-
-**Execution plan:** [`phase_3_execution_plan_49b4bd6d.plan.md`](file:///Users/rheeger/.cursor/plans/phase_3_execution_plan_49b4bd6d.plan.md)
-
-**What it is:** The final production-scale extraction run across the full vault, entity resolution, and validation. By the time this phase starts, all extractors have been rebuilt via the Phase 2.5 EDL process and verified against quality baselines. Phase 3 is the batch run at full scale.
-
-**Why it's still its own phase:** Individual extractors were developed in Phase 2 and quality-rebuilt in Phase 2.5, but the full vault run at scale — all extractors, all ~461K emails, with parallelism — is a distinct operation. Entity resolution across the full derived card set (not just per-extractor batches) may produce different clustering results. And the final vault state needs comprehensive validation (including quality report comparison against the Phase 2.5 baseline) before the Phase 4 rebuild.
-
-**Logging:** Same as Phase 2; full-scale **`extract-emails`** and **`resolve-entities`** require **`--log-file`** artifacts for postmortems. Runner metrics (matched, extracted, yield, errors, wall-clock) must remain visible in logs.
-
-**Process:**
-
-1. **Full extraction:** `ppa extract-emails --staging-dir _staging/ --workers 8` — runs all extractors against all email cards in parallel. Monitor progress via runner metrics (matched/total, yield, errors, throughput).
-2. **Inspect staging output at scale.** Spot-check per-type samples. Verify volume estimates:
-   - meal_order: ~1,000-1,500 cards
-   - purchase: ~500-2,000 cards
-   - ride: ~500-2,000 cards
-   - shipment: ~500-2,000 cards
-   - Other types: per volume estimates in the Card Type Inventory
-3. **Promote staging to vault:** Move files from `_staging/` to vault directories per Phase 1c conventions.
-4. **Full entity resolution:** `ppa resolve-entities` across all derived cards — this may produce different clustering than per-extractor runs because cross-type entity references are now visible (e.g., a restaurant PlaceCard referenced by both meal_orders and ride dropoff locations).
-5. **Final validation:** `ppa validate` against the full vault.
-
-At the end of this phase, the vault has ~3K-7K new derived cards plus ~300-800 entity cards. None are in Postgres yet.
-
-**Definition of Done:**
-
-_Phase 0 baseline:_
-
-- Full Phase 0 test suite passes (seed slice re-forked to include all 37 types)
-- `ppa health-check` passes against the seed slice after re-fork
-
-_Idempotency:_
-
-- Full-scale extraction produces 0 new cards beyond what Phase 2's per-extractor loop already promoted — confirms no cross-extractor interactions or ordering dependencies
-
-_Volume and quality:_
-
-- `ppa extract-emails --dry-run` final report shows extraction counts within 50% of volume estimates per type
-- Staging output spot-checked: at least 10 cards of each high-volume type manually reviewed
-- Yield rates per extractor documented and acceptable (>10% for all Tier 1-3 extractors, or explicit deferral with reasoning)
-
-_Vault integrity:_
-
-- `ppa validate` reports zero errors after full promotion
-- Entity resolution produces PlaceCards and OrgCards with no obvious false merges on spot-check
-- All derived cards have `source_email` wikilinks pointing to existing email cards
-
-_Performance:_
-
-- Full extraction run completes within projected time (extrapolated from 5% benchmark × 20, adjusted for superlinear operations)
-- Runner metrics logged: total matched, total extracted, yield per extractor, errors per extractor, wall-clock time
-
----
-
 ## Phase 2.75: LLM Email Enrichment Pipeline (DONE)
 
 **Execution plan:** [`phase_2.75_llm_email_enrichment_pipeline_b8f4a2d1.plan.md`](file:///Users/rheeger/.cursor/plans/phase_2.75_llm_email_enrichment_pipeline_b8f4a2d1.plan.md)
@@ -1026,227 +973,222 @@ Stage 2: LLM Extract (~1,700 tokens)
 
 **Results:**
 
-| Metric | Regex (Phase 3) | LLM (Phase 2.75) |
-|--------|---:|---:|
-| Card types covered | 7 | 11 |
-| Items populated (meals) | 27% | ~70%+ |
-| Duplicate-suspect rate | 41% | Near zero |
-| New provider effort | Weeks of EDL | Add domain |
-| Extraction yield | N/A | 84% |
-| Full seed cost | $0 (local) | ~$10 (Gemini API) |
+| Metric                  | Regex (Phase 3) |  LLM (Phase 2.75) |
+| ----------------------- | --------------: | ----------------: |
+| Card types covered      |               7 |                11 |
+| Items populated (meals) |             27% |             ~70%+ |
+| Duplicate-suspect rate  |             41% |         Near zero |
+| New provider effort     |    Weeks of EDL |        Add domain |
+| Extraction yield        |             N/A |               84% |
+| Full seed cost          |      $0 (local) | ~$10 (Gemini API) |
 
 **Key metrics (1pct final):** 486 cards, 84% extraction yield, 81 seconds, zero schema failures, zero errors.
 
 **Models tested:** Ollama gemma4 (31b, 26b, e4b, e2b), qwen3:8b, Gemini 2.5-flash, 2.5-flash-lite, 3.1-flash-lite-preview. Final: Gemini 3.1-flash-lite-preview for both classify and extract.
 
-**What remains:** Full seed production run (~$10, ~5 hours) and vault promotion. The pipeline, prompts, and infrastructure are complete.
+**What remains:** Full seed production run is executed as part of the Phase 2.875 `ppa enrich` orchestrator (`enrich_emails` step). Vault promotion happens in Phase 3.
 
-**Impact on Phase 3:** The LLM pipeline produces the `_staging-llm/` output that Phase 3 promotes to the vault. Phase 3's regex `_staging/` remains as a comparison baseline but is superseded by the LLM output for quality.
+**Impact on Phase 2.875:** The LLM extraction pipeline runs as the `enrich_emails` step in the `ppa enrich` orchestrator. Transaction cards are staged; Phase 3 promotes them to the vault.
+
+**Impact on Phase 3:** Phase 3 promotes the staged transaction cards to the vault, runs match resolution and entity resolution on the enrichment output, and deploys to production.
 
 **Impact on later phases:** Phase 6 (LLM Enrichment) shares the provider infrastructure (`hfa/llm_provider.py`), inference cache, and provenance system. Phase 15 (v3 Connector Contribution Framework) is dramatically simplified — contributors provide email samples instead of code.
 
 ---
 
-## Phase 3.5: archive_crate — Rust Performance Engine
+## Phase 2.875: Vault Enrichment & Cross-Card Linking
 
-**Execution plan:** [`phase_3.5_archive_crate_execution_plan.plan.md`](file:///Users/rheeger/.cursor/plans/phase_3.5_archive_crate_execution_plan.plan.md)
+**Execution plan:** [`phase_2.875_vault_enrichment_cross_card_linking_c7e1d4a3.plan.md`](file:///Users/rheeger/.cursor/plans/phase_2.875_vault_enrichment_cross_card_linking_c7e1d4a3.plan.md)
 
-**What it is:** A Rust crate (`archive_crate`) exposed to the Python engine via PyO3 that replaces the four most expensive code paths: vault walking, vault cache building, manifest scanning, and the materialization + load pipeline. Python extractors, adapters, MCP server, and knowledge definitions are unchanged — Rust handles the I/O and CPU-bound foundation they sit on.
+**What it is:** LLM-driven enrichment of existing source cards and full-seed LLM email extraction, orchestrated by `ppa enrich`. Phase 2.75 proved the classify → extract pipeline on email transactions. Phase 2.875 applies the same gate → prefilter → enrich pattern across email threads, iMessage/Beeper threads, finance cards, and documents. A pre-enrichment document text extraction pass uses `markitdown` to convert PDFs, Word docs, and other formats into markdown card bodies. The `ppa enrich` orchestrator runs all six steps in sequence with checkpoints, cost tracking, and resume support. Phase 2.875 ends when the full seed enrichment run completes — cross-card match resolution, entity resolution, promotion, and production deployment are Phase 3.
 
-**Why it exists:** The Python engine hits a performance ceiling that no amount of `ProcessPoolExecutor` or caching can fix. A cold vault scan of 1.85M files takes ~42 minutes. A full rebuild takes ~2 hours. A noop rebuild — where nothing changed — takes 8-10 seconds just to start the interpreter and scan the manifest. Every operation downstream of the vault walk (extraction, entity resolution, benchmarking, slicing, seed links) inherits this cost because they each re-walk the same filesystem. Rust eliminates the GIL bottleneck, the per-file interpreter overhead, and the YAML parsing cost. Expected speedups: 8-15x on vault operations, 5-8x on rebuild, 10x+ on noop/incremental.
+**Why it exists:** The vault has thousands of empty fields that directly impact retrieval quality. `thread_summary` is blank on every email and iMessage thread. Finance cards have no counterparty classification. Document cards have no summaries. Filling these fields before the ONE rebuild ensures that Phase 4 and Phase 5 capture the full richness of the archive.
 
-**Why now, before Phase 4:** Phase 4 is the ONE full rebuild — a multi-hour operation whose cost is paid once. Running that rebuild through archive_crate instead of Python means the difference between a ~2-hour wait and a ~20-minute wait. More importantly, every subsequent phase benefits: Phase 5's embedding orchestration is faster (chunking is Rust), Phase 6's enrichment cycle is faster (incremental rebuilds are Rust), and the development loop for Phases 7-9 is faster because every `rebuild-indexes`, `extract-emails` scan, and `health-check` runs against the Rust engine.
+**Architecture:** Four active workflows plus the Phase 2.75 email extraction, each following the same gate → prefilter → enrich pattern:
 
-**What stays Python:** Extractors (`archive_sync/extractors/*.py`), adapters (`archive_sync/adapters/*.py`), entity resolution, knowledge domain definitions, enrichment pipeline, MCP server, and all CLI orchestration. These are not performance-critical — they're I/O-bound on APIs, benefit from Python's ecosystem, and change frequently. The Rust crate handles the vault I/O and database pipeline that everything else depends on.
+| Workflow                   | Source card type                              | Key outputs                                                                     |
+| -------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------- |
+| A — Email thread           | `email_thread`                                | `thread_summary`, entity mentions, calendar match candidates                    |
+| B — iMessage/Beeper thread | `imessage_thread`, `beeper_thread`            | `thread_summary` via LLM-driven conversation detection, entity mentions         |
+| C — Finance card           | `finance`                                     | Counterparty person/org classification, email match candidates, entity mentions |
+| ~~D — Calendar event~~     | ~~`calendar_event`~~                          | CANCELLED — marginal value                                                      |
+| ~~E — Meeting transcript~~ | ~~`meeting_transcript`~~                      | DEFERRED — Otter AI summaries sufficient                                        |
+| F — Document               | `document` (after markitdown text extraction) | `summary`, `description`, `document_date`, entity mentions                      |
 
-**Logging:** Rust-side progress is emitted via `ppa.*` loggers through PyO3 callbacks. The same `--log-file` and `--progress-every` conventions from v2 principle 9 apply — the Rust code calls back into Python's logging infrastructure. Structured progress (count, percentage, throughput, ETA in `M:SS`) is emitted from the Rust side for vault walk, cache build, scan, materialize, and load phases.
+The `ppa enrich` orchestrator runs 6 steps in order: `extract_document_text` → `enrich_emails` (Phase 2.75) → `enrich_email_thread` → `enrich_imessage_thread` → `enrich_finance` → `enrich_document`. Each step has manifest tracking, per-step logs, cost accounting, and resume support.
 
-### Prerequisite: Full `archive_*` namespace alignment
+**Outputs staged for Phase 3:** Transaction cards from `enrich_emails`, `entity_mentions.jsonl` and `match_candidates.jsonl` per workflow. Phase 3 consumes these for match resolution, entity resolution, and promotion.
 
-Before building the Rust crate, rename all legacy-named directories to a consistent `archive_*` convention. The README already flags `hfa` as a legacy name ("import names are legacy until someone finishes the rename"), and `archive_mcp` describes the transport layer rather than the package's actual role (CLI, index, retrieval). Aligning everything now — before the Rust crate integrates — means the entire codebase uses a consistent, descriptive namespace from the start.
+**Schema change:** Adds `source_email` field to `FinanceCard`. Adds `DeclEdgeRule` entries for `counterparty`, `driver_name`, `provider_name`, and `source_email`.
 
-**The renames:**
+**Scale (actual full seed run `enrich-20260413-31fb894a`):** 219K classify + 31K extract + 8K email thread + 10K iMessage + 900 finance + 12K document LLM calls. 338M prompt tokens, 17.4M completion tokens. **Real cost: $39.69** (Google dashboard) on `gemini-2.5-flash-lite`. Wall time: ~3.5 hours of LLM time + ~2 hours vault cache builds (interruptible and resumable via `InferenceCache` + orchestrator manifest).
 
-| Before                            | After                                                                                     | Purpose                                                    |
-| --------------------------------- | ----------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| `hfa/`                            | `archive_vault/`                                                                          | Schema, vault I/O, provenance, YAML parsing                |
-| `archive_mcp/`                    | `archive_cli/`                                                                            | CLI, MCP server, index, retrieval, embeddings              |
-| `ppa_google_auth/`                | `archive_auth/`                                                                           | Google OAuth token management                              |
-| `tests/`                          | `archive_tests/`                                                                          | All test modules                                           |
-| `scripts/`                        | `archive_scripts/`                                                                        | Operational scripts (vault init, backup, sync, benchmarks) |
-| `docs/`                           | `archive_docs/`                                                                           | Documentation (architecture, self-hosting, runbooks)       |
-| `from hfa.vault import ...`       | `from archive_vault.vault import ...`                                                     | All import paths                                           |
-| `from archive_mcp import ...`     | `from archive_cli import ...`                                                             | All import paths                                           |
-| `from ppa_google_auth import ...` | `from archive_auth import ...`                                                            | All import paths                                           |
-| `pyproject.toml` includes         | `["archive_cli*", "archive_vault*", "archive_sync*", "archive_doctor*", "archive_auth*"]` | Package discovery                                          |
-| `pyproject.toml` `pythonpath`     | `pythonpath = ["."]` (unchanged)                                                          | Test discovery                                             |
-| `pyproject.toml` `testpaths`      | `testpaths = ["archive_tests"]`                                                           | Pytest discovery                                           |
-
-**Full module alignment after rename:**
-
-| Package           | Role                                                                 |
-| ----------------- | -------------------------------------------------------------------- |
-| `archive_vault`   | Schema, vault I/O, provenance, YAML parsing                          |
-| `archive_cli`     | CLI, index, retrieval, embeddings, MCP server                        |
-| `archive_sync`    | Sources → vault cards (adapters + extractors)                        |
-| `archive_crate`   | Rust performance engine (vault walk, cache, scan, materialize, load) |
-| `archive_doctor`  | Validate, dedupe, stats                                              |
-| `archive_auth`    | Google OAuth token management                                        |
-| `archive_tests`   | All test modules                                                     |
-| `archive_scripts` | Operational scripts                                                  |
-| `archive_docs`    | Documentation                                                        |
-
-**Scope:** Mechanical `git mv` for directories, find-and-replace for all imports and path references, `pyproject.toml` updates. No behavioral changes. All tests must pass after the rename. The `ppa` CLI entrypoint name is unchanged (`ppa = "archive_cli.__main__:main"`).
-
-### Crate structure
-
-```
-archive_crate/
-├── Cargo.toml                   # workspace root
-├── src/
-│   ├── lib.rs                   # PyO3 module: #[pymodule] fn archive_crate
-│   ├── walk.rs                  # Parallel vault walk (rayon + walkdir)
-│   ├── frontmatter.rs           # YAML frontmatter parsing (yaml-rust2)
-│   ├── hasher.rs                # SHA-256, content_hash (ring or sha2)
-│   ├── cache.rs                 # Vault scan cache (rusqlite)
-│   ├── scanner.rs               # Manifest building + incremental classification
-│   ├── materializer.rs          # Card → DB row: search_text, quality, edges, chunks
-│   ├── chunker.rs               # Text → embedding chunks + chunk hashing
-│   ├── loader.rs                # Batch Postgres ingestion (tokio-postgres + COPY)
-│   ├── config.rs                # ppa.yml / env var config resolution
-│   └── progress.rs              # Progress callback bridge to Python logging
-└── tests/
-    └── integration_tests.rs     # Rust-side integration tests
-```
-
-**PyO3 surface (what Python calls):**
-
-```python
-import archive_crate
-
-# Tier 1: Vault walk — replaces archive_vault.vault.iter_note_paths
-paths: list[str] = archive_crate.walk_vault("/path/to/vault")
-
-# Tier 1: Vault cache — replaces archive_cli.vault_cache
-manifest = archive_crate.build_vault_cache(
-    vault_path="/path/to/vault",
-    cache_path="/path/to/vault/_meta/vault-scan-cache.sqlite3",
-    tier=2,
-    progress_callback=my_logger,
-)
-
-# Tier 1: Scanner — replaces archive_cli.scanner
-scan_result = archive_crate.scan_manifest(
-    vault_path="/path/to/vault",
-    cache_path="...",
-    dsn="postgresql://...",
-    schema="archive_cli",
-    verify_hash=False,
-)
-# scan_result.mode: "noop" | "incremental" | "full"
-# scan_result.materialize_uids: list[str]
-# scan_result.manifest_rows: list[dict]
-
-# Tier 1: Type index — replaces iter_parsed_notes for filtered scans
-email_cards = archive_crate.cards_by_type(manifest, "email_message")
-derived_cards = archive_crate.cards_by_type(manifest, ["meal_order", "ride", "purchase"])
-
-# Tier 2: Materialize + load — replaces archive_cli.materializer + loader
-rebuild_result = archive_crate.rebuild_index(
-    scan_result=scan_result,
-    dsn="postgresql://...",
-    schema="archive_cli",
-    workers=8,
-    batch_size=1000,
-    progress_callback=my_logger,
-)
-# rebuild_result.cards_loaded, .edges_loaded, .chunks_loaded
-# rebuild_result.elapsed_seconds, .rows_per_second
-```
-
-### Tier 1: Foundation I/O (Phases 3.5a-c)
-
-The primitives that every other operation depends on. Making these fast has cascading benefits across all downstream phases.
-
-**3.5a) Vault walk (`walk.rs`)** — Replaces `archive_vault.vault.iter_note_paths`. Uses `walkdir` crate with `rayon` for parallel directory traversal. Applies the same exclusion rules (skip `_meta`, `Attachments`, `.obsidian`, etc.) and yields only `*.md` files. At 1.85M files, Python's `os.walk` with per-syscall overhead takes minutes; Rust's `walkdir` with parallel readdir saturates SSD bandwidth in seconds.
-
-**3.5b) Vault cache (`cache.rs` + `frontmatter.rs` + `hasher.rs`)** — Replaces `archive_cli.vault_cache.VaultScanCache._populate_db`. For each file: read bytes, parse YAML frontmatter (`yaml-rust2`), compute SHA-256 (`sha2` or `ring`), optionally zlib-compress body, extract wikilinks, batch-write to SQLite (`rusqlite`). This is the single most expensive cold operation — every file is read and parsed. The Rust version parallelizes reads across cores with `rayon`, parses YAML without interpreter overhead, and uses `rusqlite`'s batch insert API. Expected: 42 min → 3-5 min.
-
-**3.5c) Scanner (`scanner.rs`)** — Replaces `archive_cli.scanner._collect_canonical_rows` and `_classify_manifest_rebuild_delta`. Builds the note manifest from cache, compares against the Postgres manifest table, classifies as `noop` / `incremental` / `full`. Also provides `cards_by_type()` — a typed index over the manifest that eliminates the need for `iter_parsed_notes` to re-walk the vault when extractors, entity resolution, or seed links need cards of a specific type.
-
-### Tier 2: Rebuild Pipeline (Phase 3.5d)
-
-**3.5d) Materializer + chunker + loader (`materializer.rs` + `chunker.rs` + `loader.rs`)** — Replaces `archive_cli.materializer._materialize_row`, `archive_cli.chunking.render_chunks_for_card`, and `archive_cli.loader._flush_load_buffer`. For each card to materialize: build `search_text` from frontmatter + body, compute `quality_score` and `quality_flags`, build edge tuples from `DeclEdgeRule` entries, split text into embedding chunks with per-chunk SHA-256, emit projection rows. Batch-load everything into Postgres via `tokio-postgres` COPY pipeline. The Rust materializer must produce **byte-identical** output to the Python materializer — same `search_text`, same `quality_score`, same edges, same chunks. The Phase 0 test suite is the correctness oracle.
-
-### Tier 3: Downstream Acceleration (free from Tier 1)
-
-These operations get faster automatically once Tier 1 lands, without additional Rust code:
-
-- **Extractor runner scan phase** (`archive_sync/extractors/runner.py`): Currently calls `iter_parsed_notes` to walk all 1.85M notes looking for `email_message` type. After Tier 1, calls `archive_crate.cards_by_type(manifest, "email_message")` — instant lookup from the cached manifest.
-- **Entity resolution scan** (`archive_sync/extractors/entity_resolution.py`): Same pattern — `cards_by_type(manifest, ["meal_order", "ride", ...])` replaces `iter_parsed_notes`.
-- **Seed link catalog** (`archive_cli/seed_links.py`): The catalog build iterates all frontmatters. After Tier 1, the manifest provides this data from the Rust cache without re-reading files.
-- **Test slice / benchmark** (`archive_cli/test_slice.py`, `archive_cli/benchmark.py`): Both depend on `VaultScanCache.build_or_load`. After Tier 1, cache builds are 8-15x faster.
-
-### Tier 4: Integration (Phase 3.5e)
-
-**3.5e) Wire archive_crate into the Python engine** — Replace call sites in `scanner.py`, `vault_cache.py`, `loader.py`, `materializer.py`, `chunking.py`, and `archive_vault/vault.py` with calls to `archive_crate`. Update `runner.py` and `entity_resolution.py` to use `cards_by_type()` instead of `iter_parsed_notes` for type-filtered scans. Update `pyproject.toml` to include `archive_crate` as a build dependency (via `maturin` or `setuptools-rust`). The Python fallback path remains available behind `PPA_ENGINE=python` for debugging.
-
-### Performance targets
-
-| Operation                               | Python (current) | Rust (target)         | Speedup |
-| --------------------------------------- | ---------------- | --------------------- | ------- |
-| Cold vault walk (1.85M files)           | ~8-12 min        | ~15-30 sec            | 20-40x  |
-| Vault cache build (tier 2, 1.85M files) | ~42 min          | ~3-5 min              | 8-15x   |
-| Scanner manifest build                  | ~5-10 min        | ~30-60 sec            | 8-15x   |
-| Noop rebuild (no changes)               | ~8-10 sec        | <1 sec                | 10x     |
-| Full rebuild (1.85M cards)              | ~2 hours         | ~15-25 min            | 5-8x    |
-| Incremental rebuild (1K cards)          | ~30-60 sec       | ~3-5 sec              | 10-15x  |
-| Extractor scan phase (find emails)      | ~8-12 min        | <1 sec (index lookup) | 500x+   |
-
-### Testing strategy
-
-**Row-level correctness:** After every sub-phase, run the Phase 0 test suite against the Rust-powered engine. The Rust materializer must produce identical output to the Python materializer — same database rows (excluding wall-clock timestamps and sequence IDs, per the Phase 0 exclusion list). A dedicated comparison test materializes the 5% slice through both engines and diffs every table.
-
-**Benchmark regression:** Run the Phase 0 benchmark suite (1% and 5% slices) against both Python and Rust engines. Record per-phase timings. The Rust engine must meet or exceed the performance targets above.
-
-**Fallback:** The Python engine remains functional behind `PPA_ENGINE=python`. If the Rust engine produces incorrect output for a specific card type or edge case, that card can be routed through the Python path while the Rust bug is fixed.
-
-**Files touched:** New: entire `archive_crate/` directory. `hfa/` renamed to `archive_vault/` (all imports updated). Modified: `archive_vault/vault.py` (vault walk delegation), `archive_cli/vault_cache.py` (cache build delegation), `archive_cli/scanner.py` (scan delegation), `archive_cli/materializer.py` (materialize delegation), `archive_cli/chunking.py` (chunk delegation), `archive_cli/loader.py` (load delegation), `archive_sync/extractors/runner.py` (type-indexed scan), `archive_sync/extractors/entity_resolution.py` (type-indexed scan), `pyproject.toml` (Rust build dependency via maturin/setuptools-rust), `Makefile` (Rust build targets).
+**Files touched:** New: `card_enrichment_runner.py`, `staging_types.py`, `document_text_extractor.py`, `enrichment_orchestrator.py`, `workflows/`, prompt templates. Modified: `hfa/schema.py`, `hfa/card_contracts.py`, `archive_mcp/card_registry.py`, `archive_mcp/__main__.py`, `pyproject.toml`.
 
 ### Definition of Done
 
-_Phase 0 baseline (must remain green throughout):_
+- Document text extraction: all documents with supported formats have markdown text in card body via `markitdown`
+- `thread_summary` populated on email threads and iMessage/Beeper threads
+- `description` populated on documents with extracted text
+- Finance `counterparty_type` classified for all gated cards
+- Transaction cards extracted from emails and staged for Phase 3 promotion
+- Entity mentions and match candidates staged for Phase 3 resolution
+- Full seed enrichment run completes with all steps `completed` in manifest
+- `ppa health-check` clean after all enrichment vault writes
+
+---
+
+## Phase 3: Validation, Promotion & Local Finalization
+
+**Execution plan:** [`phase_3_execution_plan_49b4bd6d.plan.md`](file:///Users/rheeger/.cursor/plans/phase_3_execution_plan_49b4bd6d.plan.md)
+
+**What it is:** Takes the enrichment output from Phase 2.875 and turns it into a validated, locally finalized vault. Phase 2.875 produced three categories of output: (1) vault field fills written during enrichment (thread summaries, descriptions, counterparty types), (2) staged transaction cards from LLM email extraction, and (3) staged JSONL files of entity mentions and match candidates. Phase 3 resolves the staged output into permanent vault state — cross-card wikilinks, entity cards, promoted transaction cards — validates everything, and confirms the seed vault is ready for Phase 3.5 and beyond.
+
+**Why it's separate from Phase 2.875:** Phase 2.875 is about running LLM inference — building, tuning, and executing the enrichment pipeline. Phase 3 is about vault integrity — resolving staged output into permanent vault state, validating everything works together, and confirming the vault is sound. Separating them ensures the full-seed enrichment run completes before any resolution or promotion decisions are made, and provides a clear human review gate between "LLM output generated" and "vault permanently modified."
+
+**Arnold deployment is deferred to Phase 9.** The seed vault and Arnold's vault started from the same frozen snapshot. Phases 3.5 through 6 all modify the vault and/or Postgres index further (namespace rename, Rust crate, ONE rebuild, embeddings, more LLM enrichment). Deploying to Arnold here means re-deploying after every subsequent phase. Phase 9 does ONE sync to Arnold after the vault reaches its final state — one rsync, one rebuild, one embedding pass.
+
+**Logging:** Same as all v2 phases. Long-running operations use `ppa --log-file logs/<name>.log <subcommand>`. Match resolution and entity resolution metrics are written to JSON for postmortem analysis.
+
+**Rollback:**
+
+| Stage                   | What happened                        | How to revert                                                                                       |
+| ----------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| After match resolution  | Bad wikilinks written to vault cards | Remove wikilinks by `run_id` from provenance log                                                    |
+| After entity resolution | Bad PlaceCards / OrgCards created    | `rm` entity cards created by `run_id` (source: `"entity_resolution"`, created after run start)      |
+| After promotion         | Bad transaction cards in vault       | `bash scripts/clean-phase3-derived-dirs.sh $PPA_PATH` removes all derived transaction + entity dirs |
+| After slice re-fork     | Bad slice                            | Re-run `ppa slice-seed` from the cleaned vault                                                      |
+
+The vault has no version control. The only undo for vault writes is provenance-based revert or directory deletion.
+
+**Process:**
+
+1. **Cross-card match resolution:** Resolve `MatchCandidate` records from all enrichment workflows into vault wikilinks. For each candidate, score potential target cards using title/subject keyword overlap, date proximity, email overlap, and amount matching. Confident matches (score ≥ 0.7 with clear margin) are written directly; ambiguous matches are disambiguated via a lightweight LLM call. Match types: email_thread ↔ calendar_event (bidirectional), finance → email_message (unidirectional `source_email`), meeting_transcript ↔ calendar_event (bidirectional). All wikilinks written with provenance (`source: "match_resolution"`, `method: "deterministic"` or `"llm"`, `run_id`). Scale: ~5-15K candidates, ~70-85% confident, ~$1-3 for LLM disambiguation calls.
+2. **Entity resolution:** Resolve `EntityMention` records from all enrichment workflows through `PlaceResolver` and `OrgResolver`. Place mentions are clustered by `(normalized_name, city)` — same logic as Phase 2, now with a richer input source (LLM-extracted mentions from email threads, finance cards, documents). Org mentions clustered by `(normalized_name, domain)`. Person-type mentions are staged to `person_mentions.jsonl` for Phase 3.5's Rust fuzzy resolver — not resolved here. Expected output: ~200-500 PlaceCards, ~50-200 OrgCards.
+3. **Promote transaction cards:** Move LLM-extracted transaction cards from `{run_dir}/staging/enrich_emails/` to the vault. Uses the existing `ppa promote-staging` pipeline (copy-verify-delete, idempotent skip). Expected: ~4,000-6,000 cards across 11 types (meal_order, ride, flight, shipment, accommodation, car_rental, grocery_order, purchase, subscription, event_ticket, payroll).
+4. **Human review gate:** Present enrichment results (per-step metrics from manifest), match resolution metrics (wikilinks per match type, confident vs disambiguated), entity resolution stats (PlaceCards/OrgCards created/merged), promotion results (cards per type), sample cards (3 per type at varying confidence), and `ppa health-check` report. User must explicitly approve before proceeding.
+5. **Vault validation:** `ppa validate` against the full vault — zero errors. All derived cards have valid `source_email` wikilinks. No duplicate UIDs. All cross-card wikilinks resolve to existing cards.
+6. **Idempotency:** Re-run `ppa enrich` and verify 0 new cards staged, 0 field updates written. `extraction_confidence` is excluded from idempotency comparison via `_card_dump_for_idempotency`. Cache hits on all LLM calls.
+7. **Re-fork seed slice:** Update `tests/slice_config.json` with real UIDs for all derived card types (≥ 5 per type). Create 3 synthetic `knowledge` and 3 synthetic `observation` fixture cards (no real cards until Phase 7). Activate `"phase": "post-phase-3"` placeholders in `tests/slice_manifest.json`. Regenerate slice and verify ≥ 3 cards per type for all 37 types, zero orphaned wikilinks.
+8. **Test suite:** `make test-unit`, `make test-slice-verify`, `ppa health-check`. All pass. Fix manifest queries/counts if tests fail due to derived card values.
+
+At the end of this phase, the local seed vault has ~4,000-6,000 transaction cards, ~200-700 entity cards, cross-card wikilinks, and enriched field fills — all validated. None are in Postgres yet (Phase 4's ONE rebuild), and none are on Arnold yet (Phase 9's production deployment). The vault is ready for Phase 3.5 (Rust crate).
+
+**Files touched:** New: `archive_sync/llm_enrichment/match_resolver.py`, `prompts/match_resolution.txt`, `docs/phase3-summary.json`. Modified: `archive_sync/extractors/entity_resolution.py` (`resolve_entity_mentions()` for JSONL input), `tests/slice_config.json`, `tests/slice_manifest.json`.
+
+### Definition of Done
+
+_Cross-card linking:_
+
+- `calendar_events` wikilinks written on email threads that discuss calendar events
+- `source_email` wikilinks written on finance cards matched to confirmation emails
+- `calendar_events` / `meeting_transcripts` bidirectional links filled where applicable
+- Spot-check 20 cross-card links — all genuinely related
+
+_Entity resolution:_
+
+- PlaceCards created from LLM-extracted entity mentions (restaurants, venues, airports)
+- OrgCards created from finance counterparties and email domains
+- No false merges on spot-check (20 entities reviewed)
+- Person mentions staged for Phase 3.5 Rust fuzzy resolver
+
+_Promotion:_
+
+- Transaction cards promoted from `enrich_emails` staging to vault
+- All promoted cards have `source_email` wikilinks pointing to existing email cards
+- Near-zero duplicate suspect rate (thread-level extraction inherently deduplicates)
+
+_Vault integrity:_
+
+- `ppa validate` reports zero errors on local seed
+- All cross-card wikilinks resolve to existing cards
+
+_Idempotency:_
+
+- Re-running `ppa enrich` produces 0 new cards and 0 field updates
+
+_Phase 0 baseline:_
+
+- `make test-unit` passes
+- `make test-slice-verify` passes with re-forked slice covering all 37 types
+- `ppa health-check` produces a clean report
+
+_Human checkpoints:_
+
+- User reviewed enrichment results, match resolution, entity resolution, and sample cards — explicitly approved
+
+---
+
+## Phase 3.5: archive_crate — Rust Performance Engine
+
+**Execution plan:** [`phase_3.5_ppa_crate_execution_plan.plan.md`](file:///Users/rheeger/.cursor/plans/phase_3.5_ppa_crate_execution_plan.plan.md)
+
+**What it is:** A Rust crate (`archive_crate`) exposed to the Python engine via PyO3 that replaces the five most expensive code paths: vault walking, vault cache building, manifest scanning, the materialization + load pipeline, and batch entity resolution with fuzzy matching. Python extractors, adapters, MCP server, and knowledge definitions are unchanged — Rust handles the I/O and CPU-bound foundation they sit on.
+
+**Why it exists:** The Python engine hits a performance ceiling that no amount of `ProcessPoolExecutor` or caching can fix. A cold vault scan of 1.85M files takes ~42 minutes. A full rebuild takes ~2 hours. A noop rebuild takes ~8-10 seconds just to start. Every downstream operation inherits this cost. Rust eliminates the GIL bottleneck, per-file interpreter overhead, and YAML parsing cost. Expected speedups: 8-15x on vault operations, 5-8x on rebuild, 10x+ on noop/incremental.
+
+**Why now, before Phase 4:** Phase 4 is the ONE full rebuild — running it through `archive_crate` means ~20 minutes instead of ~2 hours. Every subsequent phase benefits: Phase 5's embedding orchestration is faster (chunking is Rust), Phase 6's enrichment cycle is faster (incremental rebuilds are Rust), and the development loop for Phases 7-9 is faster.
+
+**Prerequisite: Full `archive_*` namespace alignment.** Before building the Rust crate, rename all legacy-named directories to a consistent `archive_*` convention: `hfa/` → `archive_vault/`, `archive_mcp/` → `archive_cli/`, `ppa_google_auth/` → `archive_auth/`, `tests/` → `archive_tests/`, `scripts/` → `archive_scripts/`, `docs/` → `archive_docs/`. Mechanical `git mv` + find-and-replace for all imports. No behavioral changes — all tests must pass.
+
+**Architecture — five tiers of work:**
+
+| Tier                                | What                                                                                                                                        | Key speedup                                        |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| **1 — Foundation I/O** (3.5a-c)     | Vault walk (`walkdir` + `rayon`), vault cache build (`yaml-rust2` + `rusqlite`), scanner/manifest, `cards_by_type()` index                  | 42 min cache build → 3-5 min; vault walk → seconds |
+| **2 — Rebuild pipeline** (3.5d)     | Materializer, chunker, loader — batch Postgres via `tokio-postgres` COPY. Must produce byte-identical output to Python.                     | Full rebuild ~2 hrs → ~20 min                      |
+| **2.5 — Entity resolution** (3.5d½) | `PersonResolutionIndex` (6 hash map indexes), batch fuzzy resolver (`rayon`), LLM disambiguation for conflicts in Python                    | ~10K cards × ~1K candidates: 15 min → <2 sec       |
+| **3 — Downstream acceleration**     | Free from Tier 1 — extractor scan, entity resolution scan, seed links, test slice all use `cards_by_type()` instead of re-walking the vault | Extractor scan ~12 min → <1 sec                    |
+| **4 — Integration** (3.5e)          | Wire `archive_crate` into all Python call sites, `PPA_ENGINE=python` fallback, `maturin` build integration                                  | All operations use Rust by default                 |
+
+**What stays Python:** Extractors, adapters, entity resolution vault writes and LLM disambiguation, knowledge domain definitions, enrichment pipeline, MCP server, and all CLI orchestration. These are I/O-bound on APIs, benefit from Python's ecosystem, and change frequently.
+
+**Logging:** Rust-side progress is emitted via `ppa.*` loggers through PyO3 callbacks. Same `--log-file` and `--progress-every` conventions as all v2 phases.
+
+**Performance targets:**
+
+| Operation                        | Python (current) | Rust (target) | Speedup |
+| -------------------------------- | ---------------- | ------------- | ------- |
+| Cold vault walk (1.85M files)    | ~8-12 min        | ~15-30 sec    | 20-40x  |
+| Vault cache build (1.85M files)  | ~42 min          | ~3-5 min      | 8-15x   |
+| Full rebuild (1.85M cards)       | ~2 hours         | ~15-25 min    | 5-8x    |
+| Noop rebuild                     | ~8-10 sec        | <1 sec        | 10x     |
+| Extractor scan phase             | ~8-12 min        | <1 sec        | 500x+   |
+| Batch fuzzy resolve (~10K × ~1K) | ~5-15 min        | <2 sec        | 150x+   |
+
+**Testing strategy:** Row-level correctness tests diff the 5% slice materialized through both Python and Rust engines. Phase 0 test suite is the correctness oracle. `PPA_ENGINE=python` fallback remains functional for debugging.
+
+**Files touched:** New: entire `archive_crate/` directory. Renamed: `hfa/` → `archive_vault/`, `archive_mcp/` → `archive_cli/`, `ppa_google_auth/` → `archive_auth/`, `tests/` → `archive_tests/`, `scripts/` → `archive_scripts/`, `docs/` → `archive_docs/`. Modified: vault walk, cache, scanner, materializer, chunker, loader delegation to Rust; `pyproject.toml` (Rust build via `maturin`); `Makefile` (Rust build targets).
+
+### Definition of Done
+
+_Phase 0 baseline:_
 
 - Full Phase 0 test suite passes against the Rust-powered engine — zero regressions
-- `ppa health-check` produces a clean report against the seed slice index after archive_crate integration
+- `ppa health-check` clean against the seed slice index
 
 _Tier 1 — Foundation I/O:_
 
-- `archive_crate.walk_vault()` returns identical paths to `iter_note_paths()` on the 5% slice
-- `archive_crate.build_vault_cache()` produces a SQLite cache with identical content to the Python `VaultScanCache._populate_db`
-- `archive_crate.scan_manifest()` classifies noop/incremental/full identically to the Python scanner
-- `archive_crate.cards_by_type()` returns correct UIDs for all 37 card types
-- Cold vault cache build meets performance target (8-15x faster)
-- Noop rebuild meets performance target (<1 second)
+- `walk_vault()`, `build_vault_cache()`, `scan_manifest()`, `cards_by_type()` produce identical output to Python equivalents
+- Cold vault cache build meets 8-15x speedup target
+- Noop rebuild <1 second
 
 _Tier 2 — Rebuild pipeline:_
 
-- Row-level diff between Python and Rust materializers shows zero differences on the 5% slice (excluding timestamps/sequences)
-- Full rebuild meets performance target (5-8x faster)
-- Incremental rebuild meets performance target (10-15x faster)
-- All MCP tool tests pass against a Rust-rebuilt index
+- Row-level diff vs Python materializer: zero differences on 5% slice
+- Full rebuild meets 5-8x speedup target
 
-_Tier 3 — Downstream acceleration:_
+_Tier 2.5 — Entity resolution:_
 
-- `runner.py` uses `cards_by_type()` and finds emails in <1 second instead of walking the vault
-- `entity_resolution.py` uses `cards_by_type()` and finds derived cards in <1 second
-- No operation in the PPA engine calls `iter_parsed_notes` for type-filtered full-vault scans
+- Person index builds in <200 ms; batch resolve in <2 seconds
+- Fuzzy scores match Python within ±1 confidence point
+- LLM disambiguation handles conflicts and writes resolved wikilinks
 
-_Tier 4 — Integration:_
+_Tier 3+4 — Integration:_
 
-- `pyproject.toml` includes `archive_crate` as a build dependency
-- `pip install -e .` builds both Python and Rust components
-- `PPA_ENGINE=python` fallback works for debugging
+- No operation calls `iter_parsed_notes` for type-filtered scans
+- `pip install -e .` builds both Python and Rust
+- `PPA_ENGINE=python` fallback works
 - All CI tests run against the Rust engine by default
 
 ---
@@ -1815,10 +1757,10 @@ A single CLI command that sequences existing operations to keep the system curre
 
 **Error handling:** If any step fails, log the error and continue to the next step. The cycle is not atomic — partial progress is better than no progress. Failed steps are reported in the coverage report. Steps 2-5 are independently idempotent — safe to re-run.
 
-**Scheduling on Arnold:**
+**Scheduling on Arnold (configured during Phase 9 deployment):**
 
 ```cron
-# Run maintenance daily at 3am
+# Run maintenance daily at 3am (set up in Phase 9 after Arnold deployment)
 0 3 * * * cd /srv/ppa && ppa maintain >> /var/log/ppa-maintain.log 2>&1
 ```
 
@@ -1857,9 +1799,9 @@ _Model provider:_
 
 **Execution plan:** [`phase_9_execution_plan_794d5d32.plan.md`](file:///Users/rheeger/.cursor/plans/phase_9_execution_plan_794d5d32.plan.md)
 
-**What it is:** Deploy v2 to Arnold and rebuild the production index directly on the VM. No pgdump/transfer needed — Arnold has the vault (encrypted share) and Postgres already running. The seed stays local as the test corpus and fallback.
+**What it is:** Deploy the fully enriched v2 vault and code to Arnold, rebuild the production index, and run the embedding pass. The seed vault and Arnold started from the same frozen snapshot, but Phases 2.75 through 6 enriched the seed with transaction cards, thread summaries, entity cards, cross-card wikilinks, embeddings, and knowledge cards — all locally. Phase 9 syncs that final vault state to Arnold in ONE operation, then rebuilds and embeds on Arnold so the MCP server serves v2 data.
 
-**Why it's a separate phase:** All prior phases develop and test locally against the seed vault. This phase runs the v2 code against the full production vault on Arnold for the first time.
+**Why it's a separate phase:** All prior phases develop and test locally against the seed vault. Arnold stays on its pre-v2 snapshot until everything is done. This avoids re-syncing, re-rebuilding, and re-embedding after every phase. Phase 9 is the ONE production deployment — vault rsync + code deploy + rebuild + embed + validate.
 
 **Logging:** On Arnold, run **`rebuild-indexes`**, **`embed-pending`**, and **`migrate`** with **`ppa --log-file`** under e.g. **`/var/log/ppa/`** or `/srv/ppa/logs/` so SSH disconnects do not lose visibility; tail the same files you use for Phase 4/5 locally.
 
@@ -1871,35 +1813,43 @@ _Model provider:_
 - **MCP server:** systemd service `ppa-mcp.service` running `python -m archive_cli serve`
 - **Health check:** `scripts/ppa-health.sh` checks mount, vault file count, Docker PG container, backups
 
-### Deployment model — rebuild on Arnold, not pgdump/transfer
+### Deployment model — rsync vault + rebuild on Arnold
 
-The v2 deployment eliminates the pgdump → scp → restore pipeline. Arnold rebuilds its own index:
+The v2 deployment syncs the fully enriched seed vault to Arnold, then rebuilds the index on Arnold. No pgdump/transfer for the index — Arnold rebuilds its own. The vault sync is the new step: the seed vault now contains ~4-6K transaction cards, ~200-700 entity cards, enriched thread summaries, cross-card wikilinks, and document descriptions that Arnold's frozen snapshot doesn't have.
 
-1. **Deploy v2 code to Arnold:** `make deploy-workspace` (git pull) + `ppa-install` (pip install -e .)
-2. **Pre-flight checks on Arnold:**
-   - `ppa health-check` against the existing (pre-v2) index — confirms the system is in a known-good state before changes
+1. **Rsync enriched vault to Arnold:**
+   ```bash
+   rsync -av --delete \
+     /Users/rheeger/Archive/seed/hf-archives-seed-20260307-235127/ \
+     arnold:/srv/hfa-secure/vault/
+   ```
+   This syncs all enrichment writes (field fills on existing cards, new transaction cards, entity cards, cross-card wikilinks). The `--delete` flag ensures Arnold matches the seed exactly — they started from the same snapshot, so any file on Arnold that isn't in the seed is stale.
+2. **Deploy v2 code to Arnold:** `make deploy-workspace` (git pull) + `ppa-install` (pip install -e .)
+3. **Pre-flight checks on Arnold:**
+   - `ppa validate` against the synced vault — confirms the rsync produced a valid vault
    - Disk space check: estimate v2 index size from Phase 4 metrics, confirm `/srv/hfa-secure/postgres` has sufficient room
    - Postgres version match: `pg17` on Arnold matches test infrastructure
-3. **Run v2 migrations on Arnold:** Pending migrations from Phase 1 apply via `MigrationRunner`
-4. **Run full rebuild on Arnold:** `ppa rebuild-indexes --force-full --workers N` against `/srv/hfa-secure/vault`
+4. **Run v2 migrations on Arnold:** Pending migrations from Phase 1 apply via `MigrationRunner`
+5. **Run full rebuild on Arnold:** `ppa rebuild-indexes --force-full --workers N` against `/srv/hfa-secure/vault`
    - Same 5-hour cap as Phase 4 — checkpoint resume provides crash safety
+   - If Phase 3.5 (Rust crate) is complete, this runs through `archive_crate` (~20 min instead of ~2 hours)
    - Monitor via `rebuild_checkpoint` progress
-5. **Post-rebuild geocoding:** `ppa enrich --task geocode` (same as Phase 4)
-6. **Run embedding pass on Arnold:** `ppa embed-pending` — uses Arnold's OpenAI API access (or OpenClaw model config for future)
-7. **Post-deployment verification:**
+6. **Post-rebuild geocoding:** `ppa enrich --task geocode` (same as Phase 4)
+7. **Run embedding pass on Arnold:** `ppa embed-pending` — uses Arnold's OpenAI API access (or OpenClaw model config for future)
+8. **Post-deployment verification:**
    - `ppa health-check` against the new index — clean report
    - `ppa index-status` — card count matches vault file count
    - Test a sample of manifest queries via the MCP server
-8. **Set up maintenance cron:**
+9. **Set up maintenance cron:**
 
    ```cron
    # Run maintenance daily at 3am
    0 3 * * * cd /srv/ppa && ppa maintain >> /var/log/ppa-maintain.log 2>&1
    ```
 
-9. **Restart MCP server:** `systemctl restart ppa-mcp`
+10. **Restart MCP server:** `systemctl restart ppa-mcp`
 
-**The seed stays as fallback:** During the v2 transition, keep the local seed dump available. If Arnold's rebuild fails or produces bad data, restore the pre-v2 index from the seed dump (`scp-restore-seed-arnold.sh`). Once the v2 production index is confirmed working, the seed becomes the test corpus and disaster-recovery backup, not the primary deployment source.
+**The seed is the source of truth:** The local seed vault is the canonical v2 vault — all enrichment, extraction, and validation ran against it through Phases 2.75-8. Arnold's vault is a deployment copy produced by rsync. If Arnold's rebuild fails or produces bad data, re-rsync from the seed and rebuild. After Phase 9, the seed remains the test corpus and disaster-recovery backup.
 
 **Post-v2 steady state (no more pgdump/transfer):**
 
@@ -1972,10 +1922,16 @@ _Phase 0 baseline:_
 - Full Phase 0 test suite passes — no regressions
 - `ppa health-check` clean against both local seed index and Arnold's production index
 
+_Vault sync:_
+
+- Enriched seed vault rsync'd to Arnold — all enrichment writes, transaction cards, entity cards, cross-card wikilinks present
+- `ppa validate` on Arnold reports zero errors after rsync
+- Arnold vault card count matches local seed vault card count
+
 _Deployment:_
 
 - v2 code deployed to Arnold via `make deploy-*` + `ppa-install`
-- Full rebuild completes on Arnold within 5-hour cap
+- Full rebuild completes on Arnold (via `archive_crate` if Phase 3.5 complete, ~20 min)
 - Embedding pass completes on Arnold
 - `ppa health-check` on Arnold produces clean report with all card types populated, all edge rules active, temporal queries working
 - Remote MCP server meets latency targets for all query types
@@ -1985,7 +1941,7 @@ _Operational:_
 - `ppa maintain` cron job running on Arnold (daily at 3am)
 - Postgres GUCs tuned and matching Phase 0 test infrastructure
 - Model config set via OpenClaw preference (or OpenAI fallback)
-- Seed dump retained locally as fallback — documented restore procedure verified
+- Seed vault retained locally as source of truth and disaster-recovery backup
 - Encrypted vault backup schedule covers v2 index size
 
 ---
@@ -2016,14 +1972,15 @@ Phase 0 (test infrastructure + rebuild verification)
 └── Phase 1 (schema & data model) — uses Phase 0 migration infrastructure
     ├── Phase 1h (expand test infra for 37 types) — follows Phase 0 extensibility contract
     └── Phase 2 (extractors) — depends on 1b schemas being defined
-        └── Phase 3 (run extractors) — depends on 2 code being ready
-            └── Phase 3.5 (archive_crate Rust engine) — depends on 3 vault state being final
-                └── Phase 4 (ONE rebuild via archive_crate) — depends on 3.5 complete
-                    └── Phase 5 (ONE embedding) — depends on 4 complete
-                        └── Phase 6 (enrichment) — depends on 5 complete
-                            └── Phase 7 (knowledge cache) — depends on 6 complete
-                                └── Phase 8 (maintenance + tool enhancements) — depends on 7 complete
-                                    └── Phase 9 (deployment) — depends on 8 complete
+        └── Phase 2.875 (vault enrichment + cross-card linking) — depends on 2.75 LLM pipeline
+            └── Phase 3 (validation, promotion, local finalization) — depends on 2.875 enrichment complete
+                └── Phase 3.5 (archive_crate Rust engine + batch entity resolution) — depends on 3 vault state being final
+                    └── Phase 4 (ONE rebuild via archive_crate) — depends on 3.5 complete
+                        └── Phase 5 (ONE embedding) — depends on 4 complete
+                            └── Phase 6 (enrichment) — depends on 5 complete
+                                └── Phase 7 (knowledge cache) — depends on 6 complete
+                                    └── Phase 8 (maintenance + tool enhancements) — depends on 7 complete
+                                        └── Phase 9 (production deployment to Arnold) — depends on 8 complete; ONE vault sync + rebuild + embed
 ```
 
 **Parallelization opportunities:**
@@ -2032,26 +1989,28 @@ Phase 0 (test infrastructure + rebuild verification)
 - Within Phase 2, individual extractors are independent and can be developed in parallel
 - Phase 3.5 Tier 1 (vault walk + cache + scanner) can begin during Phase 3 if vault structure is stable
 - Phase 3.5 Tier 2 (materializer + loader) can overlap with late Phase 3 extractor work
+- Phase 3.5 Tier 2.5 (entity resolution) depends on Tier 1 (needs the manifest for person index) but not on Tier 2 (materializer). Can be developed in parallel with Tier 2
 - Phase 8a (tool enhancements) and 8b (maintenance) can be developed in parallel
 
-**Critical path:** Phase 0 → Phase 1 → Phase 3 → Phase 3.5 → Phase 4 → Phase 5 → Phase 6. Phase 3.5 adds ~8-12 weeks to the critical path but makes Phase 4 (~20 min vs ~2 hours) and every subsequent phase dramatically faster. Phases 7, 8, 9 build on 6 but have less time pressure since the archive is already usable after Phase 5.
+**Critical path:** Phase 0 → Phase 1 → Phase 2.875 (vault enrichment) → Phase 3 (validation + promotion) → Phase 3.5 (crate + entity resolution + person linking) → Phase 4 → Phase 5 → Phase 6 → Phase 7 → Phase 8 → Phase 9 (ONE Arnold deployment). Phase 2.875 adds ~1-2 weeks (mostly LLM inference time) but ensures thread summaries, cross-card links, and entity mentions are in the vault before extraction. Phase 3.5 adds ~10-14 weeks (including entity resolution) but makes Phase 4 (~20 min vs ~2 hours) and every subsequent phase dramatically faster. Arnold deployment is deferred to Phase 9 so the vault is synced once in its final state — avoiding repeated rsync + rebuild + embed cycles after every intermediate phase.
 
 ---
 
 ## Risks
 
-| Risk                                                                                                                                                                                                                                                                                                          | Impact                                                                                      | Mitigation                                                                                                                                                                                                          | Decision Point                                                                                                                              |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Extractor yield rates** — what % of emails from a given sender actually produce parseable derived cards? Some eras may have HTML-only bodies with no extractable text.                                                                                                                                      | Lower-than-expected derived card counts. Some types may have very few cards.                | Summary-only fallback in extractors (emit card with whatever data is available). Audit yield rates during Phase 3 staging.                                                                                          | Phase 3: if yield < 10% for a sender, consider dropping that extractor or investing in HTML parsing.                                        |
-| **Entity resolution precision** — fuzzy matching may produce false merges (two different "Main Street Pizza" locations merged) or false splits (same restaurant with slightly different name not merged).                                                                                                     | Incorrect PlaceCards, misleading analytics.                                                 | Use `(name, city)` compound key. Manual override via tags. Audit entity resolution output during Phase 3.                                                                                                           | Phase 3: spot-check entity resolution output. If error rate > 5%, invest in better disambiguation (geocoding, temporal clustering).         |
-| **Rebuild time growth** — 37 card types with more projections and edges means the full rebuild takes longer.                                                                                                                                                                                                  | Phase 4 rebuild takes longer than expected.                                                 | Benchmark against 1% and 5% seed slices to extrapolate full rebuild time. Use scaling curve analysis (Phase 0) to identify superlinear operations early. Checkpoint resume (Phase 0) provides crash safety.         | Phase 4: if projected time > 8 hours, consider parallelizing the materialization loop.                                                      |
-| **Embedding cost** — more cards with richer `search_text` means more chunks and higher API cost for the full embedding pass.                                                                                                                                                                                  | Phase 5 costs more than budgeted.                                                           | Estimate chunk count from Phase 4 rebuild metrics before starting. Consider embedding only high-quality cards first (quality_score > 0.3).                                                                          | Phase 5: review chunk count and projected cost before running.                                                                              |
-| **LLM enrichment ROI** — summary improvement may not meaningfully improve retrieval quality for the token cost.                                                                                                                                                                                               | Phase 6 spends tokens without measurable benefit.                                           | Budget-gate enrichment. Measure quality score improvement per 1K tokens spent. Stop if ROI drops below threshold.                                                                                                   | Phase 6: after first 1K cards, evaluate quality score improvement vs. cost.                                                                 |
-| **Seed slice completeness** — the stratified transitive-closure slicer may produce a corpus that's too large (if a few highly-connected cards pull in thousands of references) or miss rare types.                                                                                                            | Test corpus doesn't represent production well enough.                                       | Cap cluster size (max 200 cards per seed). Reject seeds that exceed cap and pick alternatives of the same type. Guarantee ≥5 cards per type via stratified seeding.                                                 | Phase 0: validate slice size, type coverage, and structure after first run.                                                                 |
-| **Arnold disk space** — the v2 index with 37 types, more projections, and embeddings may exceed Arnold's current disk allocation.                                                                                                                                                                             | Deployment fails in Phase 9.                                                                | Estimate v2 index size from Phase 4 rebuild. Plan Docker volume expansion before Phase 9.                                                                                                                           | Phase 9: pre-flight disk check before deploy.                                                                                               |
-| **Template versioning maintenance** — email senders change templates regularly. Extractors need ongoing maintenance.                                                                                                                                                                                          | Derived cards stop being produced for newer emails.                                         | Template versioning architecture (Phase 2) makes adding new parsers easy. `ppa maintain` (Phase 8b) runs extraction on new emails automatically; yield rate drops will be visible in maintenance coverage reports.  | Ongoing: monitor extraction yield per sender per month via maintenance reports.                                                             |
-| **Rust rewrite correctness** — the archive_crate materializer must produce byte-identical output to the Python materializer. YAML parsing edge cases (Unicode, multiline strings, anchors), date parsing, and quality scoring precision differences between Python and Rust could produce subtle divergences. | Silent data corruption in the index — wrong search_text, wrong quality scores, wrong edges. | Row-level diff test: materialize the 5% slice through both engines and compare every column. Phase 0 behavioral test suite as the correctness oracle. `PPA_ENGINE=python` fallback for any card type that diverges. | Phase 3.5d: if >0.1% of rows differ after 2 weeks of debugging, keep the materializer in Python and limit Rust to Tier 1 (vault I/O).       |
-| **Rust build toolchain in CI/CD** — adding Rust + maturin/setuptools-rust to the Python build pipeline adds complexity. CI runners need both Python and Rust toolchains. Build times increase.                                                                                                                | Slower CI, more complex contributor setup.                                                  | Use `maturin develop` for local builds, `maturin build` for CI wheels. Pre-built wheels for common platforms. Document Rust toolchain setup in CONTRIBUTING.md.                                                     | Phase 3.5e: if build pipeline takes >2 weeks to stabilize, ship archive_crate as a pre-built wheel and skip source builds for contributors. |
+| Risk                                                                                                                                                                                                                                                                                                          | Impact                                                                                                                                               | Mitigation                                                                                                                                                                                                                                                                                                           | Decision Point                                                                                                                                                                                                     |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Extractor yield rates** — what % of emails from a given sender actually produce parseable derived cards? Some eras may have HTML-only bodies with no extractable text.                                                                                                                                      | Lower-than-expected derived card counts. Some types may have very few cards.                                                                         | Summary-only fallback in extractors (emit card with whatever data is available). Audit yield rates during Phase 3 staging.                                                                                                                                                                                           | Phase 3: if yield < 10% for a sender, consider dropping that extractor or investing in HTML parsing.                                                                                                               |
+| **Entity resolution precision** — fuzzy matching may produce false merges (two different "Main Street Pizza" locations merged) or false splits (same restaurant with slightly different name not merged).                                                                                                     | Incorrect PlaceCards, misleading analytics.                                                                                                          | Use `(name, city)` compound key. Manual override via tags. Audit entity resolution output during Phase 3.                                                                                                                                                                                                            | Phase 3: spot-check entity resolution output. If error rate > 5%, invest in better disambiguation (geocoding, temporal clustering).                                                                                |
+| **Rebuild time growth** — 37 card types with more projections and edges means the full rebuild takes longer.                                                                                                                                                                                                  | Phase 4 rebuild takes longer than expected.                                                                                                          | Benchmark against 1% and 5% seed slices to extrapolate full rebuild time. Use scaling curve analysis (Phase 0) to identify superlinear operations early. Checkpoint resume (Phase 0) provides crash safety.                                                                                                          | Phase 4: if projected time > 8 hours, consider parallelizing the materialization loop.                                                                                                                             |
+| **Embedding cost** — more cards with richer `search_text` means more chunks and higher API cost for the full embedding pass.                                                                                                                                                                                  | Phase 5 costs more than budgeted.                                                                                                                    | Estimate chunk count from Phase 4 rebuild metrics before starting. Consider embedding only high-quality cards first (quality_score > 0.3).                                                                                                                                                                           | Phase 5: review chunk count and projected cost before running.                                                                                                                                                     |
+| **LLM enrichment ROI** — summary improvement may not meaningfully improve retrieval quality for the token cost.                                                                                                                                                                                               | Phase 6 spends tokens without measurable benefit.                                                                                                    | Budget-gate enrichment. Measure quality score improvement per 1K tokens spent. Stop if ROI drops below threshold.                                                                                                                                                                                                    | Phase 6: after first 1K cards, evaluate quality score improvement vs. cost.                                                                                                                                        |
+| **Seed slice completeness** — the stratified transitive-closure slicer may produce a corpus that's too large (if a few highly-connected cards pull in thousands of references) or miss rare types.                                                                                                            | Test corpus doesn't represent production well enough.                                                                                                | Cap cluster size (max 200 cards per seed). Reject seeds that exceed cap and pick alternatives of the same type. Guarantee ≥5 cards per type via stratified seeding.                                                                                                                                                  | Phase 0: validate slice size, type coverage, and structure after first run.                                                                                                                                        |
+| **Arnold disk space** — the v2 index with 37 types, more projections, and embeddings may exceed Arnold's current disk allocation.                                                                                                                                                                             | Deployment fails in Phase 9.                                                                                                                         | Estimate v2 index size from Phase 4 rebuild. Plan Docker volume expansion before Phase 9.                                                                                                                                                                                                                            | Phase 9: pre-flight disk check before deploy.                                                                                                                                                                      |
+| **Template versioning maintenance** — email senders change templates regularly. Extractors need ongoing maintenance.                                                                                                                                                                                          | Derived cards stop being produced for newer emails.                                                                                                  | Template versioning architecture (Phase 2) makes adding new parsers easy. `ppa maintain` (Phase 8b) runs extraction on new emails automatically; yield rate drops will be visible in maintenance coverage reports.                                                                                                   | Ongoing: monitor extraction yield per sender per month via maintenance reports.                                                                                                                                    |
+| **Rust rewrite correctness** — the archive_crate materializer must produce byte-identical output to the Python materializer. YAML parsing edge cases (Unicode, multiline strings, anchors), date parsing, and quality scoring precision differences between Python and Rust could produce subtle divergences. | Silent data corruption in the index — wrong search_text, wrong quality scores, wrong edges.                                                          | Row-level diff test: materialize the 5% slice through both engines and compare every column. Phase 0 behavioral test suite as the correctness oracle. `PPA_ENGINE=python` fallback for any card type that diverges.                                                                                                  | Phase 3.5d: if >0.1% of rows differ after 2 weeks of debugging, keep the materializer in Python and limit Rust to Tier 1 (vault I/O).                                                                              |
+| **Rust build toolchain in CI/CD** — adding Rust + maturin/setuptools-rust to the Python build pipeline adds complexity. CI runners need both Python and Rust toolchains. Build times increase.                                                                                                                | Slower CI, more complex contributor setup.                                                                                                           | Use `maturin develop` for local builds, `maturin build` for CI wheels. Pre-built wheels for common platforms. Document Rust toolchain setup in CONTRIBUTING.md.                                                                                                                                                      | Phase 3.5e: if build pipeline takes >2 weeks to stabilize, ship archive_crate as a pre-built wheel and skip source builds for contributors.                                                                        |
+| **Person-linking false merges** — fuzzy matching merges two different people who share a common name (e.g., "John Smith" on a Venmo transaction matched to the wrong John Smith PersonCard). Finance cards are high-volume and counterparty names are often informal.                                         | Incorrect `people` wikilinks on vault cards. Wrong person edges in the graph. Misleading retrieval when agents ask "show me transactions with John." | Multi-signal scoring (name alone is never sufficient for merge — require name + at least one supporting signal). `conflict` tier for ambiguous cases routes to LLM disambiguation. `--dry-run` mode for pre-flight audit. Revert mechanism: vault writes include provenance so person-linking can be undone per-run. | Phase 3.5d½: after first batch resolve, audit conflict rate. If >10% of resolutions are conflicts, lower `merge_threshold` or add more supporting signals (e.g., temporal proximity, transaction amount patterns). |
 
 ---
 
@@ -2136,16 +2095,17 @@ The composite B-tree index on `(activity_at, uid)` is maintained automatically b
 
 ## Summary Table
 
-| Phase | What                                                                                                          | Touches Vault | Touches Postgres | Rebuild Cost  | Embed Cost  | LLM Cost |
-| ----- | ------------------------------------------------------------------------------------------------------------- | :-----------: | :--------------: | :-----------: | :---------: | :------: |
-| 0     | Test infrastructure + rebuild verification (seed slice, fixtures, health-check, cache fixes, migration infra) |   test only   |    test only     |   test only   |      0      |    0     |
-| 1     | Schema + data model (37 types, temporal spine, infra tables)                                                  |       0       |        0         |       0       |      0      |    0     |
-| 2     | Extractor framework + all extractors                                                                          |       0       |        0         |       0       |      0      |    0     |
-| 3     | Run extractors (vault writes)                                                                                 |    **yes**    |        0         |       0       |      0      |    0     |
-| 3.5   | **archive_crate Rust engine** (vault walk, cache, scanner, materializer, loader)                              |       0       |    test only     |   test only   |      0      |    0     |
-| 4     | **ONE full rebuild** (via archive_crate — ~20 min instead of ~2 hours)                                        |       0       |     **yes**      |    **1x**     |      0      |    0     |
-| 5     | **ONE full embedding pass**                                                                                   |       0       |     **yes**      |       0       |   **1x**    |    0     |
-| 6     | LLM enrichment                                                                                                |  incremental  |   incremental    |  incremental  | incremental |  **1x**  |
-| 7     | Knowledge cache                                                                                               |  incremental  |   incremental    |       0       |      0      | partial  |
-| 8     | Maintenance automation + tool enhancements (confidence, gap detection, agent prompt guide)                    |  incremental  |   incremental    |       0       |      0      |    0     |
-| 9     | Secure deployment & remote access                                                                             |       0       |      remote      | **1x remote** |      0      |    0     |
+| Phase | What                                                                                                                                                                           |     Touches Vault      | Touches Postgres | Rebuild Cost  | Embed Cost  |         LLM Cost         |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | :--------------------: | :--------------: | :-----------: | :---------: | :----------------------: |
+| 0     | Test infrastructure + rebuild verification (seed slice, fixtures, health-check, cache fixes, migration infra)                                                                  |       test only        |    test only     |   test only   |      0      |            0             |
+| 1     | Schema + data model (37 types, temporal spine, infra tables)                                                                                                                   |           0            |        0         |       0       |      0      |            0             |
+| 2     | Extractor framework + all extractors                                                                                                                                           |           0            |        0         |       0       |      0      |            0             |
+| 2.875 | Vault enrichment & cross-card linking (thread summaries, entity mentions, wikilinks)                                                                                           |        **yes**         |        0         |       0       |      0      |         **~$40**         |
+| 3     | Run extractors (vault writes)                                                                                                                                                  |        **yes**         |        0         |       0       |      0      |            0             |
+| 3.5   | **archive_crate Rust engine** (vault walk, cache, scanner, materializer, loader) + **batch entity resolution** (person-linking vault writes, LLM disambiguation for conflicts) | **yes** (person links) |    test only     |   test only   |      0      | partial (conflicts only) |
+| 4     | **ONE full rebuild** (via archive_crate — ~20 min instead of ~2 hours)                                                                                                         |           0            |     **yes**      |    **1x**     |      0      |            0             |
+| 5     | **ONE full embedding pass**                                                                                                                                                    |           0            |     **yes**      |       0       |   **1x**    |            0             |
+| 6     | LLM enrichment                                                                                                                                                                 |      incremental       |   incremental    |  incremental  | incremental |          **1x**          |
+| 7     | Knowledge cache                                                                                                                                                                |      incremental       |   incremental    |       0       |      0      |         partial          |
+| 8     | Maintenance automation + tool enhancements (confidence, gap detection, agent prompt guide)                                                                                     |      incremental       |   incremental    |       0       |      0      |            0             |
+| 9     | Secure deployment & remote access                                                                                                                                              |           0            |      remote      | **1x remote** |      0      |            0             |

@@ -13,6 +13,7 @@ dependencies = [
   "psycopg[binary]>=3.2",
   "python-dateutil>=2.8",
   "html2text>=2024.2.26",
+  "markitdown>=0.0.1",
 ]
 
 [project.scripts]

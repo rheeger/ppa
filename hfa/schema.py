@@ -665,6 +665,7 @@ class FinanceCard(BaseCard):
     provider_tags: list[str] = Field(default_factory=list)
     note: str = ""
     recurring_label: str = ""
+    source_email: str = ""  # wikilink to confirmation email (Phase 2.875 match resolution)
 
 
 class MedicalRecordCard(BaseCard):

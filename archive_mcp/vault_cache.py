@@ -7,13 +7,15 @@ import json
 import logging
 import math
 import sqlite3
+import threading
 import time
 import zlib
 from pathlib import Path
 from typing import Any, Iterator
 
 from hfa.schema import validate_card_permissive
-from hfa.vault import extract_wikilinks, iter_note_paths, read_note_file, read_note_frontmatter_file
+from hfa.vault import (extract_wikilinks, iter_note_paths, read_note_file,
+                       read_note_frontmatter_file)
 
 logger = logging.getLogger("ppa.vault_cache")
 
@@ -126,6 +128,8 @@ class VaultScanCache:
         self._tier = tier
         self._vault_fingerprint = vault_fingerprint
         self._cache_hit = cache_hit
+        # sqlite3 connections are not thread-safe; parallel enrich-cards workers must serialize reads.
+        self._lock = threading.RLock()
 
     @property
     def is_cache_hit(self) -> bool:
@@ -390,7 +394,8 @@ class VaultScanCache:
         return cls(conn, tier, fp, cache_hit=cache_hit)
 
     def note_count(self) -> int:
-        row = self._conn.execute("SELECT COUNT(*) FROM notes").fetchone()
+        with self._lock:
+            row = self._conn.execute("SELECT COUNT(*) FROM notes").fetchone()
         return int(row[0]) if row else 0
 
     def tier(self) -> int:
@@ -400,44 +405,78 @@ class VaultScanCache:
         return self._vault_fingerprint
 
     def uid_to_rel_path(self) -> dict[str, str]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT uid, rel_path FROM notes WHERE uid != ''"
+            ).fetchall()
         out: dict[str, str] = {}
-        for uid, rp in self._conn.execute(
-            "SELECT uid, rel_path FROM notes WHERE uid != ''"
-        ).fetchall():
+        for uid, rp in rows:
             out[str(uid)] = str(rp)
         return out
 
     def rel_path_to_uid(self) -> dict[str, str]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT rel_path, uid FROM notes WHERE uid != ''"
+            ).fetchall()
         out: dict[str, str] = {}
-        for rp, uid in self._conn.execute(
-            "SELECT rel_path, uid FROM notes WHERE uid != ''"
-        ).fetchall():
+        for rp, uid in rows:
             out[str(rp)] = str(uid)
         return out
 
+    def rel_path_for_slug(self, slug: str) -> str | None:
+        """Resolve a note filename stem (Obsidian wikilink target) to ``rel_path``."""
+
+        s = (slug or "").strip()
+        if not s:
+            return None
+        variants = [s, s.replace(" ", "-"), s.replace(" ", "_")]
+        seen: set[str] = set()
+        with self._lock:
+            for v in variants:
+                if not v or v in seen:
+                    continue
+                seen.add(v)
+                row = self._conn.execute(
+                    "SELECT rel_path FROM notes WHERE slug = ? LIMIT 1",
+                    (v,),
+                ).fetchone()
+                if row:
+                    return str(row[0])
+        return None
+
     def rel_paths_by_type(self) -> dict[str, list[str]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT card_type, rel_path FROM notes WHERE card_type != '' ORDER BY card_type, rel_path"
+            ).fetchall()
         out: dict[str, list[str]] = {}
-        for ctype, rp in self._conn.execute(
-            "SELECT card_type, rel_path FROM notes WHERE card_type != '' ORDER BY card_type, rel_path"
-        ).fetchall():
+        for ctype, rp in rows:
             ct = str(ctype)
             out.setdefault(ct, []).append(str(rp))
         return out
 
     def frontmatter_for_rel_path(self, rel_path: str) -> dict[str, Any]:
-        row = self._conn.execute(
-            "SELECT frontmatter_json FROM notes WHERE rel_path = ?", (rel_path,)
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT frontmatter_json FROM notes WHERE rel_path = ?", (rel_path,)
+            ).fetchone()
         if not row:
             raise KeyError(rel_path)
         return json.loads(row[0])
 
     def all_frontmatters(self) -> Iterator[tuple[str, dict[str, Any]]]:
-        for rp, fj in self._conn.execute("SELECT rel_path, frontmatter_json FROM notes ORDER BY rel_path"):
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT rel_path, frontmatter_json FROM notes ORDER BY rel_path"
+            ).fetchall()
+        for rp, fj in rows:
             yield str(rp), json.loads(fj)
 
     def all_rel_paths(self) -> list[str]:
-        return [str(r[0]) for r in self._conn.execute("SELECT rel_path FROM notes ORDER BY rel_path").fetchall()]
+        with self._lock:
+            rows = self._conn.execute("SELECT rel_path FROM notes ORDER BY rel_path").fetchall()
+        return [str(r[0]) for r in rows]
 
     def slice_lookup_tables(
         self,
@@ -461,9 +500,10 @@ class VaultScanCache:
         uid_by_stem: dict[str, str] = {}
         frontmatter_by_uid: dict[str, dict[str, Any]] = {}
 
-        cursor = self._conn.execute(
-            "SELECT uid, rel_path, card_type, frontmatter_json FROM notes WHERE uid != ''"
-        )
+        with self._lock:
+            cursor = self._conn.execute(
+                "SELECT uid, rel_path, card_type, frontmatter_json FROM notes WHERE uid != ''"
+            ).fetchall()
         count = 0
         t0 = time.monotonic()
         for uid_raw, rp_raw, ct_raw, fj_raw in cursor:
@@ -520,60 +560,71 @@ class VaultScanCache:
         return by_type, rel_by_uid, uid_by_path, uid_by_stem, frontmatter_by_uid
 
     def body_for_rel_path(self, rel_path: str) -> str:
-        row = self._conn.execute(
-            "SELECT body_compressed FROM notes WHERE rel_path = ?", (rel_path,)
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT body_compressed FROM notes WHERE rel_path = ?", (rel_path,)
+            ).fetchone()
         if not row or row[0] is None:
             raise ValueError("tier 2 required for body access")
         return zlib.decompress(row[0]).decode("utf-8")
 
     def wikilinks_for_rel_path(self, rel_path: str) -> list[str]:
-        row = self._conn.execute(
-            "SELECT wikilinks_json FROM notes WHERE rel_path = ?", (rel_path,)
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT wikilinks_json FROM notes WHERE rel_path = ?", (rel_path,)
+            ).fetchone()
         if not row or row[0] is None:
             raise ValueError("tier 2 required for wikilinks access")
         return json.loads(row[0])
 
     def content_hash_for_rel_path(self, rel_path: str) -> str:
-        row = self._conn.execute(
-            "SELECT content_hash FROM notes WHERE rel_path = ?", (rel_path,)
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT content_hash FROM notes WHERE rel_path = ?", (rel_path,)
+            ).fetchone()
         if not row or row[0] is None:
             raise ValueError("tier 2 required for content_hash access")
         return str(row[0])
 
     def raw_content_sha256_for_rel_path(self, rel_path: str) -> str:
         """SHA-256 hex of full UTF-8 file bytes (matches seed_links catalog sketch hash)."""
-        row = self._conn.execute(
-            "SELECT raw_content_sha256 FROM notes WHERE rel_path = ?", (rel_path,)
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT raw_content_sha256 FROM notes WHERE rel_path = ?", (rel_path,)
+            ).fetchone()
         if not row or row[0] is None:
             raise ValueError("tier 2 required for raw_content_sha256 access")
         return str(row[0])
 
     def all_wikilinks(self) -> Iterator[tuple[str, list[str]]]:
-        for rp, wj in self._conn.execute(
-            "SELECT rel_path, wikilinks_json FROM notes WHERE wikilinks_json IS NOT NULL ORDER BY rel_path"
-        ):
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT rel_path, wikilinks_json FROM notes WHERE wikilinks_json IS NOT NULL ORDER BY rel_path"
+            ).fetchall()
+        for rp, wj in rows:
             yield str(rp), json.loads(wj)
 
     def all_bodies(self) -> Iterator[tuple[str, str]]:
-        for rp, blob in self._conn.execute(
-            "SELECT rel_path, body_compressed FROM notes WHERE body_compressed IS NOT NULL ORDER BY rel_path"
-        ):
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT rel_path, body_compressed FROM notes WHERE body_compressed IS NOT NULL ORDER BY rel_path"
+            ).fetchall()
+        for rp, blob in rows:
             yield str(rp), zlib.decompress(blob).decode("utf-8")
 
     def file_stats(self) -> dict[str, tuple[int, int]]:
+        with self._lock:
+            rows = self._conn.execute("SELECT rel_path, mtime_ns, file_size FROM notes").fetchall()
         out: dict[str, tuple[int, int]] = {}
-        for rp, mtime_ns, fsize in self._conn.execute(
-            "SELECT rel_path, mtime_ns, file_size FROM notes"
-        ):
+        for rp, mtime_ns, fsize in rows:
             out[str(rp)] = (int(mtime_ns), int(fsize))
         return out
 
     def all_stems(self) -> set[str]:
-        return {Path(str(r[0])).stem for r in self._conn.execute("SELECT rel_path FROM notes")}
+        with self._lock:
+            rows = self._conn.execute("SELECT rel_path FROM notes").fetchall()
+        return {Path(str(r[0])).stem for r in rows}
 
     def close(self) -> None:
-        self._conn.close()
+        with self._lock:
+            self._conn.close()

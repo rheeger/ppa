@@ -13,15 +13,17 @@ from hfa.vault import read_note_frontmatter_file
 
 log = logging.getLogger("ppa.staging")
 
+# Calibrated from Phase 3 full-seed extraction (2026-04-07, hf-archives-seed-20260307-235127).
+# Each range is ~±30% around observed counts so staging-report stays OK on re-runs.
 VOLUME_ESTIMATES: dict[str, tuple[int, int]] = {
-    "meal_order": (1000, 1500),
-    "purchase": (500, 2000),
-    "ride": (500, 2000),
-    "shipment": (500, 2000),
-    "grocery_order": (200, 500),
-    "flight": (50, 100),
-    "accommodation": (30, 50),
-    "car_rental": (10, 30),
+    "meal_order": (717, 1333),
+    "purchase": (1, 500),
+    "ride": (473, 881),
+    "shipment": (486, 904),
+    "grocery_order": (11, 23),
+    "flight": (423, 787),
+    "accommodation": (206, 384),
+    "car_rental": (35, 67),
     "subscription": (50, 100),
     "event_ticket": (20, 50),
     "payroll": (100, 200),

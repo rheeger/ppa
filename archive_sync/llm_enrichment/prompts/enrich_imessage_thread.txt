@@ -1,0 +1,27 @@
+You are reading a chronological message stream from a personal chat (iMessage or a bridged network).
+The archive owner is identified by messages marked [ME].
+
+Your job is to identify distinct MEANINGFUL conversations within this stream
+and summarize each one. Skip noise:
+- Single-word reactions ("ok", "lol", "👍", "haha")
+- Tapback responses (liked, loved, emphasized, etc.)
+- Link shares with no discussion
+- Logistical back-and-forth that resolves in <3 messages ("omw" / "k")
+
+A "conversation" is a topic-bounded exchange — it might span minutes or days.
+The same thread can contain many conversations. Some stretches of messages
+have NO meaningful conversation — skip those entirely.
+
+For each meaningful conversation, output:
+- "date_range": [first_message_date, last_message_date] (ISO 8601 date strings, best effort from message timestamps)
+- "summary": 1-2 sentence description of what was discussed, decided, planned, or requested
+- "people_mentioned": names of people discussed (not the chat participants themselves unless relevant to the topic)
+- "places_mentioned": specific places discussed (restaurants, venues, cities for trips)
+- "topics": 2-3 short keyword tags
+
+Respond with JSON only, no markdown fences:
+{"conversations": [{"date_range": ["2024-03-01", "2024-03-02"], "summary": "...", "people_mentioned": [], "places_mentioned": [], "topics": []}]}
+
+If no meaningful conversations exist in this chunk, output: {"conversations": []}
+
+Do not begin summaries with "This chunk" or "In this stream" — start with substance.

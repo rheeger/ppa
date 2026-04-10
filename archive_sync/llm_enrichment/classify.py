@@ -106,14 +106,20 @@ def classify_thread(
         model=use_model,
         temperature=temperature,
         seed=seed,
-        max_tokens=96,
+        max_tokens=256,
     )
-    parsed = r.parsed_json or {}
+
+    parsed: dict[str, Any] | list[Any] | None = r.parsed_json
     if not isinstance(parsed, dict):
         parsed = {}
+    if not parsed and (r.content or "").strip():
+        from hfa.llm_provider import _parse_json_from_model_text
 
-    if not r.content.strip():
-        logger.warning("classify: empty LLM response")
+        loose = _parse_json_from_model_text((r.content or "").strip())
+        if isinstance(loose, dict):
+            parsed = loose
+
+    if not (r.content or "").strip():
         parsed = {"category": "noise", "confidence": 0.0}
 
     if cache is not None and cache_key is not None:
@@ -145,12 +151,32 @@ def _normalize_card_types(raw_types: list[Any] | None) -> list[str]:
     return [str(t).strip() for t in raw_types if str(t).strip() in _VALID_CARD_TYPES]
 
 
+def _normalize_category_label(raw: str) -> str:
+    """Map common model variants to canonical labels."""
+
+    c = (raw or "").strip().lower()
+    if not c:
+        return "noise"
+    if c in frozenset({"transaction", "txn", "commerce", "commercial"}):
+        return "transactional"
+    if c.startswith("transaction") and c != "transactional":
+        return "transactional"
+    return c
+
+
 def _result_from_raw(parsed: dict[str, Any], *, cache_hit: bool) -> ClassifyResult:
-    category = str(parsed.get("category") or "noise").strip().lower()
+    if parsed.get("is_transactional") is True:
+        parsed = {**parsed, "category": "transactional"}
+
+    category = _normalize_category_label(str(parsed.get("category") or ""))
+    conf_present = "confidence" in parsed
     try:
         confidence = float(parsed.get("confidence", 0.0))
     except (TypeError, ValueError):
         confidence = 0.0
+
+    if category == "transactional" and not conf_present:
+        confidence = max(confidence, 0.85)
 
     card_types = _normalize_card_types(parsed.get("card_types"))
     is_tx = category in TRANSACTIONAL_CATEGORIES and confidence >= 0.2

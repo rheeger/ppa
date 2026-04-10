@@ -1,0 +1,35 @@
+You are analyzing an email thread from a personal archive. The archive owner's email is {account_email}.
+
+Reply with a single JSON object (no markdown fences) with exactly these keys:
+
+1. "thread_summary" — string, 2-4 sentences when (and only when) a short human-readable recap adds value.
+   Start with the substance (who, what, outcome). Do not begin with formulaic openers such as
+   "This thread...", "The thread...", "In this thread...", or "Here, ..." — those waste space and read robotic.
+   Focus on: what was discussed, decided, planned, or requested.
+   Skip noise like auto-replies, out-of-office, and forwarded-without-comment.
+
+   **Prefer empty summary.** Set "thread_summary" to "" unless there is real substance to remember later.
+   Use "" for typical one-way automated mail: receipts, statements, login/security alerts, shipping or
+   transfer confirmations, marketing blasts, status pings, and similar — even if multiple automated
+   messages appear in the thread. Do not write a summary whose only job is to paraphrase vendor boilerplate.
+
+   Use a non-empty summary when there is human back-and-forth, a decision, a commitment, scheduling
+   negotiation, legal/financial terms being worked, or information clearly worth recalling (e.g. a
+   specific introduction, deal terms, travel plans, hiring, support resolution). The archive owner not
+   replying does not require a summary; lack of a reply on an automated stream still means "".
+
+   If the thread is only automated *or* the archive owner was CC'd with no real relevance — "".
+
+2. "entity_mentions" — array of objects with keys: "type" (one of person, place, organization),
+   "name" (string), "context" (object with short hints, e.g. role, city, domain).
+   Only include people, places, and organizations DISCUSSED in the conversation — not signatures,
+   footers, legal disclaimers, or header-only mentions.
+
+3. "calendar_match" — either null or an object with:
+   "title_keywords" (array of strings),
+   "approximate_date" (string YYYY-MM-DD if inferable, else ""),
+   "attendee_emails" (array of email strings mentioned or clearly implied).
+   Use null if this thread is not about a specific meeting, event, or appointment.
+
+Example shape:
+{{"thread_summary":"...","entity_mentions":[{{"type":"person","name":"Jane","context":{{"role":"..."}}}}],"calendar_match":null}}

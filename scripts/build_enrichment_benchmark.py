@@ -6,7 +6,7 @@ Selection (Phase 2.75 plan Step 8):
   - ``extraction_confidence >=`` threshold (default 0.8).
   - No quality flags: critical_fail / critical_err / heuristic (same bar as extraction-quality report).
 
-Outputs ``_benchmark/enrichment_ground_truth.json`` (or a slice-specific name) with
+Outputs ``_artifacts/_benchmark/enrichment_ground_truth.json`` (or a slice-specific name) with
 ``benchmark_set`` (positives) and ``negative_benchmark_set`` (threads not used as
 positives — review in Step 8b).
 
@@ -15,9 +15,9 @@ under that vault's ``Email/``. Same pairing as ``make extraction-quality-reports
 
 **Verification order (always start small — full seed is huge and slow):**
 
-1. **1pct** — ``make build-enrichment-benchmark-smoke`` (``_staging-1pct/`` + ``.slices/1pct``).
+1. **1pct** — ``make build-enrichment-benchmark-smoke`` (``_artifacts/_staging-1pct/`` + ``.slices/1pct``).
 2. **10pct** (and/or **5pct**) — only for slices where you actually ran
-   ``make extract-emails-{10,5}pct-slice``. Each ``_staging-Npct/`` must match that extract;
+   ``make extract-emails-{10,5}pct-slice``. Each ``_artifacts/_staging-Npct/`` must match that extract;
    if you skip the 5pct extractor, skip ``build-enrichment-benchmark-5pct`` (stale dir → 0 positives).
 3. **Full** — ``build-enrichment-benchmark`` with ``PPA_PATH`` after slices look good.
 
@@ -161,9 +161,9 @@ def main() -> None:
     ap.add_argument(
         "--staging-dir",
         type=Path,
-        default=Path("_staging"),
+        default=Path("_artifacts/_staging"),
         help=(
-            "Phase 3 regex staging dir under cwd (e.g. _staging, _staging-5pct). "
+            "Phase 3 regex staging dir under cwd (e.g. _artifacts/_staging). "
             "Must match the vault used for extract-emails that produced it."
         ),
     )
@@ -171,7 +171,7 @@ def main() -> None:
     ap.add_argument(
         "--out",
         type=Path,
-        default=Path("_benchmark/enrichment_ground_truth.json"),
+        default=Path("_artifacts/_benchmark/enrichment_ground_truth.json"),
         help="Output JSON path",
     )
     ap.add_argument("--seed", type=int, default=42)

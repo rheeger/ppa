@@ -25,7 +25,8 @@ Specifically NOT transactional — classify as automated:
 
 Exception: booking/flight CANCELLATIONS are transactional (they represent a purchase that was cancelled).
 
-Reply with one JSON object:
+Reply with one JSON object. The "category" string must be exactly one of: transactional, personal, marketing, automated, noise (use "transactional" for any receipt/order/booking/payment thread).
+
 {"category": "transactional", "confidence": 0.95, "card_types": ["ride", "purchase"]}
 
 Valid card_types: meal_order, grocery_order, purchase, ride, flight, accommodation, car_rental, shipment, subscription, event_ticket, payroll

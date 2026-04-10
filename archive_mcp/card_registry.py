@@ -161,7 +161,10 @@ CARD_TYPE_REGISTRATIONS: tuple[CardTypeRegistration, ...] = (
             _text("location"),
         ),
         person_edge_type="mentions_person",
-        edge_rules=(),
+        edge_rules=(
+            DeclEdgeRule("counterparty", "transaction_with_person", "person", ("counterparty",), multi=False),
+            DeclEdgeRule("source_email", "finance_from_email", "card", ("source_email",), multi=False),
+        ),
         chunk_builder_name=None,
         chunk_types=(),
     ),
@@ -191,7 +194,9 @@ CARD_TYPE_REGISTRATIONS: tuple[CardTypeRegistration, ...] = (
             _json("details_json", source_field="details_json", default="{}"),
         ),
         person_edge_type="mentions_person",
-        edge_rules=(),
+        edge_rules=(
+            DeclEdgeRule("provider_name", "record_has_provider", "person", ("provider_name",), multi=False),
+        ),
         chunk_builder_name=None,
         chunk_types=(),
     ),
@@ -1011,6 +1016,7 @@ CARD_TYPE_REGISTRATIONS: tuple[CardTypeRegistration, ...] = (
         edge_rules=(
             DeclEdgeRule("source_email", "derived_from", "card", ("source_email",), multi=False),
             DeclEdgeRule("service", "provided_by", "card", ("service",), multi=False),
+            DeclEdgeRule("driver_name", "ride_has_driver", "person", ("driver_name",), multi=False),
             DeclEdgeRule("pickup_location", "located_at", "card", ("pickup_location",), multi=False),
             DeclEdgeRule("dropoff_location", "located_at", "card", ("dropoff_location",), multi=False),
         ),

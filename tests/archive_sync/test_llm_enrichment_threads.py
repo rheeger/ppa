@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from archive_mcp.vault_cache import VaultScanCache
 from archive_sync.llm_enrichment.threads import (
     ThreadStub, build_thread_index, build_thread_index_from_cache,
@@ -100,8 +101,11 @@ def test_load_email_stubs_prefers_cache(tmp_path: Path) -> None:
     assert any(s.uid for s in stubs)
 
 
-def test_extraction_truncates_long_threads() -> None:
+def test_extraction_truncates_long_threads(monkeypatch: pytest.MonkeyPatch) -> None:
     from archive_sync.llm_enrichment import threads as T
+
+    # Force per-message capping (full 12-message render would otherwise fit the default budget).
+    monkeypatch.setattr(T, "_EXTRACTION_TOKEN_BUDGET", 12_000)
 
     n_msgs = 12
     body = "word " * 8000
@@ -129,5 +133,6 @@ def test_extraction_truncates_long_threads() -> None:
         content_hash="x",
     )
     rendered = render_thread_for_extraction(doc)
-    assert "omitted" in rendered
-    assert rendered.count("[MSG ") == 10
+    # Prefer all messages with equal per-message caps (not first+last only).
+    assert rendered.count("[MSG ") == 12
+    assert len(rendered) < sum(len(m.body) for m in msgs)

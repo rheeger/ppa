@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,9 +51,11 @@ class ClassifyIndex:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
+        self._lock = threading.RLock()
 
     def close(self) -> None:
-        self._conn.close()
+        with self._lock:
+            self._conn.close()
 
     def __enter__(self) -> ClassifyIndex:
         return self
@@ -74,53 +77,57 @@ class ClassifyIndex:
         classify_prompt_version: str = "",
         run_id: str = "",
     ) -> None:
-        self._conn.execute(
-            """INSERT OR REPLACE INTO thread_classifications
+        with self._lock:
+            self._conn.execute(
+                """INSERT OR REPLACE INTO thread_classifications
                (thread_id, category, confidence, card_types, message_count,
                 first_subject, first_from_email, classify_model,
                 classify_prompt_version, run_id, classified_at, extracted, extraction_run_id)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '')""",
-            (
-                thread_id,
-                category,
-                confidence,
-                json.dumps(card_types),
-                message_count,
-                first_subject[:200],
-                first_from_email[:100],
-                classify_model,
-                classify_prompt_version,
-                run_id,
-                time.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            ),
-        )
-        self._conn.commit()
+                (
+                    thread_id,
+                    category,
+                    confidence,
+                    json.dumps(card_types),
+                    message_count,
+                    first_subject[:200],
+                    first_from_email[:100],
+                    classify_model,
+                    classify_prompt_version,
+                    run_id,
+                    time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                ),
+            )
+            self._conn.commit()
 
     def mark_extracted(self, thread_id: str, extraction_run_id: str) -> None:
-        self._conn.execute(
-            "UPDATE thread_classifications SET extracted = 1, extraction_run_id = ? WHERE thread_id = ?",
-            (extraction_run_id, thread_id),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                "UPDATE thread_classifications SET extracted = 1, extraction_run_id = ? WHERE thread_id = ?",
+                (extraction_run_id, thread_id),
+            )
+            self._conn.commit()
 
     def get(self, thread_id: str) -> dict[str, Any] | None:
-        row = self._conn.execute(
-            "SELECT * FROM thread_classifications WHERE thread_id = ?",
-            (thread_id,),
-        ).fetchone()
-        if not row:
-            return None
-        cols = [d[0] for d in self._conn.execute("SELECT * FROM thread_classifications LIMIT 0").description]
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM thread_classifications WHERE thread_id = ?",
+                (thread_id,),
+            ).fetchone()
+            if not row:
+                return None
+            cols = [d[0] for d in self._conn.execute("SELECT * FROM thread_classifications LIMIT 0").description]
         d = dict(zip(cols, row))
         d["card_types"] = json.loads(d.get("card_types") or "[]")
         return d
 
     def get_by_category(self, category: str) -> list[dict[str, Any]]:
-        rows = self._conn.execute(
-            "SELECT thread_id, confidence, card_types, message_count, first_subject, first_from_email, extracted "
-            "FROM thread_classifications WHERE category = ? ORDER BY confidence DESC",
-            (category,),
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT thread_id, confidence, card_types, message_count, first_subject, first_from_email, extracted "
+                "FROM thread_classifications WHERE category = ? ORDER BY confidence DESC",
+                (category,),
+            ).fetchall()
         return [
             {
                 "thread_id": r[0],
@@ -135,9 +142,10 @@ class ClassifyIndex:
         ]
 
     def stats(self) -> dict[str, Any]:
-        rows = self._conn.execute(
-            "SELECT category, COUNT(*), SUM(extracted) FROM thread_classifications GROUP BY category"
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT category, COUNT(*), SUM(extracted) FROM thread_classifications GROUP BY category"
+            ).fetchall()
         categories = {}
         total = 0
         total_extracted = 0
@@ -153,7 +161,8 @@ class ClassifyIndex:
 
     def unextracted_transactional(self) -> list[str]:
         """Thread IDs classified as transactional but not yet extracted."""
-        rows = self._conn.execute(
-            "SELECT thread_id FROM thread_classifications WHERE category = 'transactional' AND extracted = 0"
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT thread_id FROM thread_classifications WHERE category = 'transactional' AND extracted = 0"
+            ).fetchall()
         return [r[0] for r in rows]

@@ -126,11 +126,30 @@ def test_classify_noise_on_empty_response() -> None:
     assert r.is_transactional is False
 
 
-def test_classify_uses_max_tokens_96() -> None:
+def test_classify_uses_max_tokens_budget() -> None:
     prov = _mock_provider("transactional", 0.9)
     classify_thread(prov, "Subject: test")
     call_kwargs = prov.chat_json.call_args
-    assert call_kwargs.kwargs.get("max_tokens") == 96 or call_kwargs[1].get("max_tokens") == 96
+    mt = call_kwargs.kwargs.get("max_tokens") or call_kwargs[1].get("max_tokens")
+    assert mt == 256
+
+
+def test_result_transaction_alias_maps_to_transactional() -> None:
+    r = _result_from_raw({"category": "transaction", "confidence": 0.9}, cache_hit=False)
+    assert r.category == "transactional"
+    assert r.is_transactional is True
+
+
+def test_result_is_transactional_boolean() -> None:
+    r = _result_from_raw({"category": "automated", "confidence": 0.9, "is_transactional": True}, cache_hit=False)
+    assert r.category == "transactional"
+    assert r.is_transactional is True
+
+
+def test_result_transactional_missing_confidence_defaults_high() -> None:
+    r = _result_from_raw({"category": "transactional"}, cache_hit=False)
+    assert r.confidence >= 0.2
+    assert r.is_transactional is True
 
 
 # ---------------------------------------------------------------------------

@@ -2,7 +2,7 @@
 
 Fill this after **`make run-enrichment-benchmark-matrix`** (or a custom `STEP9_MODELS=...` run) and **`make aggregate-benchmark-results`**.
 
-See **`_benchmark/results/index.md`** for the comparison table and per-model folders for `summary.md` / `failures.json`.
+See **`_artifacts/_benchmark/results/index.md`** for the comparison table and per-model folders for `summary.md` / `failures.json`.
 
 ## Chosen models (Gemma 4 only)
 

@@ -1,0 +1,13 @@
+You are analyzing a calendar event's location from a personal archive. Respond with JSON only (no markdown fences).
+
+Given the event title and location string, extract the place:
+
+If the location is a real-world venue or address, return:
+{"place_extraction": {"name": "venue name", "address": "full address if present", "city": "city", "place_type": "restaurant|office|hospital|venue|residence|other"}}
+
+Rules:
+- If the location string contains both a venue name and an address (e.g. "Lilia, 567 Union Ave, Brooklyn"), split them: name is the venue, address is the street address.
+- If the location is just an address with no named venue, use the street address as the name.
+- "place_type" should reflect the venue category. Use "other" if unclear.
+- If the location is virtual (Zoom, Google Meet, phone number, URL, "TBD", "Remote"), empty, or ambiguous, return:
+  {"place_extraction": null}

@@ -8,8 +8,8 @@ plan gate checklist (≥200 positives / ≥50 negatives when targeting full seed
 Run from ``ppa/``::
 
   .venv/bin/python scripts/prepare_step8b_human_review.py \\
-    --ground-truth _benchmark/enrichment_ground_truth_10pct.json \\
-    --out _benchmark/step8b_review_packet.md
+    --ground-truth _artifacts/_benchmark/enrichment_ground_truth_10pct.json \\
+    --out _artifacts/_benchmark/step8b_review_packet.md
 """
 
 from __future__ import annotations
@@ -48,13 +48,13 @@ def main() -> None:
     ap.add_argument(
         "--ground-truth",
         type=Path,
-        default=Path("_benchmark/enrichment_ground_truth_10pct.json"),
+        default=Path("_artifacts/_benchmark/enrichment_ground_truth_10pct.json"),
         help="Path to enrichment_ground_truth JSON",
     )
     ap.add_argument(
         "--out",
         type=Path,
-        default=Path("_benchmark/step8b_review_packet.md"),
+        default=Path("_artifacts/_benchmark/step8b_review_packet.md"),
         help="Markdown output path",
     )
     ap.add_argument("--seed", type=int, default=42)
@@ -113,7 +113,7 @@ def main() -> None:
     if pc < 200 or nc < 50:
         lines.append(
             "- **Slice / partial run:** OK to APPROVE for *pipeline smoke*; re-build from "
-            "full `_staging/` + matching `PPA_PATH` (or larger slice) before trusting benchmark scale."
+            "full `_artifacts/_staging/` + matching `PPA_PATH` (or larger slice) before trusting benchmark scale."
         )
     lines.append("")
     lines.append("## Positive samples (check field values vs email)")

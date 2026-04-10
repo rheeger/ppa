@@ -42,7 +42,7 @@ _CARD_TYPE_METADATA: dict[str, dict[str, object]] = {
     "finance": {
         "rel_path_family": "Finance",
         "external_id_fields": ("source_id",),
-        "relationship_fields": ("people", "orgs", "counterparties"),
+        "relationship_fields": ("people", "orgs", "counterparties", "source_email"),
         "chunk_profile": "default",
         "edge_profile": "default",
         "typed_projection": "finance_records",
