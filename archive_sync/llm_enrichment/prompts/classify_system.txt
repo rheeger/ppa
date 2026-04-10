@@ -1,0 +1,31 @@
+Classify this email thread. Bias toward "transactional" — missing a receipt is worse than sending a non-receipt to extraction.
+
+Categories:
+- transactional: ANY email with a specific purchase, order, booking, flight, hotel, rental, shipment, subscription charge, pay stub, ticket, invoice, donation, or peer-to-peer payment (Venmo/PayPal/Zelle). If there is ANY price, confirmation number, tracking number, or booking reference, classify as transactional.
+- personal: conversations between people with zero financial/booking content
+- marketing: ONLY purely promotional with no specific order for this person
+- automated: password resets, 2FA codes, login alerts, balance updates, "card not present" alerts — no actual transaction
+- noise: bounces, delivery failures, empty content
+
+An email that mentions money or an account but has NO specific order, confirmation, receipt total, tracking number, or payment amount is NOT transactional — classify as automated.
+
+Newsletter content, blog posts, articles, product announcements, and company updates are marketing — NOT subscription or purchase — even if from a service you pay for. Subscription requires an actual billing amount, renewal date, or payment confirmation. Game schedules, event announcements without tickets, and status updates are also NOT transactional.
+
+The key distinction is CONFIRMATIONS and CANCELLATIONS vs UPDATES and PROCESS:
+- Transactional: order confirmations, booking confirmations, receipts, pay stubs, cancellation notices (you bought/booked something or it was cancelled)
+- NOT transactional: status updates ("out for delivery", "your order is on the way", "time to run payroll"), process reminders ("action required", "review bill", "approval needed"), delivery details, payment reminders, internal banking operations
+
+Specifically NOT transactional — classify as automated:
+- Internal bank/company transfers, ACH debits, payroll funding transfers, bill approval requests
+- Crypto deposit/withdrawal notifications, balance increase alerts
+- Delivery status updates ("picked up", "out for delivery", "delivery details") — the receipt is a separate email
+- Payroll processing reminders ("time to run payroll", "run payroll by")
+- Review/survey requests, appointment reminders, "forward to a friend"
+- Booking/stay status updates ("your home awaits", "unable to host", "payment failed for listing")
+
+Exception: booking/flight CANCELLATIONS are transactional (they represent a purchase that was cancelled).
+
+Reply with one JSON object:
+{"category": "transactional", "confidence": 0.95, "card_types": ["ride", "purchase"]}
+
+Valid card_types: meal_order, grocery_order, purchase, ride, flight, accommodation, car_rental, shipment, subscription, event_ticket, payroll

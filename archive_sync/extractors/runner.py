@@ -14,7 +14,8 @@ from typing import Any
 
 from archive_sync.extractors.base import EmailExtractor
 from archive_sync.extractors.field_metrics import compute_field_population
-from archive_sync.extractors.field_validation import validate_provenance_round_trip
+from archive_sync.extractors.field_validation import \
+    validate_provenance_round_trip
 from archive_sync.extractors.preprocessing import clean_email_body
 from archive_sync.extractors.registry import ExtractorRegistry
 from hfa.card_contracts import get_card_type_spec
@@ -61,7 +62,7 @@ def _email_domain(from_email: str) -> str:
     return from_email.rsplit("@", 1)[-1]
 
 
-def _uid_in_vault_percent_sample(uid: str, vault_percent: float) -> bool:
+def uid_in_vault_percent_sample(uid: str, vault_percent: float) -> bool:
     """Deterministic inclusion: ~vault_percent% of UIDs (0–100), stable across runs."""
     if vault_percent <= 0:
         return True
@@ -105,7 +106,7 @@ def _card_dump_for_idempotency(card: Any) -> dict[str, Any]:
     return d
 
 
-def _note_content_matches(
+def note_content_matches(
     output_root: Path,
     rel_path: str,
     card: Any,
@@ -243,14 +244,14 @@ class ExtractionRunner:
                     metrics.extracted_cards += 1
                 self._bump(lock, metrics, eid, "extracted", 1)
                 continue
-            if _note_content_matches(out_root, rel_out, er.card, er.body):
+            if note_content_matches(out_root, rel_out, er.card, er.body):
                 with lock:
                     metrics.skipped_existing += 1
                 self._bump(lock, metrics, eid, "skipped", 1)
                 continue
             # Staging runs: skip if an identical card already exists in the vault (post-promotion idempotency).
             if self.staging_dir and out_root != Path(self.vault_path):
-                if _note_content_matches(Path(self.vault_path), rel_out, er.card, er.body):
+                if note_content_matches(Path(self.vault_path), rel_out, er.card, er.body):
                     with lock:
                         metrics.skipped_existing += 1
                     self._bump(lock, metrics, eid, "skipped", 1)
@@ -283,7 +284,7 @@ class ExtractionRunner:
                 continue
             scanned += 1
             uid = str(fm.get("uid") or "")
-            if self.vault_percent is not None and uid and not _uid_in_vault_percent_sample(uid, self.vault_percent):
+            if self.vault_percent is not None and uid and not uid_in_vault_percent_sample(uid, self.vault_percent):
                 if self.progress_every and scanned % self.progress_every == 0:
                     log.info(
                         "[extract] %s email_messages scanned, %s matched (queued) — %s",

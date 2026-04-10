@@ -171,7 +171,7 @@ class VaultScanCache:
         miss_reason = "fingerprint_changed"
         if cache_path.exists():
             try:
-                conn = sqlite3.connect(str(cache_path), timeout=60.0)
+                conn = sqlite3.connect(str(cache_path), timeout=60.0, check_same_thread=False)
                 conn.row_factory = sqlite3.Row
                 stored_fp = _meta_get(conn, "vault_fingerprint")
                 stored_tier = _meta_get(conn, "tier")
@@ -210,7 +210,7 @@ class VaultScanCache:
         )
         try:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
-            conn = sqlite3.connect(str(cache_path), timeout=120.0)
+            conn = sqlite3.connect(str(cache_path), timeout=120.0, check_same_thread=False)
             conn.row_factory = sqlite3.Row
             _init_db(conn)
             result = cls._populate_db(
@@ -265,9 +265,9 @@ class VaultScanCache:
         cache_hit: bool = False,
     ) -> VaultScanCache:
         if persist_path is None:
-            conn = sqlite3.connect(":memory:")
+            conn = sqlite3.connect(":memory:", check_same_thread=False)
         else:
-            conn = sqlite3.connect(str(persist_path), timeout=120.0)
+            conn = sqlite3.connect(str(persist_path), timeout=120.0, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         _init_db(conn)
         return cls._populate_db(

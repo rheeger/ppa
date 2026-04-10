@@ -10,7 +10,7 @@ import pytest
 from archive_sync.extractors.base import EmailExtractor, TemplateVersion
 from archive_sync.extractors.registry import ExtractorRegistry
 from archive_sync.extractors.runner import (ExtractionRunner,
-                                            _uid_in_vault_percent_sample)
+                                            uid_in_vault_percent_sample)
 from tests.archive_sync.extractors.conftest import write_email_to_vault
 
 
@@ -85,7 +85,7 @@ def test_limit_vault_percent_samples_correctly(extractor_vault, sample_email_car
     reg = ExtractorRegistry()
     reg.register(AcmeXExtractor())
     uids = [f"hfa-email-message-{i:04d}" for i in range(40)]
-    expected = sum(1 for u in uids if _uid_in_vault_percent_sample(u, 50.0))
+    expected = sum(1 for u in uids if uid_in_vault_percent_sample(u, 50.0))
     for i, uid in enumerate(uids):
         fm, b = sample_email_card(uid, "a@acme.com", "s", "b")
         write_email_to_vault(extractor_vault, f"Email/2024-03/e{i}.md", fm, b)

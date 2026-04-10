@@ -17,6 +17,15 @@ _staging/
 _staging-1pct/
 _staging-5pct/
 _staging-10pct/
+_staging-llm/
+_staging-llm-*/
+
+# Phase 2.75 LLM enrichment cache / benchmark / classify index artifacts
+_enrichment_cache*.db
+_enrichment_cache*.db-shm
+_enrichment_cache*.db-wal
+_classify_index*.db
+_benchmark/
 
 # Extraction reports
 _reports/

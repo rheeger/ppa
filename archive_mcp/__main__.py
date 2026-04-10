@@ -10,6 +10,9 @@ import os
 import sys
 from pathlib import Path
 
+from archive_sync.llm_enrichment.defaults import (DEFAULT_ENRICH_EXTRACT_MODEL,
+                                                  DEFAULT_ENRICH_TRIAGE_MODEL)
+
 from .benchmark import (BENCHMARK_PROFILES, DEFAULT_BENCHMARK_SOURCE_VAULT,
                         benchmark_multi_size, benchmark_rebuild,
                         benchmark_seed_links, build_benchmark_sample)
@@ -395,6 +398,83 @@ def main() -> None:
         help="Log scan/extract progress every N emails or work items",
     )
 
+    enrich_parser = subparsers.add_parser(
+        "enrich-emails",
+        help="LLM extraction from known-sender email threads (Phase 2.75 — no triage, writes staging)",
+    )
+    enrich_parser.add_argument("--staging-dir", default="_staging-llm", help="Output directory for derived cards")
+    enrich_parser.add_argument(
+        "--provider",
+        default="ollama",
+        choices=["ollama", "gemini"],
+        help="LLM provider: ollama (local) or gemini (Google API, needs GEMINI_API_KEY)",
+    )
+    enrich_parser.add_argument(
+        "--extract-model",
+        default="",
+        help=f"Model name (default: {DEFAULT_ENRICH_EXTRACT_MODEL} for ollama, gemini-2.0-flash for gemini)",
+    )
+    enrich_parser.add_argument(
+        "--classify-model",
+        default="",
+        help="Model for classify stage (default: same as extract-model; use cheaper model for classify)",
+    )
+    enrich_parser.add_argument(
+        "--base-url",
+        default="http://localhost:11434",
+        help="Ollama base URL (ignored for gemini provider)",
+    )
+    enrich_parser.add_argument(
+        "--workers",
+        type=int,
+        default=4,
+        help="Concurrent extraction threads (default 4; gemini handles high concurrency natively)",
+    )
+    enrich_parser.add_argument(
+        "--progress-every",
+        type=int,
+        default=25,
+        help="Log progress every N extracted threads",
+    )
+    enrich_parser.add_argument(
+        "--full-report",
+        action="store_true",
+        help="After run, log staging summary to stderr (requires writable staging-dir)",
+    )
+    enrich_parser.add_argument(
+        "--cache-db",
+        default="_enrichment_cache.db",
+        help="SQLite inference cache path (set empty to disable)",
+    )
+    enrich_parser.add_argument("--run-id", default="", help="Run id for cache + card comments")
+    enrich_parser.add_argument("--limit-threads", type=int, default=0, help="Max threads to process (0 = all)")
+    enrich_parser.add_argument(
+        "--limit-vault-percent",
+        type=float,
+        default=0.0,
+        help="Deterministic sample: process ~N%% of threads by thread_id hash (0 = all)",
+    )
+    enrich_parser.add_argument(
+        "--no-gate",
+        action="store_true",
+        help="Skip known-sender gate — send ALL threads to extraction (uses more API calls)",
+    )
+    enrich_parser.add_argument(
+        "--skip-classify",
+        action="store_true",
+        help="Skip Stage 1 LLM classify — only extract threads matching the domain gate (faster, fewer cards)",
+    )
+    enrich_parser.add_argument(
+        "--classify-index-db",
+        default="_classify_index.db",
+        help="Persistent thread classification index path (stores classify results for reuse)",
+    )
+    enrich_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Run triage + extraction but do not write cards",
+    )
+
     census_parser = subparsers.add_parser("sender-census", help="Discover email types from a sender domain")
     census_parser.add_argument("--domain", required=True, help="Sender domain (e.g., doordash.com)")
     census_parser.add_argument(
@@ -700,6 +780,54 @@ def main() -> None:
                 from .commands.staging import emit_full_staging_report
 
                 emit_full_staging_report(str(args.staging_dir).strip())
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "enrich-emails":
+        try:
+            from archive_sync.llm_enrichment.enrich_runner import \
+                LlmEnrichmentRunner
+
+            from .commands._resolve import resolve_vault
+
+            vault = resolve_vault()
+            cache_raw = str(getattr(args, "cache_db", "") or "").strip()
+            cache_db = cache_raw if cache_raw else None
+            lim = int(getattr(args, "limit_threads", 0) or 0)
+            vp = float(getattr(args, "limit_vault_percent", 0.0) or 0.0)
+            prov = str(getattr(args, "provider", "ollama") or "ollama").strip()
+            ext_model = str(getattr(args, "extract_model", "") or "").strip()
+            if not ext_model:
+                ext_model = "gemini-2.5-flash" if prov == "gemini" else DEFAULT_ENRICH_EXTRACT_MODEL
+            runner = LlmEnrichmentRunner(
+                vault_path=vault,
+                staging_dir=str(getattr(args, "staging_dir", "_staging-llm") or "_staging-llm"),
+                extract_model=ext_model,
+                classify_model=str(getattr(args, "classify_model", "") or "").strip(),
+                provider_kind=prov,
+                base_url=str(getattr(args, "base_url", "http://localhost:11434") or "http://localhost:11434"),
+                cache_db=cache_db,
+                run_id=str(getattr(args, "run_id", "") or ""),
+                progress_every=int(getattr(args, "progress_every", 25) or 25),
+                limit_threads=(lim if lim > 0 else None),
+                vault_percent=(vp if vp > 0 else None),
+                dry_run=bool(getattr(args, "dry_run", False)),
+                workers=int(getattr(args, "workers", 4) or 4),
+                no_gate=bool(getattr(args, "no_gate", False)),
+                skip_classify=bool(getattr(args, "skip_classify", False)),
+                classify_index_db=str(getattr(args, "classify_index_db", "") or "").strip() or None,
+            )
+            metrics = runner.run()
+            _print_json(metrics.to_dict())
+            if bool(getattr(args, "full_report", False)):
+                sd = str(getattr(args, "staging_dir", "") or "").strip()
+                if sd:
+                    from .commands.staging import emit_full_staging_report
+
+                    emit_full_staging_report(sd)
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            raise SystemExit(1) from exc
         except PpaError as exc:
             _cli_fail(exc)
         return
