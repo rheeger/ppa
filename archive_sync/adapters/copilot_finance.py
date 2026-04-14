@@ -8,8 +8,8 @@ from datetime import date, datetime
 from time import perf_counter
 from typing import Any, Iterable
 
-from hfa.schema import FinanceCard
-from hfa.uid import generate_uid
+from archive_vault.schema import FinanceCard
+from archive_vault.uid import generate_uid
 
 from .base import BaseAdapter, FetchedBatch, deterministic_provenance
 

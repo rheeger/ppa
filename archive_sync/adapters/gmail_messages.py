@@ -18,16 +18,16 @@ from email.header import decode_header
 from email.utils import getaddresses, parsedate_to_datetime
 from typing import Any
 
-from hfa.identity import IdentityCache
-from hfa.schema import EmailAttachmentCard, EmailMessageCard, EmailThreadCard
-from hfa.thread_hash import (
+from archive_auth import build_google_cli_token_manager
+from archive_vault.identity import IdentityCache
+from archive_vault.schema import EmailAttachmentCard, EmailMessageCard, EmailThreadCard
+from archive_vault.thread_hash import (
     compute_email_attachment_metadata_sha_from_payload,
     compute_email_message_body_sha_from_payload,
     compute_email_thread_body_sha_from_payload,
 )
-from hfa.uid import generate_uid
-from hfa.vault import iter_notes, read_note
-from ppa_google_auth import build_google_cli_token_manager
+from archive_vault.uid import generate_uid
+from archive_vault.vault import iter_notes, read_note
 
 from .base import BaseAdapter, FetchedBatch, deterministic_provenance
 from .gmail_correspondents import load_own_aliases

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61", "wheel"]
+requires = ["setuptools>=61", "wheel", "maturin>=1.7"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -17,12 +17,16 @@ dependencies = [
 ]
 
 [project.scripts]
-ppa = "archive_mcp.__main__:main"
+ppa = "archive_cli.__main__:main"
 
 [project.optional-dependencies]
 dev = [
   "pytest>=7.0",
   "ruff>=0.1",
+]
+# Native extension: `cd archive_crate && maturin develop` then `pip install -e ".[rust]"` optional path:
+rust = [
+  "archive_crate @ file:./archive_crate",
 ]
 
 [tool.ruff]
@@ -38,15 +42,17 @@ ignore = ["E501"]
 [tool.ruff.lint.per-file-ignores]
 # Dotenv must load before local imports (repo-root on sys.path / env for adapters).
 "archive_sync/handler.py" = ["E402"]
-"scripts/ppa-google-workspace-backfill.py" = ["E402"]
-"scripts/ppa-seed-runbook.py" = ["E402"]
+"archive_scripts/ppa-google-workspace-backfill.py" = ["E402"]
+"archive_scripts/ppa-seed-runbook.py" = ["E402"]
+"archive_scripts/phase3_step8_verification.py" = ["E402"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["archive_mcp*", "hfa*", "archive_sync*", "archive_doctor*", "ppa_google_auth*"]
+include = ["archive_cli*", "archive_vault*", "archive_sync*", "archive_doctor*", "archive_auth*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+testpaths = ["archive_tests"]
 markers = [
     "integration: requires a running Postgres instance",
     "slow: long-running tests (>30 seconds)",

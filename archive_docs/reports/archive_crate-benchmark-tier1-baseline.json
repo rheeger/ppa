@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "description": "Phase 2.9 Step 6 — Tier 1 speedup targets (walk + tier-2 cache vs Python). Used with scripts/benchmark-archive_crate-tier1.py --enforce.",
+  "targets": {
+    "min_walk_speedup": 8,
+    "max_walk_speedup_planned": 15,
+    "min_cache_tier2_speedup": 8,
+    "max_cache_tier2_speedup_planned": 15,
+    "fingerprint_speedup_note": "Fingerprint timing is optional; use --enforce-fingerprint only if you care (often noisy on small vaults)."
+  },
+  "enforce_defaults": {
+    "PPA_TIER1_ENFORCE_MIN_NOTES": 500,
+    "PPA_TIER1_MIN_WALK_SPEEDUP": 8,
+    "PPA_TIER1_MIN_CACHE_SPEEDUP": 8,
+    "PPA_TIER1_MIN_FINGERPRINT_SPEEDUP": 2
+  },
+  "how_to_record_a_run": [
+    "cd archive_crate && maturin develop",
+    "PPA_BENCHMARK_VAULT=/path/to/large/slice python scripts/benchmark-archive_crate-tier1.py > /tmp/tier1.json",
+    "Optionally: same command with --enforce after verifying ratios on that machine"
+  ]
+}

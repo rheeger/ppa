@@ -8,8 +8,8 @@ import re
 from datetime import date, datetime
 from typing import Any
 
-from hfa.schema import PersonCard
-from hfa.uid import generate_uid
+from archive_vault.schema import PersonCard
+from archive_vault.uid import generate_uid
 
 from .base import BaseAdapter, deterministic_provenance
 

@@ -1,0 +1,4 @@
+# Postgres stack (tokio-postgres / chacha20) needs a recent rustc + Cargo; 1.83 stable cannot
+# parse some transitive manifests. Pin a toolchain you have installed (`rustup toolchain list`).
+[toolchain]
+channel = "1.85"

@@ -4,17 +4,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from archive_mcp.vault_cache import VaultScanCache
+from archive_cli.vault_cache import VaultScanCache
 from archive_sync.llm_enrichment.cache import InferenceCache
-from archive_sync.llm_enrichment.extract import (ExtractResult,
-                                                 extract_cards_for_thread)
-from archive_sync.llm_enrichment.threads import (ThreadDocument, ThreadStub,
-                                                 build_thread_index,
-                                                 hydrate_thread,
-                                                 load_email_stubs_for_vault,
-                                                 render_thread_for_triage)
+from archive_sync.llm_enrichment.extract import ExtractResult, extract_cards_for_thread
+from archive_sync.llm_enrichment.threads import (
+    ThreadDocument,
+    ThreadStub,
+    build_thread_index,
+    hydrate_thread,
+    load_email_stubs_for_vault,
+    render_thread_for_triage,
+)
 from archive_sync.llm_enrichment.triage import TriageResult, triage_thread
-from hfa.llm_provider import OllamaProvider
+from archive_vault.llm_provider import OllamaProvider
 
 
 def stubs_for_thread_id(vault: Path, thread_id: str) -> list[ThreadStub]:

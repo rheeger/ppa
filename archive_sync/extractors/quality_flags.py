@@ -11,11 +11,9 @@ from pathlib import Path
 from typing import Any
 
 from archive_sync.extractors.field_metrics import CRITICAL_FIELDS
-from archive_sync.extractors.field_validation import (
-    validate_field, validate_provenance_round_trip)
+from archive_sync.extractors.field_validation import validate_field, validate_provenance_round_trip
 from archive_sync.extractors.preprocessing import clean_email_body
-from hfa.vault import (iter_note_paths, read_note_file,
-                       read_note_frontmatter_file)
+from archive_vault.vault import _tier2_cache_path, iter_note_paths, read_note_file, read_note_frontmatter_file
 
 
 def strict_field_flags(ct: str, fm: dict[str, Any]) -> list[str]:
@@ -86,12 +84,40 @@ def source_uids_needed(by_type: dict[str, list[tuple[Path, dict[str, Any]]]]) ->
 
 
 def email_uid_index(vault: Path, only_uids: set[str]) -> dict[str, Path]:
-    """Walk ``Email/`` once; frontmatter-only reads; stop when every UID in ``only_uids`` is found."""
+    """Map UIDs to paths for email notes.
+
+    When ``PPA_ENGINE=rust`` and a tier-2 cache exists, reads frontmatter from SQLite instead of
+    walking the filesystem.
+    """
 
     idx: dict[str, Path] = {}
     if not only_uids:
         return idx
     vault = Path(vault)
+
+    from archive_cli.ppa_engine import ppa_engine
+
+    if ppa_engine() == "rust":
+        cache_path = _tier2_cache_path(vault)
+        if cache_path is not None:
+            try:
+                import archive_crate
+
+                rows = archive_crate.frontmatter_dicts_from_cache(
+                    str(cache_path), types=["email_message"], prefix="Email/",
+                )
+                for row in rows:
+                    fm = row["frontmatter"]
+                    uid = fm.get("uid")
+                    if not isinstance(uid, str) or not uid.strip():
+                        continue
+                    uid = uid.strip()
+                    if uid in only_uids:
+                        idx[uid] = vault / row["rel_path"]
+                return idx
+            except Exception:
+                pass
+
     remaining = set(only_uids)
     for rel_path in iter_note_paths(vault):
         if not rel_path.parts or rel_path.parts[0] != "Email":

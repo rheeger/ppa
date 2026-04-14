@@ -10,13 +10,13 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
-from hfa.config import load_config
-from hfa.identity import load_identity_map, save_identity_map, upsert_identity_map
-from hfa.identity_resolver import is_same_person, load_nicknames, merge_into_existing, normalize_person_name
-from hfa.provenance import validate_provenance
-from hfa.schema import PersonCard, validate_card_strict
-from hfa.sync_state import load_sync_state, save_sync_state
-from hfa.vault import extract_wikilinks, iter_note_paths, iter_notes, iter_parsed_notes, read_note
+from archive_vault.config import load_config
+from archive_vault.identity import load_identity_map, save_identity_map, upsert_identity_map
+from archive_vault.identity_resolver import is_same_person, load_nicknames, merge_into_existing, normalize_person_name
+from archive_vault.provenance import validate_provenance
+from archive_vault.schema import PersonCard, validate_card_strict
+from archive_vault.sync_state import load_sync_state, save_sync_state
+from archive_vault.vault import extract_wikilinks, iter_note_paths, iter_notes, iter_parsed_notes_from_disk, read_note
 
 WIKILINK_FIELDS = (
     "people",
@@ -47,7 +47,7 @@ def get_vault_path() -> str:
 
 def _load_card_records(vault: Path) -> list[dict]:
     records: list[dict] = []
-    for note in iter_parsed_notes(vault):
+    for note in iter_parsed_notes_from_disk(vault):
         try:
             card = validate_card_strict(note.frontmatter)
         except Exception:
@@ -149,7 +149,7 @@ def _iter_frontmatter_wikilinks(frontmatter: dict) -> list[tuple[str, str]]:
 
 def _slug_set(vault: Path) -> set[str]:
     try:
-        from archive_mcp.vault_cache import VaultScanCache
+        from archive_cli.vault_cache import VaultScanCache
 
         return VaultScanCache.build_or_load(vault, tier=1, progress_every=0).all_stems()
     except Exception:
@@ -256,7 +256,7 @@ def cmd_validate(args):
         "errors": [],
     }
 
-    for note in iter_parsed_notes(vault):
+    for note in iter_parsed_notes_from_disk(vault):
         report["total_cards"] += 1
         try:
             card = validate_card_strict(note.frontmatter)

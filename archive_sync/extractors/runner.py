@@ -14,14 +14,13 @@ from typing import Any
 
 from archive_sync.extractors.base import EmailExtractor
 from archive_sync.extractors.field_metrics import compute_field_population
-from archive_sync.extractors.field_validation import \
-    validate_provenance_round_trip
+from archive_sync.extractors.field_validation import validate_provenance_round_trip
 from archive_sync.extractors.preprocessing import clean_email_body
 from archive_sync.extractors.registry import ExtractorRegistry
-from hfa.card_contracts import get_card_type_spec
-from hfa.provenance import strip_provenance
-from hfa.schema import validate_card_strict
-from hfa.vault import iter_parsed_notes, read_note, write_card
+from archive_vault.card_contracts import get_card_type_spec
+from archive_vault.provenance import strip_provenance
+from archive_vault.schema import validate_card_strict
+from archive_vault.vault import iter_parsed_notes_for_card_types, read_note, write_card
 
 log = logging.getLogger("ppa.extractor.runner")
 
@@ -278,10 +277,8 @@ class ExtractionRunner:
 
         work_queue: list[_EmailWorkItem] = []
         scanned = 0
-        for note in iter_parsed_notes(self.vault_path):
+        for note in iter_parsed_notes_for_card_types(self.vault_path, frozenset({"email_message"})):
             fm = note.frontmatter
-            if fm.get("type") != "email_message":
-                continue
             scanned += 1
             uid = str(fm.get("uid") or "")
             if self.vault_percent is not None and uid and not uid_in_vault_percent_sample(uid, self.vault_percent):

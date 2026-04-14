@@ -13,18 +13,18 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from hfa.identity import IdentityCache
-from hfa.identity_resolver import merge_into_existing
-from hfa.provenance import ProvenanceEntry
-from hfa.schema import (
+from archive_vault.identity import IdentityCache
+from archive_vault.identity_resolver import merge_into_existing
+from archive_vault.provenance import ProvenanceEntry
+from archive_vault.schema import (
     GitCommitCard,
     GitMessageCard,
     GitRepositoryCard,
     GitThreadCard,
     validate_card_permissive,
 )
-from hfa.uid import generate_uid
-from hfa.vault import read_note
+from archive_vault.uid import generate_uid
+from archive_vault.vault import read_note
 
 from .base import BaseAdapter, FetchedBatch, deterministic_provenance
 

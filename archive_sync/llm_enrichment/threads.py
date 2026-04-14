@@ -10,12 +10,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from archive_mcp.vault_cache import VaultScanCache
-from archive_sync.extractors.preprocessing import (clean_email_body,
-                                                   strip_reply_artifacts)
-from hfa.thread_hash import slug_from_wikilink
-from hfa.vault import (find_note_by_slug, iter_note_paths, read_note_file,
-                       read_note_frontmatter_file)
+from archive_cli.vault_cache import VaultScanCache
+from archive_sync.extractors.preprocessing import clean_email_body, strip_reply_artifacts
+from archive_vault.thread_hash import slug_from_wikilink
+from archive_vault.vault import find_note_by_slug, iter_note_paths, read_note_file, read_note_frontmatter_file
 
 logger = logging.getLogger("ppa.llm_enrichment.threads")
 
@@ -120,10 +118,36 @@ def email_message_stubs_from_sqlite(cache_db: Path) -> list[ThreadStub]:
 
 
 def stubs_from_filesystem_walk(vault: Path) -> list[ThreadStub]:
-    """Fallback: walk ``Email/`` and read frontmatter only."""
+    """Walk ``Email/`` and build thread stubs.
+
+    When ``PPA_ENGINE=rust`` and a tier-2 cache exists, reads from SQLite with no per-file I/O.
+    """
 
     vault = Path(vault)
-    out: list[ThreadStub] = []
+
+    from archive_cli.ppa_engine import ppa_engine
+
+    if ppa_engine() == "rust":
+        from archive_vault.vault import _tier2_cache_path
+
+        cache_path = _tier2_cache_path(vault)
+        if cache_path is not None:
+            try:
+                import archive_crate
+
+                rows = archive_crate.frontmatter_dicts_from_cache(
+                    str(cache_path), types=["email_message"], prefix="Email/",
+                )
+                out: list[ThreadStub] = []
+                for row in rows:
+                    stub = thread_stub_from_frontmatter(row["rel_path"], row["frontmatter"])
+                    if stub:
+                        out.append(stub)
+                return out
+            except Exception:
+                pass
+
+    out = []
     for rel in iter_note_paths(vault):
         if not rel.parts or rel.parts[0] != "Email":
             continue

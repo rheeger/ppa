@@ -455,7 +455,7 @@ def cmd_apple_health(args):
 def cmd_extract_emails(args):
     import logging
 
-    from archive_mcp.log import configure_logging
+    from archive_cli.log import configure_logging
     from archive_sync.extractors.registry import build_default_registry
     from archive_sync.extractors.runner import ExtractionRunner
 
@@ -482,13 +482,13 @@ def cmd_extract_emails(args):
     log.info("extract-emails finished: %s", metrics.to_dict())
     print(json.dumps(metrics.to_dict(), indent=2))
     if bool(getattr(args, "full_report", False)) and staging:
-        from archive_mcp.commands.staging import emit_full_staging_report
+        from archive_cli.commands.staging import emit_full_staging_report
 
         emit_full_staging_report(staging)
 
 
 def cmd_resolve_entities(args):
-    from archive_mcp.log import configure_logging
+    from archive_cli.log import configure_logging
     from archive_sync.extractors.entity_resolution import run_entity_resolution
 
     configure_logging(verbose=bool(getattr(args, "verbose", False)))
@@ -505,7 +505,7 @@ def cmd_promote_staging(args):
     import dataclasses
     import json
 
-    from archive_mcp.log import configure_logging
+    from archive_cli.log import configure_logging
     from archive_sync.extractors.promoter import promote_staging
 
     configure_logging(verbose=bool(getattr(args, "verbose", False)))

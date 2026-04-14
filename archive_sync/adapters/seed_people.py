@@ -7,13 +7,13 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from hfa.config import load_config
-from hfa.identity import IdentityCache
-from hfa.schema import PersonCard
-from hfa.sync_state import load_sync_state, update_cursor
-from hfa.uid import generate_uid
-from hfa.vault import write_card
-from hfa.yaml_parser import parse_frontmatter
+from archive_vault.config import load_config
+from archive_vault.identity import IdentityCache
+from archive_vault.schema import PersonCard
+from archive_vault.sync_state import load_sync_state, update_cursor
+from archive_vault.uid import generate_uid
+from archive_vault.vault import write_card
+from archive_vault.yaml_parser import parse_frontmatter
 
 from .base import BaseAdapter, IngestResult, deterministic_provenance
 

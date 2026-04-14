@@ -13,10 +13,10 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
-from archive_mcp.vault_cache import VaultScanCache
-from hfa.config import PPAConfig, load_config
-from hfa.identity import IdentityCache
-from hfa.identity_resolver import (
+from archive_cli.vault_cache import VaultScanCache
+from archive_vault.config import PPAConfig, load_config
+from archive_vault.identity import IdentityCache
+from archive_vault.identity_resolver import (
     PersonIndex,
     ResolveResult,
     load_nicknames,
@@ -25,11 +25,17 @@ from hfa.identity_resolver import (
     resolve_person,
     resolve_person_snapshot,
 )
-from hfa.provenance import PROVENANCE_EXEMPT_FIELDS, ProvenanceEntry, merge_provenance
-from hfa.schema import BaseCard, PersonCard, card_to_frontmatter, validate_card_permissive, validate_card_strict
-from hfa.slugger import normalize_for_slug, unique_slug
-from hfa.sync_state import load_sync_state, update_cursor
-from hfa.vault import read_note, write_card
+from archive_vault.provenance import PROVENANCE_EXEMPT_FIELDS, ProvenanceEntry, merge_provenance
+from archive_vault.schema import (
+    BaseCard,
+    PersonCard,
+    card_to_frontmatter,
+    validate_card_permissive,
+    validate_card_strict,
+)
+from archive_vault.slugger import normalize_for_slug, unique_slug
+from archive_vault.sync_state import load_sync_state, update_cursor
+from archive_vault.vault import read_note, write_card
 
 
 def deterministic_provenance(

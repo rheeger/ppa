@@ -7,11 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from archive_sync.llm_enrichment.staging_types import EntityMention
-from archive_sync.llm_enrichment.threads import (MessageStubIndex,
-                                                 ThreadMessage,
-                                                 render_imessage_chunk_for_llm)
-from archive_sync.llm_enrichment.workflows.email_thread import \
-    strip_thread_summary_boilerplate
+from archive_sync.llm_enrichment.threads import MessageStubIndex, ThreadMessage, render_imessage_chunk_for_llm
+from archive_sync.llm_enrichment.workflows.email_thread import strip_thread_summary_boilerplate
 
 PROMPT_FILE = Path(__file__).resolve().parent.parent / "prompts" / "enrich_imessage_thread.txt"
 ENRICH_IMESSAGE_THREAD_PROMPT_VERSION = "v2"
@@ -46,7 +43,7 @@ def load_message_stub_frontmatters_for_thread(
 ) -> list[dict[str, Any]]:
     """Resolve message wikilinks → frontmatters via bulk in-memory index (no per-link SQL)."""
 
-    from hfa.thread_hash import slug_from_wikilink
+    from archive_vault.thread_hash import slug_from_wikilink
 
     raw_links = thread_card.get("messages") or []
     if not isinstance(raw_links, list):

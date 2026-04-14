@@ -7,9 +7,9 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from archive_mcp.features import card_activity_at
+from archive_cli.features import card_activity_at
 from archive_sync.extractors.runner import derive_output_rel_path
-from hfa.vault import read_note_file
+from archive_vault.vault import read_note_file
 
 log = logging.getLogger("ppa.extractor.promoter")
 

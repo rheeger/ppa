@@ -11,8 +11,8 @@ import urllib.request
 from datetime import date, datetime
 from typing import Any
 
-from hfa.schema import PersonCard
-from hfa.uid import generate_uid
+from archive_vault.schema import PersonCard
+from archive_vault.uid import generate_uid
 
 from .base import BaseAdapter, deterministic_provenance
 
@@ -107,7 +107,7 @@ class ContactsAdapter(BaseAdapter):
         account_email = os.environ.get("GOOGLE_ACCOUNT", "").strip().lower()
         if account_email:
             try:
-                from ppa_google_auth import account_name_from_email
+                from archive_auth import account_name_from_email
 
                 account_name = account_name_from_email(account_email)
             except Exception:
@@ -142,7 +142,7 @@ class ContactsAdapter(BaseAdapter):
         )
 
     def _fetch_google_page_via_direct(self, account: str, *, fields: str, page_token: str | None) -> dict[str, Any]:
-        from ppa_google_auth import build_google_cli_token_manager
+        from archive_auth import build_google_cli_token_manager
 
         manager = build_google_cli_token_manager(account_name=account, services=["contacts"])
         if manager is None:
@@ -185,7 +185,7 @@ class ContactsAdapter(BaseAdapter):
     def _fetch_google(self) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         try:
-            from ppa_google_auth import ACCOUNTS
+            from archive_auth import ACCOUNTS
 
             _has_arnoldlib = True
             try:

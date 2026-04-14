@@ -12,12 +12,9 @@ from pathlib import Path
 from typing import Any
 
 from archive_sync.llm_enrichment.cache import InferenceCache
-from archive_sync.llm_enrichment.card_enrichment_runner import \
-    CardEnrichmentRunner
-from archive_sync.llm_enrichment.defaults import \
-    DEFAULT_ENRICH_CARD_GEMINI_MODEL
-from archive_sync.llm_enrichment.document_text_extractor import \
-    run_document_text_extraction
+from archive_sync.llm_enrichment.card_enrichment_runner import CardEnrichmentRunner
+from archive_sync.llm_enrichment.defaults import DEFAULT_ENRICH_CARD_GEMINI_MODEL
+from archive_sync.llm_enrichment.document_text_extractor import run_document_text_extraction
 from archive_sync.llm_enrichment.enrich_runner import LlmEnrichmentRunner
 
 log = logging.getLogger("ppa.enrichment_orchestrator")
@@ -291,7 +288,7 @@ class EnrichmentOrchestrator:
         from the scan cache.
         """
 
-        from archive_mcp.vault_cache import VaultScanCache
+        from archive_cli.vault_cache import VaultScanCache
 
         cache_path = VaultScanCache.cache_path_for_vault(self.vault_path)
         if not cache_path.exists():
@@ -300,7 +297,7 @@ class EnrichmentOrchestrator:
         import hashlib
         import sqlite3
 
-        from hfa.vault import iter_note_paths
+        from archive_vault.vault import iter_note_paths
 
         t0 = time.perf_counter()
         rel_paths = sorted(p.as_posix() for p in iter_note_paths(self.vault_path))
@@ -342,7 +339,7 @@ class EnrichmentOrchestrator:
             self.skip_populated,
         )
 
-        from archive_mcp.log import attach_file_log
+        from archive_cli.log import attach_file_log
 
         for step in manifest.steps:
             if step.status == "completed":

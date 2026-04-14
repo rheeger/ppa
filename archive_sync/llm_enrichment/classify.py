@@ -12,9 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Union
 
-from archive_sync.llm_enrichment.cache import (InferenceCache,
-                                               build_inference_cache_key)
-from hfa.llm_provider import GeminiProvider, LLMResponse, OllamaProvider
+from archive_sync.llm_enrichment.cache import InferenceCache, build_inference_cache_key
+from archive_vault.llm_provider import GeminiProvider, OllamaProvider
 
 logger = logging.getLogger("ppa.llm_enrichment.classify")
 
@@ -113,7 +112,7 @@ def classify_thread(
     if not isinstance(parsed, dict):
         parsed = {}
     if not parsed and (r.content or "").strip():
-        from hfa.llm_provider import _parse_json_from_model_text
+        from archive_vault.llm_provider import _parse_json_from_model_text
 
         loose = _parse_json_from_model_text((r.content or "").strip())
         if isinstance(loose, dict):

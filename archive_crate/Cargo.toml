@@ -1,0 +1,30 @@
+[package]
+name = "archive_crate"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "archive_crate"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.22", features = ["extension-module"] }
+walkdir = "2"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+serde_yaml = "0.9"
+# serde_yaml pulls indexmap; 2.14+ requires edition2024 in manifest (breaks older Cargo in CI)
+indexmap = "=2.13.0"
+sha2 = "0.10"
+hex = "0.4"
+rusqlite = { version = "0.32", features = ["bundled"] }
+flate2 = "1"
+rayon = "1.10"
+strsim = "0.11"
+chrono = { version = "0.4", default-features = false, features = ["std", "alloc"] }
+chrono-tz = "0.10"
+jiff = "0.2"
+
+[build-dependencies]
+pyo3-build-config = "0.22"

@@ -10,12 +10,12 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from hfa.identity import IdentityCache
-from hfa.schema import CalendarEventCard
-from hfa.thread_hash import compute_calendar_event_body_sha_from_payload
-from hfa.uid import generate_uid
-from hfa.vault import iter_notes, read_note
-from ppa_google_auth import CALENDAR_READONLY_SCOPES, account_name_from_email, build_google_cli_token_manager
+from archive_auth import CALENDAR_READONLY_SCOPES, account_name_from_email, build_google_cli_token_manager
+from archive_vault.identity import IdentityCache
+from archive_vault.schema import CalendarEventCard
+from archive_vault.thread_hash import compute_calendar_event_body_sha_from_payload
+from archive_vault.uid import generate_uid
+from archive_vault.vault import iter_notes, read_note
 
 from .base import BaseAdapter, FetchedBatch, deterministic_provenance
 

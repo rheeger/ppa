@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "description": "Phase 2.9 Step 12 — Tier 2 benchmark baseline. Measured during Step 11 correctness run + Step 15b cache iteration. 1% slice (143,148 notes).",
+  "slice": "1pct",
+  "note_count": 143148,
+  "total_rows": 3353530,
+  "materializer": {
+    "python_rows_per_second": 614,
+    "python_wall_seconds": 233,
+    "rust_rows_per_second": 1257,
+    "rust_wall_seconds": 114,
+    "speedup": 2.0
+  },
+  "full_pipeline": {
+    "python_wall_seconds": 460,
+    "rust_wall_seconds": 125,
+    "rust_cache_build_seconds": 12,
+    "rust_materialize_seconds": 114,
+    "speedup": 3.7
+  },
+  "cache_iteration": {
+    "notes_from_cache_all_with_body_seconds": 1.9,
+    "frontmatter_dicts_entity_types_seconds": 0.004,
+    "frontmatter_dicts_email_34k_seconds": 0.57,
+    "note_paths_all_seconds": 0.014,
+    "python_iter_parsed_notes_seconds": 75,
+    "iteration_speedup_range": "30-3000x depending on operation"
+  },
+  "entity_resolution": {
+    "person_index_build_notes": "Included in resolve_person_batch wall time",
+    "resolve_100_identifiers_python_seconds": 5.66,
+    "resolve_100_identifiers_rust_seconds": 2.42,
+    "resolve_speedup": 2.3
+  },
+  "targets": {
+    "materializer_min_speedup": 2.0,
+    "pipeline_min_speedup": 3.0,
+    "iteration_min_speedup": 10
+  },
+  "measured_on": "2026-04-15",
+  "machine": "Apple Silicon (local dev)"
+}

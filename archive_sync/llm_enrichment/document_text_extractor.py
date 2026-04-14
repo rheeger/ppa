@@ -8,9 +8,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from hfa.provenance import ProvenanceEntry, merge_provenance
-from hfa.schema import validate_card_strict
-from hfa.vault import read_note, write_card
+from archive_vault.provenance import ProvenanceEntry, merge_provenance
+from archive_vault.schema import validate_card_strict
+from archive_vault.vault import read_note, write_card
 
 log = logging.getLogger("ppa.document_text_extractor")
 
@@ -140,7 +140,7 @@ def run_document_text_extraction(
 ) -> dict[str, Any]:
     """Scan vault for document cards needing re-extraction; process each."""
 
-    from archive_mcp.vault_cache import VaultScanCache
+    from archive_cli.vault_cache import VaultScanCache
 
     vault = Path(vault).resolve()
     scan_cache = VaultScanCache.build_or_load(vault, tier=2, progress_every=0)

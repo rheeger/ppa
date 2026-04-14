@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -12,8 +13,8 @@ from typing import Any, Callable
 from archive_sync.adapters.base import deterministic_provenance
 from archive_sync.extractors.field_metrics import compute_extraction_confidence
 from archive_sync.extractors.field_validation import SYSTEM_FIELDS, validate_field
-from hfa.provenance import ProvenanceEntry
-from hfa.schema import CARD_TYPES, BaseCard
+from archive_vault.provenance import ProvenanceEntry
+from archive_vault.schema import CARD_TYPES, BaseCard
 
 _BODY_KEY = "_body"
 _DISCRIMINATOR_KEY = "_discriminator"
@@ -224,7 +225,8 @@ class EmailExtractor(ABC):
         return []
 
     def generate_derived_uid(self, source_uid: str, discriminator: str) -> str:
-        """Deterministic UID: hfa-{output_card_type}-{sha256(source_uid:discriminator)[:12]}."""
+        """Deterministic UID: {prefix}-{output_card_type}-{sha256(source_uid:discriminator)[:12]}."""
+        prefix = (os.environ.get("PPA_UID_PREFIX") or "hfa").strip() or "hfa"
         raw = f"{source_uid}:{discriminator}".encode("utf-8")
         short = hashlib.sha256(raw).hexdigest()[:12]
-        return f"hfa-{self.output_card_type}-{short}"
+        return f"{prefix}-{self.output_card_type}-{short}"

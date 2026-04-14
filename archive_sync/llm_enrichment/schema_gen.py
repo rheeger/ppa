@@ -7,7 +7,7 @@ import hashlib
 import json
 from typing import Any
 
-from hfa.schema import CARD_TYPES, BaseCard
+from archive_vault.schema import CARD_TYPES, BaseCard
 
 # Filled by the enrichment runner / promotion pipeline, not the extraction model.
 LLM_OMIT_FIELDS: frozenset[str] = frozenset(

@@ -13,27 +13,33 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from archive_mcp.vault_cache import VaultScanCache
+from archive_auth import INTERNAL_DOMAINS
+from archive_cli.vault_cache import VaultScanCache
 from archive_sync.extractors.runner import uid_in_vault_percent_sample
-from archive_sync.llm_enrichment.cache import (InferenceCache,
-                                               build_inference_cache_key)
+from archive_sync.llm_enrichment.cache import InferenceCache, build_inference_cache_key
 from archive_sync.llm_enrichment.classify_index import ClassifyIndex
 from archive_sync.llm_enrichment.threads import (
-    MessageStubIndex, ParticipantNameResolver, build_message_stub_index,
-    build_participant_name_resolver, build_thread_index, chunk_thread_messages,
-    hydrate_imessage_thread, hydrate_thread, imessage_thread_content_hash,
-    load_email_stubs_for_vault, render_imessage_chunk_for_llm)
+    MessageStubIndex,
+    ParticipantNameResolver,
+    build_message_stub_index,
+    build_participant_name_resolver,
+    build_thread_index,
+    chunk_thread_messages,
+    hydrate_imessage_thread,
+    hydrate_thread,
+    imessage_thread_content_hash,
+    load_email_stubs_for_vault,
+    render_imessage_chunk_for_llm,
+)
 from archive_sync.llm_enrichment.workflows import calendar_event as wf_calendar
 from archive_sync.llm_enrichment.workflows import document as wf_document
 from archive_sync.llm_enrichment.workflows import email_thread as wf_email
 from archive_sync.llm_enrichment.workflows import finance as wf_finance
-from archive_sync.llm_enrichment.workflows import \
-    imessage_thread as wf_imessage
-from hfa.llm_provider import GeminiProvider, LLMResponse, OllamaProvider
-from hfa.provenance import ProvenanceEntry, merge_provenance
-from hfa.schema import validate_card_strict
-from hfa.vault import read_note, write_card
-from ppa_google_auth import INTERNAL_DOMAINS
+from archive_sync.llm_enrichment.workflows import imessage_thread as wf_imessage
+from archive_vault.llm_provider import GeminiProvider, LLMResponse, OllamaProvider
+from archive_vault.provenance import ProvenanceEntry, merge_provenance
+from archive_vault.schema import validate_card_strict
+from archive_vault.vault import read_note, write_card
 
 log = logging.getLogger("ppa.card_enrichment")
 
@@ -196,7 +202,7 @@ class CardEnrichmentRunner:
         field_updates: dict[str, Any],
         content_hash: str,
     ) -> None:
-        from hfa.schema import DETERMINISTIC_ONLY
+        from archive_vault.schema import DETERMINISTIC_ONLY
 
         fm, body, existing_prov = read_note(self.vault_path, rel_path)
         merged = {**fm, **field_updates}
@@ -1991,7 +1997,7 @@ def _write_dry_run_preview_review_md(staging_dir: Path, uids: list[str]) -> None
                     "",
                     f"- **uid:** `{uid}`",
                     f"- **path:** `{rel}` {vault_hint}",
-                    f"- **card_type:** finance",
+                    "- **card_type:** finance",
                     "",
                     "### counterparty_type (LLM)",
                     "",
@@ -2016,7 +2022,7 @@ def _write_dry_run_preview_review_md(staging_dir: Path, uids: list[str]) -> None
                     "",
                     f"- **uid:** `{uid}`",
                     f"- **path:** `{rel}` {vault_hint}",
-                    f"- **card_type:** calendar_event",
+                    "- **card_type:** calendar_event",
                     f"- **location:** `{parsed.get('_input_location', '')}`",
                     "",
                     "### place_extraction",
@@ -2032,7 +2038,7 @@ def _write_dry_run_preview_review_md(staging_dir: Path, uids: list[str]) -> None
                     "",
                     f"- **uid:** `{uid}`",
                     f"- **path:** `{rel}` {vault_hint}",
-                    f"- **card_type:** document",
+                    "- **card_type:** document",
                     "",
                     "### field_updates (would be written)",
                     "",

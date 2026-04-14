@@ -4,13 +4,13 @@
 
 Your life is split across apps with different UIs and exports. There is no vendor that gives you one definitive copy of “everything.” PPA is the **one place you control**: files on disk you can back up, a database you can rebuild from those files, and tools that search across sources without uploading your corpus to someone else’s AI product.
 
-| Without | With |
-| ------- | ---- |
+| Without                        | With                                |
+| ------------------------------ | ----------------------------------- |
 | Search each product separately | One index over what you’ve imported |
-| Model only sees what you paste | MCP tools over your own material |
-| No single portable archive | Vault + regenerable index |
+| Model only sees what you paste | MCP tools over your own material    |
+| No single portable archive     | Vault + regenerable index           |
 
-Typical uses: recall and research across sources, agents in-editor against your corpus (**[docs/AGENT_USAGE.md](docs/AGENT_USAGE.md)**), long-term retention with provenance on every card.
+Typical uses: recall and research across sources, agents in-editor against your corpus (**[archive_docs/AGENT_USAGE.md](archive_docs/AGENT_USAGE.md)**), long-term retention with provenance on every card.
 
 ### Similar projects
 
@@ -34,11 +34,11 @@ If you only need to **index folders of markdown you already have** (notes, docs,
 └─────────────────────────────────────────────────────────────┘
 ```
 
-| Layer | Role |
-| ----- | ---- |
-| **Vault** | Markdown, YAML frontmatter, provenance — what you back up |
-| **Index** | Derived; rebuild from the vault anytime |
-| **MCP** | Tools for humans and agents; profiles gate destructive ops |
+| Layer     | Role                                                       |
+| --------- | ---------------------------------------------------------- |
+| **Vault** | Markdown, YAML frontmatter, provenance — what you back up  |
+| **Index** | Derived; rebuild from the vault anytime                    |
+| **MCP**   | Tools for humans and agents; profiles gate destructive ops |
 
 ---
 
@@ -75,8 +75,8 @@ make embed-pending
 **Run MCP** (adjust paths)
 
 ```bash
-./run-local-seed-mcp.sh
-# Remote index: ./scripts/ppa-tunnel.sh & ./run-arnold-mcp.sh
+./archive_scripts/run-local-seed-mcp.sh
+# Remote index: ./archive_scripts/ppa-tunnel.sh & ./archive_scripts/run-arnold-mcp.sh
 # Or portable: ppa serve --tunnel user@host  (tunnel is a child of the MCP process)
 ```
 
@@ -86,15 +86,15 @@ make embed-pending
 2. Export `PPA_INDEX_DSN`, `PPA_PATH`, `PPA_INDEX_SCHEMA` (and embedding vars as needed).
 3. `ppa mcp-config` → paste into `~/.cursor/mcp.json` (or Claude Desktop / Codex). Add API keys only in the client `env` block — they are never printed by `mcp-config`.
 
-Template: **[ppa.mcp-example.json](ppa.mcp-example.json)** · details: **[docs/MCP_SETUP.md](docs/MCP_SETUP.md)**.
+Template: **[archive_docs/examples/ppa.mcp-example.json](archive_docs/examples/ppa.mcp-example.json)** · details: **[archive_docs/MCP_SETUP.md](archive_docs/MCP_SETUP.md)**.
 
 **CLI entrypoint** (what the scripts wrap)
 
 ```bash
-python -m archive_mcp serve
+python -m archive_cli serve
 ```
 
-Other subcommands (`rebuild-indexes`, `embed-pending`, migrations, …): **[docs/PPA_RUNTIME_CONTRACT.md](docs/PPA_RUNTIME_CONTRACT.md)**.
+Other subcommands (`rebuild-indexes`, `embed-pending`, migrations, …): **[archive_docs/PPA_RUNTIME_CONTRACT.md](archive_docs/PPA_RUNTIME_CONTRACT.md)**.
 
 ---
 
@@ -104,16 +104,16 @@ PPA exposes a **stdio** MCP server (same pattern as [qmd’s MCP](https://github
 
 **Tools exposed** (names vary slightly by `PPA_MCP_TOOL_PROFILE`; seed-link tools are optional — see runtime contract):
 
-| Area | Tools |
-| ---- | ----- |
-| **Search & read** | `archive_search`, `archive_search_json`, `archive_vector_search`, `archive_hybrid_search`, `archive_hybrid_search_json`, `archive_read`, `archive_read_many` |
-| **Structured** | `archive_query` |
-| **Graph & people** | `archive_graph`, `archive_person`, `archive_timeline` |
-| **Explain** | `archive_retrieval_explain`, `archive_retrieval_explain_json` |
-| **Status** | `archive_stats`, `archive_validate`, `archive_duplicates`, `archive_index_status`, `archive_embedding_status`, `archive_embed_pending`, … |
-| **Admin** | `archive_rebuild_indexes`, `archive_bootstrap_postgres`, projections — **restrict in production** |
+| Area               | Tools                                                                                                                                                        |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Search & read**  | `archive_search`, `archive_search_json`, `archive_vector_search`, `archive_hybrid_search`, `archive_hybrid_search_json`, `archive_read`, `archive_read_many` |
+| **Structured**     | `archive_query`                                                                                                                                              |
+| **Graph & people** | `archive_graph`, `archive_person`, `archive_timeline`                                                                                                        |
+| **Explain**        | `archive_retrieval_explain`, `archive_retrieval_explain_json`                                                                                                |
+| **Status**         | `archive_stats`, `archive_validate`, `archive_duplicates`, `archive_index_status`, `archive_embedding_status`, `archive_embed_pending`, …                    |
+| **Admin**          | `archive_rebuild_indexes`, `archive_bootstrap_postgres`, projections — **restrict in production**                                                            |
 
-Agent prompts and call order: **[docs/AGENT_USAGE.md](docs/AGENT_USAGE.md)**.
+Agent prompts and call order: **[archive_docs/AGENT_USAGE.md](archive_docs/AGENT_USAGE.md)**.
 
 **Portable config** (after `pip install -e .`, `ppa` on `PATH`):
 
@@ -135,7 +135,7 @@ Agent prompts and call order: **[docs/AGENT_USAGE.md](docs/AGENT_USAGE.md)**.
 }
 ```
 
-Remote Postgres via SSH: `"args": ["serve", "--tunnel", "user@host"]` and point `PPA_INDEX_DSN` at `127.0.0.1:5433` (or `PPA_TUNNEL_PORT`). **`run-local-seed-mcp.sh` / `run-arnold-mcp.sh`** remain supported convenience wrappers.
+Remote Postgres via SSH: `"args": ["serve", "--tunnel", "user@host"]` and point `PPA_INDEX_DSN` at `127.0.0.1:5433` (or `PPA_TUNNEL_PORT`). **`archive_scripts/run-local-seed-mcp.sh`** / **`archive_scripts/run-arnold-mcp.sh`** remain supported convenience wrappers.
 
 **Claude Desktop** — same `command` / `args` shape under your `claude_desktop_config.json` MCP block.
 
@@ -145,12 +145,12 @@ Remote Postgres via SSH: `"args": ["serve", "--tunnel", "user@host"]` and point 
 
 Single editable install; import names are legacy until someone finishes the rename:
 
-| Module | Role |
-| ------ | ---- |
-| `archive_mcp` | MCP server, index, retrieval, embeddings |
-| `hfa` | Schema, vault I/O, provenance |
-| `archive_sync` | Sources → vault cards |
-| `archive_doctor` | Validate, dedupe, stats |
+| Module           | Role                                     |
+| ---------------- | ---------------------------------------- |
+| `archive_cli`    | MCP server, index, retrieval, embeddings |
+| `archive_vault`  | Schema, vault I/O, provenance            |
+| `archive_sync`   | Sources → vault cards                    |
+| `archive_doctor` | Validate, dedupe, stats                  |
 
 ---
 
@@ -160,63 +160,63 @@ If it’s listed here, there’s code that already knows how to turn it into car
 
 ### Communication & meetings
 
-| Service | Ingests | Connection |
-| ------- | ------- | ---------- |
-| **Gmail** | Threads, messages | Google API; incremental |
-| **Gmail correspondents** | People graph from mail | From Gmail |
-| **iMessage** | Chats, messages | Local `chat.db` |
-| **Beeper** | Threads, DMs, attachments | Local BeeperTexts SQLite (`index.db`, macOS default) |
-| **Otter.ai** | Transcripts | Otter HTTP API |
+| Service                  | Ingests                   | Connection                                           |
+| ------------------------ | ------------------------- | ---------------------------------------------------- |
+| **Gmail**                | Threads, messages         | Google API; incremental                              |
+| **Gmail correspondents** | People graph from mail    | From Gmail                                           |
+| **iMessage**             | Chats, messages           | Local `chat.db`                                      |
+| **Beeper**               | Threads, DMs, attachments | Local BeeperTexts SQLite (`index.db`, macOS default) |
+| **Otter.ai**             | Transcripts               | Otter HTTP API                                       |
 
 ### Calendar & contacts
 
-| Service | Ingests | Connection |
-| ------- | ------- | ---------- |
-| **Google Calendar** | Events | API |
-| **Google Contacts** | People | People API |
+| Service             | Ingests | Connection |
+| ------------------- | ------- | ---------- |
+| **Google Calendar** | Events  | API        |
+| **Google Contacts** | People  | People API |
 
 ### People & directories
 
-| Service | Ingests | Connection |
-| ------- | ------- | ---------- |
-| **LinkedIn** | Network CSV | Export file |
-| **Notion** | People / staff rows | CSV (`notion-people`, `notion-staff`) |
-| **Seed people** | Hand-curated | Local seeds |
+| Service         | Ingests             | Connection                            |
+| --------------- | ------------------- | ------------------------------------- |
+| **LinkedIn**    | Network CSV         | Export file                           |
+| **Notion**      | People / staff rows | CSV (`notion-people`, `notion-staff`) |
+| **Seed people** | Hand-curated        | Local seeds                           |
 
 ### Files, photos, code
 
-| Service | Ingests | Connection |
-| ------- | ------- | ---------- |
-| **File libraries** | Trees of files | Directory scan |
-| **Apple Photos** | Assets, albums, faces/labels (macOS) | [osxphotos](https://github.com/RhetTbull/osxphotos) on local library |
-| **GitHub** | Commits, PRs, issues | GitHub API |
+| Service            | Ingests                              | Connection                                                           |
+| ------------------ | ------------------------------------ | -------------------------------------------------------------------- |
+| **File libraries** | Trees of files                       | Directory scan                                                       |
+| **Apple Photos**   | Assets, albums, faces/labels (macOS) | [osxphotos](https://github.com/RhetTbull/osxphotos) on local library |
+| **GitHub**         | Commits, PRs, issues                 | GitHub API                                                           |
 
 ### Health & medical
 
-| Service | Ingests | Connection |
-| ------- | ------- | ---------- |
-| **Apple Health** | Vitals, activity rollups | Health export XML |
+| Service            | Ingests                                     | Connection                                                                                                      |
+| ------------------ | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| **Apple Health**   | Vitals, activity rollups                    | Health export XML                                                                                               |
 | **Clinical / EHR** | Encounters, labs, meds, immunizations, docs | **`medical-records`**: FHIR JSON, CCD/XML, PDFs, Epic EHI TSV, etc. (whatever your provider actually gives you) |
 
 ### Finance
 
-| Service | Ingests | Connection |
-| ------- | ------- | ---------- |
+| Service     | Ingests      | Connection                                           |
+| ----------- | ------------ | ---------------------------------------------------- |
 | **Copilot** | Transactions | CSV (default `~/Downloads/copilot-transactions.csv`) |
 
 ---
 
 ## Config (minimum)
 
-Prefix everything **`PPA_*`**. The exhaustive list is **[docs/PPA_RUNTIME_CONTRACT.md](docs/PPA_RUNTIME_CONTRACT.md)** §2 — this is the “just let me run it” subset:
+Prefix everything **`PPA_*`**. The exhaustive list is **[archive_docs/PPA_RUNTIME_CONTRACT.md](archive_docs/PPA_RUNTIME_CONTRACT.md)** §2 — this is the “just let me run it” subset:
 
-| Var | Purpose |
-| --- | ------- |
-| `PPA_PATH` | Vault root (default `~/Archive/vault`; override in `ppa.yml`) |
-| `PPA_INDEX_DSN` | Postgres DSN (required) |
-| `PPA_INDEX_SCHEMA` | Schema (default `archive_mcp`) |
-| `PPA_MCP_TOOL_PROFILE` | `full` / `read-only` / `remote-read` / `admin-only` |
-| `PPA_EMBEDDING_PROVIDER` | `hash` or `openai` |
+| Var                      | Purpose                                                       |
+| ------------------------ | ------------------------------------------------------------- |
+| `PPA_PATH`               | Vault root (default `~/Archive/vault`; override in `ppa.yml`) |
+| `PPA_INDEX_DSN`          | Postgres DSN (required)                                       |
+| `PPA_INDEX_SCHEMA`       | Schema (default `ppa`)                                        |
+| `PPA_MCP_TOOL_PROFILE`   | `full` / `read-only` / `remote-read` / `admin-only`           |
+| `PPA_EMBEDDING_PROVIDER` | `hash` or `openai`                                            |
 
 Optional: **`PPA_CONFIG_PATH`** forces a specific `ppa.yml`.
 
@@ -228,13 +228,13 @@ Optional: **`PPA_CONFIG_PATH`** forces a specific `ppa.yml`.
 - Treat `rebuild-indexes` / `bootstrap-postgres` on prod like `rm -rf` — default stance is local build → dump → restore (or your written playbook).
 - Sanity checks: **`psql` over SSH**. Not “run a random Python command and accidentally walk the vault.”
 
-More: **[docs/SECURITY_MODEL.md](docs/SECURITY_MODEL.md)**, **[docs/PPA_BACKUP_AND_RESTORE.md](docs/PPA_BACKUP_AND_RESTORE.md)**, **`docs/runbooks/`**.
+More: **[archive_docs/SECURITY_MODEL.md](archive_docs/SECURITY_MODEL.md)**, **[archive_docs/PPA_BACKUP_AND_RESTORE.md](archive_docs/PPA_BACKUP_AND_RESTORE.md)**, **`archive_docs/runbooks/`**.
 
 ---
 
 ## Scripts
 
-- **`scripts/ppa-*.sh`** — vault init, encrypted backup/restore, volumes, post-import, pg dump, tunnels  
+- **`scripts/ppa-*.sh`** — vault init, encrypted backup/restore, volumes, post-import, pg dump, tunnels
 - **`scripts/ppa-*.py`** — Gmail / Calendar / iMessage / Photos / GitHub extract + import glue
 
 ---
@@ -242,7 +242,7 @@ More: **[docs/SECURITY_MODEL.md](docs/SECURITY_MODEL.md)**, **[docs/PPA_BACKUP_A
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest tests/
+.venv/bin/python -m pytest archive_tests/
 ```
 
 ~275 tests. Integration kicks up Dockerized pgvector when it can; otherwise it skips without drama.
@@ -251,19 +251,20 @@ More: **[docs/SECURITY_MODEL.md](docs/SECURITY_MODEL.md)**, **[docs/PPA_BACKUP_A
 
 ## Docs
 
-| Doc | About |
-| --- | ----- |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System layout |
-| [docs/INDEXING.md](docs/INDEXING.md) | Index pipeline |
-| [docs/AGENT_USAGE.md](docs/AGENT_USAGE.md) | Agent / tool usage |
-| [docs/MCP_SETUP.md](docs/MCP_SETUP.md) | MCP client config, tunnel |
-| [docs/PPA_RUNTIME_CONTRACT.md](docs/PPA_RUNTIME_CONTRACT.md) | CLI, env (frozen) |
-| [docs/PLAYBOOK.md](docs/PLAYBOOK.md) | Ops |
-| [docs/CARD_TYPE_CONTRACTS.md](docs/CARD_TYPE_CONTRACTS.md) | Card types |
-| [docs/RETRIEVAL_CONTRACT.md](docs/RETRIEVAL_CONTRACT.md) | Retrieval |
+| Doc                                                                          | About                     |
+| ---------------------------------------------------------------------------- | ------------------------- |
+| [archive_docs/ARCHITECTURE.md](archive_docs/ARCHITECTURE.md)                 | System layout             |
+| [archive_docs/INDEXING.md](archive_docs/INDEXING.md)                         | Index pipeline            |
+| [archive_docs/AGENT_USAGE.md](archive_docs/AGENT_USAGE.md)                   | Agent / tool usage        |
+| [archive_docs/MCP_SETUP.md](archive_docs/MCP_SETUP.md)                       | MCP client config, tunnel |
+| [archive_docs/PPA_RUNTIME_CONTRACT.md](archive_docs/PPA_RUNTIME_CONTRACT.md) | CLI, env (frozen)         |
+| [archive_docs/PLAYBOOK.md](archive_docs/PLAYBOOK.md)                         | Ops                       |
+| [archive_docs/CARD_TYPE_CONTRACTS.md](archive_docs/CARD_TYPE_CONTRACTS.md)   | Card types                |
+| [archive_docs/RETRIEVAL_CONTRACT.md](archive_docs/RETRIEVAL_CONTRACT.md)     | Retrieval                 |
+| [archive_docs/vision/](archive_docs/vision/)                                 | Long-form roadmap (v2–v4) |
 
 ---
 
 ## Contributing
 
-PRs genuinely welcome. Run **`pytest`** when you touch index / adapters / MCP surfaces. If CLI, env, or MCP semantics move, **update** **[docs/PPA_RUNTIME_CONTRACT.md](docs/PPA_RUNTIME_CONTRACT.md)** — that file is the handshake with anyone automating this.
+PRs genuinely welcome. Run **`pytest`** when you touch index / adapters / MCP surfaces. If CLI, env, or MCP semantics move, **update** **[archive_docs/PPA_RUNTIME_CONTRACT.md](archive_docs/PPA_RUNTIME_CONTRACT.md)** — that file is the handshake with anyone automating this.

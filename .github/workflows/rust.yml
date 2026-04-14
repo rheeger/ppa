@@ -1,0 +1,31 @@
+# Build and smoke-test the archive_crate PyO3 extension (Phase 2.9).
+name: rust
+on:
+  push:
+    branches: [main, f/v2]
+  pull_request:
+
+jobs:
+  archive_crate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install maturin
+        run: pip install maturin
+      - name: Build archive_crate
+        run: cd archive_crate && maturin develop
+      - name: Run Rust tests
+        run: cd archive_crate && cargo test
+      - name: Run archive_crate Python tests
+        run: |
+          python -m pytest archive_tests/test_archive_crate_smoke.py tests/test_archive_crate_walk.py \
+            tests/test_archive_crate_hasher.py tests/test_archive_crate_frontmatter.py \
+            tests/test_archive_crate_cache.py tests/test_archive_crate_scanner.py \
+            tests/test_archive_crate_benchmark_tier1.py \
+            tests/test_archive_crate_materializer_chunker.py tests/test_chunk_hash_parity.py \
+            tests/test_archive_crate_correctness.py \
+            tests/test_ppa_engine_vault_cache.py -v

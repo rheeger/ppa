@@ -8,16 +8,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from archive_sync.extractors.field_validation import \
-    validate_provenance_round_trip
-from archive_sync.llm_enrichment.cache import (InferenceCache,
-                                               build_inference_cache_key)
-from archive_sync.llm_enrichment.schema_gen import (
-    card_type_to_llm_json_schema, combined_schema_version)
-from archive_sync.llm_enrichment.threads import (ThreadDocument,
-                                                 render_thread_for_extraction)
-from hfa.llm_provider import OllamaProvider
-from hfa.schema import BaseCard, validate_card_permissive
+from archive_sync.extractors.field_validation import validate_provenance_round_trip
+from archive_sync.llm_enrichment.cache import InferenceCache, build_inference_cache_key
+from archive_sync.llm_enrichment.schema_gen import card_type_to_llm_json_schema, combined_schema_version
+from archive_sync.llm_enrichment.threads import ThreadDocument, render_thread_for_extraction
+from archive_vault.llm_provider import OllamaProvider
+from archive_vault.schema import BaseCard, validate_card_permissive
 
 logger = logging.getLogger("ppa.llm_enrichment.extract")
 

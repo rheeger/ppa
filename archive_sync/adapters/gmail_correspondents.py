@@ -13,9 +13,9 @@ from email.utils import getaddresses
 from pathlib import Path
 from typing import Any
 
-from hfa.schema import PersonCard
-from hfa.uid import generate_uid
-from ppa_google_auth import ACCOUNTS, build_google_cli_token_manager
+from archive_auth import ACCOUNTS, build_google_cli_token_manager
+from archive_vault.schema import PersonCard
+from archive_vault.uid import generate_uid
 
 from .base import BaseAdapter, deterministic_provenance
 

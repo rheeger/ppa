@@ -2,11 +2,11 @@
 
 Generated vault trees from your seed live here — **not committed** (see repo `.gitignore`).
 
-| Directory | Config                          | Approx. role                   |
-| --------- | ------------------------------- | ------------------------------ |
-| `1pct/`   | `tests/slice_config.1pct.json`  | Small slice, `cluster_cap` 400 |
-| `5pct/`   | `tests/slice_config.5pct.json`  | Medium, `cluster_cap` 1000     |
-| `10pct/`  | `tests/slice_config.10pct.json` | Large, `cluster_cap` 2500      |
+| Directory | Config                                  | Approx. role                   |
+| --------- | --------------------------------------- | ------------------------------ |
+| `1pct/`   | `archive_tests/slice_config.1pct.json`  | Small slice, `cluster_cap` 400 |
+| `5pct/`   | `archive_tests/slice_config.5pct.json`  | Medium, `cluster_cap` 1000     |
+| `10pct/`  | `archive_tests/slice_config.10pct.json` | Large, `cluster_cap` 2500      |
 
 Build from repo root (`ppa/`):
 
@@ -26,8 +26,8 @@ Then point tools at e.g. `PPA_PATH=$(pwd)/.slices/5pct`.
 
 ```bash
 # From ppa/ — align with extract-emails-10pct-slice / quality reports
-PPA_PATH="$(pwd)/.slices/10pct" .venv/bin/python -m archive_mcp sender-census --domain doordash.com --sample 50
-PPA_PATH="$(pwd)/.slices/10pct" .venv/bin/python -m archive_mcp template-sampler --domain doordash.com --category receipt --per-year 2 --out-dir /tmp/dd-era-samples
+PPA_PATH="$(pwd)/.slices/10pct" .venv/bin/python -m archive_cli sender-census --domain doordash.com --sample 50
+PPA_PATH="$(pwd)/.slices/10pct" .venv/bin/python -m archive_cli template-sampler --domain doordash.com --category receipt --per-year 2 --out-dir /tmp/dd-era-samples
 ```
 
 Or: `make sender-census-slice-smoke DOMAIN=doordash.com` and `make template-sampler-slice-smoke DOMAIN=doordash.com` (see repo `Makefile` — both use `.slices/10pct`). Census only reads `Email/**/*.md` (not the whole vault tree).

@@ -19,12 +19,12 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Iterator
 
-from hfa.identity import IdentityCache
-from hfa.provenance import ProvenanceEntry
-from hfa.schema import CalendarEventCard, MeetingTranscriptCard
-from hfa.thread_hash import compute_meeting_transcript_body_sha_from_payload
-from hfa.uid import generate_uid
-from hfa.vault import find_note_by_slug, read_note, write_card
+from archive_vault.identity import IdentityCache
+from archive_vault.provenance import ProvenanceEntry
+from archive_vault.schema import CalendarEventCard, MeetingTranscriptCard
+from archive_vault.thread_hash import compute_meeting_transcript_body_sha_from_payload
+from archive_vault.uid import generate_uid
+from archive_vault.vault import find_note_by_slug, read_note, write_card
 
 from .base import BaseAdapter, FetchedBatch, deterministic_provenance
 

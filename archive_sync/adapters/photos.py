@@ -11,11 +11,11 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from hfa.identity import IdentityCache
-from hfa.identity_resolver import PersonIndex, resolve_person
-from hfa.schema import MediaAssetCard
-from hfa.uid import generate_uid
-from hfa.vault import iter_notes, read_note
+from archive_vault.identity import IdentityCache
+from archive_vault.identity_resolver import PersonIndex, resolve_person
+from archive_vault.schema import MediaAssetCard
+from archive_vault.uid import generate_uid
+from archive_vault.vault import iter_notes, read_note
 
 from .base import BaseAdapter, FetchedBatch, deterministic_provenance
 from .photos_private_meta import (

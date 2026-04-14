@@ -7,8 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from archive_sync.llm_enrichment.staging_types import (EntityMention,
-                                                       MatchCandidate)
+from archive_sync.llm_enrichment.staging_types import EntityMention, MatchCandidate
 
 PROMPT_FILE = Path(__file__).resolve().parent.parent / "prompts" / "enrich_finance.txt"
 ENRICH_FINANCE_PROMPT_VERSION = "v4"

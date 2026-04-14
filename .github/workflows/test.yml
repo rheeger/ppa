@@ -28,7 +28,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e ".[dev]"
-      - run: python -m pytest tests/ -v --tb=short -m "not integration and not slow"
+      - run: python -m pytest archive_tests/ -v --tb=short -m "not integration and not slow"
         env:
           PPA_INDEX_DSN: "postgresql://unused:unused@localhost/unused"
 
@@ -71,8 +71,8 @@ jobs:
           PPA_EMBEDDING_MODEL: archive-hash-dev
           PPA_EMBEDDING_VERSION: "1"
         run: |
-          python -m archive_mcp bootstrap-postgres
-          python -m archive_mcp health
+          python -m archive_cli bootstrap-postgres
+          python -m archive_cli health
       - name: Run health check
         env:
           PPA_INDEX_DSN: postgresql://archive:archive@localhost:5432/archive
@@ -81,7 +81,7 @@ jobs:
           PPA_EMBEDDING_MODEL: archive-hash-dev
           PPA_EMBEDDING_VERSION: "1"
           PPA_REBUILD_VERIFY_HASH: "1"
-        run: python -m archive_mcp health-check
+        run: python -m archive_cli health-check
       - name: Run pytest integration
         env:
           PPA_INDEX_DSN: postgresql://archive:archive@localhost:5432/archive
@@ -89,7 +89,7 @@ jobs:
           PPA_EMBEDDING_PROVIDER: hash
           PPA_EMBEDDING_MODEL: archive-hash-dev
           PPA_EMBEDDING_VERSION: "1"
-        run: python -m pytest tests/ -v --tb=short -m "integration"
+        run: python -m pytest archive_tests/ -v --tb=short -m "integration"
       - name: CLI smoke test
         env:
           PPA_INDEX_DSN: postgresql://archive:archive@localhost:5432/archive
@@ -124,7 +124,7 @@ jobs:
       - run: pip install -e ".[dev]"
       - name: Prepare slice from fixtures
         run: |
-          python -m archive_mcp slice-seed --config tests/slice_config.json --output /tmp/ppa-test-slice --source-vault tests/fixtures
+          python -m archive_cli slice-seed --config archive_archive_tests/slice_config.json --output /tmp/ppa-test-slice --source-vault archive_archive_tests/fixtures
       - name: Bootstrap, rebuild, and verify
         env:
           PPA_INDEX_DSN: postgresql://archive:archive@localhost:5432/archive
@@ -134,9 +134,9 @@ jobs:
           PPA_EMBEDDING_MODEL: archive-hash-dev
           PPA_EMBEDDING_VERSION: "1"
         run: |
-          python -m archive_mcp bootstrap-postgres
-          python -m archive_mcp rebuild-indexes
-          python -m archive_mcp health-check --manifest tests/slice_manifest_fixture.json --report-format both --report-dir /tmp/
+          python -m archive_cli bootstrap-postgres
+          python -m archive_cli rebuild-indexes
+          python -m archive_cli health-check --manifest tests/slice_manifest_fixture.json --report-format both --report-dir /tmp/
 
   benchmark-nightly:
     runs-on: ubuntu-latest
@@ -167,7 +167,7 @@ jobs:
           PPA_EMBEDDING_PROVIDER: hash
           PPA_EMBEDDING_MODEL: archive-hash-dev
           PPA_EMBEDDING_VERSION: "1"
-        run: python -m archive_mcp benchmark --slice-percent 5 --output /tmp/bench-results/
+        run: python -m archive_cli benchmark --slice-percent 5 --output /tmp/bench-results/
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4
         with:

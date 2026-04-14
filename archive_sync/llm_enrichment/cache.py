@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from hfa.provenance import compute_input_hash
+from archive_vault.provenance import compute_input_hash
 
 
 def build_inference_cache_key(

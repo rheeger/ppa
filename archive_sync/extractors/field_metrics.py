@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from hfa.vault import read_note_frontmatter_file
+from archive_vault.vault import read_note_frontmatter_file
 
 # Card type -> (field_name, predicate). Predicate True => populated.
 CRITICAL_FIELDS: dict[str, list[tuple[str, Any]]] = {

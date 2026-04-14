@@ -14,19 +14,19 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
-from hfa.identity import IdentityCache
-from hfa.identity_resolver import merge_into_existing
-from hfa.provenance import ProvenanceEntry, compute_input_hash
-from hfa.schema import (
+from archive_vault.identity import IdentityCache
+from archive_vault.identity_resolver import merge_into_existing
+from archive_vault.provenance import ProvenanceEntry, compute_input_hash
+from archive_vault.schema import (
     BeeperAttachmentCard,
     BeeperMessageCard,
     BeeperThreadCard,
     PersonCard,
 )
-from hfa.slugger import normalize_for_slug
-from hfa.sync_state import load_sync_state, update_cursor
-from hfa.uid import generate_uid
-from hfa.vault import write_card
+from archive_vault.slugger import normalize_for_slug
+from archive_vault.sync_state import load_sync_state, update_cursor
+from archive_vault.uid import generate_uid
+from archive_vault.vault import write_card
 
 from .base import BaseAdapter, FetchedBatch, IngestResult, deterministic_provenance
 

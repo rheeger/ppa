@@ -20,31 +20,26 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from archive_mcp.vault_cache import VaultScanCache
-from archive_sync.extractors.registry import (ExtractorRegistry,
-                                              build_default_registry)
-from archive_sync.extractors.runner import (derive_output_rel_path,
-                                            note_content_matches,
-                                            uid_in_vault_percent_sample)
+from archive_auth import INTERNAL_DOMAINS
+from archive_cli.vault_cache import VaultScanCache
+from archive_sync.extractors.registry import ExtractorRegistry, build_default_registry
+from archive_sync.extractors.runner import derive_output_rel_path, note_content_matches, uid_in_vault_percent_sample
 from archive_sync.llm_enrichment.cache import InferenceCache
-from archive_sync.llm_enrichment.classify import (CLASSIFY_PROMPT_VERSION,
-                                                  classify_thread,
-                                                  render_classify_input)
+from archive_sync.llm_enrichment.classify import CLASSIFY_PROMPT_VERSION, classify_thread, render_classify_input
 from archive_sync.llm_enrichment.classify_index import ClassifyIndex
 from archive_sync.llm_enrichment.defaults import DEFAULT_ENRICH_EXTRACT_MODEL
-from archive_sync.llm_enrichment.extract import (ExtractedCard,
-                                                 extract_cards_for_thread)
-from archive_sync.llm_enrichment.known_senders import (TRANSACTIONAL_DOMAINS,
-                                                       _email_domain,
-                                                       _is_marketing_subject)
-from archive_sync.llm_enrichment.threads import (ThreadDocument, ThreadStub,
-                                                 build_thread_index,
-                                                 hydrate_thread,
-                                                 load_email_stubs_for_vault)
-from hfa.llm_provider import GeminiProvider, OllamaProvider
-from hfa.schema import CARD_TYPES, BaseCard, validate_card_strict
-from hfa.vault import write_card
-from ppa_google_auth import INTERNAL_DOMAINS
+from archive_sync.llm_enrichment.extract import ExtractedCard, extract_cards_for_thread
+from archive_sync.llm_enrichment.known_senders import TRANSACTIONAL_DOMAINS, _email_domain, _is_marketing_subject
+from archive_sync.llm_enrichment.threads import (
+    ThreadDocument,
+    ThreadStub,
+    build_thread_index,
+    hydrate_thread,
+    load_email_stubs_for_vault,
+)
+from archive_vault.llm_provider import GeminiProvider, OllamaProvider
+from archive_vault.schema import CARD_TYPES, BaseCard, validate_card_strict
+from archive_vault.vault import write_card
 
 log = logging.getLogger("ppa.llm_enrichment.enrich_runner")
 
@@ -218,8 +213,8 @@ def _llm_provenance(
 ) -> dict[str, Any]:
     """Provenance with LLM model + run_id populated (richer than deterministic_provenance)."""
 
-    from hfa.provenance import PROVENANCE_EXEMPT_FIELDS, ProvenanceEntry
-    from hfa.schema import card_to_frontmatter
+    from archive_vault.provenance import PROVENANCE_EXEMPT_FIELDS, ProvenanceEntry
+    from archive_vault.schema import card_to_frontmatter
 
     today = __import__("datetime").date.today().isoformat()
     fm = card_to_frontmatter(card)
@@ -252,8 +247,7 @@ def _gate_thread(
     - ``("classify", [])`` — unknown sender, send to LLM classify first
     - ``("skip", [])`` — known noise, no LLM call
     """
-    from archive_sync.llm_enrichment.known_senders import \
-        classify_thread_prefilter
+    from archive_sync.llm_enrichment.known_senders import classify_thread_prefilter
 
     card_types: list[str] = []
 
@@ -478,8 +472,7 @@ class LlmEnrichmentRunner:
                 _tls.inference_cache = ic
             return ic
 
-        from archive_sync.llm_enrichment.schema_gen import \
-            all_extractable_card_types
+        from archive_sync.llm_enrichment.schema_gen import all_extractable_card_types
         _all_types = [t for t in all_extractable_card_types() if t in _VALID_CARD_TYPES]
 
         metrics.total_threads = len(thread_items)

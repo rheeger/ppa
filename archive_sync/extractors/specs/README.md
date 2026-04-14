@@ -22,7 +22,7 @@ When documenting field anchors in `<provider>.md`, prefer file paths under **`sa
 | ------- | ---------------------------- | --------------------------------------------------------------------------------------------------------- |
 | **11a** | Template samples (seed)      | `make step-11a-template-samplers-seed` → `samples_seed/<provider>/`                                       |
 | **11b** | Parser pass vs `.clean.txt`  | Edit `archive_sync/extractors/*.py`; cite paths in `<provider>.md`                                        |
-| **11c** | Fixtures from sampler bodies | Copy PII-redacted `.clean.txt` into `tests/fixtures/emails/`                                              |
+| **11c** | Fixtures from sampler bodies | Copy PII-redacted `.clean.txt` into `archive_tests/fixtures/emails/`                                              |
 | **11d** | Yield on slice               | `python scripts/step_11d_slice_yield_report.py` (dry-run, one pass) or `make step-11d-slice-yield-report` |
 
 ## Current specs (Phase 2.5)

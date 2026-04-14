@@ -14,10 +14,10 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree
 
-from hfa.identity_resolver import resolve_person
-from hfa.schema import MedicalRecordCard, VaccinationCard
-from hfa.uid import generate_uid
-from hfa.vault import find_note_by_slug
+from archive_vault.identity_resolver import resolve_person
+from archive_vault.schema import MedicalRecordCard, VaccinationCard
+from archive_vault.uid import generate_uid
+from archive_vault.vault import find_note_by_slug
 
 from ..cli_logging import CliProgressReporter, log_cli_step
 from .base import BaseAdapter, deterministic_provenance

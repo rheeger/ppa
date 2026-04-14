@@ -12,14 +12,14 @@ alwaysApply: true
 ## Implementation standards (match the code)
 
 1. **Logger namespace** — `logging.getLogger("ppa.<module>")` (e.g. `ppa.slice`, `ppa.loader`). Never `print()` for status on long jobs.
-2. **Stderr + format** — `archive_mcp.log.configure_logging` attaches `%(asctime)s [%(name)s] %(levelname)s %(message)s` to **stderr** only; stdout stays for JSON / MCP / CLI JSON summaries.
-3. **Optional file log** — Global **`ppa --log-file PATH <subcommand>`** (flag **before** the subcommand). Same line format as stderr; parent dirs created; **`_FlushingFileHandler`** in `archive_mcp/log.py` flushes after each record so `tail -f` and Cursor updates see lines immediately. Prefer `ppa/logs/*.log` (gitignored).
-4. **`slice-seed`** (`archive_mcp/test_slice.py`):
+2. **Stderr + format** — `archive_cli.log.configure_logging` attaches `%(asctime)s [%(name)s] %(levelname)s %(message)s` to **stderr** only; stdout stays for JSON / MCP / CLI JSON summaries.
+3. **Optional file log** — Global **`ppa --log-file PATH <subcommand>`** (flag **before** the subcommand). Same line format as stderr; parent dirs created; **`_FlushingFileHandler`** in `archive_cli/log.py` flushes after each record so `tail -f` and Cursor updates see lines immediately. Prefer `ppa/logs/*.log` (gitignored).
+4. **`slice-seed`** (`archive_cli/test_slice.py`):
    - Logs **`slice-seed start`** before any heavy work.
    - **Walk count** pass yields `total_notes`; then **read pass** with `notes_read=i/total (pct%)`, **`elapsed`** and **`eta_remaining`** as **`M:SS`** (minutes:zero-padded seconds), **`rate_notes_per_s`**.
    - **Copy** phase: `files=i/n (pct%)`, elapsed, ETA, `rate_files_per_s`.
-   - CLI: `--progress-every N`, `--target-percent`, `--cluster-cap`. Smoke: `tests/slice_config.smoke.json`, `make test-slice-smoke` → `logs/ppa-slice-smoke.log`.
-5. **`rebuild-indexes`** — Step `k/6` logs, materialize/load reporters, `--progress-every`; use `--log-file` via global flag: `python -m archive_mcp --log-file logs/rebuild.log rebuild-indexes`.
+   - CLI: `--progress-every N`, `--target-percent`, `--cluster-cap`. Smoke: `archive_tests/slice_config.smoke.json`, `make test-slice-smoke` → `logs/ppa-slice-smoke.log`.
+5. **`rebuild-indexes`** — Step `k/6` logs, materialize/load reporters, `--progress-every`; use `--log-file` via global flag: `python -m archive_cli --log-file logs/rebuild.log rebuild-indexes`.
 6. **Agents** — Prefer `make test-slice-smoke` before full slice; always **`--log-file`** or **`tee`** for jobs that may outlive the session; quote paths with spaces.
 
 ## Rough duration

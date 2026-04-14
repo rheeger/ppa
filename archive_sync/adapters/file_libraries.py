@@ -25,10 +25,10 @@ from time import perf_counter
 from typing import Any
 from xml.etree import ElementTree
 
-from hfa.identity import IdentityCache
-from hfa.schema import DocumentCard
-from hfa.uid import generate_uid
-from hfa.vault import read_note
+from archive_vault.identity import IdentityCache
+from archive_vault.schema import DocumentCard
+from archive_vault.uid import generate_uid
+from archive_vault.vault import read_note
 
 from .base import BaseAdapter, FetchedBatch, deterministic_provenance
 

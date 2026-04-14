@@ -3,16 +3,14 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from archive_sync.llm_enrichment.cache import (InferenceCache,
-                                               build_inference_cache_key)
+from archive_sync.llm_enrichment.cache import InferenceCache, build_inference_cache_key
 from archive_sync.llm_enrichment.schema_gen import all_extractable_card_types
-from hfa.llm_provider import OllamaProvider
+from archive_vault.llm_provider import OllamaProvider
 
 logger = logging.getLogger("ppa.llm_enrichment.triage")
 

@@ -12,18 +12,18 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from hfa.identity import IdentityCache
-from hfa.provenance import ProvenanceEntry, merge_provenance
-from hfa.schema import (
+from archive_vault.identity import IdentityCache
+from archive_vault.provenance import ProvenanceEntry, merge_provenance
+from archive_vault.schema import (
     IMessageAttachmentCard,
     IMessageMessageCard,
     IMessageThreadCard,
     validate_card_permissive,
     validate_card_strict,
 )
-from hfa.thread_hash import compute_imessage_thread_body_sha_from_payload
-from hfa.uid import generate_uid
-from hfa.vault import read_note, write_card
+from archive_vault.thread_hash import compute_imessage_thread_body_sha_from_payload
+from archive_vault.uid import generate_uid
+from archive_vault.vault import read_note, write_card
 
 from .base import BaseAdapter, deterministic_provenance
 

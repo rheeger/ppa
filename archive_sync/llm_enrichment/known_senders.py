@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 from functools import lru_cache
 
-from ppa_google_auth import INTERNAL_DOMAINS
+from archive_auth import INTERNAL_DOMAINS
 
 # ---------------------------------------------------------------------------
 # Transactional sender domains → card_types fast-track
@@ -519,7 +519,7 @@ def classify_thread_prefilter(
 
     ``user_domains`` — org/work domains treated like personal for the
     all-personal-senders heuristic (coworker threads). Defaults to
-    ``INTERNAL_DOMAINS`` from ``ppa_google_auth`` when omitted.
+    ``INTERNAL_DOMAINS`` from ``archive_auth`` when omitted.
     """
 
     work_domains: frozenset[str] = (

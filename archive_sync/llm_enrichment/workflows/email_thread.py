@@ -7,10 +7,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from archive_sync.llm_enrichment.known_senders import classify_thread_prefilter
-from archive_sync.llm_enrichment.staging_types import (EntityMention,
-                                                       MatchCandidate)
-from archive_sync.llm_enrichment.threads import (ThreadDocument, ThreadStub,
-                                                 render_thread_for_extraction)
+from archive_sync.llm_enrichment.staging_types import EntityMention, MatchCandidate
+from archive_sync.llm_enrichment.threads import ThreadDocument, ThreadStub, render_thread_for_extraction
 
 if TYPE_CHECKING:
     from archive_sync.llm_enrichment.classify_index import ClassifyIndex
