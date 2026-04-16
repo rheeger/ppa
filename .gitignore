@@ -8,6 +8,7 @@ ppa.json
 logs/
 
 # Local stratified slices (slice-seed output from make slice-local-*; large vault trees)
+.slices/smoke/
 .slices/1pct/
 .slices/5pct/
 .slices/10pct/

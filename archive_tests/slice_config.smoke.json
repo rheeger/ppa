@@ -1,7 +1,21 @@
 {
   "vault_commit": "",
-  "snapshot_date": "2026-03-31",
-  "seed_uids_by_type": {},
+  "snapshot_date": "2026-04-15",
+  "seed_uids_by_type": {
+    "meal_order": ["hfa-meal-order-12b8e8deba25"],
+    "ride": ["hfa-ride-fff0ca6a0c52"],
+    "grocery_order": ["hfa-grocery-order-bfeb731b1e31"],
+    "flight": ["hfa-flight-3c43b26eb4f9"],
+    "accommodation": ["hfa-accommodation-4cdad15b8c78"],
+    "car_rental": ["hfa-car-rental-9914d86ad198"],
+    "purchase": ["hfa-purchase-fc07e704c6be"],
+    "shipment": ["hfa-shipment-fc639fb49bc7"],
+    "event_ticket": ["hfa-event-ticket-073c0e226d09"],
+    "payroll": ["hfa-payroll-79c511bfa6a9"],
+    "subscription": ["hfa-subscription-9a24cea5c6f7"],
+    "place": ["hfa-place-00004acab94b"],
+    "organization": ["hfa-organization-0047ae744b95"]
+  },
   "cluster_cap": 60,
   "min_cards_per_type": 1,
   "target_percent": 0.5,

@@ -12,9 +12,12 @@ from pathlib import Path
 from typing import Any
 
 from archive_sync.llm_enrichment.cache import InferenceCache
-from archive_sync.llm_enrichment.card_enrichment_runner import CardEnrichmentRunner
-from archive_sync.llm_enrichment.defaults import DEFAULT_ENRICH_CARD_GEMINI_MODEL
-from archive_sync.llm_enrichment.document_text_extractor import run_document_text_extraction
+from archive_sync.llm_enrichment.card_enrichment_runner import \
+    CardEnrichmentRunner
+from archive_sync.llm_enrichment.defaults import \
+    DEFAULT_ENRICH_CARD_GEMINI_MODEL
+from archive_sync.llm_enrichment.document_text_extractor import \
+    run_document_text_extraction
 from archive_sync.llm_enrichment.enrich_runner import LlmEnrichmentRunner
 
 log = logging.getLogger("ppa.enrichment_orchestrator")
@@ -294,23 +297,12 @@ class EnrichmentOrchestrator:
         if not cache_path.exists():
             return
 
-        import hashlib
         import sqlite3
 
-        from archive_vault.vault import iter_note_paths
+        from archive_cli.vault_cache import _compute_fingerprint_with_paths
 
         t0 = time.perf_counter()
-        rel_paths = sorted(p.as_posix() for p in iter_note_paths(self.vault_path))
-        lines: list[str] = []
-        for rp in rel_paths:
-            target = self.vault_path / rp
-            try:
-                st = target.stat()
-            except OSError:
-                continue
-            mtime_ns = getattr(st, "st_mtime_ns", int(st.st_mtime * 1_000_000_000))
-            lines.append(f"{rp}\t{mtime_ns}\t{st.st_size}")
-        new_fp = hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
+        _, _, new_fp = _compute_fingerprint_with_paths(self.vault_path)
 
         conn = sqlite3.connect(str(cache_path), timeout=60.0)
         conn.execute("INSERT OR REPLACE INTO cache_meta (key, value) VALUES ('vault_fingerprint', ?)", (new_fp,))

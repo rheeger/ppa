@@ -1,0 +1,100 @@
+{
+  "phase": 3,
+  "title": "Validation, Promotion & Local Finalization",
+  "completed": "2026-04-15",
+  "vault_notes_total": 1882463,
+  "vault_validation": {
+    "total": 1882463,
+    "valid": 1882463,
+    "errors": 0,
+    "validator": "rust (archive_crate::validate_vault_from_cache)",
+    "elapsed_s": 4.68
+  },
+  "step_0_document_enrichment_v3": {
+    "documents_enriched": 12328,
+    "entity_mentions_staged": 27857,
+    "cache_hits": 12195,
+    "llm_calls": 133,
+    "vault_writes": 11878,
+    "errors": 32
+  },
+  "step_1_match_resolution": {
+    "total_candidates": 4161,
+    "confident_deterministic": 687,
+    "llm_disambiguated": 1128,
+    "no_match": 2346,
+    "wikilinks_written": 920,
+    "already_linked": 859,
+    "total_links": 1779,
+    "errors": 0,
+    "architecture": "3-phase: deterministic scoring with date/keyword pre-filter indexes, parallel LLM workers (16), sequential vault writes"
+  },
+  "step_2_promotion": {
+    "cards_promoted": 22396,
+    "types": {
+      "purchase": 11841,
+      "ride": 2592,
+      "flight": 2039,
+      "meal_order": 1548,
+      "shipment": 1410,
+      "event_ticket": 1236,
+      "subscription": 657,
+      "accommodation": 552,
+      "payroll": 337,
+      "car_rental": 126,
+      "grocery_order": 58
+    },
+    "errors": 0
+  },
+  "step_3_entity_resolution": {
+    "place_cards_created": 11031,
+    "org_cards_created": 1966,
+    "place_clusters": 4054,
+    "org_clusters": 12,
+    "person_mentions_saved": 81986,
+    "entity_mentions_input": {
+      "enrich_email_thread": {
+        "person": 31818,
+        "organization": 16778,
+        "place": 4324,
+        "total": 52920
+      },
+      "enrich_finance": { "person": 899, "organization": 7983, "place": 87, "total": 8969 },
+      "enrich_imessage_thread": { "person": 33610, "place": 23213, "total": 56823 },
+      "enrich_document": { "person": 15659, "organization": 36594, "place": 2984, "total": 55237 }
+    }
+  },
+  "step_4_person_linking": {
+    "derived_cards_scanned": 56433,
+    "person_merges": 2503,
+    "person_conflicts": 110,
+    "conflicts_resolved_llm": 59,
+    "person_no_match": 9863,
+    "wikilinks_written": 2503,
+    "driver_name_skipped": true
+  },
+  "idempotency": {
+    "vault_writes": 0,
+    "promote_moved": 0,
+    "entity_mentions_staged": 0
+  },
+  "seed_slice": {
+    "cards": 334067,
+    "types_present": 34,
+    "types_missing": ["knowledge", "observation"],
+    "orphaned_wikilinks": 2
+  },
+  "test_suite": {
+    "passed": 703,
+    "skipped": 2,
+    "failed": 0
+  },
+  "infra_improvements": [
+    "Rust cache_build.rs: skip bad YAML notes instead of aborting (1 note: People/rebecca-hu.md unquoted ':)')",
+    "Rust person_index.rs: skip full 12K-candidate scan for names with no parseable last name (merchants)",
+    "Rust validator.rs: pure-Rust vault validator with rayon parallelism (30min Python -> 5s Rust)",
+    "Rust cache.rs: busy_timeout(120s) + WAL/SHM cleanup before builds",
+    "Python match_resolver.py: date-window + keyword pre-filter indexes, 3-phase architecture with parallel LLM workers",
+    "Python match_resolver.py: list vs str field handling for Pydantic validation on calendar_events/source_threads"
+  ]
+}

@@ -10,6 +10,8 @@ use regex::Regex;
 use rayon::prelude::*;
 use serde_json::{Map, Value};
 
+use serde_json::Value as JsonValue;
+
 use crate::frontmatter::split_frontmatter_text;
 use crate::hasher;
 use crate::json_stable::{
@@ -30,6 +32,37 @@ pub fn strip_provenance(body: &str) -> String {
         .replace_all(body, "")
         .trim()
         .to_string()
+}
+
+/// Extract provenance entries from the raw body (before stripping) and serialize
+/// as sorted JSON: `{"field": {"method": "...", "source": "...", ...}, ...}`.
+/// Mirrors `archive_vault.provenance.read_provenance`.
+pub fn extract_provenance_json(body_raw: &str) -> String {
+    let caps = match provenance_re().captures(body_raw) {
+        Some(c) => c,
+        None => return "{}".to_string(),
+    };
+    let block = caps.get(1).unwrap().as_str();
+    let mut entries: std::collections::BTreeMap<String, JsonValue> = std::collections::BTreeMap::new();
+    for line in block.lines() {
+        let line = line.trim();
+        if line.is_empty() || !line.contains(':') {
+            continue;
+        }
+        let Some((field, json_part)) = line.split_once(':') else {
+            continue;
+        };
+        let field = field.trim();
+        let json_part = json_part.trim();
+        let Ok(v) = serde_json::from_str::<JsonValue>(json_part) else {
+            continue;
+        };
+        if !v.is_object() {
+            continue;
+        }
+        entries.insert(field.to_string(), v);
+    }
+    serde_json::to_string(&entries).unwrap_or_else(|_| "{}".to_string())
 }
 
 fn wikilink_re() -> &'static Regex {
@@ -133,6 +166,7 @@ pub struct Tier2Row {
     pub content_hash: String,
     pub wikilinks_json: String,
     pub raw_content_sha256: String,
+    pub provenance_json: String,
 }
 
 fn slug_from_rel(rel_path: &str) -> String {
@@ -184,7 +218,12 @@ fn build_tier2_row(
 ) -> Result<Tier2Row, String> {
     let abs = vault.join(rel_path);
     let content = fs::read_to_string(&abs).map_err(|e| format!("{rel_path}: {e}"))?;
-    let (fm, body) = parse_note_content_rust(&content)?;
+    let (fm, body_raw) = match split_frontmatter_text(&content) {
+        Some((yaml_text, raw)) => (parse_yaml_mapping(&yaml_text)?, raw),
+        None => (Value::Object(Map::new()), content.clone()),
+    };
+    let provenance_json = extract_provenance_json(&body_raw);
+    let body = strip_provenance(&body_raw);
     let card = CardFields::from_frontmatter_value(fm.clone()).map_err(|e| format!("{rel_path}: {e}"))?;
     let fm_json = frontmatter_json_string(&fm);
     let fm_hash = frontmatter_hash_stable_from_value(fm.clone()).map_err(|e| format!("{rel_path}: {e}"))?;
@@ -207,6 +246,7 @@ fn build_tier2_row(
         content_hash,
         wikilinks_json,
         raw_content_sha256,
+        provenance_json,
     })
 }
 
@@ -216,27 +256,51 @@ pub enum BuiltRows {
 }
 
 /// Build all note rows in parallel; results sorted by `rel_path` (stable vs Python insert order).
+/// Notes that fail YAML parsing are skipped (matches Python `validate_card_permissive` behavior).
+/// Returns `(rows, skipped_count)`.
 pub fn build_all_rows(
     vault: &Path,
     rel_paths: &[String],
     stats: &HashMap<String, (i64, i64)>,
     tier_ge2: bool,
     zlib_level: u32,
-) -> Result<BuiltRows, String> {
+) -> Result<(BuiltRows, usize), String> {
     if tier_ge2 {
-        let mut rows: Vec<Tier2Row> = rel_paths
+        let results: Vec<Result<Tier2Row, String>> = rel_paths
             .par_iter()
             .map(|rel_path| build_tier2_row(vault, rel_path, stats, zlib_level))
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect();
+        let mut rows = Vec::with_capacity(results.len());
+        let mut skipped: usize = 0;
+        for r in results {
+            match r {
+                Ok(row) => rows.push(row),
+                Err(e) => {
+                    eprintln!("vault-cache rust: skipping note (parse error): {e}");
+                    skipped += 1;
+                }
+            }
+        }
         rows.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
-        Ok(BuiltRows::Tier2(rows))
+        Ok((BuiltRows::Tier2(rows), skipped))
     } else {
-        let mut rows: Vec<Tier1Row> = rel_paths
+        let results: Vec<Result<Tier1Row, String>> = rel_paths
             .par_iter()
             .map(|rel_path| build_tier1_row(vault, rel_path, stats))
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect();
+        let mut rows = Vec::with_capacity(results.len());
+        let mut skipped: usize = 0;
+        for r in results {
+            match r {
+                Ok(row) => rows.push(row),
+                Err(e) => {
+                    eprintln!("vault-cache rust: skipping note (parse error): {e}");
+                    skipped += 1;
+                }
+            }
+        }
         rows.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
-        Ok(BuiltRows::Tier1(rows))
+        Ok((BuiltRows::Tier1(rows), skipped))
     }
 }
 

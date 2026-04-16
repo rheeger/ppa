@@ -8,8 +8,10 @@ import re
 from pathlib import Path
 from typing import Any
 
+from archive_sync.llm_enrichment.staging_types import EntityMention
+
 PROMPT_FILE = Path(__file__).resolve().parent.parent / "prompts" / "enrich_document.txt"
-ENRICH_DOCUMENT_PROMPT_VERSION = "v2"
+ENRICH_DOCUMENT_PROMPT_VERSION = "v3"
 
 _DATE_ISO = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _BODY_EXCERPT = 4000
@@ -103,8 +105,10 @@ def parse_document_response(
     *,
     fm: dict[str, Any],
     body: str = "",
-) -> dict[str, Any]:
-    """Map LLM JSON to vault field updates (only when allowed by current card state)."""
+    source_uid: str,
+    run_id: str,
+) -> tuple[dict[str, Any], list[EntityMention]]:
+    """Map LLM JSON to vault field updates and staged entity rows (only when allowed by card state)."""
 
     field_updates: dict[str, Any] = {}
 
@@ -136,7 +140,42 @@ def parse_document_response(
     elif "title" in field_updates:
         field_updates["summary"] = _compact_summary_line(field_updates["title"])
 
-    return field_updates
+    entities: list[EntityMention] = []
+    raw_mentions = data.get("entity_mentions") or []
+    if isinstance(raw_mentions, list):
+        for m in raw_mentions:
+            if not isinstance(m, dict):
+                continue
+            et = str(m.get("type") or "").strip().lower()
+            if et == "org":
+                et = "organization"
+            if et not in ("person", "place", "organization"):
+                continue
+            name = str(m.get("name") or "").strip()
+            if not name:
+                continue
+            ctx = m.get("context")
+            if not isinstance(ctx, dict):
+                ctx = {}
+            conf = m.get("confidence")
+            try:
+                c = float(conf) if conf is not None else 0.75
+            except (TypeError, ValueError):
+                c = 0.75
+            entities.append(
+                EntityMention(
+                    source_card_uid=source_uid,
+                    source_card_type="document",
+                    workflow="document_enrichment",
+                    entity_type=et,
+                    raw_text=name,
+                    context=ctx,
+                    confidence=max(0.0, min(1.0, c)),
+                    run_id=run_id,
+                )
+            )
+
+    return field_updates, entities
 
 
 def response_to_cache_payload(parsed: dict[str, Any] | None) -> dict[str, Any]:

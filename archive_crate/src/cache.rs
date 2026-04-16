@@ -1,7 +1,8 @@
 //! Vault scan cache — SQLite layout matches `archive_cli.vault_cache` (tier 1 frontmatter-only; tier ≥2 full note).
 
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyTuple};
+use pyo3::types::{PyDict, PyList, PyTuple};
+use rayon::prelude::*;
 use rusqlite::{params, Connection};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -18,23 +19,36 @@ const BATCH_INSERT: usize = 1000;
 const ZLIB_LEVEL: u32 = 6;
 
 /// Match `archive_cli.vault_cache._compute_vault_fingerprint` (sorted paths, same line format).
+/// Stat calls are parallelised with rayon; the hash is computed over sorted paths for determinism.
 pub fn compute_vault_fingerprint(
     vault: &Path,
     rel_paths: &[String],
 ) -> Result<(HashMap<String, (i64, i64)>, String), String> {
-    let mut sorted: Vec<&String> = rel_paths.iter().collect();
-    sorted.sort();
-    let mut lines: Vec<String> = Vec::new();
-    let mut stats: HashMap<String, (i64, i64)> = HashMap::new();
-    for rel_path in sorted {
-        let target = vault.join(rel_path);
-        let meta = match fs::metadata(&target) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-        let mtime_ns = file_mtime_ns(&meta);
-        let size = meta.len() as i64;
-        stats.insert(rel_path.clone(), (mtime_ns, size));
+    let stat_results: Vec<Option<(String, i64, i64)>> = rel_paths
+        .par_iter()
+        .map(|rel_path| {
+            let target = vault.join(rel_path);
+            match fs::metadata(&target) {
+                Ok(meta) => {
+                    let mtime_ns = file_mtime_ns(&meta);
+                    let size = meta.len() as i64;
+                    Some((rel_path.clone(), mtime_ns, size))
+                }
+                Err(_) => None,
+            }
+        })
+        .collect();
+
+    let mut stats: HashMap<String, (i64, i64)> = HashMap::with_capacity(rel_paths.len());
+    for item in stat_results.into_iter().flatten() {
+        stats.insert(item.0, (item.1, item.2));
+    }
+
+    let mut sorted_keys: Vec<&String> = stats.keys().collect();
+    sorted_keys.sort();
+    let mut lines: Vec<String> = Vec::with_capacity(sorted_keys.len());
+    for rel_path in &sorted_keys {
+        let (mtime_ns, size) = stats[*rel_path];
         lines.push(format!("{rel_path}\t{mtime_ns}\t{size}"));
     }
     let joined = lines.join("\n");
@@ -78,7 +92,8 @@ fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             body_compressed BLOB,
             content_hash TEXT,
             wikilinks_json TEXT,
-            raw_content_sha256 TEXT
+            raw_content_sha256 TEXT,
+            provenance_json TEXT NOT NULL DEFAULT '{}'
         );
         CREATE INDEX IF NOT EXISTS idx_notes_uid ON notes(uid);
         CREATE INDEX IF NOT EXISTS idx_notes_card_type ON notes(card_type);
@@ -110,6 +125,26 @@ pub fn vault_fingerprint(py: Python<'_>, vault_path: String) -> PyResult<(PyObje
     Ok((dict.to_object(py), fp))
 }
 
+/// Walk + stat + fingerprint in a single Rust call, returning `(rel_paths, stats_dict, fp)`.
+/// Uses rayon-parallelised stat and avoids re-walking when callers need both paths and fingerprint.
+#[pyfunction]
+pub fn vault_fingerprint_with_paths(
+    py: Python<'_>,
+    vault_path: String,
+) -> PyResult<(PyObject, PyObject, String)> {
+    let vault = PathBuf::from(&vault_path);
+    let rel_paths = walk::collect_note_paths(&vault_path)?;
+    let (stats, fp) = compute_vault_fingerprint(&vault, &rel_paths)
+        .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+    let py_paths = PyList::new_bound(py, &rel_paths);
+    let dict = PyDict::new_bound(py);
+    for (k, (mt, sz)) in stats {
+        let tup = PyTuple::new_bound(py, [mt, sz]);
+        dict.set_item(k, tup)?;
+    }
+    Ok((py_paths.to_object(py), dict.to_object(py), fp))
+}
+
 fn flush_tier2_batch_rs(
     conn: &mut Connection,
     batch: &mut Vec<cache_build::Tier2Row>,
@@ -124,8 +159,8 @@ fn flush_tier2_batch_rs(
             r#"INSERT INTO notes (
                 rel_path, uid, card_type, slug, mtime_ns, file_size,
                 frontmatter_json, frontmatter_hash, body_compressed, content_hash, wikilinks_json,
-                raw_content_sha256
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+                raw_content_sha256, provenance_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
             params![
                 row.rel_path,
                 row.uid,
@@ -139,6 +174,7 @@ fn flush_tier2_batch_rs(
                 row.content_hash,
                 row.wikilinks_json,
                 row.raw_content_sha256,
+                row.provenance_json,
             ],
         )?;
         *inserted += 1;
@@ -208,18 +244,19 @@ pub fn build_vault_cache(
     let fp_owned = fp.clone();
     let tier_meta = tier;
 
-    let (inserted, fp_out) = py.allow_threads(move || {
+    let (inserted, skipped, fp_out) = py.allow_threads(move || {
         if let Some(parent) = Path::new(&cache_path_owned).parent() {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let mut conn = Connection::open(&cache_path_owned).map_err(|e| e.to_string())?;
+        conn.busy_timeout(std::time::Duration::from_secs(120)).map_err(|e| e.to_string())?;
         init_db(&conn).map_err(|e| e.to_string())?;
         conn.execute("DELETE FROM notes", [])
             .map_err(|e| e.to_string())?;
         conn.execute("DELETE FROM cache_meta", [])
             .map_err(|e| e.to_string())?;
 
-        let built = cache_build::build_all_rows(
+        let (built, skipped) = cache_build::build_all_rows(
             Path::new(&vault_path_owned),
             &rel_paths_owned,
             &stats_owned,
@@ -267,12 +304,13 @@ pub fn build_vault_cache(
         meta_set(&conn, "generated_at", &now.to_string()).map_err(|e| e.to_string())?;
         meta_set(&conn, "note_count", &inserted.to_string()).map_err(|e| e.to_string())?;
 
-        Ok::<(usize, String), String>((inserted, fp_owned))
+        Ok::<(usize, usize, String), String>((inserted, skipped, fp_owned))
     })
     .map_err(|e: String| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
 
     let out = PyDict::new_bound(py);
     out.set_item("note_count", inserted)?;
+    out.set_item("skipped", skipped)?;
     out.set_item("fingerprint", fp_out)?;
     Ok(out.to_object(py))
 }

@@ -413,7 +413,7 @@ impl PersonResolutionIndexInner {
             }
         }
         if candidate_links.is_empty() {
-            self.records.keys().cloned().collect()
+            Vec::new()
         } else {
             candidate_links.into_iter().collect()
         }

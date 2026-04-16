@@ -16,27 +16,22 @@ from typing import Any
 from archive_auth import INTERNAL_DOMAINS
 from archive_cli.vault_cache import VaultScanCache
 from archive_sync.extractors.runner import uid_in_vault_percent_sample
-from archive_sync.llm_enrichment.cache import InferenceCache, build_inference_cache_key
+from archive_sync.llm_enrichment.cache import (InferenceCache,
+                                               build_inference_cache_key)
 from archive_sync.llm_enrichment.classify_index import ClassifyIndex
 from archive_sync.llm_enrichment.threads import (
-    MessageStubIndex,
-    ParticipantNameResolver,
-    build_message_stub_index,
-    build_participant_name_resolver,
-    build_thread_index,
-    chunk_thread_messages,
-    hydrate_imessage_thread,
-    hydrate_thread,
-    imessage_thread_content_hash,
-    load_email_stubs_for_vault,
-    render_imessage_chunk_for_llm,
-)
+    MessageStubIndex, ParticipantNameResolver, build_message_stub_index,
+    build_participant_name_resolver, build_thread_index, chunk_thread_messages,
+    hydrate_imessage_thread, hydrate_thread, imessage_thread_content_hash,
+    load_email_stubs_for_vault, render_imessage_chunk_for_llm)
 from archive_sync.llm_enrichment.workflows import calendar_event as wf_calendar
 from archive_sync.llm_enrichment.workflows import document as wf_document
 from archive_sync.llm_enrichment.workflows import email_thread as wf_email
 from archive_sync.llm_enrichment.workflows import finance as wf_finance
-from archive_sync.llm_enrichment.workflows import imessage_thread as wf_imessage
-from archive_vault.llm_provider import GeminiProvider, LLMResponse, OllamaProvider
+from archive_sync.llm_enrichment.workflows import \
+    imessage_thread as wf_imessage
+from archive_vault.llm_provider import (GeminiProvider, LLMResponse,
+                                        OllamaProvider)
 from archive_vault.provenance import ProvenanceEntry, merge_provenance
 from archive_vault.schema import validate_card_strict
 from archive_vault.vault import read_note, write_card
@@ -954,6 +949,7 @@ class CardEnrichmentRunner:
         *,
         cache: InferenceCache | None,
         prov: OllamaProvider | GeminiProvider,
+        entity_path: Path,
         lock: threading.Lock | None,
     ) -> str:
         def _bump(metric: str, n: int = 1) -> None:
@@ -972,7 +968,7 @@ class CardEnrichmentRunner:
             content_hash=content_hash,
             model_id=self.model,
             prompt_version=wf_document.ENRICH_DOCUMENT_PROMPT_VERSION,
-            schema_version="document_v2",
+            schema_version="document_v3",
             temperature=0.0,
             seed=42,
         )
@@ -1036,10 +1032,17 @@ class CardEnrichmentRunner:
             _bump("errors")
             return "error"
 
-        field_updates = wf_document.parse_document_response(parsed, fm=fm, body=body)
+        field_updates, entities = wf_document.parse_document_response(
+            parsed,
+            fm=fm,
+            body=body,
+            source_uid=uid,
+            run_id=self.run_id,
+        )
 
         if llm_invoked and (
             field_updates
+            or entities
             or str(parsed.get("description") or "").strip()
             or str(parsed.get("title") or "").strip()
         ):
@@ -1065,6 +1068,7 @@ class CardEnrichmentRunner:
                         "subject": str(fm.get("title") or fm.get("filename") or ""),
                         "parsed": parsed,
                         "field_updates": field_updates,
+                        "entity_mentions_count": len(entities),
                     },
                     ensure_ascii=False,
                 )
@@ -1081,6 +1085,19 @@ class CardEnrichmentRunner:
                     _append_preview()
             else:
                 _append_preview()
+
+        if not self.dry_run:
+            for e in entities:
+                line = e.to_json_line() + "\n"
+                if lock:
+                    with lock:
+                        with entity_path.open("a", encoding="utf-8") as fh:
+                            fh.write(line)
+                        self.metrics.entity_mentions_staged += 1
+                else:
+                    with entity_path.open("a", encoding="utf-8") as fh:
+                        fh.write(line)
+                    self.metrics.entity_mentions_staged += 1
 
         if field_updates:
             if self.dry_run:
@@ -1638,6 +1655,7 @@ class CardEnrichmentRunner:
 
         self.metrics.total_cards = len(paths)
 
+        entity_path = self.staging_dir / "entity_mentions.jsonl"
         metrics_path = self.staging_dir / "_metrics.json"
         self.staging_dir.mkdir(parents=True, exist_ok=True)
         if self.dry_run:
@@ -1711,6 +1729,7 @@ class CardEnrichmentRunner:
                 rel,
                 cache=cache,
                 prov=prov,
+                entity_path=entity_path,
                 lock=lock,
             )
             if lock:

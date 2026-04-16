@@ -8,7 +8,8 @@ The user stores PDFs, medical records, leases, tax forms, tickets, and other fil
   "summary": string or null,
   "description": string or null,
   "title": string or null,
-  "document_date": string or null
+  "document_date": string or null,
+  "entity_mentions": array of objects (see below) or []
 }
 
 ### summary (required when the excerpt is summarizable)
@@ -29,6 +30,15 @@ The user stores PDFs, medical records, leases, tax forms, tickets, and other fil
 ### document_date
 - ISO date `YYYY-MM-DD` only if a clear document date appears in the excerpt (e.g. statement date, lease start, form year as Jan 1 of that year only when the doc is clearly tied to that calendar year).
 - Otherwise **null**. Do not guess from file modified date alone.
+
+### entity_mentions
+- **0–12** items. Only **people, places, and organizations** that appear **by name** in the excerpt and are **material** to what the document is (parties, institutions, venues, employers, providers — not generic words like "the hospital" unless tied to a name).
+- Each object **must** include:
+  - `"type"`: one of `"person"`, `"place"`, `"organization"` (use `"organization"` for companies, agencies, schools, brands; map `"org"` mentally to `"organization"` in output).
+  - `"name"`: string as written or a concise canonical form (e.g. "Cedars-Sinai Medical Center").
+  - `"context"`: object with short hints such as `role`, `relationship`, `city`, or `note` — only facts supported by the excerpt.
+- Optional `"confidence"`: number 0–1 if uncertain; omit when clearly stated.
+- Omit or use `[]` if there are no substantive named entities. Do not invent names.
 
 ## Rules
 

@@ -1,7 +1,99 @@
 {
   "vault_commit": "",
-  "snapshot_date": "2026-04-01",
-  "seed_uids_by_type": {},
+  "snapshot_date": "2026-04-15",
+  "seed_uids_by_type": {
+    "meal_order": [
+      "hfa-meal-order-12b8e8deba25",
+      "hfa-meal-order-c3784bc3911c",
+      "hfa-meal-order-c1b8069491c2",
+      "hfa-meal-order-c82f9030e85e",
+      "hfa-meal-order-eae32e7cf066"
+    ],
+    "ride": [
+      "hfa-ride-fff0ca6a0c52",
+      "hfa-ride-4d34847ba55d",
+      "hfa-ride-1c7e9711c780",
+      "hfa-ride-4fc2badc3005",
+      "hfa-ride-983821035cbc"
+    ],
+    "grocery_order": [
+      "hfa-grocery-order-bfeb731b1e31",
+      "hfa-grocery-order-3c977a6de0e7",
+      "hfa-grocery-order-9c447607a95b",
+      "hfa-grocery-order-1a0ad12d9f1d",
+      "hfa-grocery-order-067b85f25aca"
+    ],
+    "flight": [
+      "hfa-flight-3c43b26eb4f9",
+      "hfa-flight-49070c8f85fa",
+      "hfa-flight-a3cccf94df38",
+      "hfa-flight-5b30fae1c553",
+      "hfa-flight-2c6e0866d8e6"
+    ],
+    "accommodation": [
+      "hfa-accommodation-4cdad15b8c78",
+      "hfa-accommodation-67b6eda57c5c",
+      "hfa-accommodation-26c14256c28f",
+      "hfa-accommodation-26e45f550291",
+      "hfa-accommodation-8b8ca9e920e5"
+    ],
+    "car_rental": [
+      "hfa-car-rental-9914d86ad198",
+      "hfa-car-rental-0c0f3feefb19",
+      "hfa-car-rental-c5975d1eb4d5",
+      "hfa-car-rental-82b344263005",
+      "hfa-car-rental-8e482a7dcf7a"
+    ],
+    "purchase": [
+      "hfa-purchase-fc07e704c6be",
+      "hfa-purchase-58c733c26b7b",
+      "hfa-purchase-27b01b460edc",
+      "hfa-purchase-59fef2ed8600",
+      "hfa-purchase-46034c410882"
+    ],
+    "shipment": [
+      "hfa-shipment-fc639fb49bc7",
+      "hfa-shipment-a08ae0de6199",
+      "hfa-shipment-c85e479adaca",
+      "hfa-shipment-bd287f08465b",
+      "hfa-shipment-4fb2c22e16e6"
+    ],
+    "event_ticket": [
+      "hfa-event-ticket-073c0e226d09",
+      "hfa-event-ticket-6a4e09b7e5d1",
+      "hfa-event-ticket-4fe11b1c3d55",
+      "hfa-event-ticket-596d16704be4",
+      "hfa-event-ticket-e566d399a9d0"
+    ],
+    "payroll": [
+      "hfa-payroll-79c511bfa6a9",
+      "hfa-payroll-0f238db96508",
+      "hfa-payroll-e28590cc725f",
+      "hfa-payroll-0b931396c259",
+      "hfa-payroll-2db877ad8d7e"
+    ],
+    "subscription": [
+      "hfa-subscription-9a24cea5c6f7",
+      "hfa-subscription-359a9267471b",
+      "hfa-subscription-a25554764cb4",
+      "hfa-subscription-eef3895ca458",
+      "hfa-subscription-6ce848186d6f"
+    ],
+    "place": [
+      "hfa-place-00004acab94b",
+      "hfa-place-0000bc736000",
+      "hfa-place-001367e7cf3c",
+      "hfa-place-0018ca3ac541",
+      "hfa-place-001aba8a21ec"
+    ],
+    "organization": [
+      "hfa-organization-0047ae744b95",
+      "hfa-organization-005b59ffa61e",
+      "hfa-organization-006553736ac8",
+      "hfa-organization-00b5ea4e304d",
+      "hfa-organization-00ed5dfc76fb"
+    ]
+  },
   "cluster_cap": 1000,
   "min_cards_per_type": 1,
   "target_percent": 5,

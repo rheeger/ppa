@@ -15,7 +15,8 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from archive_vault.schema import validate_card_permissive
-from archive_vault.vault import extract_wikilinks, iter_note_paths, read_note_file, read_note_frontmatter_file
+from archive_vault.vault import (extract_wikilinks, iter_note_paths,
+                                 read_note_file, read_note_frontmatter_file)
 
 logger = logging.getLogger("ppa.vault_cache")
 
@@ -63,6 +64,34 @@ def _compute_vault_fingerprint(
         lines.append(f"{rel_path}\t{mtime_ns}\t{size}")
     fingerprint = hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
     return stats, fingerprint
+
+
+def _compute_fingerprint_with_paths(
+    vault: Path,
+) -> tuple[list[str], dict[str, tuple[int, int]], str]:
+    """Walk + stat + fingerprint via Rust (rayon-parallelised) when available, else Python fallback."""
+    from archive_cli.ppa_engine import ppa_engine
+
+    if ppa_engine() == "rust":
+        try:
+            import archive_crate
+
+            rel_paths_py, stats_dict, fp = archive_crate.vault_fingerprint_with_paths(str(vault))
+            stats: dict[str, tuple[int, int]] = {}
+            for k, v in stats_dict.items():
+                stats[k] = (int(v[0]), int(v[1]))
+            return list(rel_paths_py), stats, fp
+        except ImportError:
+            pass
+        except Exception as exc:
+            warnings.warn(
+                f"PPA: falling back to Python for fingerprint — archive_crate error: {exc}",
+                stacklevel=2,
+            )
+
+    rel_paths = [p.as_posix() for p in iter_note_paths(vault)]
+    stats_py, fp = _compute_vault_fingerprint(vault, rel_paths)
+    return rel_paths, stats_py, fp
 
 
 def _init_db(conn: sqlite3.Connection) -> None:
@@ -202,8 +231,10 @@ def _try_build_vault_cache_disk_with_rust(
         logger.warning("vault-cache rust fingerprint check failed: %s", exc)
         return False
     try:
-        if cache_path.exists():
-            cache_path.unlink()
+        for suffix in ("", "-wal", "-shm"):
+            p = Path(str(cache_path) + suffix)
+            if p.exists():
+                p.unlink()
         out = archive_crate.build_vault_cache(str(vault), str(cache_path), tier)
         if out.get("fingerprint") != expected_fp:
             logger.warning("vault-cache rust build fingerprint mismatch; using Python fill")
@@ -213,17 +244,23 @@ def _try_build_vault_cache_disk_with_rust(
                 pass
             return False
         n = int(out.get("note_count", 0))
-        if n != expected_note_count:
+        skipped = int(out.get("skipped", 0))
+        if n + skipped != expected_note_count:
             logger.warning(
-                "vault-cache rust note_count mismatch (expected=%d got=%d); using Python fill",
+                "vault-cache rust note_count mismatch (expected=%d got=%d skipped=%d); using Python fill",
                 expected_note_count,
                 n,
+                skipped,
             )
             try:
                 cache_path.unlink(missing_ok=True)
             except OSError:
                 pass
             return False
+        if skipped > 0:
+            logger.info(
+                "vault-cache rust skipped %d notes with parse errors (inserted=%d)", skipped, n
+            )
         logger.info("vault-cache disk build used rust engine tier=%d notes=%d", tier, n)
         return True
     except Exception as exc:
@@ -275,8 +312,7 @@ class VaultScanCache:
         _ = workers  # reserved for future parallel reads
         vault = Path(vault).resolve()
         t0 = time.monotonic()
-        rel_paths = [p.as_posix() for p in iter_note_paths(vault)]
-        stats, fp = _compute_vault_fingerprint(vault, rel_paths)
+        rel_paths, stats, fp = _compute_fingerprint_with_paths(vault)
         fp_elapsed = time.monotonic() - t0
         logger.info("vault-cache fingerprint_check vault=%s elapsed=%.2fs", vault, fp_elapsed)
 
@@ -798,8 +834,7 @@ def refresh_stored_vault_fingerprint(vault: Path | str) -> bool:
     if not cache_path.exists():
         return False
     t0 = time.monotonic()
-    rel_paths = [p.as_posix() for p in iter_note_paths(vault)]
-    _, fp = _compute_vault_fingerprint(vault, rel_paths)
+    _, _, fp = _compute_fingerprint_with_paths(vault)
     conn = sqlite3.connect(str(cache_path), timeout=120.0)
     try:
         inferred = _infer_tier_from_notes(conn)

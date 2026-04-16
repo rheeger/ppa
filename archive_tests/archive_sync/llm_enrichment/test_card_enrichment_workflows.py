@@ -402,13 +402,17 @@ def test_parse_document_response() -> None:
         "description": "Bank statement for Jan 2024; closing balance $100.",
         "title": "Jan 2024 bank statement",
         "document_date": "2024-01-31",
+        "entity_mentions": [],
     }
-    fu = wf_doc.parse_document_response(data, fm=fm, body=body)
+    fu, ents = wf_doc.parse_document_response(
+        data, fm=fm, body=body, source_uid="doc-u1", run_id="r1"
+    )
     assert fu["description"].startswith("Bank statement")
     assert fu["title"] == "Jan 2024 bank statement"
     assert fu["document_date"] == "2024-01-31"
     assert fu["summary"] == "Jan 2024 bank statement; closing balance $100."
     assert fu["quality_flags"] == []
+    assert ents == []
 
 
 def test_parse_document_response_overwrites_description_and_fills_summary() -> None:
@@ -419,29 +423,77 @@ def test_parse_document_response_overwrites_description_and_fills_summary() -> N
         "document_date": "",
     }
     body = "Completely different text in the document body with more content."
-    fu = wf_doc.parse_document_response(
+    fu, ents = wf_doc.parse_document_response(
         {
             "summary": "Replacement line.",
             "description": "New description from LLM.",
             "title": None,
             "document_date": None,
+            "entity_mentions": [],
         },
         fm=fm,
         body=body,
+        source_uid="doc-u2",
+        run_id="r1",
     )
     assert fu["description"] == "New description from LLM."
     assert fu["summary"] == "Replacement line."
+    assert ents == []
 
 
 def test_parse_document_response_summary_fallback_from_description() -> None:
     fm = {"description": "", "title": "t", "quality_flags": []}
-    fu = wf_doc.parse_document_response(
-        {"description": "First sentence here. Second sentence.", "summary": ""},
+    fu, ents = wf_doc.parse_document_response(
+        {"description": "First sentence here. Second sentence.", "summary": "", "entity_mentions": []},
         fm=fm,
         body="x",
+        source_uid="doc-u3",
+        run_id="r1",
     )
     assert "summary" in fu
     assert fu["summary"].startswith("First sentence")
+    assert ents == []
+
+
+def test_parse_document_response_entity_mentions() -> None:
+    fm = {
+        "description": "",
+        "title": "nicu.pdf",
+        "quality_flags": ["title_from_filename"],
+        "document_date": "",
+    }
+    body = "Patient Amelia Friedman-Heeger admitted to Cedars-Sinai NICU 2025-12-27."
+    data = {
+        "summary": "NICU face sheet, Amelia Friedman-Heeger, Cedars-Sinai, admitted 2025-12-27.",
+        "description": "Medical face sheet for newborn at Cedars-Sinai Medical Center.",
+        "title": "NICU face sheet",
+        "document_date": "2025-12-27",
+        "entity_mentions": [
+            {
+                "type": "person",
+                "name": "Amelia Friedman-Heeger",
+                "context": {"role": "patient"},
+            },
+            {
+                "type": "organization",
+                "name": "Cedars-Sinai Medical Center",
+                "context": {"note": "hospital"},
+            },
+            {"type": "org", "name": "Should map to organization", "context": {}},
+        ],
+    }
+    fu, ents = wf_doc.parse_document_response(
+        data, fm=fm, body=body, source_uid="hfa-document-x", run_id="run-doc"
+    )
+    assert "summary" in fu
+    assert len(ents) == 3
+    types = {e.entity_type for e in ents}
+    assert types == {"person", "organization"}
+    assert ents[0].source_card_uid == "hfa-document-x"
+    assert ents[0].workflow == "document_enrichment"
+    assert ents[0].source_card_type == "document"
+    assert ents[2].entity_type == "organization"
+    assert ents[2].raw_text == "Should map to organization"
 
 
 def test_document_content_hash_stable() -> None:

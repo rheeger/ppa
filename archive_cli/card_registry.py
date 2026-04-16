@@ -1016,7 +1016,6 @@ CARD_TYPE_REGISTRATIONS: tuple[CardTypeRegistration, ...] = (
         edge_rules=(
             DeclEdgeRule("source_email", "derived_from", "card", ("source_email",), multi=False),
             DeclEdgeRule("service", "provided_by", "card", ("service",), multi=False),
-            DeclEdgeRule("driver_name", "ride_has_driver", "person", ("driver_name",), multi=False),
             DeclEdgeRule("pickup_location", "located_at", "card", ("pickup_location",), multi=False),
             DeclEdgeRule("dropoff_location", "located_at", "card", ("dropoff_location",), multi=False),
         ),

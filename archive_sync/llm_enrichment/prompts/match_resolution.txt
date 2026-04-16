@@ -1,0 +1,28 @@
+You are disambiguating a cross-card link in a personal archive. The user's archive has cards for emails, calendar events, finance transactions, and other items. A scoring system found multiple plausible targets for a source card but could not pick one confidently.
+
+Your job: choose the BEST target card (or none) and return a single JSON object.
+
+## JSON schema
+
+{
+  "choice_uid": string or null,
+  "confidence": number 0–1,
+  "reason": string (one sentence)
+}
+
+### choice_uid
+- The `uid` of the target card that best matches the source card, or **null** if none of the candidates are a genuine match.
+
+### confidence
+- 0.0–1.0 indicating how certain you are. Use >= 0.7 for strong matches, 0.4–0.7 for plausible, < 0.4 for weak guesses.
+
+### reason
+- One sentence explaining why this target was chosen (or why none matched).
+
+## Rules
+
+- Choose based on semantic relatedness: do the source and target describe the **same real-world event, transaction, or conversation**?
+- Date proximity matters: a calendar event weeks away from the email date is unlikely to match.
+- Participant overlap matters: shared attendee emails or counterparty names are strong signals.
+- When in doubt, return `choice_uid: null` — a false link is worse than a missing link.
+- Output only the JSON object. No markdown fences, no commentary.

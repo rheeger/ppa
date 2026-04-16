@@ -7,10 +7,10 @@ from datetime import date
 from pathlib import Path
 
 import pytest
-
 from archive_sync.adapters.base import deterministic_provenance
 from archive_sync.extractors.entity_resolution import run_person_linking
-from archive_vault.schema import FinanceCard, MedicalRecordCard, PersonCard, RideCard
+from archive_vault.schema import (FinanceCard, MedicalRecordCard, PersonCard,
+                                  RideCard)
 from archive_vault.vault import read_note, write_card
 
 
@@ -244,7 +244,7 @@ def test_decl_edge_rules_registered():
     ride_spec = REGISTRATION_BY_CARD_TYPE.get("ride")
     assert ride_spec is not None
     ride_edges = {r.edge_type for r in (ride_spec.edge_rules or ())}
-    assert "ride_has_driver" in ride_edges
+    assert "provided_by" in ride_edges
 
     medical_spec = REGISTRATION_BY_CARD_TYPE.get("medical_record")
     assert medical_spec is not None

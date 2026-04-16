@@ -9,9 +9,10 @@ from typing import Any
 
 from archive_vault.provenance import validate_provenance
 from archive_vault.schema import validate_card_strict
-from archive_vault.vault import iter_notes, read_note
+from archive_vault.vault import _tier2_cache_path, iter_notes, read_note
 
 from ..index_store import BaseArchiveIndex
+from ..ppa_engine import ppa_engine
 from ..store import DefaultArchiveStore
 
 
@@ -25,11 +26,44 @@ def stats(*, index: BaseArchiveIndex, logger: logging.Logger) -> dict[str, Any]:
 
 
 def validate(*, vault: Path, logger: logging.Logger) -> dict[str, Any]:
-    """Walk the vault and validate every card (canonical markdown), not via index.
+    """Walk the vault and validate every card.
 
-    Validation checks canonical on-disk data integrity rather than derived index rows.
+    When ``PPA_ENGINE=rust`` and the tier-2 vault scan cache exists at
+    ``_meta/vault-scan-cache.sqlite3``, uses ``archive_crate.validate_vault_from_cache``
+    — parallel Rust validation of uid/type/source/dates + full provenance coverage
+    from cached ``provenance_json`` (same provenance rules as Python
+    ``validate_provenance``). This is authoritative and fast (~seconds on large vaults).
+
+    Falls back to per-note Python (``read_note`` + Pydantic + ``validate_provenance``)
+    when the cache is missing or ``archive_crate`` is unavailable.
     """
     logger.info("validate_start vault=%s", vault)
+    vault = Path(vault)
+    cache = _tier2_cache_path(vault)
+    if cache is not None and ppa_engine() == "rust":
+        try:
+            import archive_crate
+
+            raw = archive_crate.validate_vault_from_cache(str(cache))
+            err_list = list(raw.get("errors", []) or [])
+            total = int(raw.get("total", 0))
+            valid = int(raw.get("valid", 0))
+            logger.info(
+                "validate_done engine=rust total=%s valid=%s error_count=%s",
+                total,
+                valid,
+                len(err_list),
+            )
+            return {
+                "total": total,
+                "valid": valid,
+                "errors": err_list,
+                "engine": "rust",
+                "cache_path": str(cache),
+            }
+        except Exception as exc:
+            logger.warning("Rust validate unavailable, falling back to Python: %s", exc)
+
     total = 0
     valid = 0
     errors: list[str] = []
@@ -44,8 +78,8 @@ def validate(*, vault: Path, logger: logging.Logger) -> dict[str, Any]:
             valid += 1
         except Exception as exc:
             errors.append(f"- {rel_path}: {exc}")
-    logger.info("validate_done total=%s valid=%s error_count=%s", total, valid, len(errors))
-    return {"total": total, "valid": valid, "errors": errors}
+    logger.info("validate_done engine=python total=%s valid=%s error_count=%s", total, valid, len(errors))
+    return {"total": total, "valid": valid, "errors": errors, "engine": "python"}
 
 
 def duplicates(*, vault: Path, logger: logging.Logger) -> dict[str, Any]:

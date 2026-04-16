@@ -16,10 +16,12 @@ from archive_cli.ppa_engine import ppa_engine
 from archive_sync.adapters.base import deterministic_provenance
 from archive_vault.identity import IdentityCache
 from archive_vault.identity_resolver import PersonIndex, ResolveResult
-from archive_vault.identity_resolver import resolve_person_batch as resolve_person_batch_python
+from archive_vault.identity_resolver import \
+    resolve_person_batch as resolve_person_batch_python
 from archive_vault.schema import OrganizationCard, PlaceCard
 from archive_vault.uid import generate_uid
-from archive_vault.vault import iter_parsed_notes, iter_parsed_notes_for_card_types, write_card
+from archive_vault.vault import (iter_parsed_notes,
+                                 iter_parsed_notes_for_card_types, write_card)
 
 log = logging.getLogger("ppa.extractor.entity_resolution")
 
@@ -806,9 +808,7 @@ def _person_names_from_derived_card(card: dict[str, Any]) -> list[str]:
         if pn:
             names.append(pn)
     elif ct == "ride":
-        dn = str(card.get("driver_name") or "").strip()
-        if dn:
-            names.append(dn)
+        pass
     elif ct == "finance":
         cp = str(card.get("counterparty") or "").strip()
         if cp:
@@ -830,7 +830,8 @@ def apply_person_links(
     """Write ``people`` wikilinks onto vault cards for merge :class:`ResolveResult` rows."""
 
     from archive_vault.provenance import ProvenanceEntry
-    from archive_vault.schema import validate_card_permissive, validate_card_strict
+    from archive_vault.schema import (validate_card_permissive,
+                                      validate_card_strict)
     from archive_vault.vault import read_note, write_card
 
     today = date.today().isoformat()

@@ -17,6 +17,7 @@ mod hasher;
 mod materializer;
 mod person_index;
 mod progress;
+mod validator;
 mod scanner;
 mod walk;
 
@@ -30,6 +31,7 @@ fn archive_crate(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(frontmatter::parse_frontmatter, m)?)?;
     m.add_function(wrap_pyfunction!(json_stable::stable_json_from_yaml_frontmatter, m)?)?;
     m.add_function(wrap_pyfunction!(cache::vault_fingerprint, m)?)?;
+    m.add_function(wrap_pyfunction!(cache::vault_fingerprint_with_paths, m)?)?;
     m.add_function(wrap_pyfunction!(cache::build_vault_cache, m)?)?;
     m.add_function(wrap_pyfunction!(scanner::vault_paths_and_fingerprint, m)?)?;
     m.add_function(wrap_pyfunction!(scanner::cards_by_type_from_cache, m)?)?;
@@ -52,5 +54,6 @@ fn archive_crate(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cache_iter::frontmatter_dicts_from_cache, m)?)?;
     m.add_function(wrap_pyfunction!(cache_iter::note_paths_from_cache, m)?)?;
     m.add_class::<progress::ProgressCallback>()?;
+    m.add_function(wrap_pyfunction!(validator::validate_vault_from_cache, m)?)?;
     Ok(())
 }
