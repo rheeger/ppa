@@ -22,6 +22,29 @@
       "description": "2-hop neighborhood from primary user PersonCard (always in slice)"
     }
   ],
+  "semantic_queries": [
+    {
+      "query": "PLACEHOLDER: restaurant name from a meal_order card in the slice",
+      "expected_types": ["meal_order"],
+      "min_hits": 1,
+      "description": "Restaurant name finds meal_order via semantic search",
+      "phase": "post-phase-4"
+    },
+    {
+      "query": "PLACEHOLDER: destination airport from a flight card in the slice",
+      "expected_types": ["flight"],
+      "min_hits": 1,
+      "description": "Airport code finds flight via semantic search",
+      "phase": "post-phase-4"
+    },
+    {
+      "query": "PLACEHOLDER: pickup/dropoff from a ride card in the slice",
+      "expected_types": ["ride"],
+      "min_hits": 1,
+      "description": "Route description finds ride via semantic search",
+      "phase": "post-phase-4"
+    }
+  ],
   "structural_invariants": {
     "zero_orphaned_wikilinks": true,
     "zero_orphaned_person_refs": false,

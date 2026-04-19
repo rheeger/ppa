@@ -10,17 +10,14 @@ import os
 import sys
 from pathlib import Path
 
-from archive_sync.llm_enrichment.defaults import DEFAULT_ENRICH_CARD_GEMINI_MODEL, DEFAULT_ENRICH_EXTRACT_MODEL
+from archive_sync.llm_enrichment.defaults import (
+    DEFAULT_ENRICH_CARD_GEMINI_MODEL, DEFAULT_ENRICH_EXTRACT_MODEL)
 
-from .benchmark import (
-    BENCHMARK_PROFILES,
-    DEFAULT_BENCHMARK_SOURCE_VAULT,
-    benchmark_multi_size,
-    benchmark_rebuild,
-    benchmark_seed_links,
-    build_benchmark_sample,
-)
+from .benchmark import (BENCHMARK_PROFILES, DEFAULT_BENCHMARK_SOURCE_VAULT,
+                        benchmark_multi_size, benchmark_rebuild,
+                        benchmark_seed_links, build_benchmark_sample)
 from .commands import admin as admin_cmd
+from .commands import batch_embed as batch_embed_cmd
 from .commands import explain
 from .commands import graph as graph_cmd
 from .commands import query as query_cmd
@@ -156,6 +153,62 @@ def main() -> None:
     embed_parser.add_argument("--limit", type=int, default=0)
     embed_parser.add_argument("--embedding-model", default="")
     embed_parser.add_argument("--embedding-version", type=int, default=0)
+    embed_estimate_parser = subparsers.add_parser(
+        "embed-estimate",
+        help="Estimate cost and time for embedding pending chunks",
+    )
+    embed_estimate_parser.add_argument("--embedding-model", type=str, default="")
+    embed_estimate_parser.add_argument("--embedding-version", type=int, default=0)
+    embed_batch_submit_parser = subparsers.add_parser(
+        "embed-batch-submit",
+        help="Submit pending chunks to OpenAI Batch API (50% discount, no TPM/TPD)",
+    )
+    embed_batch_submit_parser.add_argument("--embedding-model", type=str, default="")
+    embed_batch_submit_parser.add_argument("--embedding-version", type=int, default=0)
+    embed_batch_submit_parser.add_argument(
+        "--max-batches",
+        type=int,
+        default=0,
+        help="Max batches to submit in one invocation (0 = until no pending remain)",
+    )
+    embed_batch_submit_parser.add_argument(
+        "--requests-per-batch",
+        type=int,
+        default=50_000,
+        help="Chunks per batch (OpenAI caps at 50,000 for /v1/embeddings)",
+    )
+    embed_batch_submit_parser.add_argument(
+        "--no-context-prefix",
+        action="store_true",
+        help="Disable context prefix (defaults to retrieval.context.include_in_embeddings)",
+    )
+    embed_batch_submit_parser.add_argument("--artifact-dir", type=str, default="")
+    embed_batch_poll_parser = subparsers.add_parser(
+        "embed-batch-poll",
+        help="Refresh status of in-flight OpenAI embedding batches",
+    )
+    embed_batch_ingest_parser = subparsers.add_parser(
+        "embed-batch-ingest",
+        help="Download completed batch outputs and write vectors into embeddings",
+    )
+    embed_batch_ingest_parser.add_argument("--artifact-dir", type=str, default="")
+    embed_batch_ingest_parser.add_argument(
+        "--write-batch-size",
+        type=int,
+        default=500,
+        help="Rows per INSERT...ON CONFLICT during ingest",
+    )
+    embed_batch_ingest_parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Parallel ingest workers (each batch is ~1.5 GB download)",
+    )
+    subparsers.add_parser(
+        "embed-batch-status",
+        help="Summary of OpenAI batch states + remaining pending chunks",
+    )
+    _ = embed_batch_poll_parser  # placate linters
     subparsers.add_parser("seed-link-surface")
     seed_link_enqueue_parser = subparsers.add_parser("seed-link-enqueue")
     seed_link_enqueue_parser.add_argument("--modules", default="")
@@ -1037,7 +1090,8 @@ def main() -> None:
     if args.command == "template-sampler":
         try:
             from .commands._resolve import resolve_vault
-            from .commands.template_sampler import run_template_sampler, run_template_sampler_from_batch_file
+            from .commands.template_sampler import (
+                run_template_sampler, run_template_sampler_from_batch_file)
 
             vp = str(getattr(args, "vault", "") or "").strip() or str(resolve_vault())
             batch = str(getattr(args, "batch", "") or "").strip()
@@ -1104,7 +1158,8 @@ def main() -> None:
         return
     if args.command == "enrich-emails":
         try:
-            from archive_sync.llm_enrichment.enrich_runner import LlmEnrichmentRunner
+            from archive_sync.llm_enrichment.enrich_runner import \
+                LlmEnrichmentRunner
 
             from .commands._resolve import resolve_vault
 
@@ -1151,7 +1206,8 @@ def main() -> None:
         return
     if args.command == "enrich-cards":
         try:
-            from archive_sync.llm_enrichment.card_enrichment_runner import CardEnrichmentRunner
+            from archive_sync.llm_enrichment.card_enrichment_runner import \
+                CardEnrichmentRunner
 
             from .commands._resolve import resolve_vault
 
@@ -1203,7 +1259,8 @@ def main() -> None:
         return
     if args.command == "extract-document-text":
         try:
-            from archive_sync.llm_enrichment.document_text_extractor import run_document_text_extraction
+            from archive_sync.llm_enrichment.document_text_extractor import \
+                run_document_text_extraction
 
             from .commands._resolve import resolve_vault
 
@@ -1221,7 +1278,8 @@ def main() -> None:
         return
     if args.command == "enrich":
         try:
-            from archive_sync.llm_enrichment.enrichment_orchestrator import EnrichmentOrchestrator, default_run_id
+            from archive_sync.llm_enrichment.enrichment_orchestrator import (
+                EnrichmentOrchestrator, default_run_id)
 
             vault = Path(str(getattr(args, "vault", "") or "").strip())
             run_id = str(getattr(args, "run_id", "") or "").strip() or default_run_id()
@@ -1291,7 +1349,8 @@ def main() -> None:
         return
     if args.command == "link-persons":
         try:
-            from archive_sync.extractors.entity_resolution import run_person_linking
+            from archive_sync.extractors.entity_resolution import \
+                run_person_linking
 
             from .commands._resolve import resolve_vault
 
@@ -1320,7 +1379,8 @@ def main() -> None:
         return
     if args.command == "resolve-matches":
         try:
-            from archive_sync.llm_enrichment.match_resolver import run_match_resolution
+            from archive_sync.llm_enrichment.match_resolver import \
+                run_match_resolution
 
             from .commands._resolve import resolve_vault
 
@@ -1355,13 +1415,16 @@ def main() -> None:
         return
     if args.command == "staging-report":
         try:
-            from .commands.staging import format_staging_report_markdown, staging_report, staging_report_to_jsonable
+            from .commands.staging import (format_staging_report_markdown,
+                                           staging_report,
+                                           staging_report_to_jsonable)
 
             report = staging_report(str(args.staging_dir))
             if bool(getattr(args, "json", False)):
                 _print_json(staging_report_to_jsonable(report))
             else:
-                from archive_sync.extractors.field_metrics import compute_field_population
+                from archive_sync.extractors.field_metrics import \
+                    compute_field_population
 
                 fp = compute_field_population(Path(str(args.staging_dir)))
                 print(format_staging_report_markdown(report, field_population=fp), file=sys.stderr)
@@ -1459,6 +1522,66 @@ def main() -> None:
                 embedding_model=args.embedding_model,
                 embedding_version=args.embedding_version,
             )
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "embed-estimate":
+        try:
+            store = resolve_store()
+            out = status_cmd.embedding_estimate(
+                store=store,
+                logger=_cli_log,
+                embedding_model=args.embedding_model,
+                embedding_version=args.embedding_version,
+            )
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "embed-batch-submit":
+        try:
+            store = resolve_store()
+            out = batch_embed_cmd.embed_batch_submit(
+                store=store,
+                logger=_cli_log,
+                embedding_model=args.embedding_model,
+                embedding_version=args.embedding_version,
+                max_batches=args.max_batches,
+                requests_per_batch=args.requests_per_batch,
+                include_context_prefix=(False if args.no_context_prefix else None),
+                artifact_dir=args.artifact_dir,
+            )
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "embed-batch-poll":
+        try:
+            store = resolve_store()
+            out = batch_embed_cmd.embed_batch_poll(store=store, logger=_cli_log)
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "embed-batch-ingest":
+        try:
+            store = resolve_store()
+            out = batch_embed_cmd.embed_batch_ingest(
+                store=store,
+                logger=_cli_log,
+                artifact_dir=args.artifact_dir,
+                write_batch_size=args.write_batch_size,
+                workers=args.workers,
+            )
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "embed-batch-status":
+        try:
+            store = resolve_store()
+            out = batch_embed_cmd.embed_batch_status(store=store, logger=_cli_log)
             _print_json(out)
         except PpaError as exc:
             _cli_fail(exc)
@@ -1765,7 +1888,8 @@ def main() -> None:
         )
         return
     if args.command == "slice-seed":
-        from .test_slice import build_slice_docker_image, load_slice_config, slice_seed_vault
+        from .test_slice import (build_slice_docker_image, load_slice_config,
+                                 slice_seed_vault)
 
         cfg = load_slice_config(Path(args.config))
         if args.target_percent is not None:

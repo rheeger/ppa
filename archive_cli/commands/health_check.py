@@ -10,6 +10,39 @@ from typing import Any
 log = logging.getLogger("ppa.health_check")
 
 
+def _check_embedding_coverage(conn: Any, schema: str) -> dict[str, Any]:
+    """Report how many chunks have embeddings for the default model/version."""
+    try:
+        from ..index_config import (get_default_embedding_model,
+                                    get_default_embedding_version)
+
+        chunk_row = conn.execute(f"SELECT COUNT(*) AS count FROM {schema}.chunks").fetchone()
+        chunk_count = int(chunk_row["count"] if isinstance(chunk_row, dict) else chunk_row[0])
+
+        model = get_default_embedding_model()
+        version = get_default_embedding_version()
+        embed_row = conn.execute(
+            f"""SELECT COUNT(*) AS count FROM {schema}.embeddings
+                WHERE embedding_model = %s AND embedding_version = %s""",
+            (model, version),
+        ).fetchone()
+        embedded_count = int(embed_row["count"] if isinstance(embed_row, dict) else embed_row[0])
+
+        pending = chunk_count - embedded_count
+        coverage = (embedded_count / chunk_count * 100) if chunk_count > 0 else 100.0
+        return {
+            "ok": pending <= 0,
+            "chunk_count": chunk_count,
+            "embedded_count": embedded_count,
+            "pending_count": max(pending, 0),
+            "coverage_percent": round(coverage, 2),
+            "embedding_model": model,
+            "embedding_version": version,
+        }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
 @dataclass
 class StructuralReport:
     card_counts: dict[str, dict[str, int]] = field(default_factory=dict)
@@ -18,6 +51,7 @@ class StructuralReport:
     edge_counts_by_rule: dict[str, int] = field(default_factory=dict)
     missing_field_entries: list[dict[str, str]] = field(default_factory=list)
     duplicate_uids: list[str] = field(default_factory=list)
+    embedding_coverage: dict[str, Any] = field(default_factory=dict)
     ok: bool = True
 
 
@@ -179,6 +213,10 @@ def run_structural_checks(conn: Any, schema: str, manifest: dict[str, Any] | Non
                     "detail": f"{null_activity_count} cards with null/empty activity_at",
                 }
             )
+
+    report.embedding_coverage = _check_embedding_coverage(conn, schema)
+    if not report.embedding_coverage.get("ok", False):
+        report.ok = False
 
     return report
 

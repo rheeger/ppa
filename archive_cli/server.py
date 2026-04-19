@@ -36,7 +36,8 @@ from .commands import status as status_cmd
 from .commands._resolve import resolve_index, resolve_store
 from .errors import InvalidInputError, PpaError, SeedLinksDisabledError
 from .index_config import get_seed_links_enabled
-from .index_store import get_default_embedding_model, get_default_embedding_version
+from .index_store import (get_default_embedding_model,
+                          get_default_embedding_version)
 
 _SEED_LINKS_DISABLED_MSG = "Seed links are not enabled. Set PPA_SEED_LINKS_ENABLED=1 to enable."
 
@@ -114,6 +115,7 @@ _TOOL_PROFILES: dict[str, set[str] | None] = {
         "archive_retrieval_explain",
         "archive_embedding_status",
         "archive_embedding_backlog",
+        "archive_embed_estimate",
         "archive_embed_pending",
         "archive_seed_link_surface",
         "archive_seed_link_enqueue",
@@ -612,6 +614,28 @@ def archive_embedding_backlog(limit: int = 20, embedding_model: str = "", embedd
         return out
     except PpaError as exc:
         return _ppa_err("archive_embedding_backlog", exc)
+
+
+@mcp.tool()
+def archive_embed_estimate(embedding_model: str = "", embedding_version: int = 0) -> str:
+    """Estimate cost and time for embedding all pending chunks."""
+
+    profile_error = _tool_profile_error("archive_embed_estimate")
+    if profile_error:
+        return profile_error
+    t0 = _log_tool_call("archive_embed_estimate", embedding_model=embedding_model, embedding_version=embedding_version)
+    try:
+        store = resolve_store()
+        result = status_cmd.embedding_estimate(
+            store=store,
+            logger=_log,
+            embedding_model=embedding_model,
+            embedding_version=embedding_version,
+        )
+        _log_tool_done("archive_embed_estimate", t0, pending_chunks=result.get("pending_chunks"))
+        return json.dumps(result, indent=2)
+    except PpaError as exc:
+        return _ppa_err("archive_embed_estimate", exc)
 
 
 @mcp.tool()

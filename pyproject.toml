@@ -56,4 +56,5 @@ testpaths = ["archive_tests"]
 markers = [
     "integration: requires a running Postgres instance",
     "slow: long-running tests (>30 seconds)",
+    "openai: requires OpenAI API key (skipped in CI)",
 ]

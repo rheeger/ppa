@@ -3,7 +3,12 @@ PG_ENV_FILE ?= .env.pgvector
 COMPOSE_FILE ?= docker-compose.pgvector.yml
 DOCKER_COMPOSE ?= docker compose --env-file $(PG_ENV_FILE) -f $(COMPOSE_FILE)
 
-PPA_PATH ?= /Users/rheeger/Archive/production/hf-archives
+# The "seed" vault is the canonical local archive (1.88M+ notes). The legacy
+# /Users/rheeger/Archive/production/hf-archives path was a dated 64K-note stub
+# from March 2026 and was deleted on 2026-04-19. Point PPA_PATH at the seed
+# vault so all default Make targets operate on real data. Override on the
+# command line if you ever want to point at a different vault snapshot.
+PPA_PATH ?= /Users/rheeger/Archive/seed/hf-archives-seed-20260307-235127
 PPA_BENCHMARK_SOURCE_VAULT ?= /Users/rheeger/Archive/seed/hf-archives-seed-20260307-235127
 # Gitignored vault trees from make slice-local-* (see .slices/README.md)
 SLICES_LOCAL_DIR ?= .slices
@@ -69,7 +74,7 @@ STEP_11A_PER_YEAR_SEED ?= 15
 # Step 11a on 10pct slice (override per-year without exporting env).
 STEP_11A_PER_YEAR ?= 5
 
-.PHONY: install pg-up pg-down pg-logs pg-psql dump-schema dump-seed-schema dump-seed-schema-fast dump-seed-schema-stream-arnold pipe-restore-seed-arnold scp-restore-seed-arnold dump-and-scp-restore-seed-arnold watch-scp-restore-continue-hfa bootstrap-postgres bootstrap-seed-postgres rebuild-indexes rebuild-seed-indexes index-status index-status-seed embed-pending migrate migrate-seed migrate-dry-run migration-status migration-status-seed build-benchmark-sample benchmark-rebuild benchmark-seed-links benchmark-archive-crate-tier1 benchmark-archive-crate-tier1-enforce benchmark-archive-crate-tier2 benchmark-archive-crate-entity smoke smoke-queries arnold-smoke test-unit ollama-llm-smoke llm-enrichment-6b-smoke test-integration test-slice test-slice-smoke test-slice-verify test-slice-verify-10pct test-slice-verify-smoke verify-incremental benchmark-1pct benchmark-5pct health-check extract-emails-staging extract-emails-full extract-benchmark extract-dry-run enrich-emails-staging enrich-emails-gemini enrich-cards-gemini-1pct enrich-cards-gemini-1pct-preview build-enrichment-benchmark build-enrichment-benchmark-smoke build-enrichment-benchmark-1pct build-enrichment-benchmark-5pct build-enrichment-benchmark-10pct build-enrichment-benchmark-slices build-enrichment-benchmark-slices-all step8b-review-packet run-enrichment-benchmark run-enrichment-benchmark-matrix aggregate-benchmark-results staging-report promote-staging promote-staging-dry-run resolve-entities resolve-entities-full clean-phase3-derived clean-phase3-derived-slices clean-phase3-derived-local-slices extract-emails-slice-smoke extract-emails-slice-full slice-local-1pct slice-local-5pct slice-local-10pct slice-local-all clean-ppa-machine-artifacts clean-ppa-machine-artifacts-dry-run clean-ppa-local-slices extract-emails-1pct-slice extract-emails-5pct-slice extract-emails-10pct-slice extraction-quality-reports sender-census template-sampler sender-census-slice-smoke template-sampler-slice-smoke step-11a-template-samplers sender-census-seed step-11a-template-samplers-seed step-11d-slice-yield-report export-materializer-registry build-rust test-rust benchmark-rust
+.PHONY: install pg-up pg-down pg-logs pg-psql dump-schema dump-seed-schema dump-seed-schema-fast dump-seed-schema-stream-arnold pipe-restore-seed-arnold scp-restore-seed-arnold dump-and-scp-restore-seed-arnold watch-scp-restore-continue-hfa bootstrap-postgres bootstrap-seed-postgres rebuild-indexes rebuild-seed-indexes index-status index-status-seed embed-pending embed-estimate embed-production embed-verify embed-batch-submit embed-batch-poll embed-batch-ingest embed-batch-status embed-batch-loop migrate migrate-seed migrate-dry-run migration-status migration-status-seed build-benchmark-sample benchmark-rebuild benchmark-seed-links benchmark-archive-crate-tier1 benchmark-archive-crate-tier1-enforce benchmark-archive-crate-tier2 benchmark-archive-crate-entity smoke smoke-queries arnold-smoke test-unit ollama-llm-smoke llm-enrichment-6b-smoke test-integration test-slice test-slice-smoke test-slice-verify test-slice-verify-10pct test-slice-verify-smoke verify-incremental benchmark-1pct benchmark-5pct health-check extract-emails-staging extract-emails-full extract-benchmark extract-dry-run enrich-emails-staging enrich-emails-gemini enrich-cards-gemini-1pct enrich-cards-gemini-1pct-preview build-enrichment-benchmark build-enrichment-benchmark-smoke build-enrichment-benchmark-1pct build-enrichment-benchmark-5pct build-enrichment-benchmark-10pct build-enrichment-benchmark-slices build-enrichment-benchmark-slices-all step8b-review-packet run-enrichment-benchmark run-enrichment-benchmark-matrix aggregate-benchmark-results staging-report promote-staging promote-staging-dry-run resolve-entities resolve-entities-full clean-phase3-derived clean-phase3-derived-slices clean-phase3-derived-local-slices extract-emails-slice-smoke extract-emails-slice-full slice-local-1pct slice-local-5pct slice-local-10pct slice-local-all clean-ppa-machine-artifacts clean-ppa-machine-artifacts-dry-run clean-ppa-local-slices extract-emails-1pct-slice extract-emails-5pct-slice extract-emails-10pct-slice extraction-quality-reports sender-census template-sampler sender-census-slice-smoke template-sampler-slice-smoke step-11a-template-samplers sender-census-seed step-11a-template-samplers-seed step-11d-slice-yield-report export-materializer-registry build-rust test-rust benchmark-rust
 
 install:
 	$(PYTHON) -m pip install -e .
@@ -178,6 +183,92 @@ embed-pending:
 	PPA_OP_SERVICE_ACCOUNT_TOKEN_OP_REF='$(PPA_OP_SERVICE_ACCOUNT_TOKEN_OP_REF)' \
 	PPA_OP_SERVICE_ACCOUNT_TOKEN_FILE='$(PPA_OP_SERVICE_ACCOUNT_TOKEN_FILE)' \
 	$(PYTHON) -m archive_cli embed-pending --limit $(PPA_EMBED_LIMIT) --embedding-model "$(PPA_EMBEDDING_MODEL)" --embedding-version $(PPA_EMBEDDING_VERSION)
+
+embed-estimate:
+	@PPA_INDEX_DSN="$$( $(LOCAL_PPA_INDEX_DSN_CMD) )"; \
+	PPA_PATH=$(PPA_PATH) \
+	PPA_INDEX_DSN="$$PPA_INDEX_DSN" \
+	PPA_INDEX_SCHEMA=$(PPA_INDEX_SCHEMA) \
+	PPA_EMBEDDING_MODEL=$(or $(PPA_EMBEDDING_MODEL),text-embedding-3-small) \
+	PPA_EMBEDDING_VERSION=$(or $(PPA_EMBEDDING_VERSION),1) \
+	$(PYTHON) -m archive_cli embed-estimate
+
+embed-production: embed-estimate
+	@echo "Starting production embedding pass with OpenAI text-embedding-3-small..."
+	@$(MAKE) embed-pending \
+		PPA_EMBEDDING_PROVIDER=openai \
+		PPA_EMBEDDING_MODEL=text-embedding-3-small \
+		PPA_EMBEDDING_VERSION=1 \
+		PPA_EMBED_DEFER_VECTOR_INDEX=1 \
+		PPA_EMBED_CONCURRENCY=$(or $(PPA_EMBED_CONCURRENCY),4) \
+		PPA_EMBED_BATCH_SIZE=$(or $(PPA_EMBED_BATCH_SIZE),32) \
+		PPA_EMBED_PROGRESS_EVERY=$(or $(PPA_EMBED_PROGRESS_EVERY),1000) \
+		PPA_USE_ARNOLD_OPENAI_KEY=1
+
+embed-verify:
+	@PPA_INDEX_DSN="$$( $(LOCAL_PPA_INDEX_DSN_CMD) )"; \
+	PPA_PATH=$(PPA_PATH) \
+	PPA_INDEX_DSN="$$PPA_INDEX_DSN" \
+	PPA_INDEX_SCHEMA=$(PPA_INDEX_SCHEMA) \
+	$(PYTHON) -m archive_cli embedding-status \
+		--embedding-model "$(or $(PPA_EMBEDDING_MODEL),text-embedding-3-small)" \
+		--embedding-version $(or $(PPA_EMBEDDING_VERSION),1)
+
+# --- OpenAI Batch API embedding path (50% cheaper, separate rate-limit pool) ---
+# Typical flow:
+#   make embed-batch-submit   # upload + create N batches (up to OpenAI 50k/batch cap)
+#   make embed-batch-poll     # refresh status of in-flight batches (safe to loop)
+#   make embed-batch-ingest   # download completed outputs and write embeddings
+#   make embed-batch-status   # JSON summary
+# Assumes OPENAI_API_KEY is set in your shell (e.g. via ~/.ppa/openai_key.txt).
+embed-batch-submit:
+	@PPA_INDEX_DSN="$$( $(LOCAL_PPA_INDEX_DSN_CMD) )"; \
+	PPA_PATH=$(PPA_PATH) \
+	PPA_INDEX_DSN="$$PPA_INDEX_DSN" \
+	PPA_INDEX_SCHEMA=$(PPA_INDEX_SCHEMA) \
+	PPA_STATEMENT_TIMEOUT_MS=$(or $(PPA_STATEMENT_TIMEOUT_MS),3600000) \
+	$(PYTHON) -m archive_cli embed-batch-submit \
+		--embedding-model "$(or $(PPA_EMBEDDING_MODEL),text-embedding-3-small)" \
+		--embedding-version $(or $(PPA_EMBEDDING_VERSION),1) \
+		--max-batches $(or $(PPA_BATCH_MAX),0) \
+		--requests-per-batch $(or $(PPA_BATCH_REQUESTS),50000)
+
+embed-batch-poll:
+	@PPA_INDEX_DSN="$$( $(LOCAL_PPA_INDEX_DSN_CMD) )"; \
+	PPA_PATH=$(PPA_PATH) \
+	PPA_INDEX_DSN="$$PPA_INDEX_DSN" \
+	PPA_INDEX_SCHEMA=$(PPA_INDEX_SCHEMA) \
+	$(PYTHON) -m archive_cli embed-batch-poll
+
+embed-batch-ingest:
+	@PPA_INDEX_DSN="$$( $(LOCAL_PPA_INDEX_DSN_CMD) )"; \
+	PPA_PATH=$(PPA_PATH) \
+	PPA_INDEX_DSN="$$PPA_INDEX_DSN" \
+	PPA_INDEX_SCHEMA=$(PPA_INDEX_SCHEMA) \
+	PPA_STATEMENT_TIMEOUT_MS=$(or $(PPA_STATEMENT_TIMEOUT_MS),3600000) \
+	$(PYTHON) -m archive_cli embed-batch-ingest
+
+embed-batch-status:
+	@PPA_INDEX_DSN="$$( $(LOCAL_PPA_INDEX_DSN_CMD) )"; \
+	PPA_PATH=$(PPA_PATH) \
+	PPA_INDEX_DSN="$$PPA_INDEX_DSN" \
+	PPA_INDEX_SCHEMA=$(PPA_INDEX_SCHEMA) \
+	$(PYTHON) -m archive_cli embed-batch-status
+
+# Continuous submit -> poll -> ingest loop. Respects PPA_BATCH_MAX_OUTSTANDING
+# (default 6) so we don't overflow the OpenAI enqueued-tokens cap.
+embed-batch-loop:
+	@PPA_INDEX_DSN="$$( $(LOCAL_PPA_INDEX_DSN_CMD) )"; \
+	PPA_PATH=$(PPA_PATH) \
+	PPA_INDEX_DSN="$$PPA_INDEX_DSN" \
+	PPA_INDEX_SCHEMA=$(PPA_INDEX_SCHEMA) \
+	PPA_EMBEDDING_MODEL=$(or $(PPA_EMBEDDING_MODEL),text-embedding-3-small) \
+	PPA_EMBEDDING_VERSION=$(or $(PPA_EMBEDDING_VERSION),1) \
+	PPA_BATCH_MAX_OUTSTANDING=$(or $(PPA_BATCH_MAX_OUTSTANDING),6) \
+	PPA_STATEMENT_TIMEOUT_MS=$(or $(PPA_STATEMENT_TIMEOUT_MS),3600000) \
+	LOOP_INTERVAL_SEC=$(or $(LOOP_INTERVAL_SEC),300) \
+	PYTHON=$(PYTHON) \
+	archive_scripts/ppa-embed-batch-loop.sh
 
 build-benchmark-sample:
 	$(PYTHON) -m archive_cli build-benchmark-sample \

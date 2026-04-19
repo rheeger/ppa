@@ -15,6 +15,7 @@ from psycopg import connect
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "integration: requires a running Postgres instance")
     config.addinivalue_line("markers", "slow: long-running tests (>30 seconds)")
+    config.addinivalue_line("markers", "openai: requires OpenAI API key (skipped in CI)")
 
 
 def _docker_available() -> bool:

@@ -191,6 +191,18 @@ def embed_defer_vector_index() -> bool:
     return _ppa_env_bool("PPA_EMBED_DEFER_VECTOR_INDEX")
 
 
+def get_ivfflat_lists() -> int | None:
+    """Optional IVFFlat ``lists`` override. None means auto-calculate from row count."""
+    raw = _ppa_env("PPA_IVFFLAT_LISTS")
+    if not raw:
+        return None
+    try:
+        v = int(raw)
+        return v if v > 0 else None
+    except ValueError:
+        return None
+
+
 def get_rebuild_workers() -> int:
     v = _ppa_env_int("PPA_REBUILD_WORKERS", default=DEFAULT_REBUILD_WORKERS)
     return max(v, 1)

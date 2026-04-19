@@ -9,20 +9,41 @@ from threading import Lock
 from typing import Any
 
 from .features import build_context_prefix_for_embed_row
-from .index_config import (
-    CHUNK_SCHEMA_VERSION,
-    EmbeddingBatchResult,
-    _vector_literal,
-    embed_defer_vector_index,
-    get_embed_batch_size,
-    get_embed_concurrency,
-    get_embed_max_retries,
-    get_embed_progress_every,
-    get_embed_write_batch_size,
-)
+from .index_config import (CHUNK_SCHEMA_VERSION, EmbeddingBatchResult,
+                           _vector_literal, embed_defer_vector_index,
+                           get_embed_batch_size, get_embed_concurrency,
+                           get_embed_max_retries, get_embed_progress_every,
+                           get_embed_write_batch_size)
 from .loader import _chunked, _log_rebuild_step, _RebuildProgressReporter
 
 logger = logging.getLogger("ppa.embedder")
+
+
+def _calculate_embed_progress(
+    *,
+    embedded_so_far: int,
+    failed_so_far: int,
+    total_pending: int,
+    elapsed_seconds: float,
+) -> dict[str, float | int]:
+    """Calculate embedding progress metrics for structured logging."""
+    rate = embedded_so_far / elapsed_seconds if elapsed_seconds > 0 else 0.0
+    remaining = max(total_pending - embedded_so_far - failed_so_far, 0)
+    eta = remaining / rate if rate > 0 else 0.0
+    return {
+        "embedded": embedded_so_far,
+        "failed": failed_so_far,
+        "remaining": remaining,
+        "rate_per_second": round(rate, 1),
+        "elapsed_seconds": round(elapsed_seconds, 1),
+        "eta_seconds": round(eta, 1),
+    }
+
+
+def _format_mss(seconds: float) -> str:
+    """Format seconds as M:SS per PPA operational logging convention."""
+    total = int(seconds)
+    return f"{total // 60}:{total % 60:02d}"
 
 
 class EmbedderMixin:
@@ -483,9 +504,12 @@ class EmbedderMixin:
                 f"target={target_total} workers={concurrency} batch_size={batch_size}",
             )
 
+            t_start = time.monotonic()
+            prev_logged_bucket = 0
+
             def run_worker() -> EmbeddingBatchResult:
                 worker_result = EmbeddingBatchResult()
-                nonlocal embedded, failed, last_error
+                nonlocal embedded, failed, last_error, prev_logged_bucket
                 while True:
                     claim_size = reserve_claim_size()
                     if claim_size <= 0:
@@ -516,7 +540,27 @@ class EmbedderMixin:
                         fail_suffix = f" failed={failed}" if failed else ""
                         err_suffix = f" last_error={last_error}" if last_error else ""
                         progress.update(embedded, extra=f"embedded={embedded}{fail_suffix}{err_suffix}")
-                return worker_result
+                        if (
+                            progress_every > 0
+                            and embedded > 0
+                            and (embedded // progress_every) > (prev_logged_bucket // progress_every)
+                        ):
+                            progress_data = _calculate_embed_progress(
+                                embedded_so_far=embedded,
+                                failed_so_far=failed,
+                                total_pending=pending_chunks,
+                                elapsed_seconds=time.monotonic() - t_start,
+                            )
+                            logger.info(
+                                "embed_progress embedded=%d failed=%d rate=%.1f/s elapsed=%s eta=%s remaining=%d",
+                                progress_data["embedded"],
+                                progress_data["failed"],
+                                progress_data["rate_per_second"],
+                                _format_mss(float(progress_data["elapsed_seconds"])),
+                                _format_mss(float(progress_data["eta_seconds"])),
+                                progress_data["remaining"],
+                            )
+                            prev_logged_bucket = embedded
 
             try:
                 with ThreadPoolExecutor(max_workers=max(1, concurrency)) as executor:

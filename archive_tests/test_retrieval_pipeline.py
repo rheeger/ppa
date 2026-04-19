@@ -244,3 +244,25 @@ def test_fetch_hybrid_propagates_vector_error():
         raise AssertionError("Should have raised")
     except RuntimeError as exc:
         assert "vector boom" in str(exc)
+
+
+def test_card_type_priors_covers_all_registered_types():
+    """Every type in CARD_TYPES has an entry in CARD_TYPE_PRIORS."""
+    from archive_cli.index_config import CARD_TYPE_PRIORS
+    from archive_vault.schema import CARD_TYPES
+
+    missing = set(CARD_TYPES.keys()) - set(CARD_TYPE_PRIORS.keys())
+    assert not missing, (
+        f"CARD_TYPE_PRIORS is missing entries for: {sorted(missing)}. "
+        f"Add priors so these types rank correctly in hybrid search."
+    )
+
+
+def test_card_type_priors_values_are_in_valid_range():
+    """All CARD_TYPE_PRIORS values are between 0.0 and 1.0 exclusive."""
+    from archive_cli.index_config import CARD_TYPE_PRIORS
+
+    for card_type, prior in CARD_TYPE_PRIORS.items():
+        assert 0.0 < prior < 1.0, (
+            f"CARD_TYPE_PRIORS['{card_type}'] = {prior} is out of range (0, 1)"
+        )

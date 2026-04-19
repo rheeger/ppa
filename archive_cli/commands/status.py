@@ -15,6 +15,10 @@ from ..index_store import BaseArchiveIndex
 from ..ppa_engine import ppa_engine
 from ..store import DefaultArchiveStore
 
+EMBEDDING_COST_PER_MILLION_TOKENS = 0.02  # text-embedding-3-small (approximate; check pricing)
+# Context header (~100 tokens) + chunk body (~300 tokens) ≈ 400 tokens when include_in_embeddings is on.
+AVG_TOKENS_PER_CHUNK = 400
+
 
 def stats(*, index: BaseArchiveIndex, logger: logging.Logger) -> dict[str, Any]:
     """Vault/index cardinality and breakdowns from ``index.stats()``."""
@@ -137,6 +141,50 @@ def embedding_status(
         embedding_version=embedding_version,
     )
     logger.info("embedding_status_done")
+    return result
+
+
+def embedding_estimate(
+    *,
+    store: DefaultArchiveStore,
+    logger: logging.Logger,
+    embedding_model: str = "",
+    embedding_version: int = 0,
+) -> dict[str, Any]:
+    """Rough cost and duration estimate for embedding pending chunks."""
+    from ..index_config import (get_default_embedding_model,
+                                get_default_embedding_version,
+                                get_embed_batch_size, get_embed_concurrency)
+
+    logger.info(
+        "embedding_estimate_start model=%r version=%s",
+        embedding_model,
+        embedding_version,
+    )
+    model = embedding_model.strip() or get_default_embedding_model()
+    version = embedding_version or get_default_embedding_version()
+    status = store.embedding_status(embedding_model=model, embedding_version=version)
+    pending = int(status.get("pending_chunk_count", 0))
+    batch_size = get_embed_batch_size()
+    concurrency = get_embed_concurrency()
+
+    total_tokens = pending * AVG_TOKENS_PER_CHUNK
+    estimated_cost_usd = round(total_tokens / 1_000_000 * EMBEDDING_COST_PER_MILLION_TOKENS, 2)
+
+    chunks_per_second = batch_size * concurrency * 5
+    estimated_seconds = pending / chunks_per_second if chunks_per_second > 0 else 0.0
+
+    result = {
+        "pending_chunks": pending,
+        "estimated_tokens": total_tokens,
+        "estimated_cost_usd": estimated_cost_usd,
+        "estimated_minutes": round(estimated_seconds / 60, 1),
+        "batch_size": batch_size,
+        "concurrency": concurrency,
+        "embedding_model": model,
+        "embedding_version": version,
+    }
+    logger.info("embedding_estimate_done pending=%s", pending)
     return result
 
 

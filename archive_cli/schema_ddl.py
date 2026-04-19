@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from .index_config import CHUNK_SCHEMA_VERSION, get_seed_links_enabled
@@ -14,10 +15,160 @@ from .projections.registry import TYPED_PROJECTIONS
 log = logging.getLogger("ppa.schema_ddl")
 
 
+def _embedding_count_from_row(row: Any) -> int:
+    """Extract COUNT(*) from a fetchone() row (psycopg Row, dict, or test fakes)."""
+    if row is None:
+        return 0
+    if isinstance(row, dict):
+        if "c" in row:
+            return int(row["c"])
+        first = next(iter(row.values()), 0)
+        return int(first)
+    return int(row[0])
+
+
+def _calculate_ivfflat_lists(row_count: int) -> int | None:
+    """Calculate IVFFlat ``lists`` from row count (pgvector-style tuning).
+
+    - Up to 1M rows: ``rows // 1000``, minimum 10
+    - Above 1M: ``sqrt(rows)``, minimum 10
+    - Empty table: ``None`` (skip index creation)
+    """
+    if row_count <= 0:
+        return None
+    if row_count <= 1_000_000:
+        return max(row_count // 1000, 10)
+    return max(int(row_count**0.5), 10)
+
+
 class SchemaDDLMixin:
     """Mixin providing schema creation, projection tables, and index management."""
 
     schema: str
+
+    def _drop_indexes_for_bulk_load(self, conn) -> int:
+        """Drop all secondary indexes (idx_*) on this schema for fast bulk COPY.
+
+        Called before the materialize/load loop on full rebuilds. Indexes are
+        recreated in step 6 via ``_create_schema(ensure_indexes=True)`` or
+        ``_create_indexes_parallel``.
+        """
+        rows = conn.execute(
+            "SELECT indexname FROM pg_indexes WHERE schemaname = %s AND indexname LIKE 'idx_%%'",
+            (self.schema,),
+        ).fetchall()
+        dropped = 0
+        for row in rows:
+            name = row["indexname"] if isinstance(row, dict) else row[0]
+            conn.execute(f'DROP INDEX IF EXISTS {self.schema}."{name}"')
+            dropped += 1
+        if dropped:
+            conn.commit()
+            log.info("Dropped %d secondary indexes for bulk load", dropped)
+        return dropped
+
+    def _collect_index_ddl(self) -> list[str]:
+        """Return all CREATE INDEX IF NOT EXISTS statements for this schema."""
+        stmts: list[str] = []
+        s = self.schema
+        stmts.append(f"CREATE INDEX IF NOT EXISTS idx_cards_slug ON {s}.cards(slug)")
+        stmts.append(f"CREATE INDEX IF NOT EXISTS idx_cards_type ON {s}.cards(type)")
+        stmts.append(f"CREATE INDEX IF NOT EXISTS idx_cards_created ON {s}.cards(created)")
+        stmts.append(f"CREATE INDEX IF NOT EXISTS idx_cards_activity_at_uid ON {s}.cards(activity_at, uid)")
+        stmts.append(f"CREATE INDEX IF NOT EXISTS idx_cards_activity_end_at ON {s}.cards(activity_end_at)")
+        stmts.append(f"CREATE INDEX IF NOT EXISTS idx_cards_search_document ON {s}.cards USING GIN(search_document)")
+        stmts.append(f"CREATE INDEX IF NOT EXISTS idx_card_sources_source ON {s}.card_sources(source)")
+        stmts.append(f"CREATE INDEX IF NOT EXISTS idx_card_sources_card_uid ON {s}.card_sources(card_uid)")
+        stmts.append(f"CREATE INDEX IF NOT EXISTS idx_card_people_person ON {s}.card_people(person)")
+        stmts.append(f"CREATE INDEX IF NOT EXISTS idx_card_people_card_uid ON {s}.card_people(card_uid)")
+        stmts.append(f"CREATE INDEX IF NOT EXISTS idx_card_orgs_org ON {s}.card_orgs(org)")
+        stmts.append(f"CREATE INDEX IF NOT EXISTS idx_card_orgs_card_uid ON {s}.card_orgs(card_uid)")
+        stmts.append(f"CREATE INDEX IF NOT EXISTS idx_external_ids_lookup ON {s}.external_ids(external_id, provider)")
+        stmts.append(f"CREATE INDEX IF NOT EXISTS idx_duplicate_uid_rows_uid ON {s}.duplicate_uid_rows(uid)")
+        stmts.append(f"CREATE INDEX IF NOT EXISTS idx_duplicate_uid_rows_preferred_path ON {s}.duplicate_uid_rows(preferred_rel_path)")
+        stmts.append(f"CREATE INDEX IF NOT EXISTS idx_edges_source_path ON {s}.edges(source_path)")
+        stmts.append(f"CREATE INDEX IF NOT EXISTS idx_edges_source_uid ON {s}.edges(source_uid)")
+        stmts.append(f"CREATE INDEX IF NOT EXISTS idx_edges_target_path ON {s}.edges(target_path)")
+        stmts.append(f"CREATE INDEX IF NOT EXISTS idx_edges_target_uid ON {s}.edges(target_uid)")
+        stmts.append(f"CREATE INDEX IF NOT EXISTS idx_chunks_card_uid ON {s}.chunks(card_uid)")
+        stmts.append(f"CREATE INDEX IF NOT EXISTS idx_ingestion_log_logged_at ON {s}.ingestion_log(logged_at)")
+        stmts.append(f"CREATE INDEX IF NOT EXISTS idx_ingestion_log_card_uid ON {s}.ingestion_log(card_uid)")
+        for projection in TYPED_PROJECTIONS:
+            for column in projection.columns:
+                if column.indexed and column.name != "card_uid":
+                    stmts.append(
+                        f"CREATE INDEX IF NOT EXISTS idx_{projection.table_name}_{column.name} "
+                        f"ON {s}.{projection.table_name}({column.name})"
+                    )
+        return stmts
+
+    def _create_indexes_parallel(self, n_connections: int = 4) -> float:
+        """Create all secondary indexes in parallel across multiple connections.
+
+        Each connection sets ``maintenance_work_mem = '1GB'`` for faster GIN builds.
+        The GIN full-text index runs alone on one connection; B-tree indexes are
+        distributed across the others.
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        import psycopg
+        from psycopg.rows import dict_row
+
+        stmts = self._collect_index_ddl()
+        if not stmts:
+            return 0.0
+
+        gin_stmts = [s for s in stmts if "USING GIN" in s]
+        btree_stmts = [s for s in stmts if "USING GIN" not in s]
+
+        groups: list[list[str]] = [gin_stmts]
+        per_conn = max(1, len(btree_stmts) // max(n_connections - 1, 1))
+        for i in range(0, len(btree_stmts), per_conn):
+            groups.append(btree_stmts[i : i + per_conn])
+
+        conns = []
+        try:
+            for _ in range(min(len(groups), n_connections)):
+                c = psycopg.connect(
+                    self.dsn,
+                    row_factory=dict_row,
+                    connect_timeout=5,
+                    options="-c statement_timeout=600000",
+                    autocommit=True,
+                )
+                c.execute("SET maintenance_work_mem = '1GB'")
+                conns.append(c)
+
+            started = time.time()
+
+            def _build_group(group_idx: int, ddl_stmts: list[str]) -> int:
+                conn = conns[group_idx % len(conns)]
+                for stmt in ddl_stmts:
+                    conn.execute(stmt)
+                return len(ddl_stmts)
+
+            with ThreadPoolExecutor(max_workers=len(conns)) as executor:
+                futures = []
+                for gi, group in enumerate(groups):
+                    if group:
+                        futures.append(executor.submit(_build_group, gi, group))
+                for f in as_completed(futures):
+                    f.result()
+
+            elapsed = time.time() - started
+            log.info(
+                "Created %d indexes in parallel (%d connections) elapsed=%.1fs",
+                len(stmts),
+                len(conns),
+                elapsed,
+            )
+            return elapsed
+        finally:
+            for c in conns:
+                try:
+                    c.close()
+                except Exception:
+                    pass
     vector_dimension: int
 
     def _projection_default_sql(self, value: Any, sql_type: str) -> str:
@@ -253,6 +404,7 @@ class SchemaDDLMixin:
             )
             """
         )
+        self._ensure_batch_embed_tables(conn, ensure_indexes=ensure_indexes)
         if get_seed_links_enabled():
             self._create_seed_link_schema(conn, ensure_indexes=ensure_indexes)
         conn.execute(
@@ -466,6 +618,7 @@ class SchemaDDLMixin:
                 graph_score DOUBLE PRECISION NOT NULL DEFAULT 0,
                 llm_score DOUBLE PRECISION NOT NULL DEFAULT 0,
                 risk_penalty DOUBLE PRECISION NOT NULL DEFAULT 0,
+                embedding_score DOUBLE PRECISION NOT NULL DEFAULT 0,
                 final_confidence DOUBLE PRECISION NOT NULL DEFAULT 0,
                 decision TEXT NOT NULL DEFAULT 'discard',
                 decision_reason TEXT NOT NULL DEFAULT '',
@@ -561,13 +714,91 @@ class SchemaDDLMixin:
             """
         )
 
-    def _ensure_embeddings_vector_index(self, conn) -> None:
-        conn.execute("SET LOCAL maintenance_work_mem = '128MB'")
+    def _ensure_batch_embed_tables(self, conn, *, ensure_indexes: bool = True) -> None:
+        """Idempotently create tables tracking OpenAI Batch API embedding jobs.
+
+        ``embed_batches`` is one row per submitted batch (OpenAI ``batch_...`` id).
+        ``embed_batch_requests`` maps each ``custom_id`` in the input JSONL to a
+        ``chunk_key`` so results can be written back to ``embeddings`` by custom_id.
+        """
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {self.schema}.embed_batches (
+                openai_batch_id TEXT PRIMARY KEY,
+                embedding_model TEXT NOT NULL,
+                embedding_version INTEGER NOT NULL,
+                input_file_id TEXT NOT NULL,
+                output_file_id TEXT,
+                error_file_id TEXT,
+                status TEXT NOT NULL,
+                request_count INTEGER NOT NULL,
+                completed_count INTEGER NOT NULL DEFAULT 0,
+                failed_count INTEGER NOT NULL DEFAULT 0,
+                input_jsonl_path TEXT,
+                include_context_prefix BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                ingested_at TIMESTAMPTZ
+            )
+            """
+        )
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {self.schema}.embed_batch_requests (
+                openai_batch_id TEXT NOT NULL REFERENCES {self.schema}.embed_batches(openai_batch_id) ON DELETE CASCADE,
+                custom_id TEXT NOT NULL,
+                chunk_key TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'queued',
+                error_message TEXT,
+                PRIMARY KEY (openai_batch_id, custom_id)
+            )
+            """
+        )
+        if ensure_indexes:
+            conn.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_embed_batches_status ON {self.schema}.embed_batches(status)"
+            )
+            conn.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_embed_batch_requests_chunk_key ON {self.schema}.embed_batch_requests(chunk_key)"
+            )
+
+    def _ensure_embeddings_vector_index(self, conn, *, lists: int | None = None) -> None:
+        from .index_config import get_ivfflat_lists
+
+        override = get_ivfflat_lists()
+        if override is not None:
+            lists = override
+
+        if lists is None:
+            row = conn.execute(f"SELECT COUNT(*) AS c FROM {self.schema}.embeddings").fetchone()
+            count = _embedding_count_from_row(row)
+            lists = _calculate_ivfflat_lists(count)
+            if lists is None:
+                return
+
+        # IVFFlat build allocates roughly ``lists * dim * 4 / (1024*1024)`` MB of
+        # working memory just for cluster centroids, plus per-row scratch. At
+        # 2600 lists × 1536 dim × 4B ≈ 16 MB centroids alone, but the full
+        # build (including k-means refinement over all rows) typically wants
+        # ~2 GB for 6-7M rows. Default to 3 GB on multi-million-row tables to
+        # avoid ``ProgramLimitExceeded``; keep 256 MB for tiny tables to be
+        # frugal in CI/dev. Override via ``PPA_MAINTENANCE_WORK_MEM``.
+        from .index_config import _ppa_env
+
+        override_mem = _ppa_env("PPA_MAINTENANCE_WORK_MEM").strip()
+        if override_mem:
+            mem = override_mem
+        elif lists >= 200:
+            mem = "3GB"
+        else:
+            mem = "256MB"
+        conn.execute(f"SET LOCAL maintenance_work_mem = '{mem}'")
         conn.execute(
             f"""
             CREATE INDEX IF NOT EXISTS idx_embeddings_vector
             ON {self.schema}.embeddings
             USING ivfflat (embedding vector_cosine_ops)
+            WITH (lists = {lists})
             """
         )
 
