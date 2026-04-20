@@ -35,12 +35,21 @@ def format_search(result: dict) -> str:
 
 
 def format_graph(rel_path: str, graph: dict[str, Any]) -> str:
-    """Format archive_graph result when the note was found."""
+    """Format archive_graph with edge types and confidence (deterministic vs seed-link)."""
     lines = [f"Graph from {rel_path}:"]
     for source, targets in graph.items():
         lines.append(f"- {source}")
         for target in targets:
-            lines.append(f"  -> {target}")
+            if isinstance(target, dict):
+                path = str(target.get("path", ""))
+                etype = str(target.get("edge_type", ""))
+                conf = float(target.get("confidence", 1.0))
+                if conf < 1.0:
+                    lines.append(f"  -> {path}  [seed:{etype}, conf={conf:.2f}]")
+                else:
+                    lines.append(f"  -> {path}  [{etype}]")
+            else:
+                lines.append(f"  -> {target}")
     return "\n".join(lines) if len(lines) > 1 else "No linked notes"
 
 

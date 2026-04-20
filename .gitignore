@@ -40,3 +40,7 @@ build/
 
 # Rust (Phase 2.9 archive_crate)
 archive_crate/target/
+
+# Health-check output files (generated; use --output-path to direct elsewhere)
+health-report.json
+health-report.md

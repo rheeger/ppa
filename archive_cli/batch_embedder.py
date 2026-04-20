@@ -31,9 +31,13 @@ from typing import Any
 from urllib import error, request
 
 from .features import build_context_prefix_for_embed_row
-from .index_config import (_ppa_env, _vector_literal,
-                           get_default_embedding_model,
-                           get_default_embedding_version, get_vector_dimension)
+from .index_config import (
+    _ppa_env,
+    _vector_literal,
+    get_default_embedding_model,
+    get_default_embedding_version,
+    get_vector_dimension,
+)
 
 logger = logging.getLogger("ppa.batch_embedder")
 

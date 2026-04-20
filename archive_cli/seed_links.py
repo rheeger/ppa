@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -13,11 +14,12 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
-from archive_vault.provenance import ProvenanceEntry
+from archive_vault.provenance import ProvenanceEntry, compute_input_hash
 from archive_vault.schema import validate_card_permissive, validate_card_strict
 from archive_vault.vault import extract_wikilinks, read_note, write_card
 
 from .features import card_activity_at, external_ids_by_provider
+from .index_config import get_default_embedding_model, get_default_embedding_version
 from .vault_cache import VaultScanCache
 
 try:
@@ -30,7 +32,7 @@ except Exception:  # pragma: no cover
 
 
 SEED_LINKER_VERSION = 1
-SEED_LINK_POLICY_VERSION = 1
+SEED_LINK_POLICY_VERSION = 5
 DEFAULT_SEED_LINK_WORKERS = 8
 DEFAULT_SEED_LINK_CLAIM_BATCH_SIZE = 32
 DEFAULT_PROMOTION_CLAIM_BATCH_SIZE = 64
@@ -49,6 +51,97 @@ MODULE_CALENDAR = "calendarLinker"
 MODULE_MEDIA = "mediaLinker"
 MODULE_ORPHAN = "orphanRepairLinker"
 MODULE_GRAPH = "graphConsistencyLinker"
+MODULE_SEMANTIC = "semanticLinker"
+
+DEFAULT_SEMANTIC_K = 20
+DEFAULT_SEMANTIC_THRESHOLD = 0.7
+DEFAULT_SEMANTIC_OVERFETCH_RATIO = 3
+DEFAULT_SEMANTIC_CHUNK_FANOUT = 10
+
+# Phase 6 Tier 4: triage classifications (from card_classifications projection or
+# email_thread.triage_classification frontmatter) that disqualify a card from being
+# either a source or target of a semantic link. The default skip set mirrors
+# archive_sync/llm_enrichment/triage.SKIP_CLASSIFICATIONS plus the equivalent legacy
+# values that the older classify pipeline writes ('marketing', 'automated', 'noise',
+# 'personal' from the v1 classifier vs 'marketing', 'automated_notification',
+# 'noise', 'person_to_person' from the v2 triage prompt).
+DEFAULT_SEMANTIC_SKIP_CLASSIFICATIONS = frozenset(
+    {
+        "marketing",
+        "automated",
+        "automated_notification",
+        "noise",
+        "personal",
+        "person_to_person",
+    }
+)
+
+# Phase 6 Tier 4 / Step 24: card-type allowlist for the semantic linker. Calibrated
+# 2026-04-19 against the 1pct sweep (qualitative report at
+# _artifacts/_semantic-linker-calibration/qualitative-1pct-20260419.md): without an
+# allowlist, 99.5% of surfaced candidates are noise (filename-similar attachments,
+# Apple-Health aggregate clusters, github review notifications, near-duplicate
+# photos). The allowlist names the types where cross-domain semantic bridges are
+# plausibly useful. Every type NOT in this set is excluded as both source and target.
+DEFAULT_SEMANTIC_ALLOWED_TYPES = frozenset(
+    {
+        "calendar_event",
+        "meeting_transcript",
+        "document",
+        "place",
+        "organization",
+        "person",
+        "knowledge",
+        "observation",
+        "accommodation",
+        "flight",
+        "car_rental",
+        "ride",
+        "finance",
+        "purchase",
+        "subscription",
+        "payroll",
+        "event_ticket",
+        "medical_record",
+        "vaccination",
+        "meal_order",
+        "grocery_order",
+        "shipment",
+        "email_thread",  # threads OK; messages excluded (already linked deterministically)
+    }
+)
+
+# Same-type semantic links: only useful for a small set of card types where a
+# secondary instance can be a meaningfully-related cluster (multiple meetings on
+# the same project, multiple records about the same diagnosis). For the rest,
+# same-type pairs are nearly always template / aggregate noise.
+DEFAULT_SEMANTIC_ALLOW_SAME_TYPE = frozenset(
+    {
+        "calendar_event",
+        "meeting_transcript",
+        "document",
+        "place",
+        "organization",
+        "knowledge",
+        "observation",
+    }
+)
+
+# Summary patterns that flag a card as template/aggregate noise rather than
+# semantic content. Cards whose summary matches are excluded from semantic linking
+# regardless of type. (The major offenders observed in the 1pct sweep.)
+DEFAULT_SEMANTIC_NOISE_SUMMARY_RE = re.compile(
+    r"^("
+    r"HK\w+Identifier|"           # Apple Health aggregate metric classes
+    r"IMG[_-]?\d|"                 # iPhone photos
+    r"MOV[_-]?\d|"                 # iPhone videos
+    r"DSC[_-]?\d|"                 # Sony / generic camera blobs
+    r"image\d+\.|"                 # embedded inline email images
+    r"~WRD\d|"                     # Word temp attachments
+    r"giphy"                       # giphy stickers
+    r")",
+    re.IGNORECASE,
+)
 
 REVIEW_ACTION_APPROVE = "approve"
 REVIEW_ACTION_REJECT = "reject"
@@ -114,6 +207,7 @@ LINK_TYPE_MEDIA_HAS_EVENT = "media_has_event"
 LINK_TYPE_POSSIBLE_SAME_PERSON = "possible_same_person"
 LINK_TYPE_ORPHAN_REPAIR_EXACT = "orphan_repair_exact"
 LINK_TYPE_ORPHAN_REPAIR_FUZZY = "orphan_repair_fuzzy"
+LINK_TYPE_SEMANTICALLY_RELATED = "semantically_related"
 
 PROPOSED_LINK_TYPES = frozenset(
     {
@@ -135,27 +229,57 @@ PROPOSED_LINK_TYPES = frozenset(
         LINK_TYPE_POSSIBLE_SAME_PERSON,
         LINK_TYPE_ORPHAN_REPAIR_EXACT,
         LINK_TYPE_ORPHAN_REPAIR_FUZZY,
+        LINK_TYPE_SEMANTICALLY_RELATED,
     }
 )
 
 CARD_TYPE_MODULES = {
     "person": (MODULE_IDENTITY, MODULE_ORPHAN),
+    "finance": (),
+    "medical_record": (),
+    "vaccination": (),
     "email_thread": (MODULE_COMMUNICATION, MODULE_CALENDAR, MODULE_GRAPH, MODULE_ORPHAN),
     "email_message": (MODULE_COMMUNICATION, MODULE_CALENDAR, MODULE_GRAPH, MODULE_ORPHAN),
     "email_attachment": (MODULE_COMMUNICATION, MODULE_GRAPH),
     "imessage_thread": (MODULE_COMMUNICATION, MODULE_GRAPH, MODULE_ORPHAN),
     "imessage_message": (MODULE_COMMUNICATION, MODULE_GRAPH, MODULE_ORPHAN),
     "imessage_attachment": (MODULE_COMMUNICATION, MODULE_GRAPH),
+    "beeper_thread": (MODULE_COMMUNICATION, MODULE_GRAPH),
+    "beeper_message": (MODULE_COMMUNICATION, MODULE_GRAPH),
+    "beeper_attachment": (MODULE_COMMUNICATION, MODULE_GRAPH),
     "calendar_event": (MODULE_CALENDAR, MODULE_GRAPH, MODULE_ORPHAN),
     "meeting_transcript": (MODULE_CALENDAR, MODULE_GRAPH, MODULE_ORPHAN),
     "media_asset": (MODULE_MEDIA, MODULE_ORPHAN),
+    "document": (),
     "git_repository": (MODULE_GRAPH, MODULE_ORPHAN),
     "git_commit": (MODULE_GRAPH,),
     "git_thread": (MODULE_GRAPH, MODULE_ORPHAN),
     "git_message": (MODULE_GRAPH, MODULE_ORPHAN),
+    "meal_order": (),
+    "grocery_order": (),
+    "ride": (),
+    "flight": (),
+    "accommodation": (),
+    "car_rental": (),
+    "purchase": (),
+    "shipment": (),
+    "subscription": (),
+    "event_ticket": (),
+    "payroll": (),
+    "place": (),
+    "organization": (),
+    "knowledge": (),
+    "observation": (),
 }
 
-LLM_REVIEW_MODULES = frozenset({MODULE_IDENTITY, MODULE_CALENDAR, MODULE_MEDIA, MODULE_ORPHAN})
+# Phase 6 Tier 3 retirement (2026-04-19): MODULE_SEMANTIC is kept in source for
+# reference but not wired into CARD_TYPE_MODULES. See
+# archive_docs/runbooks/phase6-retirement-rationale.md for the honest account of
+# why the semantic kNN linker was retired in favor of the Phase 6.5 structural
+# cross-derived-card linkers (MODULE_FINANCE_RECONCILE, MODULE_TRIP_CLUSTER, etc.).
+LLM_REVIEW_MODULES = frozenset(
+    {MODULE_IDENTITY, MODULE_CALENDAR, MODULE_MEDIA, MODULE_ORPHAN}
+)
 HIGH_PRIORITY_CARD_TYPES = frozenset(
     {
         "person",
@@ -268,6 +392,7 @@ class SeedLinkDecision:
     deterministic_score: float
     lexical_score: float
     graph_score: float
+    embedding_score: float
     llm_score: float
     risk_penalty: float
     final_confidence: float
@@ -1020,6 +1145,22 @@ def get_link_surface_policies() -> list[LinkSurfacePolicy]:
             auto_promote_floor=0.98,
             canonical_floor=0.99,
             description="Fuzzy orphan repair candidate. Review-only by default.",
+        ),
+        LinkSurfacePolicy(
+            link_type=LINK_TYPE_SEMANTICALLY_RELATED,
+            module_name=MODULE_SEMANTIC,
+            surface=SURFACE_DERIVED_ONLY,
+            promotion_target=PROMOTION_TARGET_DERIVED_EDGE,
+            # Calibrated 2026-04-19 (multiple sweeps; see archive_docs/runbooks/
+            # phase6-semantic-linker.md and _artifacts/_semantic-linker-calibration/).
+            # The single floor below operates on the post-gate distribution from the
+            # two-tier formula in evaluate_seed_link_candidate (strict for same-type,
+            # lenient for cross-type). 0.50 captures both regimes — same-type pairs
+            # land at 0.85+ and cross-type bridges typically at 0.50-0.76.
+            auto_review_floor=0.40,
+            auto_promote_floor=0.50,
+            canonical_floor=1.0,
+            description="Semantically-related card pair discovered via embedding kNN.",
         ),
     ]
 
@@ -2100,6 +2241,273 @@ def _generate_graph_consistency_candidates(catalog: SeedLinkCatalog, source: See
     return results
 
 
+def _edge_exists(conn: Any, schema: str, source_uid: str, target_uid: str) -> bool:
+    row = conn.execute(
+        f"""
+        SELECT 1 FROM {schema}.edges
+        WHERE (source_uid = %s AND target_uid = %s)
+           OR (source_uid = %s AND target_uid = %s)
+        LIMIT 1
+        """,
+        (source_uid, target_uid, target_uid, source_uid),
+    ).fetchone()
+    return row is not None
+
+
+def _candidate_exists(conn: Any, schema: str, source_uid: str, target_uid: str) -> bool:
+    row = conn.execute(
+        f"""
+        SELECT 1 FROM {schema}.link_candidates
+        WHERE module_name = %s
+          AND ((source_card_uid = %s AND target_card_uid = %s)
+               OR (source_card_uid = %s AND target_card_uid = %s))
+        LIMIT 1
+        """,
+        (MODULE_SEMANTIC, source_uid, target_uid, target_uid, source_uid),
+    ).fetchone()
+    return row is not None
+
+
+def _semantic_skip_classifications() -> frozenset[str]:
+    """Read PPA_SEMANTIC_SKIP_CLASSIFICATIONS env override or fall back to default."""
+    raw = os.environ.get("PPA_SEMANTIC_SKIP_CLASSIFICATIONS", "").strip()
+    if not raw:
+        return DEFAULT_SEMANTIC_SKIP_CLASSIFICATIONS
+    return frozenset(item.strip().lower() for item in raw.split(",") if item.strip())
+
+
+def _semantic_allowed_types() -> frozenset[str]:
+    """Type allowlist (env-overridable via PPA_SEMANTIC_ALLOWED_TYPES)."""
+    raw = os.environ.get("PPA_SEMANTIC_ALLOWED_TYPES", "").strip()
+    if not raw:
+        return DEFAULT_SEMANTIC_ALLOWED_TYPES
+    return frozenset(item.strip() for item in raw.split(",") if item.strip())
+
+
+def _semantic_allow_same_type() -> frozenset[str]:
+    """Same-type allowlist (env-overridable via PPA_SEMANTIC_ALLOW_SAME_TYPE)."""
+    raw = os.environ.get("PPA_SEMANTIC_ALLOW_SAME_TYPE", "").strip()
+    if not raw:
+        return DEFAULT_SEMANTIC_ALLOW_SAME_TYPE
+    return frozenset(item.strip() for item in raw.split(",") if item.strip())
+
+
+def is_semantic_noise_summary(summary: str) -> bool:
+    """Return True if the summary matches a template / aggregate noise pattern."""
+    if not summary:
+        return False
+    return bool(DEFAULT_SEMANTIC_NOISE_SUMMARY_RE.match(summary.strip()))
+
+
+def is_semantic_eligible(card_type: str, summary: str) -> bool:
+    """Card-level gate: in allowed-type set AND summary isn't a noise template."""
+    if card_type not in _semantic_allowed_types():
+        return False
+    if is_semantic_noise_summary(summary):
+        return False
+    return True
+
+
+def _is_classification_skipped(conn: Any, schema: str, card_uid: str) -> bool:
+    """Return True iff this card's triage classification is in the skip set.
+
+    Cards without a card_classifications row (e.g. non-email cards, or email cards
+    not yet triaged) are NOT skipped — safe-default-include preserves recall.
+    """
+    skip_set = _semantic_skip_classifications()
+    if not skip_set:
+        return False
+    try:
+        row = conn.execute(
+            f"SELECT classification FROM {schema}.card_classifications WHERE card_uid = %s",
+            (card_uid,),
+        ).fetchone()
+    except Exception:
+        # card_classifications table absent (older schema) — never skip.
+        return False
+    if row is None:
+        return False
+    classification = str(row["classification"] if isinstance(row, dict) else row[0]).strip().lower()
+    return classification in skip_set
+
+
+def _generate_semantic_candidates(
+    conn: Any,
+    schema: str,
+    catalog: SeedLinkCatalog,
+    source_card_uid: str,
+    *,
+    k: int = DEFAULT_SEMANTIC_K,
+    threshold: float = DEFAULT_SEMANTIC_THRESHOLD,
+    embedding_model: str | None = None,
+    embedding_version: int | None = None,
+) -> list[SeedLinkCandidate]:
+    """Top-K semantically similar cards via chunk-level kNN (IVFFlat), grouped to card-level."""
+    model = embedding_model or get_default_embedding_model()
+    version = int(embedding_version if embedding_version is not None else get_default_embedding_version())
+    source = catalog.cards_by_uid.get(source_card_uid)
+    if source is None:
+        return []
+
+    # Phase 6 Tier 4 / Step 24: type + summary-template gate (cheap, no DB).
+    if not is_semantic_eligible(source.card_type, source.summary):
+        return []
+
+    # Phase 6 Tier 4: skip the source entirely if it's a classified-junk email
+    # (marketing / automated / noise / personal). This avoids ~78% of email candidate
+    # generation and the LLM-judge cost that would follow.
+    if _is_classification_skipped(conn, schema, source_card_uid):
+        return []
+
+    same_type_allowed = _semantic_allow_same_type()
+
+    src_row = conn.execute(
+        f"""
+        SELECT AVG(e.embedding)::vector AS v
+        FROM {schema}.chunks c
+        JOIN {schema}.embeddings e ON e.chunk_key = c.chunk_key
+        WHERE c.card_uid = %s
+          AND e.embedding_model = %s
+          AND e.embedding_version = %s
+        """,
+        (source_card_uid, model, version),
+    ).fetchone()
+    if src_row is None or src_row["v"] is None:
+        return []
+    source_vec = src_row["v"]
+
+    overfetch_chunks = k * DEFAULT_SEMANTIC_OVERFETCH_RATIO * DEFAULT_SEMANTIC_CHUNK_FANOUT
+    final_card_limit = k * DEFAULT_SEMANTIC_OVERFETCH_RATIO
+    # Single-pool kNN: the Phase 6 calibration sweep (2026-04-19, 102 sample sources) showed
+    # an explicit cross-type pool added zero candidates above threshold — text-embedding-3-small
+    # simply doesn't place cross-type cards within cosine 0.5 of each other on this corpus.
+    rows = conn.execute(
+        f"""
+        WITH nearest_chunks AS (
+            SELECT
+                c.card_uid,
+                e.embedding <=> %s::vector AS dist
+            FROM {schema}.embeddings e
+            JOIN {schema}.chunks c ON c.chunk_key = e.chunk_key
+            WHERE c.card_uid != %s
+              AND e.embedding_model = %s
+              AND e.embedding_version = %s
+            ORDER BY e.embedding <=> %s::vector
+            LIMIT %s
+        ),
+        per_card AS (
+            SELECT card_uid, MIN(dist) AS distance
+            FROM nearest_chunks
+            GROUP BY card_uid
+        )
+        SELECT
+            pc.card_uid AS target_uid,
+            cards.rel_path AS target_rel_path,
+            cards.type AS target_type,
+            1 - pc.distance AS similarity
+        FROM per_card pc
+        JOIN {schema}.cards cards ON cards.uid = pc.card_uid
+        WHERE 1 - pc.distance >= %s
+        ORDER BY pc.distance
+        LIMIT %s
+        """,
+        (
+            source_vec,
+            source_card_uid,
+            model,
+            version,
+            source_vec,
+            overfetch_chunks,
+            threshold,
+            final_card_limit,
+        ),
+    ).fetchall()
+
+    sem_policy = LINK_SURFACE_BY_TYPE[LINK_TYPE_SEMANTICALLY_RELATED]
+    candidates: list[SeedLinkCandidate] = []
+    for row in rows:
+        if len(candidates) >= k:
+            break
+        target_uid = str(row["target_uid"])
+        similarity = float(row["similarity"])
+        if similarity < threshold:
+            continue
+        if target_uid == source_card_uid:
+            continue
+        if _edge_exists(conn, schema, source_card_uid, target_uid):
+            continue
+        if _candidate_exists(conn, schema, source_card_uid, target_uid):
+            continue
+        # Phase 6 Tier 4: skip targets that are classified-junk emails. The kNN may
+        # surface them based on cosine alone; the LLM-judge cost is wasted on them.
+        if _is_classification_skipped(conn, schema, target_uid):
+            continue
+        # Phase 6 Tier 4 / Step 24: type + summary-template gate for target.
+        target_type = str(row["target_type"])
+        target_summary = catalog.cards_by_uid.get(target_uid)
+        target_summary_str = target_summary.summary if target_summary is not None else ""
+        if not is_semantic_eligible(target_type, target_summary_str):
+            continue
+        # Same-type pair restriction: only allowed for a small set of types.
+        if source.card_type == target_type and source.card_type not in same_type_allowed:
+            continue
+        if catalog.cards_by_uid.get(target_uid) is None:
+            continue
+
+        features: dict[str, Any] = {
+            "embedding_similarity": round(similarity, 6),
+            "deterministic_hits": [],
+            "ambiguous_target_count": 0,
+        }
+        evidences = [
+            LinkEvidence(
+                evidence_type="embedding_similarity",
+                evidence_source="pgvector_knn",
+                feature_name="cosine_similarity",
+                feature_value=f"{similarity:.6f}",
+                feature_weight=similarity,
+                raw_payload_json={
+                    "k": k,
+                    "threshold": threshold,
+                    "source_uid": source_card_uid,
+                    "target_uid": target_uid,
+                    "embedding_model": model,
+                    "embedding_version": version,
+                },
+            ),
+        ]
+        input_hash = compute_input_hash(
+            {
+                "source_uid": source_card_uid,
+                "target_uid": target_uid,
+                "module": MODULE_SEMANTIC,
+                "linker_version": SEED_LINKER_VERSION,
+            }
+        )
+        evidence_hash = compute_input_hash({"features": features})
+        candidates.append(
+            SeedLinkCandidate(
+                module_name=MODULE_SEMANTIC,
+                source_card_uid=source_card_uid,
+                source_rel_path=source.rel_path,
+                target_card_uid=target_uid,
+                target_rel_path=str(row["target_rel_path"]),
+                target_kind="card",
+                proposed_link_type=LINK_TYPE_SEMANTICALLY_RELATED,
+                candidate_group="",
+                input_hash=input_hash,
+                evidence_hash=evidence_hash,
+                features=features,
+                evidences=evidences,
+                surface=sem_policy.surface,
+                promotion_target=sem_policy.promotion_target,
+                canonical_field_name=sem_policy.canonical_field_name,
+                canonical_value_mode=sem_policy.canonical_value_mode,
+            )
+        )
+    return candidates
+
+
 def generate_seed_link_candidates(
     catalog: SeedLinkCatalog, source: SeedCardSketch, module_name: str
 ) -> list[SeedLinkCandidate]:
@@ -2191,13 +2599,14 @@ def llm_judge_candidate(
     return 0.0, "", {}
 
 
-def _component_scores(candidate: SeedLinkCandidate) -> tuple[float, float, float, float]:
+def _component_scores(candidate: SeedLinkCandidate) -> tuple[float, float, float, float, float]:
     features = candidate.features
     module_name = candidate.module_name
     deterministic_hits = len(features.get("deterministic_hits", []))
     deterministic_score = 0.0
     lexical_score = 0.0
     graph_score = 0.0
+    embedding_score = 0.0
     risk_penalty = 0.0
     if module_name == MODULE_IDENTITY:
         deterministic_score = min(
@@ -2286,6 +2695,13 @@ def _component_scores(candidate: SeedLinkCandidate) -> tuple[float, float, float
         )
         lexical_score = 0.0
         graph_score = 0.9 if int(features.get("reverse_edge_missing", 0)) else 0.65
+    elif module_name == MODULE_SEMANTIC:
+        embedding_score = float(features.get("embedding_similarity", 0.0))
+        deterministic_score = 0.0
+        lexical_score = 0.0
+        graph_score = 0.0
+        if embedding_score < 0.7:
+            risk_penalty += 0.20
     else:
         deterministic_score = 0.0
         lexical_score = 0.0
@@ -2295,6 +2711,7 @@ def _component_scores(candidate: SeedLinkCandidate) -> tuple[float, float, float
         max(0.0, min(deterministic_score, 1.0)),
         max(0.0, min(lexical_score, 1.0)),
         max(0.0, min(graph_score, 1.0)),
+        max(0.0, min(embedding_score, 1.0)),
         max(0.0, min(risk_penalty, 0.8)),
     )
 
@@ -2307,25 +2724,58 @@ def evaluate_seed_link_candidate(
     source = catalog.cards_by_uid[candidate.source_card_uid]
     target = catalog.cards_by_uid[candidate.target_card_uid]
     policy = LINK_SURFACE_BY_TYPE[candidate.proposed_link_type]
-    deterministic_score, lexical_score, graph_score, risk_penalty = _component_scores(candidate)
+    deterministic_score, lexical_score, graph_score, embedding_score, risk_penalty = _component_scores(candidate)
     llm_score, llm_model, llm_output = llm_judge_candidate(vault_path, candidate, source, target)
     review_floor = policy.auto_review_floor
     auto_floor = policy.auto_promote_floor
     canonical_floor = policy.canonical_floor
-    final_confidence = round(
-        max(
-            0.0,
-            min(
-                1.0,
-                (0.50 * deterministic_score)
-                + (0.15 * lexical_score)
-                + (0.15 * graph_score)
-                + (0.20 * llm_score)
-                - risk_penalty,
+    if candidate.module_name == MODULE_SEMANTIC:
+        # Semantic candidates: no deterministic / lexical / graph signal by design.
+        # Calibrated 2026-04-19 (1020-source then 1pct=1914-source sweeps, reports under
+        # _artifacts/_semantic-linker-calibration/). Two-tier gate based on whether
+        # source and target are the same card type:
+        #
+        # SAME-TYPE pairs (eg. calendar↔calendar) are template-prone and tend to be
+        # near-duplicates — strict gate: verdict==YES, llm>=0.90, emb>=0.85 means both
+        # signals must agree strongly.
+        #
+        # CROSS-TYPE pairs (eg. flight↔email_thread, accommodation↔calendar_event,
+        # vaccination↔medical_record) are exactly the cross-domain bridges Phase 6 was
+        # designed to find. They're rare in the corpus and the LLM is naturally less
+        # confident on them (cross-type wording differs more), so a strict same-type
+        # gate eliminates 100% of them. Lenient gate: verdict==YES, llm>=0.70,
+        # emb>=0.55. The 1pct sweep showed this surfaces ~27 high-quality cross-type
+        # bridges out of 167 candidates with zero "junk-mail bridge" leakage thanks
+        # to the type-allowlist + classification filter in _generate_semantic_candidates.
+        llm_verdict = str(llm_output.get("link", "")).strip().upper() if llm_output else ""
+        is_cross_type = source.card_type != target.card_type
+        if is_cross_type:
+            min_llm, min_emb = 0.70, 0.55
+        else:
+            min_llm, min_emb = 0.90, 0.85
+        if llm_verdict != "YES" or llm_score < min_llm or embedding_score < min_emb:
+            final_confidence = 0.0
+        else:
+            final_confidence = round(
+                max(0.0, min(1.0, (llm_score * embedding_score) - risk_penalty)),
+                6,
+            )
+    else:
+        final_confidence = round(
+            max(
+                0.0,
+                min(
+                    1.0,
+                    (0.45 * deterministic_score)
+                    + (0.12 * lexical_score)
+                    + (0.13 * graph_score)
+                    + (0.18 * llm_score)
+                    + (0.12 * embedding_score)
+                    - risk_penalty,
+                ),
             ),
-        ),
-        6,
-    )
+            6,
+        )
     if candidate.surface == SURFACE_CANONICAL_SAFE and deterministic_score >= 1.0 and risk_penalty < 0.2:
         final_confidence = round(max(final_confidence, canonical_floor), 6)
     decision_reason = DECISION_REASON_LOW_CONFIDENCE
@@ -2377,6 +2827,7 @@ def evaluate_seed_link_candidate(
         deterministic_score=deterministic_score,
         lexical_score=lexical_score,
         graph_score=graph_score,
+        embedding_score=embedding_score,
         llm_score=llm_score,
         risk_penalty=risk_penalty,
         final_confidence=final_confidence,
@@ -2715,10 +3166,11 @@ def _persist_candidate(
         f"""
         INSERT INTO {index.schema}.link_decisions(
             candidate_id, deterministic_score, lexical_score, graph_score, llm_score, risk_penalty,
+            embedding_score,
             final_confidence, decision, decision_reason, auto_approved_floor, review_floor, discard_floor,
             policy_version, llm_model, llm_output_json
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
         """,
         (
             candidate_id,
@@ -2727,6 +3179,7 @@ def _persist_candidate(
             decision.graph_score,
             decision.llm_score,
             decision.risk_penalty,
+            decision.embedding_score,
             decision.final_confidence,
             decision.decision,
             decision.decision_reason,
@@ -3175,9 +3628,14 @@ def run_seed_link_workers(
                         source = catalog.cards_by_uid.get(str(job["source_card_uid"]))
                         if source is None:
                             raise ValueError("source card missing from catalog")
-                        candidates = _dedupe_candidates(
-                            generate_seed_link_candidates(catalog, source, str(job["module_name"]))
-                        )
+                        job_module = str(job["module_name"])
+                        if job_module == MODULE_SEMANTIC:
+                            raw_candidates = _generate_semantic_candidates(
+                                conn, index.schema, catalog, source.uid
+                            )
+                        else:
+                            raw_candidates = generate_seed_link_candidates(catalog, source, job_module)
+                        candidates = _dedupe_candidates(raw_candidates)
                         if not include_llm:
                             for candidate in candidates:
                                 candidate.features["llm_disabled"] = 1
@@ -3403,7 +3861,7 @@ def run_seed_link_backfill(
     promotion_counts = {"derived_edge": 0, "canonical_field": 0, "blocked": 0}
     if apply_promotions:
         promotion_counts = run_seed_link_promotion_workers(index, cache=seed_cache)
-    gate = run_seed_link_report(index, rebuild_if_dirty=bool(apply_promotions), cache=seed_cache)
+    gate = run_seed_link_report(index, rebuild_if_dirty=bool(apply_promotions))
     return {
         "workers": int(worker_result["workers"]),
         "jobs_prepared": int(enqueue_result["prepared"]),

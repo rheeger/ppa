@@ -334,5 +334,10 @@ def test_seed_link_scoring_keeps_identity_merge_review_first(tmp_path: Path):
     assert candidates
 
     decision = evaluate_seed_link_candidate(vault, catalog, candidates[0])
-    assert decision.final_confidence >= 0.80
+    # Phase 6 policy v2 reweighting: deterministic 0.50 -> 0.45, etc., to make room for
+    # embedding_score (0.12). For deterministic-only candidates (embedding_score = 0),
+    # final_confidence drops by 0.05 vs the old formula. The decision (review-first for
+    # possible_same_person) is unaffected because review_floor is still 0.45 and
+    # auto_promote_floor is forced to 0.97.
+    assert decision.final_confidence >= 0.75
     assert decision.decision in {"review", "auto_promote", "canonical_safe"}

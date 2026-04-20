@@ -25,45 +25,45 @@ use crate::materializer::text_hash::{build_search_text_value, content_hash_value
 use crate::materializer::time_parse::{optional_utc_to_py, parse_timestamp_to_utc_rust};
 use sha2::{Digest, Sha256};
 
-struct CardsRowRust {
-    card_uid: String,
-    rel_path: String,
-    stem: String,
-    card_type: String,
-    summary: String,
-    source_id: String,
-    timeline: HashMap<String, String>,
-    activity_at: Option<DateTime<Utc>>,
-    activity_end_at: Option<DateTime<Utc>>,
-    quality_score: f64,
-    quality_flags: Vec<String>,
-    content_hash: String,
-    search_text: String,
+pub(crate) struct CardsRowRust {
+    pub(crate) card_uid: String,
+    pub(crate) rel_path: String,
+    pub(crate) stem: String,
+    pub(crate) card_type: String,
+    pub(crate) summary: String,
+    pub(crate) source_id: String,
+    pub(crate) timeline: HashMap<String, String>,
+    pub(crate) activity_at: Option<DateTime<Utc>>,
+    pub(crate) activity_end_at: Option<DateTime<Utc>>,
+    pub(crate) quality_score: f64,
+    pub(crate) quality_flags: Vec<String>,
+    pub(crate) content_hash: String,
+    pub(crate) search_text: String,
 }
 
-struct ChunkRowRust {
-    ck: String,
-    card_uid: String,
-    rel_path: String,
-    chunk_type: String,
-    chunk_index: i32,
-    chunk_schema_version: i32,
-    source_fields: Vec<String>,
-    content: String,
-    content_hash: String,
-    token_count: i32,
+pub(crate) struct ChunkRowRust {
+    pub(crate) ck: String,
+    pub(crate) card_uid: String,
+    pub(crate) rel_path: String,
+    pub(crate) chunk_type: String,
+    pub(crate) chunk_index: i32,
+    pub(crate) chunk_schema_version: i32,
+    pub(crate) source_fields: Vec<String>,
+    pub(crate) content: String,
+    pub(crate) content_hash: String,
+    pub(crate) token_count: i32,
 }
 
-struct MaterializedOneRust {
-    cards: CardsRowRust,
-    ingestion: (String, String, String, String),
-    card_sources: Vec<(String, String)>,
-    card_people: Vec<(String, String)>,
-    card_orgs: Vec<(String, String)>,
-    typed_projection: Option<(String, Vec<ProjectionCell>, bool, String)>,
-    external_ids: Vec<(String, String, String, String)>,
-    edges: Vec<edges::EdgeRow>,
-    chunks: Vec<ChunkRowRust>,
+pub(crate) struct MaterializedOneRust {
+    pub(crate) cards: CardsRowRust,
+    pub(crate) ingestion: (String, String, String, String),
+    pub(crate) card_sources: Vec<(String, String)>,
+    pub(crate) card_people: Vec<(String, String)>,
+    pub(crate) card_orgs: Vec<(String, String)>,
+    pub(crate) typed_projection: Option<(String, Vec<ProjectionCell>, bool, String)>,
+    pub(crate) external_ids: Vec<(String, String, String, String)>,
+    pub(crate) edges: Vec<edges::EdgeRow>,
+    pub(crate) chunks: Vec<ChunkRowRust>,
 }
 
 /// Same keys as `archive_cli.features.TIMELINE_FIELDS`.
@@ -158,6 +158,7 @@ fn materialize_one_rust(
     person_lookup: &HashMap<String, String>,
     batch_id: &str,
     chunk_schema_version: i32,
+    body_cache: Option<&HashMap<String, Vec<u8>>>,
 ) -> Result<MaterializedOneRust, String> {
     let fm = fm_val
         .as_object()
@@ -165,7 +166,12 @@ fn materialize_one_rust(
     let card = CardFields::from_frontmatter_value(fm_val.clone())
         .map_err(|e| format!("CardFields: {e}"))?;
 
-    let body = read_note_body(vault_root, &rel_path).map_err(|e| format!("read {rel_path}: {e}"))?;
+    let body = if let Some(cache) = body_cache {
+        crate::materializer::body::read_note_body_from_cache(cache, vault_root, &rel_path)
+    } else {
+        read_note_body(vault_root, &rel_path)
+    }
+    .map_err(|e| format!("read {rel_path}: {e}"))?;
 
     let search_text = build_search_text_value(fm, &body);
     let content_hash_val =
@@ -504,8 +510,12 @@ fn materialize_rust_to_py(py: Python<'_>, m: MaterializedOneRust) -> PyResult<Py
 }
 
 /// Native materializer — parity with `archive_cli.materializer._materialize_row_batch`.
+///
+/// When `body_cache` (a `BodyCache` handle) is provided, bodies are read from the pre-loaded
+/// in-memory cache (zlib-decompressed, already provenance-stripped) instead of disk.
+/// Create the `BodyCache` once via `BodyCache.load(path)` and pass it to every batch call.
 #[pyfunction]
-#[pyo3(signature = (rows, vault_root, slug_map, path_to_uid, person_lookup, batch_id=None, chunk_schema_version=5))]
+#[pyo3(signature = (rows, vault_root, slug_map, path_to_uid, person_lookup, batch_id=None, chunk_schema_version=5, body_cache=None))]
 pub fn materialize_row_batch(
     py: Python<'_>,
     rows: &Bound<'_, PyAny>,
@@ -515,6 +525,7 @@ pub fn materialize_row_batch(
     person_lookup: HashMap<String, String>,
     batch_id: Option<String>,
     chunk_schema_version: i32,
+    body_cache: Option<&crate::materializer::body::BodyCache>,
 ) -> PyResult<PyObject> {
     let batch_id = batch_id.unwrap_or_default();
     let seq = rows.downcast::<PyList>()?;
@@ -533,6 +544,7 @@ pub fn materialize_row_batch(
     let sm = slug_map.clone();
     let ptu = path_to_uid.clone();
     let pl = person_lookup.clone();
+    let cache_arc = body_cache.map(|bc| bc.inner.clone());
 
     let results: Vec<Result<MaterializedOneRust, String>> = py.allow_threads(|| {
         inputs
@@ -547,6 +559,7 @@ pub fn materialize_row_batch(
                     &pl,
                     bid.as_str(),
                     chunk_schema_version,
+                    cache_arc.as_deref(),
                 )
             })
             .collect()
@@ -564,4 +577,91 @@ pub fn materialize_row_batch(
     }
 
     Ok(out.into())
+}
+
+/// Materialize ALL rows — maps converted once from Python, then shared as `&HashMap` refs
+/// across rayon workers (zero cloning per batch). Processes in chunks of `batch_size`,
+/// materializing each chunk in parallel then converting to Python. Logs progress to stderr.
+/// Returns a Python list of `ProjectionRowBuffer` objects.
+#[pyfunction]
+#[pyo3(signature = (rows, vault_root, slug_map, path_to_uid, person_lookup, batch_id=None, chunk_schema_version=5, body_cache=None, batch_size=5000))]
+pub fn materialize_all_rows(
+    py: Python<'_>,
+    rows: &Bound<'_, PyAny>,
+    vault_root: String,
+    slug_map: HashMap<String, String>,
+    path_to_uid: HashMap<String, String>,
+    person_lookup: HashMap<String, String>,
+    batch_id: Option<String>,
+    chunk_schema_version: i32,
+    body_cache: Option<&crate::materializer::body::BodyCache>,
+    batch_size: usize,
+) -> PyResult<PyObject> {
+    let batch_id = batch_id.unwrap_or_default();
+    let seq = rows.downcast::<PyList>()?;
+    let n = seq.len();
+    let mut inputs: Vec<(String, JsonValue)> = Vec::with_capacity(n);
+    for i in 0..n {
+        let row = seq.get_item(i)?;
+        let rel_path: String = row.getattr("rel_path")?.extract()?;
+        let row_fm = row.getattr("frontmatter")?;
+        let fm_val = json_stable::json_value_from_py_any(py, &row_fm)?;
+        inputs.push((rel_path, fm_val));
+    }
+
+    let cache_ref = body_cache.map(|bc| &*bc.inner);
+    let bs = if batch_size == 0 { 5000 } else { batch_size };
+
+    let out_list = PyList::empty_bound(py);
+
+    let total = inputs.len();
+    let mut processed = 0usize;
+    let started = std::time::Instant::now();
+    let mut remaining = inputs;
+
+    while !remaining.is_empty() {
+        let split_at = bs.min(remaining.len());
+        let chunk_vec: Vec<(String, JsonValue)> = remaining.drain(..split_at).collect();
+
+        let chunk_results: Vec<Result<MaterializedOneRust, String>> = py.allow_threads(|| {
+            chunk_vec
+                .into_par_iter()
+                .map(|(rel_path, fm_val)| {
+                    materialize_one_rust(
+                        rel_path,
+                        fm_val,
+                        vault_root.as_str(),
+                        &slug_map,
+                        &path_to_uid,
+                        &person_lookup,
+                        batch_id.as_str(),
+                        chunk_schema_version,
+                        cache_ref,
+                    )
+                })
+                .collect()
+        });
+
+        let mut materialized: Vec<MaterializedOneRust> = Vec::with_capacity(chunk_results.len());
+        for r in chunk_results {
+            let m = r.map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+            materialized.push(m);
+        }
+        let copy_buf = crate::materializer::copy_buffer::build_copy_buffer(materialized);
+        let py_buf = Py::new(py, copy_buf)?;
+        out_list.append(py_buf)?;
+        processed += split_at;
+
+        let elapsed = started.elapsed().as_secs_f64();
+        let rate = processed as f64 / elapsed.max(0.001);
+        let eta = (total - processed) as f64 / rate.max(1.0);
+        eprintln!(
+            "[archive_crate] materialize {}/{} ({:.1}%) elapsed={:.1}s rate={:.0}/s eta={:.0}s",
+            processed, total,
+            processed as f64 / total as f64 * 100.0,
+            elapsed, rate, eta,
+        );
+    }
+
+    Ok(out_list.into())
 }

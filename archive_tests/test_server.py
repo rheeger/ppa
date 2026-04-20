@@ -288,7 +288,7 @@ class FakeIndex:
         return lexical_rows, vector_rows
 
     def fetch_graph_neighbors_for_uids(self, anchor_uids):
-        return set()
+        return {}
 
 
 @pytest.fixture

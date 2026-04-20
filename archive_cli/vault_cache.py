@@ -15,12 +15,55 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from archive_vault.schema import validate_card_permissive
-from archive_vault.vault import (extract_wikilinks, iter_note_paths,
-                                 read_note_file, read_note_frontmatter_file)
+from archive_vault.vault import extract_wikilinks, iter_note_paths, read_note_file, read_note_frontmatter_file
 
 logger = logging.getLogger("ppa.vault_cache")
 
-CACHE_VERSION = 1
+# ---------------------------------------------------------------------------
+# Cache version — auto-derived from source files that determine row shape.
+#
+# Any change to parsing, hashing, or field-extraction logic triggers a full
+# cache rebuild on next load, preventing stale rows from surviving incremental
+# updates.  The set of files below covers both the Python and Rust code paths.
+# ---------------------------------------------------------------------------
+
+_CACHE_CODE_FINGERPRINT_FILES = (
+    # Python: parsing, hashing, row population
+    "archive_cli/vault_cache.py",
+    # Python: card model, permissive validation
+    "archive_vault/schema.py",
+    # Python: note reading, wikilink extraction
+    "archive_vault/vault.py",
+    # Rust: row build (tier1/tier2), provenance, wikilinks
+    "archive_crate/src/cache_build.rs",
+    # Rust: JSON serialization, frontmatter hash, content hash
+    "archive_crate/src/json_stable.rs",
+    # Rust: card field extraction (uid, type, people, orgs, etc.)
+    "archive_crate/src/materializer/card_fields.rs",
+    "archive_crate/src/materializer/card_field_keys.rs",
+    # Rust: raw content hash
+    "archive_crate/src/hasher.rs",
+)
+
+
+def _compute_cache_code_version() -> str:
+    """SHA-256 fingerprint of source files that determine cache row shape.
+
+    Returns the first 16 hex chars — short enough for readable meta values,
+    long enough to be collision-free in practice.
+    """
+    repo_root = Path(__file__).resolve().parent.parent
+    h = hashlib.sha256()
+    for rel in _CACHE_CODE_FINGERPRINT_FILES:
+        p = repo_root / rel
+        try:
+            h.update(p.read_bytes())
+        except FileNotFoundError:
+            h.update(rel.encode())
+    return h.hexdigest()[:16]
+
+
+CACHE_VERSION = _compute_cache_code_version()
 CACHE_FILENAME = "vault-scan-cache.sqlite3"
 ZLIB_LEVEL = 6
 BATCH_COMMIT_EVERY = 50_000
@@ -197,8 +240,14 @@ def _try_build_vault_cache_disk_with_rust(
     tier: int,
     expected_fp: str,
     expected_note_count: int,
+    *,
+    incremental: bool = False,
 ) -> bool:
     """If ``PPA_ENGINE=rust`` and ``archive_crate`` is available, build the on-disk cache via Rust.
+
+    When ``incremental=True`` and the cache file already exists, uses
+    ``build_vault_cache_incremental`` to only re-parse notes whose ``mtime_ns`` or
+    ``file_size`` changed on disk. Falls back to full build when incremental is unavailable.
 
     Returns True when the SQLite file at ``cache_path`` was produced by Rust and matches
     ``expected_fp``. On failure, attempts to remove ``cache_path`` and returns False so callers
@@ -218,58 +267,91 @@ def _try_build_vault_cache_disk_with_rust(
         )
         logger.info("vault-cache PPA_ENGINE=rust but archive_crate is not installed; using Python fill")
         return False
+
+    use_incremental = incremental and cache_path.exists() and hasattr(archive_crate, "build_vault_cache_incremental")
+
+    if not use_incremental:
+        # Full build: verify fingerprint parity first
+        try:
+            _, fp_r = archive_crate.vault_fingerprint(str(vault))
+            if fp_r != expected_fp:
+                logger.warning(
+                    "vault-cache rust fingerprint mismatch (walk parity); using Python fill fp_py=%s fp_rust=%s",
+                    expected_fp,
+                    fp_r,
+                )
+                return False
+        except Exception as exc:
+            logger.warning("vault-cache rust fingerprint check failed: %s", exc)
+            return False
+
     try:
-        _, fp_r = archive_crate.vault_fingerprint(str(vault))
-        if fp_r != expected_fp:
-            logger.warning(
-                "vault-cache rust fingerprint mismatch (walk parity); using Python fill fp_py=%s fp_rust=%s",
-                expected_fp,
-                fp_r,
-            )
-            return False
-    except Exception as exc:
-        logger.warning("vault-cache rust fingerprint check failed: %s", exc)
-        return False
-    try:
-        for suffix in ("", "-wal", "-shm"):
-            p = Path(str(cache_path) + suffix)
-            if p.exists():
-                p.unlink()
-        out = archive_crate.build_vault_cache(str(vault), str(cache_path), tier)
-        if out.get("fingerprint") != expected_fp:
-            logger.warning("vault-cache rust build fingerprint mismatch; using Python fill")
-            try:
-                cache_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-            return False
-        n = int(out.get("note_count", 0))
-        skipped = int(out.get("skipped", 0))
-        if n + skipped != expected_note_count:
-            logger.warning(
-                "vault-cache rust note_count mismatch (expected=%d got=%d skipped=%d); using Python fill",
-                expected_note_count,
-                n,
-                skipped,
-            )
-            try:
-                cache_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-            return False
-        if skipped > 0:
-            logger.info(
-                "vault-cache rust skipped %d notes with parse errors (inserted=%d)", skipped, n
-            )
-        logger.info("vault-cache disk build used rust engine tier=%d notes=%d", tier, n)
-        return True
+        if use_incremental:
+            out = archive_crate.build_vault_cache_incremental(str(vault), str(cache_path), tier, CACHE_VERSION)
+            rebuilt = int(out.get("rebuilt", 0))
+            skipped = int(out.get("skipped", 0))
+            deleted = int(out.get("deleted", 0))
+            unchanged = int(out.get("unchanged", 0))
+            n = int(out.get("note_count", 0))
+            if out.get("fingerprint") != expected_fp:
+                logger.warning(
+                    "vault-cache rust incremental fingerprint mismatch; falling back to full build"
+                )
+                # Fall through to full build below
+                use_incremental = False
+            else:
+                if skipped > 0:
+                    logger.info(
+                        "vault-cache rust incremental skipped %d notes with parse errors", skipped
+                    )
+                logger.info(
+                    "vault-cache incremental build via rust tier=%d rebuilt=%d deleted=%d unchanged=%d total=%d",
+                    tier, rebuilt, deleted, unchanged, n,
+                )
+                return True
+
+        if not use_incremental:
+            for suffix in ("", "-wal", "-shm"):
+                p = Path(str(cache_path) + suffix)
+                if p.exists():
+                    p.unlink()
+            out = archive_crate.build_vault_cache(str(vault), str(cache_path), tier, CACHE_VERSION)
+            if out.get("fingerprint") != expected_fp:
+                logger.warning("vault-cache rust build fingerprint mismatch; using Python fill")
+                try:
+                    cache_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                return False
+            n = int(out.get("note_count", 0))
+            skipped = int(out.get("skipped", 0))
+            if n + skipped != expected_note_count:
+                logger.warning(
+                    "vault-cache rust note_count mismatch (expected=%d got=%d skipped=%d); using Python fill",
+                    expected_note_count,
+                    n,
+                    skipped,
+                )
+                try:
+                    cache_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                return False
+            if skipped > 0:
+                logger.info(
+                    "vault-cache rust skipped %d notes with parse errors (inserted=%d)", skipped, n
+                )
+            logger.info("vault-cache disk build used rust engine tier=%d notes=%d", tier, n)
+            return True
     except Exception as exc:
         logger.warning("vault-cache rust build failed: %s", exc)
         try:
-            cache_path.unlink(missing_ok=True)
+            if not use_incremental:
+                cache_path.unlink(missing_ok=True)
         except OSError:
             pass
         return False
+    return False
 
 
 class VaultScanCache:
@@ -363,9 +445,10 @@ class VaultScanCache:
                     )
                     _init_db(conn)
                     return cls(conn, int(stored_tier), fp, cache_hit=True)
-                if stored_fp == fp and stored_ver == str(CACHE_VERSION) and stored_tier is not None:
-                    if int(stored_tier) < tier:
-                        miss_reason = "tier_upgrade"
+                if stored_ver != str(CACHE_VERSION):
+                    miss_reason = "version_changed"
+                elif stored_fp == fp and stored_tier is not None and int(stored_tier) < tier:
+                    miss_reason = "tier_upgrade"
                 conn.close()
             except sqlite3.OperationalError as exc:
                 logger.warning("vault-cache miss reason=open_failed err=%s", exc)
@@ -385,17 +468,20 @@ class VaultScanCache:
                 fp[:16],
             )
 
+        use_incremental = miss_reason == "fingerprint_changed" and cache_path.exists()
         logger.info(
-            "vault-cache miss reason=%s building tier=%d notes=%d",
+            "vault-cache miss reason=%s building tier=%d notes=%d incremental=%s",
             miss_reason,
             tier,
             len(rel_paths),
+            use_incremental,
         )
         try:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             note_count_expected = len(rel_paths)
             if _try_build_vault_cache_disk_with_rust(
-                vault, cache_path, tier, fp, note_count_expected
+                vault, cache_path, tier, fp, note_count_expected,
+                incremental=use_incremental,
             ):
                 conn = sqlite3.connect(str(cache_path), timeout=120.0, check_same_thread=False)
                 conn.row_factory = sqlite3.Row
@@ -414,6 +500,7 @@ class VaultScanCache:
                     tier,
                     progress_every=progress_every,
                     cache_hit=False,
+                    incremental=use_incremental,
                 )
                 conn.commit()
             try:
@@ -485,11 +572,60 @@ class VaultScanCache:
         *,
         progress_every: int,
         cache_hit: bool = False,
+        incremental: bool = False,
     ) -> VaultScanCache:
-        conn.execute("DELETE FROM notes")
-        conn.execute("DELETE FROM cache_meta")
-        n_total = len(rel_paths)
         t_build = time.monotonic()
+
+        if incremental:
+            cached_stats: dict[str, tuple[int, int]] = {}
+            try:
+                for row in conn.execute("SELECT rel_path, mtime_ns, file_size FROM notes"):
+                    cached_stats[str(row[0])] = (int(row[1]), int(row[2]))
+            except Exception:
+                cached_stats = {}
+
+            if cached_stats:
+                disk_paths = set(stats.keys())
+                cached_paths = set(cached_stats.keys())
+                deleted_paths = cached_paths - disk_paths
+                paths_to_build: list[str] = []
+                unchanged_count = 0
+                for rp in rel_paths:
+                    cached = cached_stats.get(rp)
+                    if cached is not None:
+                        disk_mt, disk_sz = stats.get(rp, (0, 0))
+                        if disk_mt == cached[0] and disk_sz == cached[1]:
+                            unchanged_count += 1
+                            continue
+                    paths_to_build.append(rp)
+
+                if deleted_paths:
+                    for chunk_start in range(0, len(deleted_paths), 500):
+                        chunk = list(deleted_paths)[chunk_start:chunk_start + 500]
+                        placeholders = ",".join("?" for _ in chunk)
+                        conn.execute(
+                            f"DELETE FROM notes WHERE rel_path IN ({placeholders})",
+                            chunk,
+                        )
+                    conn.commit()
+
+                logger.info(
+                    "vault-cache incremental delta: rebuild=%d deleted=%d unchanged=%d",
+                    len(paths_to_build),
+                    len(deleted_paths),
+                    unchanged_count,
+                )
+            else:
+                paths_to_build = rel_paths
+                unchanged_count = 0
+        else:
+            conn.execute("DELETE FROM notes")
+            paths_to_build = rel_paths
+            unchanged_count = 0
+
+        conn.execute("DELETE FROM cache_meta")
+
+        n_total = len(paths_to_build)
         batch: list[tuple[Any, ...]] = []
         inserted = 0
 
@@ -499,7 +635,7 @@ class VaultScanCache:
                 return
             conn.executemany(
                 """
-                INSERT INTO notes (
+                INSERT OR REPLACE INTO notes (
                     rel_path, uid, card_type, slug, mtime_ns, file_size,
                     frontmatter_json, frontmatter_hash, body_compressed, content_hash, wikilinks_json,
                     raw_content_sha256
@@ -512,7 +648,7 @@ class VaultScanCache:
             if inserted % BATCH_COMMIT_EVERY == 0:
                 conn.commit()
 
-        for i, rel_path in enumerate(rel_paths, start=1):
+        for i, rel_path in enumerate(paths_to_build, start=1):
             if progress_every > 0 and i % progress_every == 0:
                 elapsed = time.monotonic() - t_build
                 rate = i / elapsed if elapsed > 0 else 0.0
@@ -565,20 +701,25 @@ class VaultScanCache:
         flush_batch()
         conn.commit()
 
+        total_notes = unchanged_count + inserted
         _meta_set(conn, "vault_fingerprint", fp)
         _meta_set(conn, "tier", str(tier))
         _meta_set(conn, "cache_version", str(CACHE_VERSION))
         _meta_set(conn, "generated_at", str(time.time()))
-        _meta_set(conn, "note_count", str(inserted))
+        _meta_set(conn, "note_count", str(total_notes))
         conn.commit()
 
         build_elapsed = time.monotonic() - t_build
-        logger.info(
-            "vault-cache build_complete tier=%d notes=%d elapsed=%s",
-            tier,
-            inserted,
-            _format_mins_secs(build_elapsed),
-        )
+        if incremental and unchanged_count > 0:
+            logger.info(
+                "vault-cache incremental_build_complete tier=%d rebuilt=%d unchanged=%d total=%d elapsed=%s",
+                tier, inserted, unchanged_count, total_notes, _format_mins_secs(build_elapsed),
+            )
+        else:
+            logger.info(
+                "vault-cache build_complete tier=%d notes=%d elapsed=%s",
+                tier, total_notes, _format_mins_secs(build_elapsed),
+            )
         return cls(conn, tier, fp, cache_hit=cache_hit)
 
     def note_count(self) -> int:
@@ -822,9 +963,14 @@ def refresh_stored_vault_fingerprint(vault: Path | str) -> bool:
     """Update ``vault_fingerprint`` in ``vault-scan-cache.sqlite3`` to match the vault *now*.
 
     The scan cache rows may still reflect an older scan; callers that read updated fields via
-    ``read_note()`` (as match resolution does for writes) are fine. This only re-stamps the
-    walk fingerprint so :meth:`VaultScanCache.build_or_load` can **hit** on the next run instead
-    of rebuilding for ~45+ minutes after bulk vault writes.
+    ``read_note()`` (as match resolution does for writes) are fine. This re-stamps the walk
+    fingerprint so :meth:`VaultScanCache.build_or_load` can **hit** on the next run without
+    any per-note work.
+
+    With incremental cache rebuilds now supported, a fingerprint mismatch no longer triggers
+    a full rebuild — only changed notes are re-parsed. This function remains useful as a
+    cheaper alternative when callers know the stale rows are acceptable (e.g. enrichment
+    steps that read from disk, not cache).
 
     Returns True if the cache file existed and was updated.
     """

@@ -8,7 +8,7 @@ import tempfile
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 
 from archive_cli.ppa_engine import ppa_engine
 from archive_vault.provenance import (
@@ -407,6 +407,31 @@ def write_card(
             pass
         raise
     return target
+
+
+def update_frontmatter_fields(vault_root: Path | str, rel_path: str, updates: dict[str, Any]) -> None:
+    """Update specific frontmatter fields in a vault card without touching the body."""
+    from io import StringIO
+
+    from ruamel.yaml import YAML
+
+    full_path = Path(vault_root) / rel_path
+    if not full_path.is_file():
+        raise FileNotFoundError(f"Card not found: {full_path}")
+    text = full_path.read_text(encoding="utf-8")
+    parts = text.split("---", 2)
+    if len(parts) < 3:
+        raise ValueError(f"No YAML frontmatter found in {rel_path}")
+    yaml = YAML()
+    yaml.preserve_quotes = True
+    frontmatter = yaml.load(parts[1])
+    if frontmatter is None:
+        frontmatter = {}
+    for key, value in updates.items():
+        frontmatter[key] = value
+    sio = StringIO()
+    yaml.dump(frontmatter, sio)
+    full_path.write_text(f"---\n{sio.getvalue()}---{parts[2]}", encoding="utf-8")
 
 
 def extract_wikilinks(content: str) -> list[str]:

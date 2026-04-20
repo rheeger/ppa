@@ -9,8 +9,7 @@ from unittest.mock import MagicMock
 
 class TestRenderBatchJsonl:
     def test_render_includes_context_prefix(self, tmp_path: Path):
-        from archive_cli.batch_embedder import (PendingChunk,
-                                                _render_batch_jsonl)
+        from archive_cli.batch_embedder import PendingChunk, _render_batch_jsonl
 
         chunks = [
             PendingChunk(chunk_key="ck-1", content="hello world", prefix="CTX: person\n---\n"),

@@ -638,11 +638,9 @@ All progress is also written to the log file (when `--log-file` is specified) in
 
 ### Vault scan cache improvements
 
-Phase 13 also addresses vault scan cache performance for enrichment and other multi-step pipelines. The current cache (`vault-scan-cache.sqlite3`) indexes all 1.8M+ vault notes with a full-vault fingerprint. Any file write invalidates the fingerprint and triggers a full rebuild (~46 minutes on the seed vault). This is the right behavior for the MCP server (which needs a consistent global view), but catastrophic for pipelines like `ppa enrich` that write vault cards between steps.
+The vault scan cache (`vault-scan-cache.sqlite3`) indexes all 1.8M+ vault notes. Incremental rebuilds are already in place — on fingerprint mismatch, only notes whose `mtime_ns` or `file_size` changed are re-parsed, and the cache version is auto-derived from source-file fingerprints so schema/parsing changes trigger a full rebuild without manual version bumps.
 
-**Phase 2.875 workaround (in place):** The enrichment orchestrator refreshes the stored fingerprint after each step (~55s stat walk) so the next step sees a cache hit and skips the full rebuild. This saves ~4 hours on a 6-step full-seed enrichment run but still walks all 1.8M files to recompute the fingerprint.
-
-**Phase 13 improvements:**
+Phase 13 builds on this with additional improvements for enrichment and multi-step pipelines:
 
 1. **Type-filtered cache loading.** `VaultScanCache.build_or_load` gains an optional `card_types: list[str]` parameter. When set, the fingerprint and cache only cover the specified subdirectories (e.g. `Finance/`, `Documents/`). Enrichment steps that only need one card type avoid walking the entire vault. The MCP server continues to use the full cache (no `card_types` filter).
 
@@ -663,7 +661,7 @@ Phase 13 also addresses vault scan cache performance for enrichment and other mu
 - No operation runs for more than 30 seconds without visible progress output
 - ETA estimates are within 2x of actual time after the first 10% of work completes
 - Progress bars degrade gracefully when total is unknown (spinner + count + throughput, no percentage)
-- `ppa enrich` on the full seed does not rebuild the vault scan cache between steps (fingerprint refresh or shared instance)
+- `ppa enrich` on the full seed does not rebuild the vault scan cache between steps (incremental rebuild handles changed notes; fingerprint refresh remains as a fast-path for enrichment)
 - Type-filtered cache loads complete in under 10 seconds for single card types on the full seed
 - Per-directory fingerprints correctly detect changes scoped to their directory without invalidating unrelated directories
 

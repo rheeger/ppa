@@ -794,6 +794,18 @@ class EmailThreadCard(BaseCard):
     invite_event_id_hints: list[str] = Field(default_factory=list)
     thread_summary: str = ""
     thread_body_sha: str = ""
+    # Triage classification (Phase 6 Tier 4 — durable replacement for
+    # _artifacts/_classify_index_*.db sidecar). Populated by archive_sync.llm_enrichment.triage.
+    # Allowed values match SKIP_CLASSIFICATIONS + the transactional categories enumerated
+    # in archive_sync/llm_enrichment/prompts/triage_system.txt: '', 'transactional_receipt',
+    # 'booking_confirmation', 'shipping_notification', 'subscription_event',
+    # 'purchase_receipt', 'payroll_notification', 'person_to_person', 'marketing',
+    # 'automated_notification', 'noise'. Empty string = unclassified.
+    triage_classification: str = ""
+    triage_confidence: float = 0.0
+    triage_card_types: list[str] = Field(default_factory=list)
+    triage_classified_at: str = ""
+    triage_classify_model: str = ""
 
     @field_validator("account_email", "participants")
     @classmethod

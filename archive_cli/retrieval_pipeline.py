@@ -50,7 +50,7 @@ class HybridFetchInputs:
 
     lexical_rows: list[dict[str, Any]]
     vector_rows: list[dict[str, Any]]
-    neighbor_uids: set[str]
+    neighbor_trust: dict[str, float]
     query_cleaned: str = ""
     subqueries_used: tuple[str, ...] = ()
 
@@ -112,7 +112,7 @@ def anchor_uids_from_lexical(lexical_rows: list[dict[str, Any]]) -> list[str]:
 def fuse_lexical_vector_rows(
     lexical_rows: list[dict[str, Any]],
     vector_rows: list[dict[str, Any]],
-    neighbor_uids: set[str],
+    neighbor_trust: dict[str, float],
 ) -> list[dict[str, Any]]:
     """Merge lexical and vector hits into one row per card (same shape as legacy hybrid_search)."""
     anchor_uids = set(anchor_uids_from_lexical(lexical_rows))
@@ -182,9 +182,11 @@ def fuse_lexical_vector_rows(
     _apply_recency_boost(ranked, key_name="recency_score")
     for entry in ranked:
         card_uid = str(entry["card_uid"])
-        if not entry["graph_hops"] and card_uid in neighbor_uids:
+        trust = float(neighbor_trust.get(card_uid, 0.0))
+        if not entry["graph_hops"] and trust > 0.0:
             entry["graph_hops"] = "1"
-        graph_boost = 0.22 if entry["graph_hops"] == "1" else 0.0
+            entry["graph_neighbor_trust"] = trust
+        graph_boost = 0.22 * float(entry.get("graph_neighbor_trust", 0.0))
         exact_boost = 3.0 if bool(entry["exact_match"]) else 0.0
         lexical_component = min(float(entry["lexical_score"]), 1.5) * (1.2 if not bool(entry["exact_match"]) else 1.4)
         vector_component = float(entry["vector_similarity"]) * 1.2
@@ -229,8 +231,8 @@ def fuse_and_rank_hybrid(
     meta["subqueries_used"] = list(inputs.subqueries_used) or ([inputs.query_cleaned] if inputs.query_cleaned else [])
     meta["lexical_candidate_count"] = len(inputs.lexical_rows)
     meta["vector_candidate_count"] = len(inputs.vector_rows)
-    meta["graph_neighbor_count"] = len(inputs.neighbor_uids)
-    fused = fuse_lexical_vector_rows(inputs.lexical_rows, inputs.vector_rows, inputs.neighbor_uids)
+    meta["graph_neighbor_count"] = len(inputs.neighbor_trust)
+    fused = fuse_lexical_vector_rows(inputs.lexical_rows, inputs.vector_rows, inputs.neighbor_trust)
     return rank_fused_hybrid_rows(fused, final_limit=final_limit)
 
 
@@ -242,7 +244,8 @@ def score_breakdown_for_row(row: dict[str, Any]) -> dict[str, float]:
     )
     vector_component = float(row.get("vector_similarity", 0.0)) * 1.2
     multi_signal_boost = 0.2 if str(row.get("matched_by", "")) == "hybrid" else 0.0
-    graph_boost = 0.22 if str(row.get("graph_hops", "")) == "1" else 0.0
+    trust = float(row.get("graph_neighbor_trust", 0.0))
+    graph_boost = 0.22 * trust if str(row.get("graph_hops", "")) == "1" else 0.0
     type_prior = _card_type_prior(str(row.get("type", "")))
     recency = float(row.get("recency_score", 0.0))
     provenance = float(row.get("provenance_score", 0.0))
@@ -252,6 +255,7 @@ def score_breakdown_for_row(row: dict[str, Any]) -> dict[str, float]:
         "vector_component": round(vector_component, 6),
         "multi_signal_boost": multi_signal_boost,
         "graph_boost": graph_boost,
+        "graph_neighbor_trust": trust,
         "type_prior": type_prior,
         "recency": recency,
         "provenance": provenance,

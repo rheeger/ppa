@@ -83,7 +83,7 @@ def test_hybrid_pipeline_explain_includes_score_components():
         HybridFetchInputs(
             lexical_rows=lexical,
             vector_rows=vector,
-            neighbor_uids=set(),
+            neighbor_trust={},
             query_cleaned="hello",
             subqueries_used=("hello",),
         ),

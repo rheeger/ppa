@@ -1,11 +1,14 @@
 //! Vault scan cache — SQLite layout matches `archive_cli.vault_cache` (tier 1 frontmatter-only; tier ≥2 full note).
+//!
+//! Supports incremental rebuilds: on cache miss, only notes whose `mtime_ns` or `file_size`
+//! changed (or that are new/deleted) are re-parsed. Unchanged notes keep their existing rows.
 
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
 use rayon::prelude::*;
 use rusqlite::{params, Connection};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -13,7 +16,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::cache_build::{self, BuiltRows};
 use crate::walk;
 
-const CACHE_VERSION: i32 = 1;
 const BATCH_INSERT: usize = 1000;
 /// Match `archive_cli.vault_cache.ZLIB_LEVEL`.
 const ZLIB_LEVEL: u32 = 6;
@@ -145,6 +147,70 @@ pub fn vault_fingerprint_with_paths(
     Ok((py_paths.to_object(py), dict.to_object(py), fp))
 }
 
+/// Read `(rel_path, mtime_ns, file_size)` from the existing cache for delta comparison.
+fn load_cached_stats(conn: &Connection) -> rusqlite::Result<HashMap<String, (i64, i64)>> {
+    let mut stmt = conn.prepare("SELECT rel_path, mtime_ns, file_size FROM notes")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, i64>(2)?,
+        ))
+    })?;
+    let mut map = HashMap::new();
+    for r in rows {
+        let (path, mtime, size) = r?;
+        map.insert(path, (mtime, size));
+    }
+    Ok(map)
+}
+
+/// Classify notes into new, changed, deleted, and unchanged sets by comparing
+/// current disk stats against the cached `(mtime_ns, file_size)` per note.
+struct CacheDelta {
+    rebuild_paths: Vec<String>,
+    delete_paths: Vec<String>,
+    unchanged_count: usize,
+}
+
+fn compute_cache_delta(
+    disk_stats: &HashMap<String, (i64, i64)>,
+    cached_stats: &HashMap<String, (i64, i64)>,
+) -> CacheDelta {
+    let disk_paths: HashSet<&String> = disk_stats.keys().collect();
+    let cached_paths: HashSet<&String> = cached_stats.keys().collect();
+
+    let deleted: Vec<String> = cached_paths
+        .difference(&disk_paths)
+        .map(|p| (*p).clone())
+        .collect();
+
+    let mut rebuild = Vec::new();
+    let mut unchanged: usize = 0;
+
+    for path in &disk_paths {
+        match cached_stats.get(*path) {
+            Some(&(cached_mt, cached_sz)) => {
+                let &(disk_mt, disk_sz) = disk_stats.get(*path).unwrap();
+                if disk_mt != cached_mt || disk_sz != cached_sz {
+                    rebuild.push((*path).clone());
+                } else {
+                    unchanged += 1;
+                }
+            }
+            None => {
+                rebuild.push((*path).clone());
+            }
+        }
+    }
+
+    CacheDelta {
+        rebuild_paths: rebuild,
+        delete_paths: deleted,
+        unchanged_count: unchanged,
+    }
+}
+
 fn flush_tier2_batch_rs(
     conn: &mut Connection,
     batch: &mut Vec<cache_build::Tier2Row>,
@@ -156,7 +222,7 @@ fn flush_tier2_batch_rs(
     let tx = conn.transaction()?;
     for row in batch.drain(..) {
         tx.execute(
-            r#"INSERT INTO notes (
+            r#"INSERT OR REPLACE INTO notes (
                 rel_path, uid, card_type, slug, mtime_ns, file_size,
                 frontmatter_json, frontmatter_hash, body_compressed, content_hash, wikilinks_json,
                 raw_content_sha256, provenance_json
@@ -194,7 +260,7 @@ fn flush_tier1_batch_rs(
     let tx = conn.transaction()?;
     for row in batch.drain(..) {
         tx.execute(
-            r#"INSERT INTO notes (
+            r#"INSERT OR REPLACE INTO notes (
                 rel_path, uid, card_type, slug, mtime_ns, file_size,
                 frontmatter_json, frontmatter_hash, body_compressed, content_hash, wikilinks_json,
                 raw_content_sha256
@@ -216,101 +282,186 @@ fn flush_tier1_batch_rs(
     Ok(())
 }
 
+/// Delete rows for paths that no longer exist on disk.
+fn delete_stale_rows(conn: &Connection, paths: &[String]) -> rusqlite::Result<usize> {
+    if paths.is_empty() {
+        return Ok(0);
+    }
+    let mut deleted = 0usize;
+    for chunk in paths.chunks(500) {
+        let placeholders: Vec<&str> = chunk.iter().map(|_| "?").collect();
+        let sql = format!(
+            "DELETE FROM notes WHERE rel_path IN ({})",
+            placeholders.join(",")
+        );
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            chunk.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+        deleted += conn.execute(&sql, params.as_slice())? as usize;
+    }
+    Ok(deleted)
+}
+
+/// Shared implementation for both full and incremental cache builds.
+/// When `incremental` is true, reads existing cached stats and only rebuilds changed/new notes.
+/// `cache_version` is passed through from the Python orchestrator (code-fingerprint derived).
+fn build_vault_cache_inner(
+    vault_path: &str,
+    cache_path: &str,
+    tier: i32,
+    incremental: bool,
+    cache_version: &str,
+) -> Result<(usize, usize, usize, usize, String), String> {
+    let tier_ge2 = tier >= 2;
+    let vault = PathBuf::from(vault_path);
+    let rel_paths = walk::collect_note_paths(vault_path)
+        .map_err(|e| e.to_string())?;
+    let (disk_stats, fp) = compute_vault_fingerprint(&vault, &rel_paths)
+        .map_err(|_| "fingerprint computation failed".to_string())?;
+
+    if let Some(parent) = Path::new(cache_path).parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let mut conn = Connection::open(cache_path).map_err(|e| e.to_string())?;
+    conn.busy_timeout(std::time::Duration::from_secs(120))
+        .map_err(|e| e.to_string())?;
+    init_db(&conn).map_err(|e| e.to_string())?;
+
+    let (paths_to_build, deleted_count, unchanged_count) = if incremental {
+        let cached_stats = load_cached_stats(&conn).map_err(|e| e.to_string())?;
+        if cached_stats.is_empty() {
+            // No existing rows — fall through to full build
+            (rel_paths.clone(), 0usize, 0usize)
+        } else {
+            let delta = compute_cache_delta(&disk_stats, &cached_stats);
+            let del = delete_stale_rows(&conn, &delta.delete_paths)
+                .map_err(|e| e.to_string())?;
+            (delta.rebuild_paths, del, delta.unchanged_count)
+        }
+    } else {
+        conn.execute("DELETE FROM notes", [])
+            .map_err(|e| e.to_string())?;
+        (rel_paths.clone(), 0usize, 0usize)
+    };
+
+    conn.execute("DELETE FROM cache_meta", [])
+        .map_err(|e| e.to_string())?;
+
+    let (built, skipped) = cache_build::build_all_rows(
+        &vault,
+        &paths_to_build,
+        &disk_stats,
+        tier_ge2,
+        ZLIB_LEVEL,
+    )
+    .map_err(|e| e.to_string())?;
+
+    let mut inserted: usize = 0;
+    match built {
+        BuiltRows::Tier1(rows) => {
+            let mut chunk: Vec<cache_build::Tier1Row> = Vec::with_capacity(BATCH_INSERT);
+            for row in rows {
+                chunk.push(row);
+                if chunk.len() >= BATCH_INSERT {
+                    flush_tier1_batch_rs(&mut conn, &mut chunk, &mut inserted)
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+            flush_tier1_batch_rs(&mut conn, &mut chunk, &mut inserted)
+                .map_err(|e| e.to_string())?;
+        }
+        BuiltRows::Tier2(rows) => {
+            let mut chunk: Vec<cache_build::Tier2Row> = Vec::with_capacity(BATCH_INSERT);
+            for row in rows {
+                chunk.push(row);
+                if chunk.len() >= BATCH_INSERT {
+                    flush_tier2_batch_rs(&mut conn, &mut chunk, &mut inserted)
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+            flush_tier2_batch_rs(&mut conn, &mut chunk, &mut inserted)
+                .map_err(|e| e.to_string())?;
+        }
+    }
+
+    let total_notes = unchanged_count + inserted;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    meta_set(&conn, "vault_fingerprint", &fp).map_err(|e| e.to_string())?;
+    meta_set(&conn, "tier", &tier.to_string()).map_err(|e| e.to_string())?;
+    meta_set(&conn, "cache_version", cache_version)
+        .map_err(|e| e.to_string())?;
+    meta_set(&conn, "generated_at", &now.to_string()).map_err(|e| e.to_string())?;
+    meta_set(&conn, "note_count", &total_notes.to_string())
+        .map_err(|e| e.to_string())?;
+
+    Ok((inserted, skipped, deleted_count, unchanged_count, fp))
+}
+
 /// Build vault scan cache at `cache_path` (same schema as Python). `tier` 1 = frontmatter-only; `tier` ≥ 2 = full note (body, wikilinks, hashes).
-/// Step 5a: pure-Rust per-note path + `rayon` + releases the GIL for the whole build.
+/// Always performs a full rebuild — deletes all existing rows and re-parses every note.
+/// `cache_version` is the code-fingerprint string from Python (stored in `cache_meta`).
 #[pyfunction]
-#[pyo3(signature = (vault_path, cache_path, tier=1))]
+#[pyo3(signature = (vault_path, cache_path, tier=1, cache_version=None))]
 pub fn build_vault_cache(
     py: Python<'_>,
     vault_path: String,
     cache_path: String,
     tier: i32,
+    cache_version: Option<String>,
 ) -> PyResult<PyObject> {
     if tier < 1 {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "tier must be >= 1",
         ));
     }
-    let tier_ge2 = tier >= 2;
-    let vault = PathBuf::from(&vault_path);
-    let rel_paths = walk::collect_note_paths(&vault_path)?;
-    let (stats, fp) = compute_vault_fingerprint(&vault, &rel_paths)
-        .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
-
-    let vault_path_owned = vault_path.clone();
-    let cache_path_owned = cache_path.clone();
-    let rel_paths_owned = rel_paths.clone();
-    let stats_owned = stats;
-    let fp_owned = fp.clone();
-    let tier_meta = tier;
-
-    let (inserted, skipped, fp_out) = py.allow_threads(move || {
-        if let Some(parent) = Path::new(&cache_path_owned).parent() {
-            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        let mut conn = Connection::open(&cache_path_owned).map_err(|e| e.to_string())?;
-        conn.busy_timeout(std::time::Duration::from_secs(120)).map_err(|e| e.to_string())?;
-        init_db(&conn).map_err(|e| e.to_string())?;
-        conn.execute("DELETE FROM notes", [])
-            .map_err(|e| e.to_string())?;
-        conn.execute("DELETE FROM cache_meta", [])
-            .map_err(|e| e.to_string())?;
-
-        let (built, skipped) = cache_build::build_all_rows(
-            Path::new(&vault_path_owned),
-            &rel_paths_owned,
-            &stats_owned,
-            tier_ge2,
-            ZLIB_LEVEL,
-        )
-        .map_err(|e| e.to_string())?;
-
-        let mut inserted: usize = 0;
-        match built {
-            BuiltRows::Tier1(rows) => {
-                let mut chunk: Vec<cache_build::Tier1Row> = Vec::with_capacity(BATCH_INSERT);
-                for row in rows {
-                    chunk.push(row);
-                    if chunk.len() >= BATCH_INSERT {
-                        flush_tier1_batch_rs(&mut conn, &mut chunk, &mut inserted)
-                            .map_err(|e| e.to_string())?;
-                    }
-                }
-                flush_tier1_batch_rs(&mut conn, &mut chunk, &mut inserted)
-                    .map_err(|e| e.to_string())?;
-            }
-            BuiltRows::Tier2(rows) => {
-                let mut chunk: Vec<cache_build::Tier2Row> = Vec::with_capacity(BATCH_INSERT);
-                for row in rows {
-                    chunk.push(row);
-                    if chunk.len() >= BATCH_INSERT {
-                        flush_tier2_batch_rs(&mut conn, &mut chunk, &mut inserted)
-                            .map_err(|e| e.to_string())?;
-                    }
-                }
-                flush_tier2_batch_rs(&mut conn, &mut chunk, &mut inserted)
-                    .map_err(|e| e.to_string())?;
-            }
-        }
-
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs_f64())
-            .unwrap_or(0.0);
-        meta_set(&conn, "vault_fingerprint", &fp_owned).map_err(|e| e.to_string())?;
-        meta_set(&conn, "tier", &tier_meta.to_string()).map_err(|e| e.to_string())?;
-        meta_set(&conn, "cache_version", &CACHE_VERSION.to_string())
-            .map_err(|e| e.to_string())?;
-        meta_set(&conn, "generated_at", &now.to_string()).map_err(|e| e.to_string())?;
-        meta_set(&conn, "note_count", &inserted.to_string()).map_err(|e| e.to_string())?;
-
-        Ok::<(usize, usize, String), String>((inserted, skipped, fp_owned))
-    })
-    .map_err(|e: String| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
+    let vp = vault_path.clone();
+    let cp = cache_path.clone();
+    let cv = cache_version.unwrap_or_else(|| "1".to_string());
+    let (inserted, skipped, _deleted, _unchanged, fp) = py
+        .allow_threads(move || build_vault_cache_inner(&vp, &cp, tier, false, &cv))
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
 
     let out = PyDict::new_bound(py);
     out.set_item("note_count", inserted)?;
     out.set_item("skipped", skipped)?;
-    out.set_item("fingerprint", fp_out)?;
+    out.set_item("fingerprint", fp)?;
+    Ok(out.to_object(py))
+}
+
+/// Incremental vault scan cache build. Compares on-disk `(mtime_ns, file_size)` against existing
+/// cached rows and only re-parses notes that are new or changed. Deleted notes are purged.
+/// `cache_version` is the code-fingerprint string from Python (stored in `cache_meta`).
+///
+/// Returns a dict with `rebuilt`, `skipped`, `deleted`, `unchanged`, `note_count`, `fingerprint`.
+#[pyfunction]
+#[pyo3(signature = (vault_path, cache_path, tier=1, cache_version=None))]
+pub fn build_vault_cache_incremental(
+    py: Python<'_>,
+    vault_path: String,
+    cache_path: String,
+    tier: i32,
+    cache_version: Option<String>,
+) -> PyResult<PyObject> {
+    if tier < 1 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "tier must be >= 1",
+        ));
+    }
+    let vp = vault_path.clone();
+    let cp = cache_path.clone();
+    let cv = cache_version.unwrap_or_else(|| "1".to_string());
+    let (rebuilt, skipped, deleted, unchanged, fp) = py
+        .allow_threads(move || build_vault_cache_inner(&vp, &cp, tier, true, &cv))
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
+
+    let out = PyDict::new_bound(py);
+    out.set_item("rebuilt", rebuilt)?;
+    out.set_item("skipped", skipped)?;
+    out.set_item("deleted", deleted)?;
+    out.set_item("unchanged", unchanged)?;
+    out.set_item("note_count", rebuilt + unchanged)?;
+    out.set_item("fingerprint", fp)?;
     Ok(out.to_object(py))
 }

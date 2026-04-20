@@ -19,7 +19,19 @@
   "graph_queries": [
     {
       "start_uid": "hfa-person-9c9dbd68e803",
-      "description": "2-hop neighborhood from primary user PersonCard (always in slice)"
+      "hops": 2,
+      "expect_edge_types_to_include": ["wikilink"],
+      "expect_confidence_range": [0.0, 1.0],
+      "description": "2-hop neighborhood from primary user PersonCard (always in slice). Phase 6 Tier 1: assert wikilink edges exist and are tagged with edge_type."
+    },
+    {
+      "anchor_rel_path": "PLACEHOLDER: pick a card path with both deterministic and seed-link edges via the SQL in phase_6 plan Step 3b",
+      "hops": 1,
+      "expect_edge_types_to_include": ["wikilink"],
+      "expect_at_least_one_seed_edge": true,
+      "expect_confidence_range": [0.0, 1.0],
+      "description": "Phase 6 Tier 1: anchor with mixed deterministic + applied seed-link edges. Until the slice has applied seed-link promotions, this entry is intentionally PLACEHOLDER and run_behavioral_checks will report it as failed; populate `anchor_rel_path` after the seed-link workers run.",
+      "phase": "post-phase-6-tier3"
     }
   ],
   "semantic_queries": [

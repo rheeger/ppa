@@ -1326,9 +1326,52 @@ _Embedding completeness:_
 
 ---
 
-## Phase 6: LLM Enrichment
+## Phase 6: Graph Edge Trust + Semantic Linking (shipped 2026-04-19)
 
-**Execution plan:** [`phase_6_llm_enrichment_f286b0bd.plan.md`](file:///Users/rheeger/.cursor/plans/phase_6_llm_enrichment_f286b0bd.plan.md)
+**Execution plan:** [`phase_6_llm_enrichment_f286b0bd.plan.md`](file:///Users/rheeger/.cursor/plans/phase_6_llm_enrichment_f286b0bd.plan.md)  
+**Retirement rationale:** [`archive_docs/runbooks/phase6-retirement-rationale.md`](../runbooks/phase6-retirement-rationale.md)  
+**Follow-up:** Phase 6.5 (structural cross-derived-card linkers) — see `.cursor/plans/phase_6_5_*.plan.md`
+
+> **The original Phase 6 scope (LLM enrichment + run-scoped provenance + budget-gated enrichment + pilot-batch review) was retired before implementation** after an audit confirmed that Phase 2.875's `archive_sync/llm_enrichment/` package had already shipped the enrichment pipeline and run-scoped provenance, and that budget monitoring lives in user infrastructure outside the PPA codebase. The original narrative below is preserved as historical context but is **not the implementation truth**.
+>
+> **What Phase 6 actually shipped** is documented immediately below. Phase 2.875 is where LLM enrichment lives; Phase 4 is where entity resolution lives; Phase 6 is where graph-consumption trust signals live.
+
+### What Phase 6 shipped
+
+A three-tier focused pass closing real gaps in retrieval quality:
+
+**Tier 1 — Graph Edge Trust.** The `archive_graph` MCP tool and `_graph_neighbor_uids` used to return neighbors as a bare set, treating every edge (`wikilink`, `derived_from`, LLM-judged seed link, materialized rule edge) as equivalent. Now they return `{neighbor_uid: trust_weight}` with `edge_type` and `confidence` visible to consumers.
+
+**Tier 2 — Confidence-Weighted Hybrid Retrieval.** Hybrid search's `graph_boost` used to be a flat `+0.22` if a row was anywhere in the neighbor set. It is now `0.22 * trust_weight`, so a `derived_from` edge (trust=1.0) boosts more than an LLM-judged soft link (trust~0.6). `score_breakdown_for_row` exposes `graph_neighbor_trust` for debugging.
+
+**Tier 4 — Slice + Classification Infrastructure (big unexpected wins).** The work exposed four operational gaps that cost real time and money on every slice rebuild:
+
+- `ppa slice-bootstrap --copy-from-schema=<src>` — one command produces a fully-equipped slice (cards + chunks + embeddings copied, card_classifications projected, IVFFlat built) in ~2 minutes vs 91+ minutes for the naive rebuild.
+- `embed-pending --copy-from-schema` — idempotent building block.
+- `card_classifications` projection table + `archive_scripts/phase6_backfill_classifications.py` — durable triage classification storage, replacing the sidecar `_classify_index_*.db` SQLite pattern.
+- Automated IVFFlat index build on slice bootstrap — caught a 140x kNN slowdown that silently affected earlier work.
+
+### What Phase 6 tried and retired (Tier 3 — `MODULE_SEMANTIC`)
+
+Tier 3 proposed a semantic kNN seed linker: pgvector cosine similarity → LLM judge → `semantically_related` edges. After roughly 15 calibration iterations and ~$4 in LLM spend (multi-model agreement study, precompute+offline calibration framework, type-allowlist + classification filter + dual-tier formula), the approach was retired. The core finding: **cosine similarity cannot distinguish "same kind" from "same instance"**. The connections we actually want (flight ↔ its confirmation email, purchase ↔ the credit-card charge, accommodation ↔ the trip's flight) are instance-level relationships that require structural fingerprints (tracking numbers, confirmation codes, amounts, dates, ical_uids) — not content resemblance. Deterministic linkers catch these at 100% precision for $0 LLM cost.
+
+The calibration framework, cache artifacts under `_artifacts/_phase6-iterations/`, and preserved `MODULE_SEMANTIC` source (kept for reference, unwired from `CARD_TYPE_MODULES`) are the empirical basis for **Phase 6.5**, which ships the deterministic replacements (`MODULE_FINANCE_RECONCILE`, `MODULE_TRIP_CLUSTER`, `MODULE_MEETING_ARTIFACT`, plus a `shipments.linked_purchase` materialization fix).
+
+### Definition of Done (shipped)
+
+- `archive_graph` MCP tool returns per-neighbor `edge_type` + `confidence` ✅
+- `_graph_neighbor_uids` returns `dict[uid, float]` trust-weighted ✅
+- Hybrid `graph_boost = 0.22 * trust_weight`, breakdown exposes `graph_neighbor_trust` ✅
+- `ppa slice-bootstrap --copy-from-schema=<src>` produces data-complete slices in ≤5 min ✅
+- `card_classifications` table backfilled from production classify run; materializer path documented for future enrichment ✅
+- All Phase 6 integration tests pass under live pgvector ✅
+- Honest retrospective at `archive_docs/runbooks/phase6-retirement-rationale.md` ✅
+
+---
+
+### Historical context — the original Phase 6 narrative (retired)
+
+The text below was the original Phase 6 plan and is kept for archival traceability with `archive_sync/llm_enrichment/` (which shipped this scope during Phase 2.875) and with Phase 8's maintenance design (which uses these provider abstractions). It does **not** describe the current implementation.
 
 **What it is:** The first LLM-based improvement pass across the corpus. Two parallel workstreams — LLM enrichment (summary improvement, entity extraction) and seed-link analysis — running against the fully-indexed, fully-embedded graph. Geocoding is already complete (moved to Phase 4 post-rebuild).
 

@@ -64,6 +64,81 @@ def test_build_vault_cache_tier1_row_parity(tmp_path):
         assert row["frontmatter_hash"] == _frontmatter_hash_stable(fm)
 
 
+def test_build_vault_cache_incremental_basic(tmp_path):
+    """Rust incremental build produces same note_count and fingerprint as full build."""
+    vault = load_fixture_vault(tmp_path / "vault", include_graphs=True)
+    vault_s = str(vault)
+    rel_paths = [p.as_posix() for p in iter_note_paths(vault)]
+
+    cache_path = tmp_path / "incr-cache.sqlite3"
+    out_full = archive_crate.build_vault_cache(vault_s, str(cache_path), 2)
+    assert out_full["note_count"] == len(rel_paths)
+
+    out_incr = archive_crate.build_vault_cache_incremental(vault_s, str(cache_path), 2)
+    assert out_incr["note_count"] == len(rel_paths)
+    assert out_incr["fingerprint"] == out_full["fingerprint"]
+    assert out_incr["unchanged"] == len(rel_paths)
+    assert out_incr["rebuilt"] == 0
+    assert out_incr["deleted"] == 0
+
+
+def test_build_vault_cache_incremental_detects_change(tmp_path):
+    """Rust incremental build detects a changed file and rebuilds only that note."""
+    vault = load_fixture_vault(tmp_path / "vault", include_graphs=True)
+    vault_s = str(vault)
+    rel_paths = [p.as_posix() for p in iter_note_paths(vault)]
+
+    cache_path = tmp_path / "incr-cache2.sqlite3"
+    archive_crate.build_vault_cache(vault_s, str(cache_path), 2)
+
+    target = next(vault.rglob("*.md"))
+    content = target.read_text()
+    target.write_text(content + "\n<!-- changed -->\n")
+
+    out_incr = archive_crate.build_vault_cache_incremental(vault_s, str(cache_path), 2)
+    assert out_incr["rebuilt"] >= 1
+    assert out_incr["unchanged"] == len(rel_paths) - out_incr["rebuilt"]
+    assert out_incr["note_count"] == len(rel_paths)
+
+
+def test_build_vault_cache_incremental_detects_delete(tmp_path):
+    """Rust incremental build purges deleted notes and adds new ones."""
+    vault = load_fixture_vault(tmp_path / "vault", include_graphs=True)
+    vault_s = str(vault)
+    rel_paths = [p.as_posix() for p in iter_note_paths(vault)]
+    n_orig = len(rel_paths)
+
+    cache_path = tmp_path / "incr-cache3.sqlite3"
+    archive_crate.build_vault_cache(vault_s, str(cache_path), 2)
+
+    target = next(vault.rglob("*.md"))
+    target.unlink()
+
+    out_incr = archive_crate.build_vault_cache_incremental(vault_s, str(cache_path), 2)
+    assert out_incr["deleted"] >= 1
+    assert out_incr["note_count"] == n_orig - 1
+
+
+def test_build_vault_cache_incremental_detects_add(tmp_path):
+    """Rust incremental build picks up newly added notes."""
+    import shutil
+    vault = load_fixture_vault(tmp_path / "vault", include_graphs=True)
+    vault_s = str(vault)
+    rel_paths = [p.as_posix() for p in iter_note_paths(vault)]
+    n_orig = len(rel_paths)
+
+    cache_path = tmp_path / "incr-cache4.sqlite3"
+    archive_crate.build_vault_cache(vault_s, str(cache_path), 2)
+
+    src = next(vault.rglob("People/*.md"))
+    dest = vault / "Documents" / "new-note-for-incr.md"
+    shutil.copy2(src, dest)
+
+    out_incr = archive_crate.build_vault_cache_incremental(vault_s, str(cache_path), 2)
+    assert out_incr["rebuilt"] >= 1
+    assert out_incr["note_count"] == n_orig + 1
+
+
 def test_build_vault_cache_tier2_row_parity(tmp_path):
     vault = load_fixture_vault(tmp_path / "vault", include_graphs=True)
     vault_s = str(vault)

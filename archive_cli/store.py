@@ -252,7 +252,7 @@ class DefaultArchiveStore(ArchiveStore):
                 "reranker": {"enabled": False, "provider": "none"},
             }
         anchors = anchor_uids_from_lexical(merged_lex)
-        neighbors = self.index.fetch_graph_neighbors_for_uids(anchors)
+        neighbor_trust = self.index.fetch_graph_neighbors_for_uids(anchors)
         pipeline_meta: dict[str, Any] = {}
         rr_cfg = rc.get("reranker", {})
         pool_limit = limit
@@ -262,7 +262,7 @@ class DefaultArchiveStore(ArchiveStore):
             HybridFetchInputs(
                 lexical_rows=merged_lex,
                 vector_rows=merged_vec,
-                neighbor_uids=neighbors,
+                neighbor_trust=neighbor_trust,
                 query_cleaned=query.strip(),
                 subqueries_used=tuple(subqs),
             ),
@@ -339,19 +339,36 @@ class DefaultArchiveStore(ArchiveStore):
             "embedding_version": version,
         }
 
-    def embed_pending(self, *, limit: int = 0, embedding_model: str = "", embedding_version: int = 0) -> dict[str, Any]:
+    def embed_pending(
+        self,
+        *,
+        limit: int = 0,
+        embedding_model: str = "",
+        embedding_version: int = 0,
+        copy_from_schema: str = "",
+    ) -> dict[str, Any]:
         model = embedding_model or get_default_embedding_model()
         version = embedding_version or get_default_embedding_version()
+        copy_result: dict[str, Any] | None = None
+        if copy_from_schema:
+            copy_result = dict(self.index.copy_embeddings_from_schema(
+                source_schema=copy_from_schema,
+                embedding_model=model,
+                embedding_version=version,
+            ))
         provider = self.provider_factory(model=model)
         ctx = self.config.retrieval.get("context", {})
         include_ctx = bool(ctx.get("include_in_embeddings", True))
-        return self.index.embed_pending(
+        embed_result = dict(self.index.embed_pending(
             provider=provider,
             embedding_model=model,
             embedding_version=version,
             limit=limit,
             include_context_prefix=include_ctx,
-        )
+        ))
+        if copy_result is not None:
+            embed_result["copy_from_schema"] = copy_result
+        return embed_result
 
     def projection_inventory(self) -> dict[str, Any]:
         if hasattr(self.index, "projection_inventory"):

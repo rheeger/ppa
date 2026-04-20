@@ -310,6 +310,25 @@ class SchemaDDLMixin:
         if ensure_indexes:
             conn.execute(f"CREATE INDEX IF NOT EXISTS idx_card_orgs_org ON {self.schema}.card_orgs(org)")
             conn.execute(f"CREATE INDEX IF NOT EXISTS idx_card_orgs_card_uid ON {self.schema}.card_orgs(card_uid)")
+        # Phase 6 Tier 4: durable triage classifications materialized from card frontmatter
+        # (replaces the _artifacts/_classify_index_*.db sidecar). Email message cards inherit
+        # their thread's classification via gmail_thread_id (resolved at JOIN time).
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {self.schema}.card_classifications (
+                card_uid TEXT PRIMARY KEY,
+                classification TEXT NOT NULL,
+                confidence DOUBLE PRECISION NOT NULL DEFAULT 0,
+                card_types JSONB NOT NULL DEFAULT '[]'::jsonb,
+                classified_at TIMESTAMPTZ,
+                classify_model TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        if ensure_indexes:
+            conn.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_card_classifications_class ON {self.schema}.card_classifications(classification)"
+            )
         for projection in TYPED_PROJECTIONS:
             self._create_projection_table(conn, projection, recreate=recreate_typed, ensure_indexes=ensure_indexes)
         conn.execute(

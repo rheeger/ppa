@@ -162,6 +162,81 @@ def test_slice_seed_no_cache(tmp_path: Path) -> None:
     assert not (vault / "_meta" / CACHE_FILENAME).exists()
 
 
+def test_incremental_rebuild_on_change(tmp_path: Path) -> None:
+    """After changing one file, incremental rebuild should produce the same result as full."""
+    vault = load_fixture_vault(tmp_path / "vault", include_graphs=True)
+    c1 = VaultScanCache.build_or_load(vault, tier=2, progress_every=0)
+    n1 = c1.note_count()
+    assert n1 > 0
+
+    target = next(vault.rglob("*.md"))
+    content = target.read_text()
+    target.write_text(content + "\n<!-- touched -->\n")
+
+    c2 = VaultScanCache.build_or_load(vault, tier=2, progress_every=0)
+    assert not c2.is_cache_hit
+    assert c2.note_count() == n1
+
+
+def test_incremental_rebuild_on_add(tmp_path: Path) -> None:
+    """Adding a new note should show up via incremental rebuild."""
+    vault = load_fixture_vault(tmp_path / "vault", include_graphs=True)
+    c1 = VaultScanCache.build_or_load(vault, tier=1, progress_every=0)
+    n1 = c1.note_count()
+
+    src = next(vault.rglob("People/*.md"))
+    dest = vault / "Documents" / "incremental-add-test.md"
+    import shutil
+    shutil.copy2(src, dest)
+
+    c2 = VaultScanCache.build_or_load(vault, tier=1, progress_every=0)
+    assert not c2.is_cache_hit
+    assert c2.note_count() == n1 + 1
+    all_paths = c2.all_rel_paths()
+    assert any("incremental-add-test" in p for p in all_paths)
+
+
+def test_incremental_rebuild_on_delete(tmp_path: Path) -> None:
+    """Deleting a note should remove it from cache via incremental rebuild."""
+    vault = load_fixture_vault(tmp_path / "vault", include_graphs=True)
+    c1 = VaultScanCache.build_or_load(vault, tier=1, progress_every=0)
+    n1 = c1.note_count()
+
+    target = next(vault.rglob("*.md"))
+    target_rel = target.relative_to(vault).as_posix()
+    target.unlink()
+
+    c2 = VaultScanCache.build_or_load(vault, tier=1, progress_every=0)
+    assert not c2.is_cache_hit
+    assert c2.note_count() == n1 - 1
+    assert target_rel not in c2.all_rel_paths()
+
+
+def test_incremental_unchanged_preserves_data(tmp_path: Path) -> None:
+    """With no disk changes but a forced fingerprint mismatch, unchanged rows survive."""
+    vault = load_fixture_vault(tmp_path / "vault", include_graphs=True)
+    c1 = VaultScanCache.build_or_load(vault, tier=2, progress_every=0)
+    some = next(iter(c1.all_rel_paths()))
+    body1 = c1.body_for_rel_path(some)
+    ch1 = c1.content_hash_for_rel_path(some)
+
+    import sqlite3 as _sqlite3
+    cache_path = VaultScanCache.cache_path_for_vault(vault)
+    conn = _sqlite3.connect(str(cache_path), timeout=10.0)
+    conn.execute(
+        "INSERT INTO cache_meta (key, value) VALUES ('vault_fingerprint', 'fake') "
+        "ON CONFLICT(key) DO UPDATE SET value = 'fake'"
+    )
+    conn.commit()
+    conn.close()
+
+    c2 = VaultScanCache.build_or_load(vault, tier=2, progress_every=0)
+    assert not c2.is_cache_hit
+    assert c2.note_count() == c1.note_count()
+    assert c2.body_for_rel_path(some) == body1
+    assert c2.content_hash_for_rel_path(some) == ch1
+
+
 @pytest.mark.integration
 def test_build_manifest_with_tier2_cache(tmp_path: Path) -> None:
     from archive_cli.index_config import CHUNK_SCHEMA_VERSION, INDEX_SCHEMA_VERSION

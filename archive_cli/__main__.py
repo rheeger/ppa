@@ -8,14 +8,19 @@ import json
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 
-from archive_sync.llm_enrichment.defaults import (
-    DEFAULT_ENRICH_CARD_GEMINI_MODEL, DEFAULT_ENRICH_EXTRACT_MODEL)
+from archive_sync.llm_enrichment.defaults import DEFAULT_ENRICH_CARD_GEMINI_MODEL, DEFAULT_ENRICH_EXTRACT_MODEL
 
-from .benchmark import (BENCHMARK_PROFILES, DEFAULT_BENCHMARK_SOURCE_VAULT,
-                        benchmark_multi_size, benchmark_rebuild,
-                        benchmark_seed_links, build_benchmark_sample)
+from .benchmark import (
+    BENCHMARK_PROFILES,
+    DEFAULT_BENCHMARK_SOURCE_VAULT,
+    benchmark_multi_size,
+    benchmark_rebuild,
+    benchmark_seed_links,
+    build_benchmark_sample,
+)
 from .commands import admin as admin_cmd
 from .commands import batch_embed as batch_embed_cmd
 from .commands import explain
@@ -153,6 +158,17 @@ def main() -> None:
     embed_parser.add_argument("--limit", type=int, default=0)
     embed_parser.add_argument("--embedding-model", default="")
     embed_parser.add_argument("--embedding-version", type=int, default=0)
+    embed_parser.add_argument(
+        "--copy-from-schema",
+        default="",
+        help=(
+            "Before calling the embedding provider, copy embeddings from another "
+            "schema in the same database for any chunk_key that already exists "
+            "there (deterministic chunk_key = same content => same key). "
+            "Skips API calls + cost when re-bootstrapping a slice from a vault "
+            "whose chunks already have embeddings in the source schema."
+        ),
+    )
     embed_estimate_parser = subparsers.add_parser(
         "embed-estimate",
         help="Estimate cost and time for embedding pending chunks",
@@ -285,6 +301,37 @@ def main() -> None:
     seed_bench_parser.add_argument("--apply-promotions", action="store_true")
     seed_bench_parser.add_argument("--modules", default="")
     seed_bench_parser.add_argument("--no-rebuild-first", action="store_true")
+
+    slice_bootstrap_parser = subparsers.add_parser(
+        "slice-bootstrap",
+        help=(
+            "End-to-end fresh slice into a Postgres schema, inheriting all the "
+            "value-added work from a source schema (embeddings, classifications, "
+            "IVFFlat index). Idempotent. Uses PPA_PATH (slice vault) and "
+            "PPA_INDEX_SCHEMA (target schema) from env."
+        ),
+    )
+    slice_bootstrap_parser.add_argument(
+        "--copy-from-schema",
+        default="",
+        help=(
+            "Source schema in the same DB to inherit data from. Embeddings, "
+            "card_classifications, and the IVFFlat vector index are all carried "
+            "over for any chunk_key / card_uid that exists in the new slice "
+            "(zero API cost — the data is already paid for)."
+        ),
+    )
+    slice_bootstrap_parser.add_argument(
+        "--workers",
+        type=int,
+        default=4,
+        help="Rebuild workers (default: 4)",
+    )
+    slice_bootstrap_parser.add_argument(
+        "--skip-rebuild",
+        action="store_true",
+        help="Skip the rebuild-indexes step (assume cards/chunks already populated).",
+    )
 
     slice_parser = subparsers.add_parser("slice-seed", help="Generate a stratified test slice from a seed vault")
     slice_parser.add_argument("--config", required=True, help="Path to slice_config.json")
@@ -744,6 +791,24 @@ def main() -> None:
         ),
     )
 
+    geocode_parser = subparsers.add_parser(
+        "geocode-places",
+        help="Geocode PlaceCards via Nominatim (Phase 4 post-rebuild)",
+    )
+    geocode_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show candidates without modifying anything",
+    )
+    geocode_parser.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="Max PlaceCards to geocode (0 = all)",
+    )
+
+    subparsers.add_parser("quality-report", help="Quality score distribution by card type")
+
     census_parser = subparsers.add_parser("sender-census", help="Discover email types from a sender domain")
     census_parser.add_argument("--domain", required=True, help="Sender domain (e.g., doordash.com)")
     census_parser.add_argument(
@@ -1090,8 +1155,7 @@ def main() -> None:
     if args.command == "template-sampler":
         try:
             from .commands._resolve import resolve_vault
-            from .commands.template_sampler import (
-                run_template_sampler, run_template_sampler_from_batch_file)
+            from .commands.template_sampler import run_template_sampler, run_template_sampler_from_batch_file
 
             vp = str(getattr(args, "vault", "") or "").strip() or str(resolve_vault())
             batch = str(getattr(args, "batch", "") or "").strip()
@@ -1158,8 +1222,7 @@ def main() -> None:
         return
     if args.command == "enrich-emails":
         try:
-            from archive_sync.llm_enrichment.enrich_runner import \
-                LlmEnrichmentRunner
+            from archive_sync.llm_enrichment.enrich_runner import LlmEnrichmentRunner
 
             from .commands._resolve import resolve_vault
 
@@ -1206,8 +1269,7 @@ def main() -> None:
         return
     if args.command == "enrich-cards":
         try:
-            from archive_sync.llm_enrichment.card_enrichment_runner import \
-                CardEnrichmentRunner
+            from archive_sync.llm_enrichment.card_enrichment_runner import CardEnrichmentRunner
 
             from .commands._resolve import resolve_vault
 
@@ -1259,8 +1321,7 @@ def main() -> None:
         return
     if args.command == "extract-document-text":
         try:
-            from archive_sync.llm_enrichment.document_text_extractor import \
-                run_document_text_extraction
+            from archive_sync.llm_enrichment.document_text_extractor import run_document_text_extraction
 
             from .commands._resolve import resolve_vault
 
@@ -1278,8 +1339,7 @@ def main() -> None:
         return
     if args.command == "enrich":
         try:
-            from archive_sync.llm_enrichment.enrichment_orchestrator import (
-                EnrichmentOrchestrator, default_run_id)
+            from archive_sync.llm_enrichment.enrichment_orchestrator import EnrichmentOrchestrator, default_run_id
 
             vault = Path(str(getattr(args, "vault", "") or "").strip())
             run_id = str(getattr(args, "run_id", "") or "").strip() or default_run_id()
@@ -1317,6 +1377,30 @@ def main() -> None:
         except PpaError as exc:
             _cli_fail(exc)
         return
+    if args.command == "geocode-places":
+        try:
+            from .commands.geocode import geocode_places
+
+            store = resolve_store()
+            result = geocode_places(
+                store=store,
+                dry_run=bool(getattr(args, "dry_run", False)),
+                limit=int(getattr(args, "limit", 0) or 0),
+            )
+            _print_cli_result(result)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "quality-report":
+        try:
+            from .commands.quality_report import quality_report
+            from .index_config import get_index_dsn, get_index_schema
+
+            result = quality_report(dsn=get_index_dsn(), schema=get_index_schema())
+            _print_cli_result(result)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
     if args.command == "resolve-entities":
         try:
             from archive_sync.extractors.entity_resolution import run_entity_resolution
@@ -1349,8 +1433,7 @@ def main() -> None:
         return
     if args.command == "link-persons":
         try:
-            from archive_sync.extractors.entity_resolution import \
-                run_person_linking
+            from archive_sync.extractors.entity_resolution import run_person_linking
 
             from .commands._resolve import resolve_vault
 
@@ -1379,8 +1462,7 @@ def main() -> None:
         return
     if args.command == "resolve-matches":
         try:
-            from archive_sync.llm_enrichment.match_resolver import \
-                run_match_resolution
+            from archive_sync.llm_enrichment.match_resolver import run_match_resolution
 
             from .commands._resolve import resolve_vault
 
@@ -1415,16 +1497,13 @@ def main() -> None:
         return
     if args.command == "staging-report":
         try:
-            from .commands.staging import (format_staging_report_markdown,
-                                           staging_report,
-                                           staging_report_to_jsonable)
+            from .commands.staging import format_staging_report_markdown, staging_report, staging_report_to_jsonable
 
             report = staging_report(str(args.staging_dir))
             if bool(getattr(args, "json", False)):
                 _print_json(staging_report_to_jsonable(report))
             else:
-                from archive_sync.extractors.field_metrics import \
-                    compute_field_population
+                from archive_sync.extractors.field_metrics import compute_field_population
 
                 fp = compute_field_population(Path(str(args.staging_dir)))
                 print(format_staging_report_markdown(report, field_population=fp), file=sys.stderr)
@@ -1617,6 +1696,9 @@ def main() -> None:
             kwargs["embedding_model"] = args.embedding_model
         if args.embedding_version:
             kwargs["embedding_version"] = args.embedding_version
+        copy_src = str(getattr(args, "copy_from_schema", "") or "").strip()
+        if copy_src:
+            kwargs["copy_from_schema"] = copy_src
         try:
             store = resolve_store()
             result = admin_cmd.embed_pending(store=store, logger=_cli_log, **kwargs)
@@ -1649,6 +1731,63 @@ def main() -> None:
                 no_cache=bool(getattr(args, "no_cache", False)),
             )
             _print_json(result)
+        except PpaError as exc:
+            print(str(exc))
+        return
+    if args.command == "slice-bootstrap":
+        try:
+            from typing import Any as _Any
+
+            from .commands import admin as _admin
+            store = resolve_store()
+            steps: list[dict[str, _Any]] = []
+            t0 = time.monotonic()
+
+            # 1. bootstrap-postgres (idempotent — creates schema if missing).
+            _cli_log.info("slice-bootstrap step=1/5 bootstrap-postgres")
+            r1 = _admin.bootstrap_postgres(vault=store.vault, logger=_cli_log)
+            steps.append({"step": "bootstrap_postgres", **{k: r1.get(k) for k in ("schema", "vector_dimension")}})
+
+            # 2. rebuild-indexes (unless skipped — useful when re-running on an existing schema).
+            if not bool(getattr(args, "skip_rebuild", False)):
+                _cli_log.info("slice-bootstrap step=2/5 rebuild-indexes")
+                r2 = _admin.rebuild_indexes(store=store, logger=_cli_log, workers=args.workers)
+                steps.append({"step": "rebuild_indexes", "row_counts": r2})
+            else:
+                steps.append({"step": "rebuild_indexes", "skipped": True})
+
+            copy_src = str(getattr(args, "copy_from_schema", "") or "").strip()
+            if copy_src:
+                # 3. copy embeddings (free, fast).
+                _cli_log.info("slice-bootstrap step=3/5 copy-embeddings from=%s", copy_src)
+                from .index_config import get_default_embedding_model, get_default_embedding_version
+                model = get_default_embedding_model()
+                version = get_default_embedding_version()
+                r3 = store.index.copy_embeddings_from_schema(
+                    source_schema=copy_src,
+                    embedding_model=model,
+                    embedding_version=version,
+                )
+                steps.append({"step": "copy_embeddings", **dict(r3)})
+
+                # 4. copy classifications (free, fast).
+                _cli_log.info("slice-bootstrap step=4/5 copy-classifications from=%s", copy_src)
+                try:
+                    r4 = store.index.copy_classifications_from_schema(source_schema=copy_src)
+                    steps.append({"step": "copy_classifications", **dict(r4)})
+                except RuntimeError as exc:
+                    steps.append({"step": "copy_classifications", "skipped": True, "reason": str(exc)})
+            else:
+                steps.append({"step": "copy_embeddings", "skipped": True, "reason": "no --copy-from-schema"})
+                steps.append({"step": "copy_classifications", "skipped": True, "reason": "no --copy-from-schema"})
+
+            # 5. Build IVFFlat (or rebuild if data changed).
+            _cli_log.info("slice-bootstrap step=5/5 build-vector-index")
+            r5 = store.index.build_vector_index()
+            steps.append({"step": "build_vector_index", **dict(r5)})
+
+            elapsed = round(time.monotonic() - t0, 2)
+            _print_json({"slice_bootstrap": "ok", "elapsed_seconds": elapsed, "steps": steps})
         except PpaError as exc:
             print(str(exc))
         return
@@ -1888,8 +2027,7 @@ def main() -> None:
         )
         return
     if args.command == "slice-seed":
-        from .test_slice import (build_slice_docker_image, load_slice_config,
-                                 slice_seed_vault)
+        from .test_slice import build_slice_docker_image, load_slice_config, slice_seed_vault
 
         cfg = load_slice_config(Path(args.config))
         if args.target_percent is not None:

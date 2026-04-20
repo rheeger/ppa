@@ -53,7 +53,8 @@ def pgvector_dsn() -> str:
     preferred = os.environ.get("PPA_TEST_PG_DSN", "").strip()
     if preferred:
         wait_for_postgres(preferred)
-        return preferred
+        yield preferred
+        return
     if not _docker_available():
         pytest.skip("Docker is required for live Postgres tests")
     container_name = f"ppa-test-{uuid.uuid4().hex[:10]}"

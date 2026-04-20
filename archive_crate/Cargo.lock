@@ -33,6 +33,7 @@ dependencies = [
 name = "archive_crate"
 version = "0.1.0"
 dependencies = [
+ "bytecount",
  "chrono",
  "chrono-tz",
  "flate2",
@@ -72,6 +73,12 @@ checksum = "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
 dependencies = [
  "generic-array",
 ]
+
+[[package]]
+name = "bytecount"
+version = "0.6.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "175812e0be2bccb6abe50bb8d566126198344f707e304f45c648fd8f2cc0365e"
 
 [[package]]
 name = "cc"

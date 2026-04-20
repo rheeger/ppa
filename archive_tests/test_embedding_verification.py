@@ -9,9 +9,14 @@ import uuid
 from pathlib import Path
 
 import pytest
+
 from archive_cli.index_store import PostgresArchiveIndex
-from archive_cli.server import (archive_embed_pending, archive_hybrid_search,
-                                archive_rebuild_indexes, archive_vector_search)
+from archive_cli.server import (
+    archive_embed_pending,
+    archive_hybrid_search,
+    archive_rebuild_indexes,
+    archive_vector_search,
+)
 from archive_vault.provenance import ProvenanceEntry
 from archive_vault.schema import PersonCard
 from archive_vault.vault import write_card

@@ -33,12 +33,14 @@ fn archive_crate(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cache::vault_fingerprint, m)?)?;
     m.add_function(wrap_pyfunction!(cache::vault_fingerprint_with_paths, m)?)?;
     m.add_function(wrap_pyfunction!(cache::build_vault_cache, m)?)?;
+    m.add_function(wrap_pyfunction!(cache::build_vault_cache_incremental, m)?)?;
     m.add_function(wrap_pyfunction!(scanner::vault_paths_and_fingerprint, m)?)?;
     m.add_function(wrap_pyfunction!(scanner::cards_by_type_from_cache, m)?)?;
     m.add_function(wrap_pyfunction!(scanner::cards_by_type, m)?)?;
     m.add_function(wrap_pyfunction!(materializer::build_search_text, m)?)?;
     m.add_function(wrap_pyfunction!(materializer::materialize_content_hash, m)?)?;
     m.add_function(wrap_pyfunction!(materializer::materialize_row_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(materializer::materialize_all_rows, m)?)?;
     m.add_function(wrap_pyfunction!(chunker::chunk_hash, m)?)?;
     m.add_function(wrap_pyfunction!(chunker::render_chunks_for_card, m)?)?;
     m.add_function(wrap_pyfunction!(bridge::rebuild_index, m)?)?;
@@ -55,5 +57,7 @@ fn archive_crate(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cache_iter::note_paths_from_cache, m)?)?;
     m.add_class::<progress::ProgressCallback>()?;
     m.add_function(wrap_pyfunction!(validator::validate_vault_from_cache, m)?)?;
+    m.add_class::<materializer::body::BodyCache>()?;
+    m.add_class::<materializer::CopyBuffer>()?;
     Ok(())
 }

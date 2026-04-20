@@ -7,10 +7,10 @@ from datetime import date
 from pathlib import Path
 
 import pytest
+
 from archive_sync.adapters.base import deterministic_provenance
 from archive_sync.extractors.entity_resolution import run_person_linking
-from archive_vault.schema import (FinanceCard, MedicalRecordCard, PersonCard,
-                                  RideCard)
+from archive_vault.schema import FinanceCard, MedicalRecordCard, PersonCard, RideCard
 from archive_vault.vault import read_note, write_card
 
 

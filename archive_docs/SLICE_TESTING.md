@@ -5,10 +5,10 @@ structurally complete subset of the real seed vault for integration and behavior
 
 ## Slice configuration files
 
-| File                            | Purpose                                      | Typical use                                                                      |
-| ------------------------------- | -------------------------------------------- | -------------------------------------------------------------------------------- |
-| `archive_archive_tests/slice_config.json`       | Full slice (~5% of seed, `cluster_cap` 200)  | `make test-slice` + `make test-slice-verify`                                     |
-| `tests/slice_config.smoke.json` | Tiny slice (~0.5% of seed, `cluster_cap` 60) | `make test-slice-smoke` + `make test-slice-verify-smoke`; fast agent/CI feedback |
+| File                                      | Purpose                                      | Typical use                                                                      |
+| ----------------------------------------- | -------------------------------------------- | -------------------------------------------------------------------------------- |
+| `archive_archive_tests/slice_config.json` | Full slice (~5% of seed, `cluster_cap` 200)  | `make test-slice` + `make test-slice-verify`                                     |
+| `tests/slice_config.smoke.json`           | Tiny slice (~0.5% of seed, `cluster_cap` 60) | `make test-slice-smoke` + `make test-slice-verify-smoke`; fast agent/CI feedback |
 
 ### Config fields
 
@@ -33,11 +33,11 @@ structurally complete subset of the real seed vault for integration and behavior
 
 ## Behavioral manifests
 
-| File                                | Purpose                                                                                                    |
-| ----------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `tests/slice_manifest.json`         | Full behavioral + structural checks against a **real** seed slice (`make test-slice-verify`, bench verify) |
-| `tests/slice_manifest.smoke.json`   | Lighter behavioral + structural checks for `make test-slice-verify-smoke`                                  |
-| `tests/slice_manifest_fixture.json` | Queries grounded in `archive_archive_tests/fixtures` — CI `slice-verify` job and `test_rebuild_incremental`                |
+| File                                | Purpose                                                                                                     |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `tests/slice_manifest.json`         | Full behavioral + structural checks against a **real** seed slice (`make test-slice-verify`, bench verify)  |
+| `tests/slice_manifest.smoke.json`   | Lighter behavioral + structural checks for `make test-slice-verify-smoke`                                   |
+| `tests/slice_manifest_fixture.json` | Queries grounded in `archive_archive_tests/fixtures` — CI `slice-verify` job and `test_rebuild_incremental` |
 
 Health-check reads the manifest and asserts every check passes after a rebuild.
 
@@ -138,7 +138,7 @@ All long-running slice operations follow [`ppa/.cursor/rules/ppa-long-running-jo
 
 PPA persists an expensive full-vault scan to **`<vault>/_meta/vault-scan-cache.sqlite3`** (SQLite, WAL mode). Tier 1 caches frontmatter-only fields; tier 2 adds zlib-compressed bodies, manifest `content_hash`, wikilinks, and raw-file SHA-256 for seed-link sketches.
 
-- **Invalidation:** walk-only fingerprint (sorted `rel_path`, `mtime_ns`, `size` per note). Any mtime/size change anywhere in the vault forces a full cache rebuild (no partial invalidation).
+- **Invalidation:** walk-only fingerprint (sorted `rel_path`, `mtime_ns`, `size` per note). On fingerprint mismatch, only notes whose `mtime_ns` or `file_size` changed are re-parsed (incremental rebuild). Deleted notes are purged; unchanged rows are kept. A cache version derived from source-file fingerprints triggers a full rebuild when parsing or hashing logic changes.
 - **`--no-cache`** (global flag, same level as `--log-file`): skip reading/writing the cache file; scan still runs into an in-memory SQLite DB (`slice-seed`, `rebuild-indexes`).
 - **Rough sizes on very large vaults:** tier 1 often ~100–150MB; tier 2 often ~2–3GB (zlib-compressed bodies vs raw markdown on disk).
 - **Delete the cache:** `rm <vault>/_meta/vault-scan-cache.sqlite3` (safe; next run rebuilds).

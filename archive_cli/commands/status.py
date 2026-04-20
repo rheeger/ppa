@@ -152,9 +152,12 @@ def embedding_estimate(
     embedding_version: int = 0,
 ) -> dict[str, Any]:
     """Rough cost and duration estimate for embedding pending chunks."""
-    from ..index_config import (get_default_embedding_model,
-                                get_default_embedding_version,
-                                get_embed_batch_size, get_embed_concurrency)
+    from ..index_config import (
+        get_default_embedding_model,
+        get_default_embedding_version,
+        get_embed_batch_size,
+        get_embed_concurrency,
+    )
 
     logger.info(
         "embedding_estimate_start model=%r version=%s",

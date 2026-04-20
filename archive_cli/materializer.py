@@ -465,10 +465,13 @@ def _materialize_row_batch(
     path_to_uid: dict[str, str],
     person_lookup: dict[str, str],
     batch_id: str = "",
+    body_cache: object | None = None,
 ) -> ProjectionRowBuffer:
     """Materialize canonical rows into projection buffers.
 
     When ``PPA_ENGINE=rust`` (default), uses ``archive_crate.materialize_row_batch``.
+    If *body_cache* is an ``archive_crate.BodyCache`` handle (loaded once), bodies are
+    read from in-memory cache instead of re-reading ``.md`` files from disk.
     Set ``PPA_ENGINE=python`` to force the legacy Python implementation.
     """
     if ppa_engine() == "rust":
@@ -483,6 +486,7 @@ def _materialize_row_batch(
                 person_lookup,
                 batch_id,
                 CHUNK_SCHEMA_VERSION,
+                body_cache=body_cache,
             )
         except (ImportError, Exception) as e:
             warnings.warn(

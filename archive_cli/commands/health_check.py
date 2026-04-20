@@ -13,8 +13,7 @@ log = logging.getLogger("ppa.health_check")
 def _check_embedding_coverage(conn: Any, schema: str) -> dict[str, Any]:
     """Report how many chunks have embeddings for the default model/version."""
     try:
-        from ..index_config import (get_default_embedding_model,
-                                    get_default_embedding_version)
+        from ..index_config import get_default_embedding_model, get_default_embedding_version
 
         chunk_row = conn.execute(f"SELECT COUNT(*) AS count FROM {schema}.chunks").fetchone()
         chunk_count = int(chunk_row["count"] if isinstance(chunk_row, dict) else chunk_row[0])
@@ -262,15 +261,64 @@ def run_behavioral_checks(index: Any, manifest: dict[str, Any]) -> BehavioralRep
         report.temporal_results.append({"entry": entry, "passed": True})
 
     for entry in manifest.get("graph_queries", []) or []:
-        start_uid = str(entry.get("start_uid", ""))
+        anchor_path = str(entry.get("anchor_rel_path", "")).strip()
+        if anchor_path.startswith("PLACEHOLDER:"):
+            report.graph_results.append({"entry": entry, "passed": True, "skipped": True, "reason": "placeholder anchor"})
+            continue
+        if not anchor_path:
+            start_uid = str(entry.get("start_uid", "")).strip()
+            try:
+                anchor_path = index.read_path_for_uid(start_uid) or ""
+            except Exception:
+                anchor_path = ""
+        hops = int(entry.get("hops", 2))
         try:
-            path = index.read_path_for_uid(start_uid)
-            payload = index.graph(path, hops=2) if path else None
+            payload = index.graph(anchor_path, hops=hops) if anchor_path else None
         except Exception:
             payload = None
-        ok = payload is not None
-        report.graph_results.append({"entry": entry, "passed": ok})
-        if not ok:
+        if payload is None:
+            report.graph_results.append(
+                {"entry": entry, "passed": False, "failures": ["anchor not found or graph() failed"]}
+            )
+            report.ok = False
+            continue
+
+        all_edges: list[dict[str, Any]] = []
+        for _src, targets in payload.items():
+            for t in targets:
+                if isinstance(t, dict):
+                    all_edges.append(t)
+        if not all_edges:
+            failures = []
+            if entry.get("expect_edge_types_to_include") or entry.get("expect_at_least_one_seed_edge"):
+                failures.append("no edges in graph payload")
+            passed = not failures
+            report.graph_results.append({"entry": entry, "passed": passed, "failures": failures})
+            if not passed:
+                report.ok = False
+            continue
+
+        edge_types_seen = {str(e.get("edge_type", "")) for e in all_edges}
+        seed_edges = [e for e in all_edges if 0.0 < float(e.get("confidence", 0.0)) < 1.0]
+        confs = [float(e.get("confidence", 0.0)) for e in all_edges]
+
+        expected_types = set(entry.get("expect_edge_types_to_include", []) or [])
+        require_seed = bool(entry.get("expect_at_least_one_seed_edge", False))
+        conf_range = entry.get("expect_confidence_range", [0.0, 1.0])
+
+        failures: list[str] = []
+        if expected_types and expected_types - edge_types_seen:
+            failures.append(f"missing edge_types: {sorted(expected_types - edge_types_seen)}")
+        if require_seed and not seed_edges:
+            failures.append("expected at least one seed edge (0.0 < confidence < 1.0); none found")
+        if confs and len(conf_range) >= 2:
+            lo, hi = float(conf_range[0]), float(conf_range[1])
+            if min(confs) < lo or max(confs) > hi:
+                failures.append(f"confidence range {min(confs)}..{max(confs)} outside expected [{lo}, {hi}]")
+
+        passed = not failures
+        report.graph_results.append({"entry": entry, "passed": passed, "failures": failures})
+        if not passed:
             report.ok = False
 
     return report

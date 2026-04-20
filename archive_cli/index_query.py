@@ -452,40 +452,67 @@ class QueryMixin:
         )
         return rows[:limit]
 
-    def _graph_neighbor_uids(self, conn, anchor_uids: list[str]) -> set[str]:
+    def _graph_neighbor_uids(self, conn, anchor_uids: list[str]) -> dict[str, float]:
+        """Return {neighbor_card_uid: trust_weight} for 1-hop neighbors of any anchor.
+
+        Deterministic edges use trust 1.0; promoted seed-link edges use ``link_decisions.final_confidence``.
+        Neighbor UIDs that are also anchors are excluded (not useful as expansion targets).
+        When multiple edges connect the same pair, the maximum trust weight wins.
+        """
         if not anchor_uids:
-            return set()
+            return {}
         seed_link_union = ""
         if get_seed_links_enabled():
             seed_link_union = f"""
                 UNION ALL
-                SELECT lc.source_card_uid AS source_uid, lc.target_card_uid AS target_uid, lc.target_kind
+                SELECT
+                    lc.source_card_uid AS source_uid,
+                    lc.target_card_uid AS target_uid,
+                    lc.target_kind,
+                    COALESCE(ld.final_confidence, 0.0) AS confidence
                 FROM {self.schema}.link_candidates lc
                 JOIN {self.schema}.promotion_queue pq
                   ON pq.candidate_id = lc.candidate_id
                  AND pq.promotion_target = 'derived_edge'
                  AND pq.promotion_status = 'applied'
+                LEFT JOIN {self.schema}.link_decisions ld ON ld.candidate_id = lc.candidate_id
             """
         rows = conn.execute(
             f"""
             WITH graph_edges AS (
-                SELECT source_uid, target_uid, target_kind
+                SELECT
+                    source_uid,
+                    target_uid,
+                    target_kind,
+                    1.0::double precision AS confidence
                 FROM {self.schema}.edges
                 {seed_link_union}
             )
-            SELECT DISTINCT
-                CASE
-                    WHEN source_uid = ANY(%s) THEN target_uid
-                    ELSE source_uid
-                END AS neighbor_uid
-            FROM graph_edges
-            WHERE target_kind = 'card'
-              AND target_uid <> ''
-              AND (source_uid = ANY(%s) OR target_uid = ANY(%s))
+            SELECT neighbor_uid, MAX(confidence) AS trust_weight
+            FROM (
+                SELECT
+                    CASE
+                        WHEN source_uid = ANY(%s) THEN target_uid
+                        ELSE source_uid
+                    END AS neighbor_uid,
+                    confidence
+                FROM graph_edges
+                WHERE target_kind = 'card'
+                  AND target_uid <> ''
+                  AND (source_uid = ANY(%s) OR target_uid = ANY(%s))
+            ) inner_neighbors
+            WHERE neighbor_uid != ALL(%s)
+              AND neighbor_uid <> ''
+            GROUP BY neighbor_uid
             """,
-            (anchor_uids, anchor_uids, anchor_uids),
+            (anchor_uids, anchor_uids, anchor_uids, anchor_uids),
         ).fetchall()
-        return {str(row["neighbor_uid"]) for row in rows if str(row["neighbor_uid"]).strip()}
+        out: dict[str, float] = {}
+        for row in rows:
+            uid = str(row["neighbor_uid"]).strip()
+            if uid:
+                out[uid] = float(row["trust_weight"])
+        return out
 
     def vector_search(
         self,
@@ -602,9 +629,10 @@ class QueryMixin:
                 raise
         return lexical_rows, vector_rows
 
-    def fetch_graph_neighbors_for_uids(self, anchor_uids: list[str]) -> set[str]:
+    def fetch_graph_neighbors_for_uids(self, anchor_uids: list[str]) -> dict[str, float]:
+        """Graph neighbors of lexical anchor cards, weighted by edge trust (see Tier 2)."""
         if not anchor_uids:
-            return set()
+            return {}
         self.ensure_ready()
         with self._connect() as conn:
             return self._graph_neighbor_uids(conn, anchor_uids)
@@ -648,14 +676,14 @@ class QueryMixin:
             or int(row["external_id_exact"])
             or int(row["person_exact"])
         ]
-        neighbor_uids = self.fetch_graph_neighbors_for_uids(anchor_uids)
+        neighbor_trust = self.fetch_graph_neighbors_for_uids(anchor_uids)
         from .retrieval_pipeline import HybridFetchInputs, fuse_and_rank_hybrid
 
         return fuse_and_rank_hybrid(
             HybridFetchInputs(
                 lexical_rows=lexical_rows,
                 vector_rows=vector_rows,
-                neighbor_uids=neighbor_uids,
+                neighbor_trust=neighbor_trust,
                 query_cleaned=cleaned,
                 subqueries_used=(cleaned,),
             ),
@@ -739,7 +767,8 @@ class QueryMixin:
             [dict(row) for row in by_source],
         )
 
-    def graph(self, note_path: str, hops: int = 2) -> dict[str, list[str]] | None:
+    def graph(self, note_path: str, hops: int = 2) -> dict[str, list[dict[str, Any]]] | None:
+        """Return adjacency with ``path``, ``edge_type``, and ``confidence`` per edge."""
         self.ensure_ready()
         rel_path = note_path if note_path.endswith(".md") else f"{note_path}.md"
         with self._connect() as conn:
@@ -751,17 +780,23 @@ class QueryMixin:
                 return None
             visited = {rel_path}
             frontier = {rel_path}
-            graph: dict[str, list[str]] = {}
+            graph: dict[str, list[dict[str, Any]]] = {}
             seed_link_union = ""
             if get_seed_links_enabled():
                 seed_link_union = f"""
                     UNION ALL
-                    SELECT lc.source_rel_path AS source_path, lc.target_rel_path AS target_path, lc.target_kind
+                    SELECT
+                        lc.source_rel_path AS source_path,
+                        lc.target_rel_path AS target_path,
+                        lc.target_kind,
+                        lc.proposed_link_type AS edge_type,
+                        COALESCE(ld.final_confidence, 0.0) AS confidence
                     FROM {self.schema}.link_candidates lc
                     JOIN {self.schema}.promotion_queue pq
                       ON pq.candidate_id = lc.candidate_id
                      AND pq.promotion_target = 'derived_edge'
                      AND pq.promotion_status = 'applied'
+                    LEFT JOIN {self.schema}.link_decisions ld ON ld.candidate_id = lc.candidate_id
                 """
             for _ in range(max(hops, 1)):
                 next_frontier: set[str] = set()
@@ -769,24 +804,37 @@ class QueryMixin:
                     rows = conn.execute(
                         f"""
                         WITH graph_edges AS (
-                            SELECT source_path, target_path, target_kind
+                            SELECT
+                                source_path,
+                                target_path,
+                                target_kind,
+                                edge_type,
+                                1.0::double precision AS confidence
                             FROM {self.schema}.edges
                             {seed_link_union}
                         )
-                        SELECT target_path
+                        SELECT target_path, edge_type, confidence
                         FROM graph_edges
                         WHERE source_path = %s
                           AND target_kind = 'card'
-                        ORDER BY target_path ASC
+                        ORDER BY target_path ASC, edge_type ASC
                         """,
                         (current,),
                     ).fetchall()
-                    targets = [str(row["target_path"]) for row in rows]
+                    targets = [
+                        {
+                            "path": str(row["target_path"]),
+                            "edge_type": str(row["edge_type"]),
+                            "confidence": float(row["confidence"]),
+                        }
+                        for row in rows
+                    ]
                     graph[current] = targets
                     for target in targets:
-                        if target not in visited:
-                            visited.add(target)
-                            next_frontier.add(target)
+                        target_path = target["path"]
+                        if target_path not in visited:
+                            visited.add(target_path)
+                            next_frontier.add(target_path)
                 frontier = next_frontier
                 if not frontier:
                     break

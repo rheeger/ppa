@@ -36,8 +36,7 @@ from .commands import status as status_cmd
 from .commands._resolve import resolve_index, resolve_store
 from .errors import InvalidInputError, PpaError, SeedLinksDisabledError
 from .index_config import get_seed_links_enabled
-from .index_store import (get_default_embedding_model,
-                          get_default_embedding_version)
+from .index_store import get_default_embedding_model, get_default_embedding_version
 
 _SEED_LINKS_DISABLED_MSG = "Seed links are not enabled. Set PPA_SEED_LINKS_ENABLED=1 to enable."
 
@@ -240,7 +239,19 @@ def archive_query(
 
 @mcp.tool()
 def archive_graph(note_path: str, hops: int = 2) -> str:
-    """Get notes linked from the given note via wikilinks."""
+    """Get notes linked from the given note via wikilinks and discovered relationships.
+
+    Each edge is tagged with its type and (for inferred edges) a confidence score:
+
+    - ``[edge_type]`` — deterministic edge from explicit signals (wikilinks in the note body,
+      frontmatter references, declarative card-type rules). Treat as authoritative.
+    - ``[seed:edge_type, conf=X]`` — inferred edge from the seed-link system.
+      ``conf`` is between 0.0 and 1.0; higher means more trustworthy. Treat as a suggestion
+      weighted by the confidence value.
+
+    When summarizing a relationship, prefer deterministic edges as grounds. Use seed-link edges
+    to broaden context but qualify claims using the confidence level.
+    """
 
     profile_error = _tool_profile_error("archive_graph")
     if profile_error:

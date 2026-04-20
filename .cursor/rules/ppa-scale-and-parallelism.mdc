@@ -1,0 +1,161 @@
+---
+description: >-
+  PPA scale, parallelism, and concurrency contract. Read before adding any code that
+  touches the vault, index, embeddings, enrichment, or retrieval — vaults are millions
+  of cards and millions of files; sequential per-row code does not ship.
+alwaysApply: true
+---
+
+# PPA — Scale, Parallelism & Concurrency
+
+PPA targets vaults and indexes in the **multi-million card / multi-million file** range. Every new feature must be designed for that target on day one. "It works on my 1k-card test vault" is not evidence; the slice harness and benchmark targets exist for exactly this reason.
+
+If your code does work-per-card / work-per-file / work-per-chunk, it must use the existing primitives below. Do not invent a new sequential loop when a Rust pass, bulk SQL load, or batched executor already exists.
+
+## The primitives — reuse, don't reinvent
+
+### Rust performance engine (`archive_crate`, PyO3 + `rayon`)
+
+Hot path code lives in Rust and is exposed via PyO3. `PPA_ENGINE=rust` (default) selects it; `PPA_ENGINE=python` is only the legacy fallback.
+
+| Primitive                                                                     | Where                                               | What it gives you                                                                              |
+| ----------------------------------------------------------------------------- | --------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `walk::walk_vault`                                                            | `archive_crate/src/walk.rs`                         | Top-level subtree walk parallelised over `rayon`, dot-dir + `EXCLUDED_DIRS` filtering          |
+| `cache::build_vault_cache(_incremental)`                                      | `archive_crate/src/cache.rs`                        | Parallel stat + parse, `mtime_ns + size` fingerprint, incremental rebuild of only changed rows |
+| `materializer::materialize_all_rows` / `materialize_row_batch`                | `archive_crate/src/materializer/`                   | Full card → projection rows in one Rust call, `Python::allow_threads` + `rayon` over rows      |
+| `materializer::CopyBuffer`                                                    | `archive_crate/src/materializer/copy_buffer.rs`     | Pre-serialized tab-separated COPY bytes per table — zero PyTuple allocation                    |
+| `person_index::PersonResolutionIndex` + `resolve_batch::resolve_person_batch` | `archive_crate/src/{person_index,resolve_batch}.rs` | Bulk person resolution, not per-card lookup                                                    |
+| `fuzzy_resolver::token_sort_ratio`                                            | `archive_crate/src/fuzzy_resolver.rs`               | Hot-path fuzzy match in Rust                                                                   |
+| `validator::validate_vault_from_cache`                                        | `archive_crate/src/validator.rs`                    | Vault validation off the cache, not the filesystem                                             |
+
+When you need work-per-note at vault scale, the answer is almost always "extend an existing Rust function" — not "loop in Python." If you must stay in Python, you must `iter` off `archive_crate.cache_iter::*` (`notes_from_cache`, `frontmatter_dicts_from_cache`, `note_paths_from_cache`).
+
+### Caches & bulk in-memory indexes
+
+Caches are not optional decorations. They are how PPA stays sub-linear in I/O.
+
+- **`VaultScanCache`** (`archive_cli/vault_cache.py`) — SQLite WAL, single connection + `RLock`, tier-1 (frontmatter only) or tier-2 (compressed body). `build_or_load()` is the one entry point. Cache version is auto-derived from a SHA-256 fingerprint of source files that determine row shape (`_CACHE_CODE_FINGERPRINT_FILES`); changing those files auto-invalidates.
+- **`MessageStubIndex`, `ParticipantNameResolver`, `ClassifyIndex`** (`archive_sync/llm_enrichment/threads.py`, `classify_index.py`) — built **once per run from a single SQL query** into in-memory dicts. Pattern: `build_message_stub_index(scan_cache)` → use `slug_to_rel` + `rel_to_fm` instead of per-wikilink lookups.
+- **`InferenceCache`** (`archive_sync/llm_enrichment/cache.py`) — SQLite, keyed by `content_hash + model_id + prompt_version + schema_version + temperature + seed`. Bumping prompt or schema **must** bump the version constant or you will silently serve stale answers.
+- **OpenAI Batch API path** (`archive_cli/batch_embedder.py`) — async submit/poll/ingest with `embed_batches` / `embed_batch_requests` state tables, `DEFAULT_MAX_OUTSTANDING_BATCHES`, terminal status handling. Use this when embedding > a few thousand chunks.
+
+### Workers, executors, and tuning
+
+All concurrency knobs are env-vars under the `PPA_*` prefix. They have defaults, but you must wire your code through them — not hardcode workers or batch sizes.
+
+| Variable                                          | Default     | Used by                         |
+| ------------------------------------------------- | ----------- | ------------------------------- |
+| `PPA_REBUILD_WORKERS`                             | `cpu_count` | rebuild materialize loop        |
+| `PPA_REBUILD_BATCH_SIZE`                          | `1000`      | per-worker chunk                |
+| `PPA_REBUILD_COMMIT_INTERVAL`                     | `5000`      | DB commit cadence               |
+| `PPA_REBUILD_EXECUTOR`                            | `thread`    | `thread` / `process` / `serial` |
+| `PPA_REBUILD_FLUSH_MAX_{ROWS,EDGES,CHUNKS,BYTES}` | adaptive    | back-pressure on load buffer    |
+| `PPA_EMBED_CONCURRENCY`                           | `4`         | embed_pending fan-out           |
+| `PPA_EMBED_BATCH_SIZE`                            | `32`        | embeddings per provider call    |
+
+Read these via `archive_cli/index_config.py` getters (`get_rebuild_workers()`, `get_embed_concurrency()`, …). Never call `os.environ.get("PPA_REBUILD_WORKERS")` directly in feature code.
+
+For LLM/provider-bound enrichment, the `CardEnrichmentRunner` default is `workers=24` (`ThreadPoolExecutor` + `as_completed`). **Sequential defaults waste wall-time on provider-bound I/O** — match that pattern.
+
+### Postgres write path
+
+- Use **`COPY FROM STDIN`** via the Rust `CopyBuffer`, not per-row `INSERT`s.
+- Open **multiple parallel COPY connections** for the load flush (`_open_copy_connections(4)` in `loader.py`); a single connection is the bottleneck, not the disk.
+- Honour the **flush back-pressure** envs (`PPA_REBUILD_FLUSH_*`) — buffers must drain before they swamp memory at full-vault scale.
+- Use **checkpoint + resume** (`rebuild_checkpoint` row, `run_id` derived from `vault_manifest_hash + INDEX_SCHEMA_VERSION + CHUNK_SCHEMA_VERSION + PROJECTION_REGISTRY_VERSION`). Long jobs must survive a SIGINT/restart.
+- Wrap statements with `PPA_STATEMENT_TIMEOUT_MS` and `PPA_CONNECT_TIMEOUT` so a runaway query never blocks the whole pipeline.
+
+### Slices — the iteration loop
+
+Never iterate on the full vault. The slicer (`archive_cli/test_slice.py`) ships stratified, transitive-closure subsets:
+
+```bash
+make slice-local-1pct      # ~1% of seed → ppa/.slices/1pct
+make slice-local-5pct      # ~5% → ppa/.slices/5pct
+make slice-local-10pct     # ~10% → ppa/.slices/10pct
+make test-slice-smoke      # ~0.5% smoke slice for fast agent loops
+```
+
+Standard development arc: **1% dry-run → 5% verify → 10% benchmark → full vault**. `--limit` forces sequential first-N for deterministic preview; do not fight it — that is the contract.
+
+## Rules of engagement
+
+### 1. Bulk-load before you loop
+
+Anything that needs frontmatter or rel_paths for many cards must hit the cache or a single SQL query, not the filesystem or per-row SQLite calls.
+
+```python
+# BAD — per-card SQLite + filesystem walk
+for slug in wikilinks:
+    rel = scan_cache.rel_path_for_slug(slug)        # serialises on RLock
+    fm = read_note_frontmatter_file(vault / rel)    # disk per call
+
+# GOOD — one SQL query → in-memory dicts
+stub_index = build_message_stub_index(scan_cache)
+for slug in wikilinks:
+    rel = stub_index.resolve_slug(slug)
+    fm = stub_index.frontmatter(rel)
+```
+
+`find_note_by_slug()` and `os.walk(vault)` are **never** acceptable inside a loop — both do a full vault walk per call.
+
+### 2. If it's hot, it's Rust
+
+If you find yourself parsing frontmatter, hashing content, walking the vault, or building chunks in Python at vault scale: the Rust function already exists. Bridge to it via `archive_cli/crate_bridge.py` or extend `archive_crate` and re-expose through `lib.rs`. Always wrap long Rust calls so the GIL is released (`Python::allow_threads`).
+
+### 3. Wire workers through the config getters
+
+```python
+# BAD
+workers = 8
+with ThreadPoolExecutor(max_workers=workers) as ex: ...
+
+# GOOD
+from archive_cli.index_config import get_rebuild_workers, get_rebuild_executor
+workers = get_rebuild_workers()
+executor_cls = ProcessPoolExecutor if get_rebuild_executor() == "process" else ThreadPoolExecutor
+with executor_cls(max_workers=workers) as ex: ...
+```
+
+### 4. Caches need versioned keys
+
+Any cache that survives a code change must invalidate when the producing code changes:
+
+- `VaultScanCache.CACHE_VERSION` is a SHA-256 of `_CACHE_CODE_FINGERPRINT_FILES` — add your file there if your edits change row shape.
+- `InferenceCache` keys must include `prompt_version` + `schema_version`. Bump the version constant when you change a prompt or output schema.
+- `run_id` for rebuilds encodes `INDEX_SCHEMA_VERSION + CHUNK_SCHEMA_VERSION + PROJECTION_REGISTRY_VERSION`. New schema = new `run_id` = no resume into inconsistent state.
+
+### 5. Provider-bound work is concurrent by default
+
+LLM, embedding, and HTTP-bound steps default to `≥ workers=24` (or the env-controlled value). Sequential defaults are a bug for provider-bound code. The `OpenAI Batch API` path (`batch_embedder.py`) is the right answer at >50k chunks.
+
+### 6. Postgres writes go through COPY + parallel connections
+
+`INSERT` loops are an instant rejection. The Rust `CopyBuffer` produces pre-escaped tab-separated bytes per table; flush them across multiple connections (`_flush_copy_buffer_parallel`).
+
+### 7. Long jobs are checkpointed and resumable
+
+Anything > a few minutes at full-vault scale needs:
+
+- A `rebuild_checkpoint`-style row updated on commit
+- A deterministic `run_id` that encodes schema/version
+- Resume gated on `status == "in_progress" AND run_id matches"`
+- Honour `PPA_REBUILD_RESUME` (and `PPA_FORCE_FULL_REBUILD` to override)
+
+See `ppa-long-running-jobs.mdc` for the matching logging contract.
+
+### 8. Prove it on slices, not on a 1k fixture
+
+New code is benchmarked against `.slices/1pct` then `.slices/5pct` before touching the seed vault. If you cannot articulate the wall-clock cost per million cards, you are not done.
+
+## Anti-patterns (instant review reject)
+
+- `for path in iter_note_paths(vault):` doing real work — should be `archive_crate.walk_vault` + `rayon`, or off the cache
+- `find_note_by_slug()` or `os.walk(vault)` inside a loop
+- `cur.execute("INSERT …")` per row in any rebuild / load path
+- Hardcoded `max_workers=N` instead of `get_rebuild_workers()` / `get_embed_concurrency()`
+- LLM / embedding workflow with `workers=1` default
+- Cache reads that don't incorporate `prompt_version` / `schema_version` / cache code fingerprint
+- New SQLite cache tables without WAL + a single connection guarded by a lock
+- A "small loop in Python, we'll optimise later" — the optimisation is the design, do it now
+- Adding a feature without measuring on at least the `1pct` slice

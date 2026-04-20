@@ -32,6 +32,7 @@ from .index_config import (
     manifest_cache_disabled,
 )
 from .materializer import _build_person_lookup, _materialize_row_batch, _resolve_person_reference
+from .ppa_engine import ppa_engine
 from .projections.base import ProjectionRowBuffer
 from .projections.registry import PROJECTION_REGISTRY, PROJECTION_REGISTRY_VERSION, TYPED_PROJECTIONS
 from .scanner import (
@@ -374,6 +375,86 @@ class LoaderMixin:
             )
         return counts
 
+    def _open_copy_connections(self, n: int) -> list:
+        """Open N additional psycopg connections for parallel COPY."""
+        import psycopg
+        from psycopg.rows import dict_row
+
+        conns = []
+        for _ in range(n):
+            c = psycopg.connect(
+                self.dsn,
+                row_factory=dict_row,
+                connect_timeout=5,
+                options="-c statement_timeout=300000",
+            )
+            conns.append(c)
+        return conns
+
+    def _flush_copy_buffer_parallel(
+        self,
+        copy_buf: Any,
+        conns: list,
+        dest_suffix: str = "",
+    ) -> dict[str, int]:
+        """Flush a CopyBuffer across multiple connections in parallel threads.
+
+        Assigns each table to its own connection. When there are more tables than
+        connections, smaller tables share a connection. This maximizes parallelism
+        for the biggest tables (edges, chunks, cards).
+        """
+        all_tables = copy_buf.table_names()
+        counts: dict[str, int] = {}
+        errors: list[Exception] = []
+
+        tasks: list[tuple[int, str]] = []
+        for i, table_name in enumerate(all_tables):
+            data = copy_buf.table_data(table_name)
+            if data:
+                tasks.append((i % len(conns), table_name))
+
+        def _flush_one(conn_idx: int, table_name: str) -> tuple[str, int]:
+            conn = conns[conn_idx]
+            data = copy_buf.table_data(table_name)
+            if not data:
+                return table_name, 0
+            n_rows = copy_buf.table_row_count(table_name)
+            target = f"{table_name}{dest_suffix}" if dest_suffix else table_name
+            columns_tuple = PROJECTION_COLUMNS_BY_TABLE.get(table_name)
+            if not columns_tuple:
+                return table_name, 0
+            columns = ", ".join(columns_tuple)
+            with conn.cursor() as cur:
+                with cur.copy(
+                    f"COPY {self.schema}.{target} ({columns}) FROM STDIN"
+                ) as copy:
+                    copy.write(data)
+            return table_name, n_rows
+
+        with ThreadPoolExecutor(max_workers=len(conns)) as executor:
+            futures = []
+            for conn_idx, table_name in tasks:
+                futures.append(executor.submit(_flush_one, conn_idx, table_name))
+            for f in futures:
+                try:
+                    tn, rc = f.result()
+                    counts[tn] = rc
+                except Exception as exc:
+                    errors.append(exc)
+
+        if errors:
+            for c in conns:
+                try:
+                    c.rollback()
+                except Exception:
+                    pass
+            raise errors[0]
+
+        for c in conns:
+            c.commit()
+
+        return counts
+
     def _meta_dict(self, conn) -> dict[str, str]:
         rows = conn.execute(f"SELECT key, value FROM {self.schema}.meta").fetchall()
         return {str(row["key"]): str(row["value"]) for row in rows}
@@ -713,58 +794,205 @@ class LoaderMixin:
             progress_every=progress_every,
             started_at=time.time(),
         )
-        materialize_fn = partial(
-            _materialize_row_batch,
-            vault_root=str(self.vault),
-            slug_map=slug_map,
-            path_to_uid=path_to_uid,
-            person_lookup=person_lookup,
-            batch_id=run_id,
-        )
+        from .vault_cache import VaultScanCache
 
-        def _consume_materialized_batches() -> Iterable[ProjectionRowBuffer]:
-            if workers <= 1 or executor_kind == "serial":
-                for batch_rows in chunked_rows:
-                    yield materialize_fn(batch_rows)
-                return
-            executor_cls = ProcessPoolExecutor if executor_kind == "process" else ThreadPoolExecutor
-            map_kwargs: dict[str, Any] = {}
-            if executor_kind == "process":
-                map_kwargs["chunksize"] = max(
-                    1,
-                    min(32, materialize_batches_total // max(workers * 4, 1) or 1),
+        _body_cache = None
+        _use_all_rows = False
+        _cache_sqlite = VaultScanCache.cache_path_for_vault(self.vault)
+        if ppa_engine() == "rust":
+            try:
+                import archive_crate
+
+                if _cache_sqlite.exists():
+                    logger.info("Loading body cache from %s", _cache_sqlite)
+                    _body_cache = archive_crate.BodyCache.load(str(_cache_sqlite))
+                    logger.info("Body cache loaded: %d entries", len(_body_cache))
+                logger.info("Using materialize_all_rows (single Rust call, maps converted once)")
+                _all_batches: list[ProjectionRowBuffer] = archive_crate.materialize_all_rows(
+                    rows_to_process,
+                    str(self.vault),
+                    slug_map,
+                    path_to_uid,
+                    person_lookup,
+                    run_id,
+                    CHUNK_SCHEMA_VERSION,
+                    body_cache=_body_cache,
+                    batch_size=commit_interval,
                 )
-            with executor_cls(max_workers=workers) as executor:
-                yield from executor.map(materialize_fn, chunked_rows, **map_kwargs)
+                _use_all_rows = True
+                logger.info("materialize_all_rows complete: %d batches", len(_all_batches))
+            except Exception as exc:
+                logger.warning("materialize_all_rows failed (%s), falling back to Python loop", exc)
+                import traceback
+                traceback.print_exc()
+                _use_all_rows = False
 
-        wait_started_at = time.time()
-        for batch_index, materialized in enumerate(_consume_materialized_batches(), start=1):
-            materialize_seconds += time.time() - wait_started_at
-            load_buffer.extend(materialized)
-            load_buffer_pending_bytes += _estimate_projection_buffer_bytes(materialized)
-            for table_name, rows_for_table in materialized.rows_by_table.items():
-                counts[table_name] = counts.get(table_name, 0) + len(rows_for_table)
-            materialize_reporter.update(
-                counts["cards"],
-                extra=(
-                    f"batch={batch_index} "
-                    f"typed={sum(counts.get(table_name, 0) for table_name in TYPED_PROJECTION_TABLES)} "
-                    f"edges={counts['edges']} chunks={counts['chunks']}"
-                ),
+        if not _use_all_rows:
+            materialize_fn = partial(
+                _materialize_row_batch,
+                vault_root=str(self.vault),
+                slug_map=slug_map,
+                path_to_uid=path_to_uid,
+                person_lookup=person_lookup,
+                batch_id=run_id,
+                body_cache=_body_cache,
             )
-            if _load_buffer_should_flush(
-                load_buffer,
-                commit_interval=commit_interval,
-                pending_bytes=load_buffer_pending_bytes,
-                caps=flush_caps,
-            ):
+
+            def _consume_materialized_batches() -> Iterable[ProjectionRowBuffer]:
+                if workers <= 1 or executor_kind == "serial":
+                    for batch_rows in chunked_rows:
+                        yield materialize_fn(batch_rows)
+                    return
+                executor_cls = ProcessPoolExecutor if executor_kind == "process" else ThreadPoolExecutor
+                map_kwargs: dict[str, Any] = {}
+                if executor_kind == "process":
+                    map_kwargs["chunksize"] = max(
+                        1,
+                        min(32, materialize_batches_total // max(workers * 4, 1) or 1),
+                    )
+                with executor_cls(max_workers=workers) as executor:
+                    yield from executor.map(materialize_fn, chunked_rows, **map_kwargs)
+
+            _all_batches = list(_consume_materialized_batches())
+
+        _copy_conns: list = []
+        if _use_all_rows:
+            try:
+                _copy_conns = self._open_copy_connections(4)
+                logger.info("Opened %d parallel COPY connections", len(_copy_conns))
+            except Exception as exc:
+                logger.warning("Failed to open parallel connections, using sequential: %s", exc)
+
+        try:
+            wait_started_at = time.time()
+            for batch_index, materialized in enumerate(_all_batches, start=1):
+                materialize_seconds += time.time() - wait_started_at
+                if _use_all_rows and hasattr(materialized, "table_names"):
+                    batch_cards = materialized.card_count()
+                    load_started_at = time.time()
+                    if _copy_conns:
+                        batch_counts = self._flush_copy_buffer_parallel(
+                            materialized, _copy_conns, dest_suffix=dest_suffix,
+                        )
+                        for tn, rc in batch_counts.items():
+                            counts[tn] = counts.get(tn, 0) + rc
+                    else:
+                        for table_name in materialized.table_names():
+                            data = materialized.table_data(table_name)
+                            if not data:
+                                continue
+                            n_rows = materialized.table_row_count(table_name)
+                            counts[table_name] = counts.get(table_name, 0) + n_rows
+                            target = f"{table_name}{dest_suffix}" if dest_suffix else table_name
+                            columns = ", ".join(PROJECTION_COLUMNS_BY_TABLE.get(table_name, ()))
+                            if not columns:
+                                continue
+                            with conn.cursor() as cur:
+                                with cur.copy(f"COPY {self.schema}.{target} ({columns}) FROM STDIN") as copy:
+                                    copy.write(data)
+                        conn.commit()
+                    committed_cards += batch_cards
+                    load_elapsed = time.time() - load_started_at
+                    load_seconds += load_elapsed
+                    _log_rebuild_step(
+                        5, 6, "load flush",
+                        f"buffer_cards={batch_cards} edges={counts.get('edges', 0)} "
+                        f"chunks={counts.get('chunks', 0)} elapsed={round(load_elapsed, 3)}s",
+                    )
+                    load_reporter.update(
+                        committed_cards,
+                        extra=f"edges={counts.get('edges', 0)} chunks={counts.get('chunks', 0)}",
+                    )
+                    self._upsert_meta(conn, {
+                        "rebuild_stage": "loading",
+                        "rebuild_loaded_cards": str(committed_cards),
+                        "rebuild_loaded_edges": str(counts.get("edges", 0)),
+                        "rebuild_loaded_chunks": str(counts.get("chunks", 0)),
+                    })
+                    conn.commit()
+                    if write_checkpoint:
+                        self._save_rebuild_checkpoint(
+                            conn, run_id=run_id, mode=rebuild_mode,
+                            last_rel_path="", last_card_uid="",
+                            loaded_cards=committed_cards,
+                            row_counts=dict(counts), bytes_estimate=0,
+                            vault_fp=vault_fp, versions=versions,
+                            dup_loaded=True, status="in_progress",
+                        )
+                        conn.commit()
+                else:
+                    load_buffer.extend(materialized)
+                    load_buffer_pending_bytes += _estimate_projection_buffer_bytes(materialized)
+                    for table_name, rows_for_table in materialized.rows_by_table.items():
+                        counts[table_name] = counts.get(table_name, 0) + len(rows_for_table)
+                    materialize_reporter.update(
+                        counts["cards"],
+                        extra=(
+                            f"batch={batch_index} "
+                            f"typed={sum(counts.get(table_name, 0) for table_name in TYPED_PROJECTION_TABLES)} "
+                            f"edges={counts['edges']} chunks={counts['chunks']}"
+                        ),
+                    )
+                    if _load_buffer_should_flush(
+                        load_buffer,
+                        commit_interval=commit_interval,
+                        pending_bytes=load_buffer_pending_bytes,
+                        caps=flush_caps,
+                    ):
+                        load_started_at = time.time()
+                        buffer_rows_total = _load_buffer_total_row_count(load_buffer)
+                        buffer_edges = len(load_buffer.rows_for("edges"))
+                        buffer_chunks = len(load_buffer.rows_for("chunks"))
+                        card_rows_before_flush = load_buffer.rows_for("cards")
+                        last_rel = str(card_rows_before_flush[-1][1]) if card_rows_before_flush else ""
+                        last_uid = str(card_rows_before_flush[-1][0]) if card_rows_before_flush else ""
+                        flushed = self._flush_load_buffer(conn, load_buffer, dest_suffix=dest_suffix)
+                        conn.commit()
+                        load_elapsed = time.time() - load_started_at
+                        load_seconds += load_elapsed
+                        committed_cards += flushed["cards"]
+                        _log_rebuild_step(
+                            5, 6, "load flush",
+                            (
+                                f"buffer_cards={flushed['cards']} buffer_rows_total={buffer_rows_total} "
+                                f"buffer_bytes_estimate={load_buffer_pending_bytes} edges={buffer_edges} "
+                                f"chunks={buffer_chunks} elapsed={round(load_elapsed, 3)}s"
+                            ),
+                        )
+                        load_reporter.update(
+                            committed_cards,
+                            extra=f"edges={counts['edges']} chunks={counts['chunks']}",
+                        )
+                        self._upsert_meta(conn, {
+                            "rebuild_stage": "loading",
+                            "rebuild_loaded_cards": str(committed_cards),
+                            "rebuild_loaded_edges": str(counts["edges"]),
+                            "rebuild_loaded_chunks": str(counts["chunks"]),
+                        })
+                        conn.commit()
+                        if write_checkpoint:
+                            self._save_rebuild_checkpoint(
+                                conn, run_id=run_id, mode=rebuild_mode,
+                                last_rel_path=last_rel, last_card_uid=last_uid,
+                                loaded_cards=committed_cards,
+                                row_counts=dict(counts),
+                                bytes_estimate=load_buffer_pending_bytes,
+                                vault_fp=vault_fp, versions=versions,
+                                dup_loaded=True, status="in_progress",
+                            )
+                            conn.commit()
+                        load_buffer.clear()
+                        load_buffer_pending_bytes = 0
+                wait_started_at = time.time()
+
+            if any(load_buffer.rows_for(table_name) for table_name in PROJECTION_NAMES):
                 load_started_at = time.time()
                 buffer_rows_total = _load_buffer_total_row_count(load_buffer)
                 buffer_edges = len(load_buffer.rows_for("edges"))
                 buffer_chunks = len(load_buffer.rows_for("chunks"))
-                card_rows_before_flush = load_buffer.rows_for("cards")
-                last_rel = str(card_rows_before_flush[-1][1]) if card_rows_before_flush else ""
-                last_uid = str(card_rows_before_flush[-1][0]) if card_rows_before_flush else ""
+                final_card_rows = load_buffer.rows_for("cards")
+                final_last_rel = str(final_card_rows[-1][1]) if final_card_rows else ""
+                final_last_uid = str(final_card_rows[-1][0]) if final_card_rows else ""
                 flushed = self._flush_load_buffer(conn, load_buffer, dest_suffix=dest_suffix)
                 conn.commit()
                 load_elapsed = time.time() - load_started_at
@@ -777,94 +1005,39 @@ class LoaderMixin:
                     (
                         f"buffer_cards={flushed['cards']} buffer_rows_total={buffer_rows_total} "
                         f"buffer_bytes_estimate={load_buffer_pending_bytes} edges={buffer_edges} "
-                        f"chunks={buffer_chunks} elapsed={round(load_elapsed, 3)}s"
+                        f"chunks={buffer_chunks} elapsed={round(load_elapsed, 3)}s final=1"
                     ),
                 )
+                load_buffer.clear()
+                load_buffer_pending_bytes = 0
                 load_reporter.update(
                     committed_cards,
                     extra=f"edges={counts['edges']} chunks={counts['chunks']}",
                 )
-                self._upsert_meta(
-                    conn,
-                    {
-                        "rebuild_stage": "loading",
-                        "rebuild_loaded_cards": str(committed_cards),
-                        "rebuild_loaded_edges": str(counts["edges"]),
-                        "rebuild_loaded_chunks": str(counts["chunks"]),
-                    },
-                )
-                conn.commit()
                 if write_checkpoint:
                     self._save_rebuild_checkpoint(
                         conn,
                         run_id=run_id,
                         mode=rebuild_mode,
-                        last_rel_path=last_rel,
-                        last_card_uid=last_uid,
+                        last_rel_path=final_last_rel,
+                        last_card_uid=final_last_uid,
                         loaded_cards=committed_cards,
                         row_counts=dict(counts),
-                        bytes_estimate=load_buffer_pending_bytes,
+                        bytes_estimate=0,
                         vault_fp=vault_fp,
                         versions=versions,
                         dup_loaded=True,
                         status="in_progress",
                     )
                     conn.commit()
-                    _log_rebuild_step(
-                        5,
-                        6,
-                        "checkpoint saved",
-                        f"loaded_cards={committed_cards} last_rel_path={last_rel!r}",
-                    )
-                load_buffer.clear()
-                load_buffer_pending_bytes = 0
-            wait_started_at = time.time()
-
-        if any(load_buffer.rows_for(table_name) for table_name in PROJECTION_NAMES):
-            load_started_at = time.time()
-            buffer_rows_total = _load_buffer_total_row_count(load_buffer)
-            buffer_edges = len(load_buffer.rows_for("edges"))
-            buffer_chunks = len(load_buffer.rows_for("chunks"))
-            final_card_rows = load_buffer.rows_for("cards")
-            final_last_rel = str(final_card_rows[-1][1]) if final_card_rows else ""
-            final_last_uid = str(final_card_rows[-1][0]) if final_card_rows else ""
-            flushed = self._flush_load_buffer(conn, load_buffer, dest_suffix=dest_suffix)
-            conn.commit()
-            load_elapsed = time.time() - load_started_at
-            load_seconds += load_elapsed
-            committed_cards += flushed["cards"]
-            _log_rebuild_step(
-                5,
-                6,
-                "load flush",
-                (
-                    f"buffer_cards={flushed['cards']} buffer_rows_total={buffer_rows_total} "
-                    f"buffer_bytes_estimate={load_buffer_pending_bytes} edges={buffer_edges} "
-                    f"chunks={buffer_chunks} elapsed={round(load_elapsed, 3)}s final=1"
-                ),
-            )
-            load_buffer.clear()
-            load_buffer_pending_bytes = 0
-            load_reporter.update(
-                committed_cards,
-                extra=f"edges={counts['edges']} chunks={counts['chunks']}",
-            )
-            if write_checkpoint:
-                self._save_rebuild_checkpoint(
-                    conn,
-                    run_id=run_id,
-                    mode=rebuild_mode,
-                    last_rel_path=final_last_rel,
-                    last_card_uid=final_last_uid,
-                    loaded_cards=committed_cards,
-                    row_counts=dict(counts),
-                    bytes_estimate=0,
-                    vault_fp=vault_fp,
-                    versions=versions,
-                    dup_loaded=True,
-                    status="in_progress",
-                )
-                conn.commit()
+        finally:
+            for c in _copy_conns:
+                try:
+                    c.close()
+                except Exception:
+                    pass
+            if _copy_conns:
+                logger.info("Closed %d parallel COPY connections", len(_copy_conns))
 
         materialize_reporter.complete(
             counts["cards"],
@@ -964,6 +1137,8 @@ class LoaderMixin:
         deleted_paths: set[str] = set()
 
         with self._connect() as conn:
+            conn.execute("SET statement_timeout = '300s'")
+            conn.commit()
             self._create_schema(conn, recreate_typed=False, ensure_indexes=False)
             conn.commit()
             self._run_pending_migrations(conn)
@@ -1327,6 +1502,10 @@ class LoaderMixin:
                 },
             )
             conn.commit()
+            if not resuming_full:
+                dropped = self._drop_indexes_for_bulk_load(conn)
+                if dropped:
+                    _log_rebuild_step(4, 6, "drop indexes for bulk load", f"dropped={dropped}")
             _log_rebuild_step(
                 5,
                 6,
@@ -1374,15 +1553,21 @@ class LoaderMixin:
                     f"elapsed={round(time.time() - promote_started, 3)}s",
                 )
             ensure_indexes_started_at = time.time()
-            _log_rebuild_step(6, 6, "ensure indexes", "ensure_indexes=1 recreate_typed=0")
-            self._create_schema(conn, recreate_typed=False, ensure_indexes=True)
-            conn.commit()
-            _log_rebuild_step(
-                6,
-                6,
-                "ensure indexes complete",
-                f"elapsed={round(time.time() - ensure_indexes_started_at, 3)}s",
-            )
+            _log_rebuild_step(6, 6, "ensure indexes", "parallel=4 maintenance_work_mem=1GB")
+            try:
+                idx_elapsed = self._create_indexes_parallel(n_connections=4)
+                _log_rebuild_step(
+                    6, 6, "ensure indexes complete (parallel)",
+                    f"elapsed={round(idx_elapsed, 3)}s",
+                )
+            except Exception as exc:
+                logger.warning("Parallel index creation failed (%s), falling back to sequential", exc)
+                self._create_schema(conn, recreate_typed=False, ensure_indexes=True)
+                conn.commit()
+                _log_rebuild_step(
+                    6, 6, "ensure indexes complete (sequential fallback)",
+                    f"elapsed={round(time.time() - ensure_indexes_started_at, 3)}s",
+                )
             total_seconds = round(time.time() - started_at, 6)
             manifest_entries = _build_manifest_rows_from_canonical(
                 rows, self.vault, file_stats, versions, cache=_vault_cache

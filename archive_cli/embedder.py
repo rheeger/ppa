@@ -9,11 +9,17 @@ from threading import Lock
 from typing import Any
 
 from .features import build_context_prefix_for_embed_row
-from .index_config import (CHUNK_SCHEMA_VERSION, EmbeddingBatchResult,
-                           _vector_literal, embed_defer_vector_index,
-                           get_embed_batch_size, get_embed_concurrency,
-                           get_embed_max_retries, get_embed_progress_every,
-                           get_embed_write_batch_size)
+from .index_config import (
+    CHUNK_SCHEMA_VERSION,
+    EmbeddingBatchResult,
+    _vector_literal,
+    embed_defer_vector_index,
+    get_embed_batch_size,
+    get_embed_concurrency,
+    get_embed_max_retries,
+    get_embed_progress_every,
+    get_embed_write_batch_size,
+)
 from .loader import _chunked, _log_rebuild_step, _RebuildProgressReporter
 
 logger = logging.getLogger("ppa.embedder")
@@ -356,6 +362,227 @@ class EmbedderMixin:
             conn.commit()
             result.embedded = len(batch)
             return result
+
+    def copy_embeddings_from_schema(
+        self,
+        *,
+        source_schema: str,
+        embedding_model: str,
+        embedding_version: int,
+    ) -> dict[str, int | str]:
+        """Copy embeddings from another schema in the same DB into this one.
+
+        Phase 6 Tier 4 / Step 22: chunk_key is a deterministic hash of the chunk's
+        content (see materializer._chunk_key), so the same .md content produces the
+        same chunk_key in any schema. After re-slicing the production seed into a
+        new schema (`ppa_1pct`, `ppa_5pct`, etc.) and rebuilding chunks, every
+        chunk row has an identical row already embedded in the source schema. This
+        method JOINs them and copies the embedding bytes — no API calls, no cost.
+
+        Returns counts of chunks_copied / chunks_already_present / chunks_no_source.
+        Idempotent (ON CONFLICT DO NOTHING).
+        """
+        # Skip ensure_ready() — this op doesn't depend on the meta table; the explicit
+        # preflight below verifies the only tables we touch (embeddings + chunks).
+        with self._connect() as conn:
+            # Bulk INSERT of ~500k rows can exceed the default statement_timeout
+            # (often set to 60s by the operator). Disable for this connection.
+            conn.execute("SET statement_timeout = 0")
+            # Sanity check both schemas exist + have the expected tables.
+            for schema in (source_schema, self.schema):
+                row = conn.execute(
+                    """
+                    SELECT 1 FROM information_schema.tables
+                    WHERE table_schema = %s AND table_name = 'embeddings'
+                    """,
+                    (schema,),
+                ).fetchone()
+                if row is None:
+                    raise RuntimeError(f"schema '{schema}' does not have an embeddings table")
+            def _scalar(row: Any) -> int:
+                if row is None:
+                    return 0
+                if isinstance(row, dict):
+                    return int(next(iter(row.values())))
+                return int(row[0])
+
+            target_chunks = _scalar(
+                conn.execute(f"SELECT COUNT(*) AS n FROM {self.schema}.chunks").fetchone()
+            )
+            already = _scalar(
+                conn.execute(
+                    f"""
+                    SELECT COUNT(*) AS n FROM {self.schema}.embeddings
+                    WHERE embedding_model = %s AND embedding_version = %s
+                    """,
+                    (embedding_model, embedding_version),
+                ).fetchone()
+            )
+            t0 = time.time()
+            inserted_row = conn.execute(
+                f"""
+                INSERT INTO {self.schema}.embeddings
+                    (chunk_key, embedding_model, embedding_version, embedding)
+                SELECT e.chunk_key, e.embedding_model, e.embedding_version, e.embedding
+                FROM {source_schema}.embeddings e
+                JOIN {self.schema}.chunks c ON c.chunk_key = e.chunk_key
+                WHERE e.embedding_model = %s
+                  AND e.embedding_version = %s
+                ON CONFLICT (chunk_key, embedding_model, embedding_version) DO NOTHING
+                RETURNING 1
+                """,
+                (embedding_model, embedding_version),
+            ).fetchall()
+            inserted = len(inserted_row)
+            conn.commit()
+            after = _scalar(
+                conn.execute(
+                    f"""
+                    SELECT COUNT(*) AS n FROM {self.schema}.embeddings
+                    WHERE embedding_model = %s AND embedding_version = %s
+                    """,
+                    (embedding_model, embedding_version),
+                ).fetchone()
+            )
+        elapsed = time.time() - t0
+        no_source = max(target_chunks - after, 0)
+        logger.info(
+            "copy_embeddings_from_schema source=%s -> %s model=%s v%d "
+            "chunks_in_target=%d already_embedded=%d copied=%d no_source=%d elapsed=%.1fs",
+            source_schema, self.schema, embedding_model, embedding_version,
+            target_chunks, already, inserted, no_source, elapsed,
+        )
+        return {
+            "source_schema": source_schema,
+            "target_schema": self.schema,
+            "embedding_model": embedding_model,
+            "embedding_version": embedding_version,
+            "chunks_in_target": target_chunks,
+            "already_embedded_before_copy": already,
+            "copied_from_source": inserted,
+            "still_no_embedding": no_source,
+            "elapsed_seconds": round(elapsed, 2),
+        }
+
+    def copy_classifications_from_schema(
+        self,
+        *,
+        source_schema: str,
+    ) -> dict[str, int | str]:
+        """Copy card_classifications rows from another schema for any card_uid present here.
+
+        Phase 6 Tier 4 / Step 23: card_uid is stable across schemas (it's stored in the
+        .md frontmatter, not generated). After re-slicing the production seed into a
+        new schema, every card_uid that exists in the new schema's cards table also
+        exists in the source — so any triage classification the source has for that
+        card is valid for the slice too. This avoids re-running the (expensive,
+        LLM-driven) triage pipeline against the slice.
+
+        Idempotent (ON CONFLICT DO NOTHING).
+        """
+        with self._connect() as conn:
+            conn.execute("SET statement_timeout = 0")
+            for schema in (source_schema, self.schema):
+                row = conn.execute(
+                    """
+                    SELECT 1 FROM information_schema.tables
+                    WHERE table_schema = %s AND table_name = 'card_classifications'
+                    """,
+                    (schema,),
+                ).fetchone()
+                if row is None:
+                    raise RuntimeError(
+                        f"schema '{schema}' does not have a card_classifications table"
+                    )
+
+            def _scalar(row: Any) -> int:
+                if row is None:
+                    return 0
+                if isinstance(row, dict):
+                    return int(next(iter(row.values())))
+                return int(row[0])
+
+            target_cards = _scalar(
+                conn.execute(f"SELECT COUNT(*) AS n FROM {self.schema}.cards").fetchone()
+            )
+            already = _scalar(
+                conn.execute(
+                    f"SELECT COUNT(*) AS n FROM {self.schema}.card_classifications"
+                ).fetchone()
+            )
+            t0 = time.time()
+            inserted_rows = conn.execute(
+                f"""
+                INSERT INTO {self.schema}.card_classifications
+                    (card_uid, classification, confidence, card_types, classified_at, classify_model)
+                SELECT src.card_uid, src.classification, src.confidence, src.card_types,
+                       src.classified_at, src.classify_model
+                FROM {source_schema}.card_classifications src
+                JOIN {self.schema}.cards c ON c.uid = src.card_uid
+                ON CONFLICT (card_uid) DO NOTHING
+                RETURNING 1
+                """
+            ).fetchall()
+            inserted = len(inserted_rows)
+            conn.commit()
+            after = _scalar(
+                conn.execute(
+                    f"SELECT COUNT(*) AS n FROM {self.schema}.card_classifications"
+                ).fetchone()
+            )
+        elapsed = time.time() - t0
+        logger.info(
+            "copy_classifications_from_schema source=%s -> %s "
+            "cards_in_target=%d already_present=%d copied=%d total_after=%d elapsed=%.1fs",
+            source_schema, self.schema, target_cards, already, inserted, after, elapsed,
+        )
+        return {
+            "source_schema": source_schema,
+            "target_schema": self.schema,
+            "cards_in_target": target_cards,
+            "already_present_before_copy": already,
+            "copied_from_source": inserted,
+            "total_after": after,
+            "elapsed_seconds": round(elapsed, 2),
+        }
+
+    def build_vector_index(self) -> dict[str, int | str]:
+        """Build the IVFFlat embeddings index, disabling statement_timeout.
+
+        Phase 6 Tier 4 / Step 23: Phase 5's `_ensure_embeddings_vector_index` is
+        gated behind the rebuild_indexes flow and may be skipped by `embed-pending
+        --incremental`. This is a direct, idempotent way to ensure the index exists
+        on a fresh slice schema after embeddings are populated. Without it, kNN
+        queries fall back to sequential scans (we measured 1 sec/query vs 7ms with
+        the index — 140x slowdown).
+        """
+        with self._connect() as conn:
+            conn.execute("SET statement_timeout = 0")
+            t0 = time.time()
+            self._ensure_embeddings_vector_index(conn)
+            conn.commit()
+            elapsed = time.time() - t0
+            row = conn.execute(
+                """
+                SELECT pg_size_pretty(pg_relation_size(c.oid)) AS size
+                FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = %s AND c.relname = 'idx_embeddings_vector'
+                """,
+                (self.schema,),
+            ).fetchone()
+            size = ""
+            if row is not None:
+                size = str(row["size"] if isinstance(row, dict) else row[0])
+        logger.info(
+            "build_vector_index schema=%s elapsed=%.1fs size=%s",
+            self.schema, elapsed, size,
+        )
+        return {
+            "schema": self.schema,
+            "elapsed_seconds": round(elapsed, 2),
+            "index_size": size,
+        }
 
     def embed_pending(
         self,
