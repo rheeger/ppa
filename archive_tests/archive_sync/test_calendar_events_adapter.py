@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from archive_sync.adapters.base import deterministic_provenance
-from archive_sync.adapters.calendar_events import CalendarEventsAdapter, _event_uid
-from archive_vault.schema import CalendarEventCard, EmailMessageCard, EmailThreadCard
+from archive_sync.adapters.calendar_events import (CalendarEventsAdapter,
+                                                   _event_uid)
+from archive_vault.schema import (CalendarEventCard, EmailMessageCard,
+                                  EmailThreadCard)
 from archive_vault.vault import read_note, write_card
 
 
@@ -94,6 +96,23 @@ def test_to_card_returns_calendar_event_card():
     assert card.source_messages == ["[[hfa-email-message-111111111111]]"]
     assert card.uid == _event_uid("me@example.com", "primary", "event-google-1")
     assert card.source_id == "me@example.com:primary:event-google-1"
+
+
+def test_to_card_normalizes_offset_datetimes_to_utc_z():
+    adapter = CalendarEventsAdapter()
+    card, _, _ = adapter.to_card(
+        {
+            "event_id": "event-google-1",
+            "calendar_id": "primary",
+            "account_email": "me@example.com",
+            "title": "Board Meeting",
+            "start_at": "2023-08-07T11:00:00-07:00",
+            "end_at": "2023-08-07T12:00:00-07:00",
+            "source_messages": [],
+        }
+    )
+    assert card.start_at == "2023-08-07T18:00:00Z"
+    assert card.end_at == "2023-08-07T19:00:00Z"
 
 
 def test_fetch_links_calendar_events_only_to_same_account_invites(tmp_vault):

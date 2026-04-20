@@ -19,11 +19,13 @@ from archive_vault.schema import validate_card_permissive, validate_card_strict
 from archive_vault.vault import extract_wikilinks, read_note, write_card
 
 from .features import card_activity_at, external_ids_by_provider
-from .index_config import get_default_embedding_model, get_default_embedding_version
+from .index_config import (get_default_embedding_model,
+                           get_default_embedding_version)
 from .vault_cache import VaultScanCache
 
 try:
-    from archive_vault.llm_provider import GROUNDING_INSTRUCTION, get_provider_chain
+    from archive_vault.llm_provider import (GROUNDING_INSTRUCTION,
+                                            get_provider_chain)
 except Exception:  # pragma: no cover
     GROUNDING_INSTRUCTION = "Use only the provided data. Do not invent facts."
 
@@ -32,7 +34,11 @@ except Exception:  # pragma: no cover
 
 
 SEED_LINKER_VERSION = 1
-SEED_LINK_POLICY_VERSION = 5
+# Phase 6.5 (2026-04-20): bumped from 5 -> 6 in tandem with register_linker
+# wiring the new modules (finance_reconcile, trip_cluster, meeting_artifact).
+# Cache-invalidation semantics: rows in link_decisions with policy_version<6
+# are stale; seed-link-run re-evaluates them on next sweep. No migration.
+SEED_LINK_POLICY_VERSION = 6
 DEFAULT_SEED_LINK_WORKERS = 8
 DEFAULT_SEED_LINK_CLAIM_BATCH_SIZE = 32
 DEFAULT_PROMOTION_CLAIM_BATCH_SIZE = 64
@@ -209,29 +215,33 @@ LINK_TYPE_ORPHAN_REPAIR_EXACT = "orphan_repair_exact"
 LINK_TYPE_ORPHAN_REPAIR_FUZZY = "orphan_repair_fuzzy"
 LINK_TYPE_SEMANTICALLY_RELATED = "semantically_related"
 
-PROPOSED_LINK_TYPES = frozenset(
-    {
-        LINK_TYPE_MESSAGE_IN_THREAD,
-        LINK_TYPE_THREAD_HAS_MESSAGE,
-        LINK_TYPE_MESSAGE_HAS_CALENDAR_EVENT,
-        LINK_TYPE_THREAD_HAS_CALENDAR_EVENT,
-        LINK_TYPE_TRANSCRIPT_HAS_CALENDAR_EVENT,
-        LINK_TYPE_EVENT_HAS_MESSAGE,
-        LINK_TYPE_EVENT_HAS_THREAD,
-        LINK_TYPE_EVENT_HAS_TRANSCRIPT,
-        LINK_TYPE_MESSAGE_HAS_ATTACHMENT,
-        LINK_TYPE_THREAD_HAS_ATTACHMENT,
-        LINK_TYPE_THREAD_HAS_PERSON,
-        LINK_TYPE_MESSAGE_MENTIONS_PERSON,
-        LINK_TYPE_EVENT_HAS_PERSON,
-        LINK_TYPE_MEDIA_HAS_PERSON,
-        LINK_TYPE_MEDIA_HAS_EVENT,
-        LINK_TYPE_POSSIBLE_SAME_PERSON,
-        LINK_TYPE_ORPHAN_REPAIR_EXACT,
-        LINK_TYPE_ORPHAN_REPAIR_FUZZY,
-        LINK_TYPE_SEMANTICALLY_RELATED,
-    }
-)
+# Phase 6.5 new link types.
+LINK_TYPE_FINANCE_RECONCILES = "finance_reconciles"
+LINK_TYPE_PART_OF_TRIP = "part_of_trip"
+
+# Mutable set so Phase 6.5's register_linker can extend it at module-load time.
+# Membership checks (`x in PROPOSED_LINK_TYPES`) continue to work.
+PROPOSED_LINK_TYPES: set[str] = {
+    LINK_TYPE_MESSAGE_IN_THREAD,
+    LINK_TYPE_THREAD_HAS_MESSAGE,
+    LINK_TYPE_MESSAGE_HAS_CALENDAR_EVENT,
+    LINK_TYPE_THREAD_HAS_CALENDAR_EVENT,
+    LINK_TYPE_TRANSCRIPT_HAS_CALENDAR_EVENT,
+    LINK_TYPE_EVENT_HAS_MESSAGE,
+    LINK_TYPE_EVENT_HAS_THREAD,
+    LINK_TYPE_EVENT_HAS_TRANSCRIPT,
+    LINK_TYPE_MESSAGE_HAS_ATTACHMENT,
+    LINK_TYPE_THREAD_HAS_ATTACHMENT,
+    LINK_TYPE_THREAD_HAS_PERSON,
+    LINK_TYPE_MESSAGE_MENTIONS_PERSON,
+    LINK_TYPE_EVENT_HAS_PERSON,
+    LINK_TYPE_MEDIA_HAS_PERSON,
+    LINK_TYPE_MEDIA_HAS_EVENT,
+    LINK_TYPE_POSSIBLE_SAME_PERSON,
+    LINK_TYPE_ORPHAN_REPAIR_EXACT,
+    LINK_TYPE_ORPHAN_REPAIR_FUZZY,
+    LINK_TYPE_SEMANTICALLY_RELATED,
+}
 
 CARD_TYPE_MODULES = {
     "person": (MODULE_IDENTITY, MODULE_ORPHAN),
@@ -277,9 +287,12 @@ CARD_TYPE_MODULES = {
 # archive_docs/runbooks/phase6-retirement-rationale.md for the honest account of
 # why the semantic kNN linker was retired in favor of the Phase 6.5 structural
 # cross-derived-card linkers (MODULE_FINANCE_RECONCILE, MODULE_TRIP_CLUSTER, etc.).
-LLM_REVIEW_MODULES = frozenset(
-    {MODULE_IDENTITY, MODULE_CALENDAR, MODULE_MEDIA, MODULE_ORPHAN}
-)
+# Mutable so Phase 6.5's register_linker can extend it based on
+# LinkerSpec.requires_llm_judge. The three new Phase 6.5 modules are
+# deterministic (requires_llm_judge=False) so they do NOT end up here.
+LLM_REVIEW_MODULES: set[str] = {
+    MODULE_IDENTITY, MODULE_CALENDAR, MODULE_MEDIA, MODULE_ORPHAN,
+}
 HIGH_PRIORITY_CARD_TYPES = frozenset(
     {
         "person",
@@ -934,7 +947,7 @@ def build_seed_link_catalog(
         )
         _ingest(sketch, fm)
 
-    return SeedLinkCatalog(
+    catalog = SeedLinkCatalog(
         cards_by_uid=cards_by_uid,
         cards_by_exact_slug=cards_by_exact_slug,
         cards_by_slug=cards_by_slug,
@@ -956,6 +969,12 @@ def build_seed_link_catalog(
         events_by_day=events_by_day,
         path_buckets=path_buckets,
     )
+    # Phase 6.5: invoke every registered linker's post_build_hook. This is how
+    # finance_reconcile, trip_cluster, meeting_artifact and any future new
+    # linker populates its private indexes (attached via linker_framework.set_private_index).
+    from archive_cli import linker_framework as _lf
+    _lf.run_post_build_hooks(catalog)
+    return catalog
 
 
 def get_link_surface_policies() -> list[LinkSurfacePolicy]:
@@ -1162,6 +1181,42 @@ def get_link_surface_policies() -> list[LinkSurfacePolicy]:
             canonical_floor=1.0,
             description="Semantically-related card pair discovered via embedding kNN.",
         ),
+        # Phase 6.5 new link types.
+        LinkSurfacePolicy(
+            link_type=LINK_TYPE_FINANCE_RECONCILES,
+            module_name="financeReconcileLinker",
+            surface=SURFACE_DERIVED_ONLY,
+            promotion_target=PROMOTION_TARGET_DERIVED_EDGE,
+            auto_review_floor=0.40,
+            auto_promote_floor=0.80,
+            canonical_floor=1.0,
+            description=(
+                "Finance↔derived-transaction reconcile via tier ladder: "
+                "source_email + >=2 tight signals (0.98 auto) > "
+                "amount+date+merchant (0.90 auto) > "
+                "shared-thread (0.78 -> 0.73 review) > "
+                "source_email + 1 tight signal (0.72 review) > "
+                "amount+date only (0.55 -> 0.40 review). "
+                "Bare source_email wikilinks with no tight-bound "
+                "corroboration are rejected per "
+                "archive_docs/runbooks/linker-quality-gates.md."
+            ),
+        ),
+        LinkSurfacePolicy(
+            link_type=LINK_TYPE_PART_OF_TRIP,
+            module_name="tripClusterLinker",
+            surface=SURFACE_DERIVED_ONLY,
+            promotion_target=PROMOTION_TARGET_DERIVED_EDGE,
+            auto_review_floor=0.60,
+            auto_promote_floor=0.80,
+            canonical_floor=1.0,
+            description=(
+                "Trip-cluster edge: accommodation ↔ flight/car_rental via "
+                "exact normalized city match + date-overlap window. "
+                "Substring/lenient city matches drop to review-only per "
+                "archive_docs/runbooks/linker-quality-gates.md."
+            ),
+        ),
     ]
 
 
@@ -1360,62 +1415,7 @@ def _shared_people_names(left: SeedCardSketch, right: SeedCardSketch) -> int:
     return len(left_people & right_people)
 
 
-def _generate_identity_candidates(catalog: SeedLinkCatalog, source: SeedCardSketch) -> list[SeedLinkCandidate]:
-    if source.card_type != "person":
-        return []
-    results: list[SeedLinkCandidate] = []
-    if source.uid not in catalog.cards_by_uid:
-        return results
-    match_map = _person_matches_for_identifiers(
-        catalog,
-        emails=source.emails,
-        phones=source.phones,
-        handles=source.handles,
-        aliases=source.aliases,
-    )
-    for target_uid, payload in match_map.items():
-        if target_uid == source.uid or source.uid > target_uid:
-            continue
-        target = payload["target"]
-        deterministic_hits = sorted(payload["deterministic_hits"])
-        features = {
-            "deterministic_hits": deterministic_hits,
-            "name_similarity": round(_name_similarity(source.summary, target.summary), 4),
-            "shared_company": int(
-                _normalize_alias(source.frontmatter.get("company", ""))
-                == _normalize_alias(target.frontmatter.get("company", ""))
-                and bool(_clean_text(source.frontmatter.get("company", "")))
-            ),
-            "shared_people_names": _shared_people_names(source, target),
-            "ambiguous_target_count": len([uid for uid in match_map if uid != source.uid]),
-        }
-        evidences = [
-            _make_evidence("identifier_match", "frontmatter", hit, 1, 1.0, source_uid=source.uid, target_uid=target.uid)
-            for hit in deterministic_hits
-        ]
-        if features["name_similarity"]:
-            evidences.append(
-                _make_evidence(
-                    "lexical_overlap",
-                    "frontmatter",
-                    "name_similarity",
-                    features["name_similarity"],
-                    0.4,
-                    source=source.summary,
-                    target=target.summary,
-                )
-            )
-        _append_candidate(
-            results,
-            module_name=MODULE_IDENTITY,
-            source=source,
-            target=target,
-            proposed_link_type=LINK_TYPE_POSSIBLE_SAME_PERSON,
-            candidate_group="identity",
-            features=features,
-            evidences=evidences,
-        )
-    return results
+# _generate_identity_candidates moved to archive_cli/linker_modules/identity.py (Phase 6.5 Step 18).
 
 
 def _generate_person_link_candidates(
@@ -1521,228 +1521,7 @@ def _message_thread_features(
     return features, evidences
 
 
-def _generate_communication_candidates(catalog: SeedLinkCatalog, source: SeedCardSketch) -> list[SeedLinkCandidate]:
-    results: list[SeedLinkCandidate] = []
-    if source.card_type == "email_message":
-        thread_id = _clean_text(source.frontmatter.get("gmail_thread_id", ""))
-        for thread in catalog.email_threads_by_thread_id.get(thread_id, []):
-            if thread.uid == source.uid:
-                continue
-            features, evidences = _message_thread_features(source, thread)
-            if features["exact_thread_id"] and _normalize_slug(
-                _slug_from_ref(source.frontmatter.get("thread", ""))
-            ) != _normalize_slug(thread.slug):
-                _append_candidate(
-                    results,
-                    module_name=MODULE_COMMUNICATION,
-                    source=source,
-                    target=thread,
-                    proposed_link_type=LINK_TYPE_MESSAGE_IN_THREAD,
-                    candidate_group="thread_membership",
-                    features=features,
-                    evidences=evidences,
-                )
-            if features["exact_thread_id"] and not features["reverse_messages_present"]:
-                _append_candidate(
-                    results,
-                    module_name=MODULE_GRAPH,
-                    source=thread,
-                    target=source,
-                    proposed_link_type=LINK_TYPE_THREAD_HAS_MESSAGE,
-                    candidate_group="thread_membership",
-                    features=features,
-                    evidences=evidences,
-                )
-        attachment_matches = catalog.email_attachments_by_message_id.get(
-            _clean_text(source.frontmatter.get("gmail_message_id", "")), []
-        )
-        existing_attachments = {
-            _normalize_slug(_slug_from_ref(item))
-            for item in _iter_string_values(source.frontmatter.get("attachments", []))
-        }
-        for attachment in attachment_matches:
-            if _normalize_slug(attachment.slug) in existing_attachments:
-                continue
-            evidences = [
-                _make_evidence(
-                    "exact_parent_message",
-                    "frontmatter",
-                    "gmail_message_id",
-                    source.frontmatter.get("gmail_message_id", ""),
-                    1.0,
-                    source_uid=source.uid,
-                    target_uid=attachment.uid,
-                )
-            ]
-            _append_candidate(
-                results,
-                module_name=MODULE_COMMUNICATION,
-                source=source,
-                target=attachment,
-                proposed_link_type=LINK_TYPE_MESSAGE_HAS_ATTACHMENT,
-                candidate_group="attachment_membership",
-                features={"exact_parent_message": 1, "ambiguous_target_count": len(attachment_matches)},
-                evidences=evidences,
-            )
-        person_emails = source.participant_emails | (
-            {_normalize_email(source.frontmatter.get("from_email", ""))}
-            if _normalize_email(source.frontmatter.get("from_email", ""))
-            else set()
-        )
-        results.extend(
-            _generate_person_link_candidates(
-                catalog,
-                source=source,
-                emails=person_emails,
-                handles=set(),
-                link_type=LINK_TYPE_MESSAGE_MENTIONS_PERSON,
-                candidate_group="participant_resolution",
-            )
-        )
-    elif source.card_type == "email_thread":
-        thread_id = _clean_text(source.frontmatter.get("gmail_thread_id", ""))
-        attachment_matches = catalog.email_attachments_by_thread_id.get(thread_id, [])
-        for attachment in attachment_matches:
-            evidences = [
-                _make_evidence(
-                    "exact_parent_thread",
-                    "frontmatter",
-                    "gmail_thread_id",
-                    thread_id,
-                    1.0,
-                    source_uid=source.uid,
-                    target_uid=attachment.uid,
-                )
-            ]
-            _append_candidate(
-                results,
-                module_name=MODULE_GRAPH,
-                source=source,
-                target=attachment,
-                proposed_link_type=LINK_TYPE_THREAD_HAS_ATTACHMENT,
-                candidate_group="attachment_membership",
-                features={"exact_parent_thread": 1, "ambiguous_target_count": len(attachment_matches)},
-                evidences=evidences,
-            )
-        results.extend(
-            _generate_person_link_candidates(
-                catalog,
-                source=source,
-                emails=source.participant_emails
-                | (
-                    {_normalize_email(source.frontmatter.get("account_email", ""))}
-                    if _normalize_email(source.frontmatter.get("account_email", ""))
-                    else set()
-                ),
-                handles=set(),
-                link_type=LINK_TYPE_THREAD_HAS_PERSON,
-                candidate_group="participant_resolution",
-            )
-        )
-    elif source.card_type == "email_attachment":
-        message_matches = catalog.email_messages_by_message_id.get(
-            _clean_text(source.frontmatter.get("gmail_message_id", "")), []
-        )
-        for message in message_matches:
-            existing_attachments = {
-                _normalize_slug(_slug_from_ref(item))
-                for item in _iter_string_values(message.frontmatter.get("attachments", []))
-            }
-            if _normalize_slug(source.slug) in existing_attachments:
-                continue
-            evidences = [
-                _make_evidence(
-                    "exact_parent_message",
-                    "frontmatter",
-                    "gmail_message_id",
-                    source.frontmatter.get("gmail_message_id", ""),
-                    1.0,
-                    source_uid=message.uid,
-                    target_uid=source.uid,
-                )
-            ]
-            _append_candidate(
-                results,
-                module_name=MODULE_COMMUNICATION,
-                source=message,
-                target=source,
-                proposed_link_type=LINK_TYPE_MESSAGE_HAS_ATTACHMENT,
-                candidate_group="attachment_membership",
-                features={"exact_parent_message": 1, "ambiguous_target_count": len(message_matches)},
-                evidences=evidences,
-            )
-    elif source.card_type == "imessage_message":
-        chat_id = _clean_text(source.frontmatter.get("imessage_chat_id", ""))
-        for thread in catalog.imessage_threads_by_chat_id.get(chat_id, []):
-            reverse_list = {
-                _normalize_slug(_slug_from_ref(item))
-                for item in _iter_string_values(thread.frontmatter.get("messages", []))
-            }
-            features = {
-                "exact_thread_id": int(bool(chat_id)),
-                "reverse_messages_present": int(_normalize_slug(source.slug) in reverse_list),
-                "message_thread_field_present": int(bool(_clean_text(source.frontmatter.get("thread", "")))),
-            }
-            evidences = [
-                _make_evidence(
-                    "exact_thread_id",
-                    "frontmatter",
-                    "imessage_chat_id",
-                    chat_id,
-                    1.0,
-                    source_uid=source.uid,
-                    target_uid=thread.uid,
-                )
-            ]
-            if not features["message_thread_field_present"]:
-                _append_candidate(
-                    results,
-                    module_name=MODULE_COMMUNICATION,
-                    source=source,
-                    target=thread,
-                    proposed_link_type=LINK_TYPE_MESSAGE_IN_THREAD,
-                    candidate_group="thread_membership",
-                    features=features,
-                    evidences=evidences,
-                )
-            if not features["reverse_messages_present"]:
-                _append_candidate(
-                    results,
-                    module_name=MODULE_GRAPH,
-                    source=thread,
-                    target=source,
-                    proposed_link_type=LINK_TYPE_THREAD_HAS_MESSAGE,
-                    candidate_group="thread_membership",
-                    features=features,
-                    evidences=evidences,
-                )
-        results.extend(
-            _generate_person_link_candidates(
-                catalog,
-                source=source,
-                emails=set(),
-                handles=source.participant_handles
-                | (
-                    {_normalize_handle(source.frontmatter.get("sender_handle", ""))}
-                    if _normalize_handle(source.frontmatter.get("sender_handle", ""))
-                    else set()
-                ),
-                link_type=LINK_TYPE_MESSAGE_MENTIONS_PERSON,
-                candidate_group="participant_resolution",
-            )
-        )
-    elif source.card_type == "imessage_thread":
-        results.extend(
-            _generate_person_link_candidates(
-                catalog,
-                source=source,
-                emails=set(),
-                handles=source.participant_handles,
-                link_type=LINK_TYPE_THREAD_HAS_PERSON,
-                candidate_group="participant_resolution",
-            )
-        )
-    return results
+# _generate_communication_candidates moved to archive_cli/linker_modules/communication.py (Phase 6.5 Step 18).
 
 
 def _event_matches_for_source(catalog: SeedLinkCatalog, source: SeedCardSketch) -> list[SeedCardSketch]:
@@ -1772,473 +1551,16 @@ def _event_matches_for_source(catalog: SeedLinkCatalog, source: SeedCardSketch) 
     return list(matches.values())
 
 
-def _generate_calendar_candidates(catalog: SeedLinkCatalog, source: SeedCardSketch) -> list[SeedLinkCandidate]:
-    results: list[SeedLinkCandidate] = []
-    if source.card_type in {"email_message", "email_thread", "meeting_transcript"}:
-        existing_event_slugs = {
-            _normalize_slug(_slug_from_ref(item))
-            for item in _iter_string_values(source.frontmatter.get("calendar_events", []))
-        }
-        for event in _event_matches_for_source(catalog, source):
-            title_similarity = _name_similarity(
-                _clean_text(source.frontmatter.get("invite_title", ""))
-                or _clean_text(source.frontmatter.get("subject", ""))
-                or _clean_text(source.frontmatter.get("title", ""))
-                or source.summary,
-                _clean_text(event.frontmatter.get("title", "")) or event.summary,
-            )
-            exact_event_id = int(bool(set(source.event_hints) & set(event.external_ids.get("calendar", set()))))
-            if source.card_type == "email_message":
-                reverse_field = "source_messages"
-            elif source.card_type == "email_thread":
-                reverse_field = "source_threads"
-            else:
-                reverse_field = "meeting_transcripts"
-            reverse_refs = {
-                _normalize_slug(_slug_from_ref(item))
-                for item in _iter_string_values(event.frontmatter.get(reverse_field, []))
-            }
-            features = {
-                "exact_event_id": exact_event_id,
-                "reverse_reference_present": int(_normalize_slug(source.slug) in reverse_refs),
-                "title_similarity": round(title_similarity, 4),
-                "participant_overlap": len(source.participant_emails & event.emails),
-            }
-            evidences = []
-            if exact_event_id:
-                evidences.append(
-                    _make_evidence(
-                        "exact_event_hint",
-                        "frontmatter",
-                        "event_hint",
-                        sorted(source.event_hints & event.external_ids.get("calendar", set()))[0],
-                        1.0,
-                    )
-                )
-            if features["reverse_reference_present"]:
-                evidences.append(
-                    _make_evidence(
-                        "reverse_reference",
-                        "frontmatter",
-                        reverse_field,
-                        source.slug,
-                        0.95,
-                        source_uid=event.uid,
-                        target_uid=source.uid,
-                    )
-                )
-            if title_similarity:
-                evidences.append(
-                    _make_evidence(
-                        "lexical_overlap",
-                        "frontmatter",
-                        "title_similarity",
-                        title_similarity,
-                        0.25,
-                        source=source.summary,
-                        target=event.summary,
-                    )
-                )
-            if _normalize_slug(event.slug) not in existing_event_slugs:
-                _append_candidate(
-                    results,
-                    module_name=MODULE_CALENDAR,
-                    source=source,
-                    target=event,
-                    proposed_link_type=(
-                        LINK_TYPE_MESSAGE_HAS_CALENDAR_EVENT
-                        if source.card_type == "email_message"
-                        else LINK_TYPE_THREAD_HAS_CALENDAR_EVENT
-                        if source.card_type == "email_thread"
-                        else LINK_TYPE_TRANSCRIPT_HAS_CALENDAR_EVENT
-                    ),
-                    candidate_group="event_association",
-                    features=features,
-                    evidences=evidences,
-                )
-            if source.card_type == "email_message" and not features["reverse_reference_present"]:
-                _append_candidate(
-                    results,
-                    module_name=MODULE_GRAPH,
-                    source=event,
-                    target=source,
-                    proposed_link_type=LINK_TYPE_EVENT_HAS_MESSAGE,
-                    candidate_group="event_association",
-                    features=features,
-                    evidences=evidences,
-                )
-            if source.card_type == "email_thread" and not features["reverse_reference_present"]:
-                _append_candidate(
-                    results,
-                    module_name=MODULE_GRAPH,
-                    source=event,
-                    target=source,
-                    proposed_link_type=LINK_TYPE_EVENT_HAS_THREAD,
-                    candidate_group="event_association",
-                    features=features,
-                    evidences=evidences,
-                )
-            if source.card_type == "meeting_transcript" and not features["reverse_reference_present"]:
-                _append_candidate(
-                    results,
-                    module_name=MODULE_GRAPH,
-                    source=event,
-                    target=source,
-                    proposed_link_type=LINK_TYPE_EVENT_HAS_TRANSCRIPT,
-                    candidate_group="event_association",
-                    features=features,
-                    evidences=evidences,
-                )
-    elif source.card_type == "calendar_event":
-        reverse_messages = {
-            _normalize_slug(_slug_from_ref(item))
-            for item in _iter_string_values(source.frontmatter.get("source_messages", []))
-        }
-        reverse_threads = {
-            _normalize_slug(_slug_from_ref(item))
-            for item in _iter_string_values(source.frontmatter.get("source_threads", []))
-        }
-        reverse_transcripts = {
-            _normalize_slug(_slug_from_ref(item))
-            for item in _iter_string_values(source.frontmatter.get("meeting_transcripts", []))
-        }
-        for message in catalog.cards_by_type.get("email_message", []):
-            event_hints = set(message.event_hints)
-            exact_event_id = int(bool(event_hints & source.external_ids.get("calendar", set())))
-            if exact_event_id and _normalize_slug(message.slug) not in reverse_messages:
-                evidences = [
-                    _make_evidence(
-                        "exact_event_hint",
-                        "frontmatter",
-                        "event_hint",
-                        sorted(event_hints & source.external_ids.get("calendar", set()))[0],
-                        1.0,
-                    )
-                ]
-                _append_candidate(
-                    results,
-                    module_name=MODULE_GRAPH,
-                    source=source,
-                    target=message,
-                    proposed_link_type=LINK_TYPE_EVENT_HAS_MESSAGE,
-                    candidate_group="event_association",
-                    features={
-                        "exact_event_id": 1,
-                        "participant_overlap": len(message.participant_emails & source.emails),
-                    },
-                    evidences=evidences,
-                )
-        for thread in catalog.cards_by_type.get("email_thread", []):
-            event_hints = set(thread.event_hints)
-            exact_event_id = int(bool(event_hints & source.external_ids.get("calendar", set())))
-            if exact_event_id and _normalize_slug(thread.slug) not in reverse_threads:
-                evidences = [
-                    _make_evidence(
-                        "exact_event_hint",
-                        "frontmatter",
-                        "event_hint",
-                        sorted(event_hints & source.external_ids.get("calendar", set()))[0],
-                        1.0,
-                    )
-                ]
-                _append_candidate(
-                    results,
-                    module_name=MODULE_GRAPH,
-                    source=source,
-                    target=thread,
-                    proposed_link_type=LINK_TYPE_EVENT_HAS_THREAD,
-                    candidate_group="event_association",
-                    features={
-                        "exact_event_id": 1,
-                        "participant_overlap": len(thread.participant_emails & source.emails),
-                    },
-                    evidences=evidences,
-                )
-        for transcript in catalog.cards_by_type.get("meeting_transcript", []):
-            event_hints = set(transcript.event_hints)
-            exact_event_id = int(bool(event_hints & source.external_ids.get("calendar", set())))
-            if exact_event_id and _normalize_slug(transcript.slug) not in reverse_transcripts:
-                evidences = [
-                    _make_evidence(
-                        "exact_event_hint",
-                        "frontmatter",
-                        "event_hint",
-                        sorted(event_hints & source.external_ids.get("calendar", set()))[0],
-                        1.0,
-                    )
-                ]
-                _append_candidate(
-                    results,
-                    module_name=MODULE_GRAPH,
-                    source=source,
-                    target=transcript,
-                    proposed_link_type=LINK_TYPE_EVENT_HAS_TRANSCRIPT,
-                    candidate_group="event_association",
-                    features={
-                        "exact_event_id": 1,
-                        "participant_overlap": len(transcript.participant_emails & source.emails),
-                    },
-                    evidences=evidences,
-                )
-        results.extend(
-            _generate_person_link_candidates(
-                catalog,
-                source=source,
-                emails=source.participant_emails
-                | (
-                    {_normalize_email(source.frontmatter.get("organizer_email", ""))}
-                    if _normalize_email(source.frontmatter.get("organizer_email", ""))
-                    else set()
-                ),
-                handles=set(),
-                link_type=LINK_TYPE_EVENT_HAS_PERSON,
-                candidate_group="participant_resolution",
-            )
-        )
-    return results
+# _generate_calendar_candidates moved to archive_cli/linker_modules/calendar.py (Phase 6.5 Step 18).
 
 
-def _generate_media_candidates(catalog: SeedLinkCatalog, source: SeedCardSketch) -> list[SeedLinkCandidate]:
-    if source.card_type != "media_asset":
-        return []
-    results: list[SeedLinkCandidate] = []
-    alias_matches = _person_matches_for_identifiers(catalog, aliases=source.person_labels)
-    for target_uid, payload in alias_matches.items():
-        target = payload["target"]
-        deterministic_hits = sorted(payload["deterministic_hits"])
-        features = {
-            "deterministic_hits": deterministic_hits,
-            "same_day_event_cluster": 0,
-            "location_overlap": 0,
-            "ambiguous_target_count": len(alias_matches),
-        }
-        evidences = [
-            _make_evidence("label_match", "frontmatter", hit, 1, 0.8, source_uid=source.uid, target_uid=target.uid)
-            for hit in deterministic_hits
-        ]
-        _append_candidate(
-            results,
-            module_name=MODULE_MEDIA,
-            source=source,
-            target=target,
-            proposed_link_type=LINK_TYPE_MEDIA_HAS_PERSON,
-            candidate_group="media_person",
-            features=features,
-            evidences=evidences,
-        )
-    for event in _event_matches_for_source(catalog, source):
-        location_overlap = int(bool(source.locations & event.locations)) if source.locations and event.locations else 0
-        same_day_event_cluster = int(
-            _day_key(_clean_text(source.frontmatter.get("captured_at", "")))
-            == _day_key(_clean_text(event.frontmatter.get("start_at", "")))
-        )
-        title_similarity = round(_name_similarity(source.summary, event.summary), 4)
-        features = {
-            "exact_event_id": int(bool(source.event_hints & event.external_ids.get("calendar", set()))),
-            "same_day_event_cluster": same_day_event_cluster,
-            "location_overlap": location_overlap,
-            "title_similarity": title_similarity,
-            "participant_overlap": len(
-                source.person_labels
-                & {_normalize_alias(item) for item in _iter_string_values(event.frontmatter.get("people", []))}
-            ),
-        }
-        evidences = []
-        if same_day_event_cluster:
-            evidences.append(
-                _make_evidence("time_window", "frontmatter", "same_day_event_cluster", 1, 0.45, target_uid=event.uid)
-            )
-        if location_overlap:
-            evidences.append(
-                _make_evidence("location_overlap", "frontmatter", "location_overlap", 1, 0.35, target_uid=event.uid)
-            )
-        if title_similarity:
-            evidences.append(
-                _make_evidence(
-                    "lexical_overlap", "frontmatter", "title_similarity", title_similarity, 0.2, target_uid=event.uid
-                )
-            )
-        _append_candidate(
-            results,
-            module_name=MODULE_MEDIA,
-            source=source,
-            target=event,
-            proposed_link_type=LINK_TYPE_MEDIA_HAS_EVENT,
-            candidate_group="media_event",
-            features=features,
-            evidences=evidences,
-        )
-    return results
+# _generate_media_candidates moved to archive_cli/linker_modules/media.py (Phase 6.5 Step 18).
 
 
-def _generate_orphan_candidates(catalog: SeedLinkCatalog, source: SeedCardSketch) -> list[SeedLinkCandidate]:
-    results: list[SeedLinkCandidate] = []
-    candidate_pairs: list[tuple[str, SeedCardSketch]] = []
-    for field_name, raw_slug in _orphan_reference_slugs(source, catalog):
-        normalized = _normalize_slug(raw_slug)
-        target = catalog.cards_by_slug.get(normalized)
-        if target is not None:
-            candidate_pairs.append((field_name, target))
-    seen: set[tuple[str, str]] = set()
-    for field_name, target in candidate_pairs:
-        key = (field_name, target.uid)
-        if key in seen:
-            continue
-        seen.add(key)
-        exact = 1
-        features = {
-            "exact_slug_match": exact,
-            "target_exists": 1,
-            "ambiguous_target_count": 1,
-        }
-        evidences = [
-            _make_evidence(
-                "orphan_reference",
-                field_name,
-                "normalized_slug",
-                target.slug,
-                1.0,
-                source_uid=source.uid,
-                target_uid=target.uid,
-            )
-        ]
-        _append_candidate(
-            results,
-            module_name=MODULE_ORPHAN,
-            source=source,
-            target=target,
-            proposed_link_type=LINK_TYPE_ORPHAN_REPAIR_EXACT if exact else LINK_TYPE_ORPHAN_REPAIR_FUZZY,
-            candidate_group="orphan_repair",
-            features=features,
-            evidences=evidences,
-        )
-    return results
+# _generate_orphan_candidates moved to archive_cli/linker_modules/orphan.py (Phase 6.5 Step 18).
 
 
-def _generate_graph_consistency_candidates(catalog: SeedLinkCatalog, source: SeedCardSketch) -> list[SeedLinkCandidate]:
-    results: list[SeedLinkCandidate] = []
-    if source.card_type == "email_thread":
-        thread_id = _clean_text(source.frontmatter.get("gmail_thread_id", ""))
-        existing = {
-            _normalize_slug(_slug_from_ref(item))
-            for item in _iter_string_values(source.frontmatter.get("messages", []))
-        }
-        for message in catalog.email_messages_by_thread_id.get(thread_id, []):
-            if _normalize_slug(message.slug) in existing:
-                continue
-            evidences = [
-                _make_evidence(
-                    "graph_closure",
-                    "index",
-                    "missing_reverse_edge",
-                    message.slug,
-                    1.0,
-                    source_uid=source.uid,
-                    target_uid=message.uid,
-                )
-            ]
-            _append_candidate(
-                results,
-                module_name=MODULE_GRAPH,
-                source=source,
-                target=message,
-                proposed_link_type=LINK_TYPE_THREAD_HAS_MESSAGE,
-                candidate_group="graph_closure",
-                features={"reverse_edge_missing": 1, "exact_thread_id": 1},
-                evidences=evidences,
-            )
-    if source.card_type == "calendar_event":
-        existing_messages = {
-            _normalize_slug(_slug_from_ref(item))
-            for item in _iter_string_values(source.frontmatter.get("source_messages", []))
-        }
-        existing_threads = {
-            _normalize_slug(_slug_from_ref(item))
-            for item in _iter_string_values(source.frontmatter.get("source_threads", []))
-        }
-        existing_transcripts = {
-            _normalize_slug(_slug_from_ref(item))
-            for item in _iter_string_values(source.frontmatter.get("meeting_transcripts", []))
-        }
-        for message in catalog.cards_by_type.get("email_message", []):
-            if (
-                set(message.event_hints) & source.external_ids.get("calendar", set())
-                and _normalize_slug(message.slug) not in existing_messages
-            ):
-                evidences = [
-                    _make_evidence(
-                        "graph_closure",
-                        "index",
-                        "missing_reverse_edge",
-                        message.slug,
-                        1.0,
-                        source_uid=source.uid,
-                        target_uid=message.uid,
-                    )
-                ]
-                _append_candidate(
-                    results,
-                    module_name=MODULE_GRAPH,
-                    source=source,
-                    target=message,
-                    proposed_link_type=LINK_TYPE_EVENT_HAS_MESSAGE,
-                    candidate_group="graph_closure",
-                    features={"reverse_edge_missing": 1, "exact_event_id": 1},
-                    evidences=evidences,
-                )
-        for thread in catalog.cards_by_type.get("email_thread", []):
-            if (
-                set(thread.event_hints) & source.external_ids.get("calendar", set())
-                and _normalize_slug(thread.slug) not in existing_threads
-            ):
-                evidences = [
-                    _make_evidence(
-                        "graph_closure",
-                        "index",
-                        "missing_reverse_edge",
-                        thread.slug,
-                        1.0,
-                        source_uid=source.uid,
-                        target_uid=thread.uid,
-                    )
-                ]
-                _append_candidate(
-                    results,
-                    module_name=MODULE_GRAPH,
-                    source=source,
-                    target=thread,
-                    proposed_link_type=LINK_TYPE_EVENT_HAS_THREAD,
-                    candidate_group="graph_closure",
-                    features={"reverse_edge_missing": 1, "exact_event_id": 1},
-                    evidences=evidences,
-                )
-        for transcript in catalog.cards_by_type.get("meeting_transcript", []):
-            if (
-                set(transcript.event_hints) & source.external_ids.get("calendar", set())
-                and _normalize_slug(transcript.slug) not in existing_transcripts
-            ):
-                evidences = [
-                    _make_evidence(
-                        "graph_closure",
-                        "index",
-                        "missing_reverse_edge",
-                        transcript.slug,
-                        1.0,
-                        source_uid=source.uid,
-                        target_uid=transcript.uid,
-                    )
-                ]
-                _append_candidate(
-                    results,
-                    module_name=MODULE_GRAPH,
-                    source=source,
-                    target=transcript,
-                    proposed_link_type=LINK_TYPE_EVENT_HAS_TRANSCRIPT,
-                    candidate_group="graph_closure",
-                    features={"reverse_edge_missing": 1, "exact_event_id": 1},
-                    evidences=evidences,
-                )
-    return results
+# _generate_graph_consistency_candidates moved to archive_cli/linker_modules/graph.py (Phase 6.5 Step 18).
 
 
 def _edge_exists(conn: Any, schema: str, source_uid: str, target_uid: str) -> bool:
@@ -2511,19 +1833,8 @@ def _generate_semantic_candidates(
 def generate_seed_link_candidates(
     catalog: SeedLinkCatalog, source: SeedCardSketch, module_name: str
 ) -> list[SeedLinkCandidate]:
-    if module_name == MODULE_IDENTITY:
-        return _generate_identity_candidates(catalog, source)
-    if module_name == MODULE_COMMUNICATION:
-        return _generate_communication_candidates(catalog, source)
-    if module_name == MODULE_CALENDAR:
-        return _generate_calendar_candidates(catalog, source)
-    if module_name == MODULE_MEDIA:
-        return _generate_media_candidates(catalog, source)
-    if module_name == MODULE_ORPHAN:
-        return _generate_orphan_candidates(catalog, source)
-    if module_name == MODULE_GRAPH:
-        return _generate_graph_consistency_candidates(catalog, source)
-    return []
+    from archive_cli import linker_framework as _lf
+    return _lf.generate_via_spec(catalog, source, module_name)
 
 
 def _llm_prompt(candidate: SeedLinkCandidate, source: SeedCardSketch, target: SeedCardSketch) -> str:
@@ -2602,118 +1913,11 @@ def llm_judge_candidate(
 def _component_scores(candidate: SeedLinkCandidate) -> tuple[float, float, float, float, float]:
     features = candidate.features
     module_name = candidate.module_name
-    deterministic_hits = len(features.get("deterministic_hits", []))
-    deterministic_score = 0.0
-    lexical_score = 0.0
-    graph_score = 0.0
-    embedding_score = 0.0
-    risk_penalty = 0.0
-    if module_name == MODULE_IDENTITY:
-        deterministic_score = min(
-            1.0,
-            (1.0 if "exact_email" in features.get("deterministic_hits", []) else 0.0)
-            + (1.0 if "exact_phone" in features.get("deterministic_hits", []) else 0.0)
-            + (0.9 if "exact_handle" in features.get("deterministic_hits", []) else 0.0)
-            + (0.6 if "exact_alias" in features.get("deterministic_hits", []) else 0.0),
-        )
-        lexical_score = min(
-            1.0,
-            float(features.get("name_similarity", 0.0)) * 0.75
-            + (0.25 if int(features.get("shared_company", 0)) else 0.0),
-        )
-        graph_score = min(1.0, min(int(features.get("shared_people_names", 0)), 3) * 0.2)
-        if int(features.get("ambiguous_target_count", 0)) > 1:
-            risk_penalty += 0.15
-        if deterministic_score == 0 and lexical_score < 0.85:
-            risk_penalty += 0.2
-    elif module_name == MODULE_COMMUNICATION:
-        deterministic_score = min(
-            1.0,
-            (1.0 if int(features.get("exact_thread_id", 0)) else 0.0)
-            + (1.0 if int(features.get("exact_parent_message", 0)) else 0.0)
-            + (0.85 if deterministic_hits else 0.0),
-        )
-        lexical_score = min(
-            1.0,
-            float(features.get("subject_similarity", 0.0)) * 0.6
-            + min(int(features.get("participant_overlap", 0)), 3) * 0.12,
-        )
-        graph_score = min(
-            1.0,
-            (0.8 if int(features.get("reverse_messages_present", 0)) else 0.0)
-            + (0.6 if int(features.get("path_bucket_match", 0)) else 0.0),
-        )
-        if int(features.get("ambiguous_target_count", 0)) > 3:
-            risk_penalty += 0.12
-    elif module_name == MODULE_CALENDAR:
-        deterministic_score = min(
-            1.0,
-            (1.0 if int(features.get("exact_event_id", 0)) else 0.0)
-            + (0.8 if int(features.get("reverse_reference_present", 0)) else 0.0),
-        )
-        lexical_score = min(
-            1.0,
-            float(features.get("title_similarity", 0.0)) * 0.7
-            + min(int(features.get("participant_overlap", 0)), 3) * 0.08,
-        )
-        graph_score = (
-            0.85
-            if int(features.get("reverse_reference_present", 0))
-            else min(int(features.get("participant_overlap", 0)), 4) * 0.12
-        )
-        if deterministic_score < 1.0 and lexical_score < 0.55:
-            risk_penalty += 0.15
-    elif module_name == MODULE_MEDIA:
-        deterministic_score = min(1.0, 0.9 if deterministic_hits else 0.0)
-        lexical_score = min(
-            1.0,
-            float(features.get("title_similarity", 0.0)) * 0.45
-            + (0.35 if int(features.get("location_overlap", 0)) else 0.0),
-        )
-        graph_score = min(
-            1.0,
-            (0.4 if int(features.get("same_day_event_cluster", 0)) else 0.0)
-            + min(int(features.get("participant_overlap", 0)), 3) * 0.18,
-        )
-        risk_penalty += 0.18
-        if int(features.get("ambiguous_target_count", 0)) > 1:
-            risk_penalty += 0.12
-    elif module_name == MODULE_ORPHAN:
-        deterministic_score = (
-            1.0 if int(features.get("target_exists", 0)) and int(features.get("exact_slug_match", 0)) else 0.0
-        )
-        lexical_score = 0.65 if int(features.get("target_exists", 0)) else 0.0
-        graph_score = 0.4 if int(features.get("target_exists", 0)) else 0.0
-        if not deterministic_score:
-            risk_penalty += 0.25
-    elif module_name == MODULE_GRAPH:
-        deterministic_score = min(
-            1.0,
-            (1.0 if int(features.get("reverse_edge_missing", 0)) else 0.0)
-            + (1.0 if int(features.get("exact_thread_id", 0)) else 0.0)
-            + (1.0 if int(features.get("exact_event_id", 0)) else 0.0),
-        )
-        lexical_score = 0.0
-        graph_score = 0.9 if int(features.get("reverse_edge_missing", 0)) else 0.65
-    elif module_name == MODULE_SEMANTIC:
-        embedding_score = float(features.get("embedding_similarity", 0.0))
-        deterministic_score = 0.0
-        lexical_score = 0.0
-        graph_score = 0.0
-        if embedding_score < 0.7:
-            risk_penalty += 0.20
-    else:
-        deterministic_score = 0.0
-        lexical_score = 0.0
-        graph_score = 0.0
-        risk_penalty = 0.2
-    return (
-        max(0.0, min(deterministic_score, 1.0)),
-        max(0.0, min(lexical_score, 1.0)),
-        max(0.0, min(graph_score, 1.0)),
-        max(0.0, min(embedding_score, 1.0)),
-        max(0.0, min(risk_penalty, 0.8)),
-    )
+    from archive_cli import linker_framework as _lf
+    _spec = _lf.ALL_LINKERS.get(module_name)
+    if _spec is not None:
+        return _spec.scoring_fn(features)
+    return (0.0, 0.0, 0.0, 0.0, 0.2)
 
 
 def evaluate_seed_link_candidate(
@@ -2729,7 +1933,15 @@ def evaluate_seed_link_candidate(
     review_floor = policy.auto_review_floor
     auto_floor = policy.auto_promote_floor
     canonical_floor = policy.canonical_floor
-    if candidate.module_name == MODULE_SEMANTIC:
+    # Phase 6.5: deterministic-mode modules (meeting_artifact, trip_cluster,
+    # finance_reconcile) bypass the legacy weighted formula — their det_score
+    # encodes the full signal and the weighted formula would cap them at 0.45.
+    from archive_cli import linker_framework as _lf
+    _spec = _lf.ALL_LINKERS.get(candidate.module_name)
+    _deterministic_mode = _spec is not None and _spec.scoring_mode == "deterministic"
+    if _deterministic_mode:
+        final_confidence = round(max(0.0, min(1.0, deterministic_score - risk_penalty)), 6)
+    elif candidate.module_name == MODULE_SEMANTIC:
         # Semantic candidates: no deterministic / lexical / graph signal by design.
         # Calibrated 2026-04-19 (1020-source then 1pct=1914-source sweeps, reports under
         # _artifacts/_semantic-linker-calibration/). Two-tier gate based on whether
@@ -4173,3 +3385,41 @@ def compute_link_quality_gate(index: Any, *, cache: VaultScanCache | None = None
             and high_risk_precision >= thresholds["required_high_risk_precision"]
         ),
     }
+
+
+# =============================================================================
+# Phase 6.5 linker framework integration.
+#
+# The framework (archive_cli/linker_framework.py) provides a declarative
+# LinkerSpec registry. Every linker self-registers from archive_cli/linker_modules
+# when the package is imported below.
+# =============================================================================
+
+from archive_cli import linker_framework as _lf  # noqa: E402
+
+_lf._bind_wiring_tables(
+    card_type_modules=CARD_TYPE_MODULES,
+    llm_review_modules=LLM_REVIEW_MODULES,
+    proposed_link_types=PROPOSED_LINK_TYPES,
+    link_surface_by_type=LINK_SURFACE_BY_TYPE,
+)
+
+
+
+
+
+
+
+
+
+
+
+# Import linker modules so every LinkerSpec self-registers.
+try:
+    from archive_cli import \
+        linker_modules as _new_linker_modules  # noqa: F401, E402
+except Exception as _e:  # pragma: no cover - defensive
+    import logging as _logging
+    _logging.getLogger("ppa.linkers").warning(
+        "Phase 6.5 linker_modules import failed: %s", _e,
+    )

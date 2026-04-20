@@ -74,7 +74,7 @@ STEP_11A_PER_YEAR_SEED ?= 15
 # Step 11a on 10pct slice (override per-year without exporting env).
 STEP_11A_PER_YEAR ?= 5
 
-.PHONY: install pg-up pg-down pg-logs pg-psql dump-schema dump-seed-schema dump-seed-schema-fast dump-seed-schema-stream-arnold pipe-restore-seed-arnold scp-restore-seed-arnold dump-and-scp-restore-seed-arnold watch-scp-restore-continue-hfa bootstrap-postgres bootstrap-seed-postgres rebuild-indexes rebuild-seed-indexes index-status index-status-seed embed-pending embed-estimate embed-production embed-verify embed-batch-submit embed-batch-poll embed-batch-ingest embed-batch-status embed-batch-loop migrate migrate-seed migrate-dry-run migration-status migration-status-seed build-benchmark-sample benchmark-rebuild benchmark-seed-links benchmark-archive-crate-tier1 benchmark-archive-crate-tier1-enforce benchmark-archive-crate-tier2 benchmark-archive-crate-entity smoke smoke-queries arnold-smoke test-unit ollama-llm-smoke llm-enrichment-6b-smoke test-integration test-slice test-slice-smoke test-slice-verify test-slice-verify-10pct test-slice-verify-smoke verify-incremental benchmark-1pct benchmark-5pct health-check extract-emails-staging extract-emails-full extract-benchmark extract-dry-run enrich-emails-staging enrich-emails-gemini enrich-cards-gemini-1pct enrich-cards-gemini-1pct-preview build-enrichment-benchmark build-enrichment-benchmark-smoke build-enrichment-benchmark-1pct build-enrichment-benchmark-5pct build-enrichment-benchmark-10pct build-enrichment-benchmark-slices build-enrichment-benchmark-slices-all step8b-review-packet run-enrichment-benchmark run-enrichment-benchmark-matrix aggregate-benchmark-results staging-report promote-staging promote-staging-dry-run resolve-entities resolve-entities-full clean-phase3-derived clean-phase3-derived-slices clean-phase3-derived-local-slices extract-emails-slice-smoke extract-emails-slice-full slice-local-1pct slice-local-5pct slice-local-10pct slice-local-all clean-ppa-machine-artifacts clean-ppa-machine-artifacts-dry-run clean-ppa-local-slices extract-emails-1pct-slice extract-emails-5pct-slice extract-emails-10pct-slice extraction-quality-reports sender-census template-sampler sender-census-slice-smoke template-sampler-slice-smoke step-11a-template-samplers sender-census-seed step-11a-template-samplers-seed step-11d-slice-yield-report export-materializer-registry build-rust test-rust benchmark-rust pre-rebuild-check post-rebuild-check geocode-places geocode-places-dry-run quality-report
+.PHONY: install pg-up pg-down pg-logs pg-psql dump-schema dump-seed-schema dump-seed-schema-fast dump-seed-schema-stream-arnold pipe-restore-seed-arnold scp-restore-seed-arnold dump-and-scp-restore-seed-arnold watch-scp-restore-continue-hfa bootstrap-postgres bootstrap-seed-postgres rebuild-indexes rebuild-seed-indexes index-status index-status-seed embed-pending embed-estimate embed-gc embed-cache-rotate embed-production embed-verify embed-batch-submit embed-batch-poll embed-batch-ingest embed-batch-status embed-batch-loop migrate migrate-seed migrate-dry-run migration-status migration-status-seed build-benchmark-sample benchmark-rebuild benchmark-seed-links benchmark-archive-crate-tier1 benchmark-archive-crate-tier1-enforce benchmark-archive-crate-tier2 benchmark-archive-crate-entity smoke smoke-queries arnold-smoke test-unit ollama-llm-smoke llm-enrichment-6b-smoke test-integration test-slice test-slice-smoke test-slice-verify test-slice-verify-10pct test-slice-verify-smoke verify-incremental benchmark-1pct benchmark-5pct health-check extract-emails-staging extract-emails-full extract-benchmark extract-dry-run enrich-emails-staging enrich-emails-gemini enrich-cards-gemini-1pct enrich-cards-gemini-1pct-preview build-enrichment-benchmark build-enrichment-benchmark-smoke build-enrichment-benchmark-1pct build-enrichment-benchmark-5pct build-enrichment-benchmark-10pct build-enrichment-benchmark-slices build-enrichment-benchmark-slices-all step8b-review-packet run-enrichment-benchmark run-enrichment-benchmark-matrix aggregate-benchmark-results staging-report promote-staging promote-staging-dry-run resolve-entities resolve-entities-full clean-phase3-derived clean-phase3-derived-slices clean-phase3-derived-local-slices extract-emails-slice-smoke extract-emails-slice-full slice-local-1pct slice-local-5pct slice-local-10pct slice-local-all clean-ppa-machine-artifacts clean-ppa-machine-artifacts-dry-run clean-ppa-local-slices extract-emails-1pct-slice extract-emails-5pct-slice extract-emails-10pct-slice extraction-quality-reports sender-census template-sampler sender-census-slice-smoke template-sampler-slice-smoke step-11a-template-samplers sender-census-seed step-11a-template-samplers-seed step-11d-slice-yield-report export-materializer-registry build-rust test-rust benchmark-rust pre-rebuild-check post-rebuild-check geocode-places geocode-places-dry-run quality-report
 
 install:
 	$(PYTHON) -m pip install -e .
@@ -192,6 +192,20 @@ embed-estimate:
 	PPA_EMBEDDING_MODEL=$(or $(PPA_EMBEDDING_MODEL),text-embedding-3-small) \
 	PPA_EMBEDDING_VERSION=$(or $(PPA_EMBEDDING_VERSION),1) \
 	$(PYTHON) -m archive_cli embed-estimate
+
+embed-gc:
+	@PPA_INDEX_DSN="$$( $(LOCAL_PPA_INDEX_DSN_CMD) )"; \
+	PPA_PATH=$(PPA_PATH) \
+	PPA_INDEX_DSN="$$PPA_INDEX_DSN" \
+	PPA_INDEX_SCHEMA=$(PPA_INDEX_SCHEMA) \
+	$(PYTHON) -m archive_cli embed-gc $(if $(EMBED_GC_APPLY),--apply)
+
+# Move ingested *-out.jsonl into _artifacts/_embedding-recovery-cache/run-{ts}/
+# (warm cache for future re-ingest without re-downloading from OpenAI). Keeps
+# only the most recent run by default; override with KEEP=N. See
+# `archive_docs/runbooks/embedding-recovery-cache.md`.
+embed-cache-rotate:
+	$(PYTHON) -m archive_cli embed-cache-rotate $(if $(KEEP),--keep $(KEEP)) $(if $(DRY_RUN),--dry-run)
 
 embed-production: embed-estimate
 	@echo "Starting production embedding pass with OpenAI text-embedding-3-small..."
@@ -545,15 +559,17 @@ health-check:
 	$(PYTHON) -m archive_cli health-check
 
 # Remove Phase-3 email-derived cards from seed or slice vaults (MealOrders, Rides, …; Entities/Places, Organizations).
+# Default is dry-run + manifest. Pass APPLY=1 to actually delete (and PPA_ALLOW_PROD_VAULT_DELETE=1
+# if the target is the canonical seed vault). See archive_scripts/clean-phase3-derived-dirs.sh --help.
 clean-phase3-derived:
-	bash archive_scripts/clean-phase3-derived-dirs.sh "$(PPA_PATH)"
+	bash archive_scripts/clean-phase3-derived-dirs.sh $(if $(APPLY),--apply) "$(PPA_PATH)"
 
 # Same cleanup for default Makefile slice outputs (paths only; no-op if missing).
 clean-phase3-derived-slices:
-	bash archive_scripts/clean-phase3-derived-dirs.sh /tmp/ppa-test-slice-smoke /tmp/ppa-test-slice
+	bash archive_scripts/clean-phase3-derived-dirs.sh $(if $(APPLY),--apply) /tmp/ppa-test-slice-smoke /tmp/ppa-test-slice
 
 clean-phase3-derived-local-slices:
-	bash archive_scripts/clean-phase3-derived-dirs.sh \
+	bash archive_scripts/clean-phase3-derived-dirs.sh $(if $(APPLY),--apply) \
 		"$(CURDIR)/$(SLICES_LOCAL_DIR)/1pct" \
 		"$(CURDIR)/$(SLICES_LOCAL_DIR)/5pct" \
 		"$(CURDIR)/$(SLICES_LOCAL_DIR)/10pct"
@@ -570,20 +586,21 @@ clean-ppa-local-slices:
 	bash archive_scripts/clean-ppa-machine-artifacts.sh --remove-local-slices
 
 # Extract from local stratified slices (see .slices/README.md). Cleans Phase-3 dirs on that slice first.
+# Slice vaults are regenerable so we pass --apply unconditionally; production vault path would still be refused.
 extract-emails-1pct-slice:
-	bash archive_scripts/clean-phase3-derived-dirs.sh "$(CURDIR)/$(SLICES_LOCAL_DIR)/1pct"
+	bash archive_scripts/clean-phase3-derived-dirs.sh --apply "$(CURDIR)/$(SLICES_LOCAL_DIR)/1pct"
 	rm -rf _artifacts/_staging-1pct/
 	PPA_PATH="$(CURDIR)/$(SLICES_LOCAL_DIR)/1pct" $(PYTHON) -m archive_cli --log-file logs/extract-1pct-slice.log extract-emails \
 		--staging-dir _artifacts/_staging-1pct/ --workers 8 --full-report
 
 extract-emails-5pct-slice:
-	bash archive_scripts/clean-phase3-derived-dirs.sh "$(CURDIR)/$(SLICES_LOCAL_DIR)/5pct"
+	bash archive_scripts/clean-phase3-derived-dirs.sh --apply "$(CURDIR)/$(SLICES_LOCAL_DIR)/5pct"
 	rm -rf _artifacts/_staging-5pct/
 	PPA_PATH="$(CURDIR)/$(SLICES_LOCAL_DIR)/5pct" $(PYTHON) -m archive_cli --log-file logs/extract-5pct-slice.log extract-emails \
 		--staging-dir _artifacts/_staging-5pct/ --workers 8 --full-report
 
 extract-emails-10pct-slice:
-	bash archive_scripts/clean-phase3-derived-dirs.sh "$(CURDIR)/$(SLICES_LOCAL_DIR)/10pct"
+	bash archive_scripts/clean-phase3-derived-dirs.sh --apply "$(CURDIR)/$(SLICES_LOCAL_DIR)/10pct"
 	rm -rf _artifacts/_staging-10pct/
 	PPA_PATH="$(CURDIR)/$(SLICES_LOCAL_DIR)/10pct" $(PYTHON) -m archive_cli --log-file logs/extract-10pct-slice.log extract-emails \
 		--staging-dir _artifacts/_staging-10pct/ --workers 8 --full-report

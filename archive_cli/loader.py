@@ -14,35 +14,25 @@ from functools import partial
 from itertools import islice
 from typing import Any
 
-from .index_config import (
-    CHUNK_SCHEMA_VERSION,
-    INDEX_SCHEMA_VERSION,
-    MANIFEST_SCHEMA_VERSION,
-    PROJECTIONS_BY_LOAD_ORDER,
-    get_force_full_rebuild,
-    get_rebuild_batch_size,
-    get_rebuild_commit_interval,
-    get_rebuild_executor,
-    get_rebuild_progress_every,
-    get_rebuild_resume,
-    get_rebuild_staging_mode,
-    get_rebuild_verify_hash,
-    get_rebuild_workers,
-    get_seed_frozen_enabled,
-    manifest_cache_disabled,
-)
-from .materializer import _build_person_lookup, _materialize_row_batch, _resolve_person_reference
+from .index_config import (CHUNK_SCHEMA_VERSION, INDEX_SCHEMA_VERSION,
+                           MANIFEST_SCHEMA_VERSION, PROJECTIONS_BY_LOAD_ORDER,
+                           get_force_full_rebuild, get_rebuild_batch_size,
+                           get_rebuild_commit_interval, get_rebuild_executor,
+                           get_rebuild_progress_every, get_rebuild_resume,
+                           get_rebuild_staging_mode, get_rebuild_verify_hash,
+                           get_rebuild_workers, get_seed_frozen_enabled,
+                           manifest_cache_disabled)
+from .materializer import (_build_person_lookup, _materialize_row_batch,
+                           _resolve_person_reference, build_target_field_index)
 from .ppa_engine import ppa_engine
 from .projections.base import ProjectionRowBuffer
-from .projections.registry import PROJECTION_REGISTRY, PROJECTION_REGISTRY_VERSION, TYPED_PROJECTIONS
-from .scanner import (
-    CanonicalRow,
-    NoteManifestRow,
-    _build_manifest_rows_from_canonical,
-    _classify_manifest_rebuild_delta,
-    _collect_canonical_rows,
-    _row_sort_key,
-)
+from .projections.registry import (PROJECTION_REGISTRY,
+                                   PROJECTION_REGISTRY_VERSION,
+                                   TYPED_PROJECTIONS)
+from .scanner import (CanonicalRow, NoteManifestRow,
+                      _build_manifest_rows_from_canonical,
+                      _classify_manifest_rebuild_delta,
+                      _collect_canonical_rows, _row_sort_key)
 from .vault_cache import VaultScanCache
 
 logger = logging.getLogger("ppa.loader")
@@ -288,8 +278,58 @@ class LoaderMixin:
             if row is not None:
                 self._run_pending_migrations(conn)
 
-    def bootstrap(self) -> dict[str, str]:
+    def bootstrap(self, *, force: bool = False) -> dict[str, str]:
+        """Initialize the derived index schema.
+
+        On a fresh install: creates every table from scratch.
+
+        On an existing populated schema: by default REFUSES to run because
+        ``recreate_typed=True`` would ``DROP TABLE … CASCADE`` for every
+        typed projection (a large data loss event). Pass ``force=True`` to
+        override (or set ``PPA_BOOTSTRAP_FORCE=1``). Added 2026-04-24 after
+        the embedding-wipe incident; see Phase 6.5 plan for context.
+        """
+        force_env = os.environ.get("PPA_BOOTSTRAP_FORCE", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+        force = force or force_env
         with self._connect() as conn:
+            existing_card_count = 0
+            try:
+                row = conn.execute(
+                    """
+                    SELECT to_regclass(%s) IS NOT NULL AS exists
+                    """,
+                    (f"{self.schema}.cards",),
+                ).fetchone()
+                cards_exists = bool(row.get("exists")) if isinstance(row, dict) else bool(row)
+                if cards_exists:
+                    cnt_row = conn.execute(
+                        f"SELECT COUNT(*) AS c FROM {self.schema}.cards"
+                    ).fetchone()
+                    if isinstance(cnt_row, dict):
+                        existing_card_count = int(cnt_row.get("c") or 0)
+                    elif cnt_row is not None:
+                        existing_card_count = int(cnt_row[0])
+            except Exception:
+                # Schema may not exist yet (fresh install) or the fake-conn used
+                # in unit tests may not support introspection. Treat as empty;
+                # the real safeguard fires only when the COUNT actually returns >0.
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                existing_card_count = 0
+            if existing_card_count > 0 and not force:
+                raise RuntimeError(
+                    f"bootstrap refused: schema {self.schema!r} already has "
+                    f"{existing_card_count:,} cards. ``recreate_typed=True`` "
+                    f"would DROP TABLE … CASCADE on every typed projection. "
+                    f"Pass force=True or PPA_BOOTSTRAP_FORCE=1 to override "
+                    f"(typically you want ``rebuild-indexes`` instead)."
+                )
             self._create_schema(conn, recreate_typed=True)
             conn.execute(
                 f"""
@@ -486,8 +526,16 @@ class LoaderMixin:
         return out
 
     def _replace_note_manifest(self, conn, entries: list[NoteManifestRow]) -> None:
-        conn.execute(f"DELETE FROM {self.schema}.note_manifest")
+        """Reconcile ``note_manifest`` to ``entries`` via UPSERT + targeted prune.
+
+        Previous implementation was DELETE-then-INSERT, which left the table
+        empty if the INSERT failed mid-way and forced the next rebuild to
+        full-scan everything. Switched to UPSERT + ``DELETE WHERE rel_path
+        NOT IN (...)`` so the manifest is always non-empty + consistent
+        across partial failures.
+        """
         if not entries:
+            conn.execute(f"DELETE FROM {self.schema}.note_manifest")
             return
         sql = f"""
             INSERT INTO {self.schema}.note_manifest (
@@ -497,6 +545,21 @@ class LoaderMixin:
             ) VALUES (
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
             )
+            ON CONFLICT (rel_path) DO UPDATE SET
+                card_uid = EXCLUDED.card_uid,
+                slug = EXCLUDED.slug,
+                content_hash = EXCLUDED.content_hash,
+                frontmatter_hash = EXCLUDED.frontmatter_hash,
+                file_size = EXCLUDED.file_size,
+                mtime_ns = EXCLUDED.mtime_ns,
+                card_type = EXCLUDED.card_type,
+                typed_projection = EXCLUDED.typed_projection,
+                people_json = EXCLUDED.people_json,
+                orgs_json = EXCLUDED.orgs_json,
+                scan_version = EXCLUDED.scan_version,
+                chunk_schema_version = EXCLUDED.chunk_schema_version,
+                projection_registry_version = EXCLUDED.projection_registry_version,
+                index_schema_version = EXCLUDED.index_schema_version
         """
         batch = [
             (
@@ -520,6 +583,11 @@ class LoaderMixin:
         ]
         with conn.cursor() as cur:
             cur.executemany(sql, batch)
+        live_paths = [e.rel_path for e in entries]
+        conn.execute(
+            f"DELETE FROM {self.schema}.note_manifest WHERE rel_path <> ALL(%s)",
+            (live_paths,),
+        )
 
     def _delete_manifest_paths(self, conn, rel_paths: set[str]) -> None:
         if not rel_paths:
@@ -533,13 +601,12 @@ class LoaderMixin:
         if not uids:
             return
         uid_list = list(uids)
-        conn.execute(
-            f"""
-            DELETE FROM {self.schema}.embeddings
-            WHERE chunk_key IN (SELECT chunk_key FROM {self.schema}.chunks WHERE card_uid = ANY(%s))
-            """,
-            (uid_list,),
-        )
+        # NOTE (post-Migration-004): we no longer cascade-delete embeddings
+        # here. Embeddings are content-addressable by chunk_key. After we
+        # delete + re-materialize chunks below, embeddings whose chunk_key
+        # regenerates identically (i.e. content unchanged) are still valid.
+        # Truly-orphaned embeddings (chunks deleted entirely) are pruned by
+        # the explicit `ppa embed-gc --apply` step.
         conn.execute(f"DELETE FROM {self.schema}.chunks WHERE card_uid = ANY(%s)", (uid_list,))
         conn.execute(
             f"DELETE FROM {self.schema}.edges WHERE source_uid = ANY(%s) OR target_uid = ANY(%s)",
@@ -578,18 +645,18 @@ class LoaderMixin:
         deleting edges WHERE target_uid IN materialize_uids would drop edges from unchanged
         cards pointing at a materialized target (e.g. attachment -> message) until those
         sources are also rebuilt.
+
+        Post-Migration-004: embeddings are no longer cascade-deleted here. After
+        chunks are re-materialized for the touched UIDs, any chunk whose content
+        is unchanged regenerates with the same ``chunk_key`` and its existing
+        embedding stays valid (we just save the OpenAI cost). Genuinely orphaned
+        embeddings (chunks for purge_uids that disappear entirely) get cleaned
+        up by ``ppa embed-gc --apply``.
         """
         all_uids = materialize_uids | purge_uids
         if not all_uids:
             return
         uid_list = list(all_uids)
-        conn.execute(
-            f"""
-            DELETE FROM {self.schema}.embeddings
-            WHERE chunk_key IN (SELECT chunk_key FROM {self.schema}.chunks WHERE card_uid = ANY(%s))
-            """,
-            (uid_list,),
-        )
         conn.execute(f"DELETE FROM {self.schema}.chunks WHERE card_uid = ANY(%s)", (uid_list,))
         conn.execute(f"DELETE FROM {self.schema}.edges WHERE source_uid = ANY(%s)", (uid_list,))
         if purge_uids:
@@ -631,6 +698,16 @@ class LoaderMixin:
             )
 
     def _promote_unlogged_stages(self, conn) -> None:
+        """Atomically swap each ``{table}`` for its ``{table}_stage``.
+
+        The TRUNCATE+INSERT pair runs inside the rebuild's transaction; if
+        the INSERT fails, the TRUNCATE rolls back, so the destination is
+        never partially populated. Pre-Migration-004 a TRUNCATE on ``chunks``
+        also wiped ``embeddings`` via the FK CASCADE; after 004 there is no
+        FK from ``embeddings`` to ``chunks``, so a chunks rebuild preserves
+        all chunk_keys whose content is unchanged and all matching embeddings
+        remain valid.
+        """
         for projection in PROJECTIONS_BY_LOAD_ORDER:
             table = projection.table_name
             stage = f"{table}_stage"
@@ -738,6 +815,7 @@ class LoaderMixin:
         slug_map: dict[str, str],
         path_to_uid: dict[str, str],
         person_lookup: dict[str, str],
+        target_field_index: dict[str, dict[str, str]],
         workers: int,
         batch_size: int,
         commit_interval: int,
@@ -814,6 +892,7 @@ class LoaderMixin:
                     slug_map,
                     path_to_uid,
                     person_lookup,
+                    target_field_index,
                     run_id,
                     CHUNK_SCHEMA_VERSION,
                     body_cache=_body_cache,
@@ -834,6 +913,7 @@ class LoaderMixin:
                 slug_map=slug_map,
                 path_to_uid=path_to_uid,
                 person_lookup=person_lookup,
+                target_field_index=target_field_index,
                 batch_id=run_id,
                 body_cache=_body_cache,
             )
@@ -1121,12 +1201,14 @@ class LoaderMixin:
         _log_rebuild_step(3, 6, "build lookup maps", f"rows={len(rows)}")
         path_to_uid = {row.rel_path: str(row.card.uid) for row in rows}
         person_lookup = _build_person_lookup(rows)
+        target_field_index = build_target_field_index(rows)
         map_seconds = round(time.time() - map_started_at, 6)
         _log_rebuild_step(
             3,
             6,
             "build lookup maps complete",
-            f"slug_map={len(slug_map)} person_lookup={len(person_lookup)}",
+            f"slug_map={len(slug_map)} person_lookup={len(person_lookup)} "
+            f"target_field_keys={len(target_field_index)}",
         )
 
         rebuild_mode = "full"
@@ -1142,6 +1224,21 @@ class LoaderMixin:
             self._create_schema(conn, recreate_typed=False, ensure_indexes=False)
             conn.commit()
             self._run_pending_migrations(conn)
+            try:
+                pre_emb_row = conn.execute(
+                    f"SELECT COUNT(*) AS c FROM {self.schema}.embeddings"
+                ).fetchone()
+                pre_embedding_count = int(
+                    pre_emb_row["c"] if isinstance(pre_emb_row, dict) else pre_emb_row[0]
+                )
+            except Exception:
+                pre_embedding_count = 0
+            if pre_embedding_count:
+                logger.info(
+                    "rebuild_embeddings_pre_count count=%d note=preserved_via_migration_004 "
+                    "(re-pay_to_re-embed_only_if_chunk_content_changed)",
+                    pre_embedding_count,
+                )
             meta = self._meta_dict(conn)
             manifest_map = self._load_note_manifest_map(conn)
             incremental_ok = (
@@ -1297,6 +1394,7 @@ class LoaderMixin:
                     slug_map=slug_map,
                     path_to_uid=path_to_uid,
                     person_lookup=person_lookup,
+                    target_field_index=target_field_index,
                     workers=workers,
                     batch_size=batch_size,
                     commit_interval=commit_interval,
@@ -1325,6 +1423,7 @@ class LoaderMixin:
                 )
                 self._replace_note_manifest(conn, manifest_entries)
                 conn.commit()
+                self._log_embedding_preservation_summary(conn, pre_count=pre_embedding_count)
                 final_counts = self._projection_table_counts(conn)
                 final_counts["duplicate_uid_rows"] = len(duplicate_uid_rows)
                 final_counts["duplicate_uids"] = duplicate_uid_count
@@ -1524,6 +1623,7 @@ class LoaderMixin:
                 slug_map=slug_map,
                 path_to_uid=path_to_uid,
                 person_lookup=person_lookup,
+                target_field_index=target_field_index,
                 workers=workers,
                 batch_size=batch_size,
                 commit_interval=commit_interval,
@@ -1633,6 +1733,7 @@ class LoaderMixin:
                 "finalize rebuild metadata complete",
                 f"cards={counts['cards']} edges={counts['edges']} chunks={counts['chunks']}",
             )
+            self._log_embedding_preservation_summary(conn, pre_count=pre_embedding_count)
 
         metrics = {
             "scan_seconds": round(scan_seconds, 6),
@@ -1649,8 +1750,72 @@ class LoaderMixin:
         }
         return RebuildRunResult(counts=counts, metrics=metrics)
 
+    def _log_embedding_preservation_summary(self, conn, *, pre_count: int) -> None:
+        """Emit a clear post-rebuild summary of embedding preservation + orphans.
+
+        After Migration 004 chunks DROP/CASCADE no longer wipes embeddings, so
+        ``post_count`` equals ``pre_count`` (modulo concurrent embed runs).
+        ``orphan_count`` is the number of embeddings whose ``chunk_key`` is no
+        longer present in ``chunks`` — those are safe to remove via
+        ``ppa embed-gc --apply``. Until that runs they cost only disk.
+        """
+        try:
+            post_row = conn.execute(
+                f"SELECT COUNT(*) AS c FROM {self.schema}.embeddings"
+            ).fetchone()
+            post_count = int(
+                post_row["c"] if isinstance(post_row, dict) else post_row[0]
+            )
+            orphan_row = conn.execute(
+                f"""
+                SELECT COUNT(*) AS c FROM {self.schema}.embeddings e
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM {self.schema}.chunks c WHERE c.chunk_key = e.chunk_key
+                )
+                """
+            ).fetchone()
+            orphan_count = int(
+                orphan_row["c"] if isinstance(orphan_row, dict) else orphan_row[0]
+            )
+        except Exception as exc:
+            logger.warning("rebuild_embeddings_summary_query_failed error=%s", exc)
+            return
+        valid = max(post_count - orphan_count, 0)
+        logger.info(
+            "rebuild_embeddings_summary pre=%d post=%d valid_after_rebuild=%d "
+            "orphan=%d gc_with=`ppa embed-gc --apply`",
+            pre_count,
+            post_count,
+            valid,
+            orphan_count,
+        )
+        if pre_count > 0 and post_count == 0:
+            logger.error(
+                "rebuild_embeddings_wiped pre=%d post=0 — Migration 004 should "
+                "prevent this; investigate the rebuild path before re-embedding",
+                pre_count,
+            )
+        elif orphan_count > 0 and pre_count > 0 and orphan_count > pre_count * 0.05:
+            logger.warning(
+                "rebuild_embeddings_significant_orphans orphan=%d (>%d%% of pre=%d) — "
+                "expected if many cards' content changed; otherwise inspect chunk_key derivation",
+                orphan_count,
+                int(orphan_count / pre_count * 100),
+                pre_count,
+            )
+
     def _clear_meta_for_finalize(self, conn) -> None:
-        conn.execute(f"DELETE FROM {self.schema}.meta")
+        """No-op kept for backward compatibility.
+
+        Previously ``DELETE FROM meta`` then ``_upsert_meta(...)`` re-populated
+        it; if the upsert failed, ``meta`` was left empty (broke ``index-status``,
+        rebuild resume, schema-version detection, MCP startup). The upsert is
+        now sufficient on its own: ``ON CONFLICT (key) DO UPDATE`` handles every
+        key the rebuild writes, and any leftover keys are stale-but-harmless. To
+        explicitly prune keys not in a known set, callers should do that
+        themselves via a targeted ``DELETE WHERE key <> ALL(%s)`` instead.
+        """
+        return None
 
     def rebuild(self) -> dict[str, int]:
         result = self.rebuild_with_metrics()

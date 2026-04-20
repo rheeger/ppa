@@ -186,6 +186,7 @@ class MatchResolver:
         cache: InferenceCache | None,
         *,
         match_threshold: float = 0.55,
+        finance_match_threshold: float | None = None,
         ambiguity_margin: float = 0.12,
         dry_run: bool = False,
         run_id: str = "phase3-match",
@@ -195,6 +196,11 @@ class MatchResolver:
         self.provider = provider
         self.cache = cache
         self.match_threshold = match_threshold
+        self.finance_match_threshold = (
+            float(finance_match_threshold)
+            if finance_match_threshold is not None
+            else 0.47
+        )
         self.ambiguity_margin = ambiguity_margin
         self.dry_run = dry_run
         self.run_id = run_id
@@ -238,12 +244,14 @@ class MatchResolver:
         self,
         mc: MatchCandidate,
         target_fm: dict[str, Any],
+        *,
+        signals: dict[str, Any] | None = None,
     ) -> float:
         """Score finance → email_message match."""
-        signals = mc.match_signals
-        kws = signals.get("counterparty_keywords") or []
-        amount = signals.get("amount")
-        date_range = signals.get("date_range") or []
+        sig = signals if signals is not None else mc.match_signals
+        kws = sig.get("counterparty_keywords") or []
+        amount = sig.get("amount")
+        date_range = sig.get("date_range") or []
 
         subject = str(target_fm.get("subject") or "")
         kw_score = _keyword_score(kws, subject)
@@ -467,19 +475,34 @@ class MatchResolver:
                 continue
 
             signals = mc.match_signals
+            eff_finance_signals: dict[str, Any] | None = None
             if mc.target_card_type == "calendar_event":
                 approx = _parse_iso_day(signals.get("approximate_date"))
                 candidate_uids = _date_window_uids(cal_date_idx, approx, days=14)
                 if not candidate_uids:
                     candidate_uids = _date_window_uids(cal_date_idx, approx, days=30)
             elif mc.target_card_type == "email_message":
-                date_range = signals.get("date_range") or []
+                eff_signals = dict(mc.match_signals)
+                dr = list(mc.match_signals.get("date_range") or [])
+                if not dr:
+                    src_fm = scan_cache.frontmatter_for_rel_path(source_rel)
+                    for key in ("created", "activity_at"):
+                        raw = str(src_fm.get(key) or "").strip()
+                        day = _parse_iso_day(raw)
+                        if day:
+                            dr = [day.isoformat(), day.isoformat()]
+                            eff_signals = {**mc.match_signals, "date_range": dr}
+                            break
+                date_range = eff_signals.get("date_range") or []
                 range_center = _parse_iso_day(date_range[0]) if date_range else None
-                date_uids = _date_window_uids(email_date_idx, range_center, days=14)
-                kw_uids = _keyword_filter_uids(email_kw_idx, signals.get("counterparty_keywords") or [])
+                date_uids = _date_window_uids(email_date_idx, range_center, days=21)
+                kw_uids = _keyword_filter_uids(
+                    email_kw_idx, eff_signals.get("counterparty_keywords") or [],
+                )
                 candidate_uids = date_uids | kw_uids
                 if not candidate_uids:
-                    candidate_uids = _date_window_uids(email_date_idx, range_center, days=30)
+                    candidate_uids = _date_window_uids(email_date_idx, range_center, days=45)
+                eff_finance_signals = eff_signals
             else:
                 candidate_uids = set(target_fms.keys())
 
@@ -491,7 +514,9 @@ class MatchResolver:
                 if mc.target_card_type == "calendar_event":
                     score = self._score_thread_calendar(mc, target_fm)
                 elif mc.target_card_type == "email_message":
-                    score = self._score_finance_email(mc, target_fm)
+                    score = self._score_finance_email(
+                        mc, target_fm, signals=eff_finance_signals,
+                    )
                 else:
                     continue
                 if score > 0.05:
@@ -499,7 +524,12 @@ class MatchResolver:
 
             scored.sort(key=lambda x: x[1], reverse=True)
 
-            if not scored or scored[0][1] < self.match_threshold:
+            thresh = (
+                self.finance_match_threshold
+                if mc.target_card_type == "email_message"
+                else self.match_threshold
+            )
+            if not scored or scored[0][1] < thresh:
                 stats["no_match"] += 1
                 continue
 

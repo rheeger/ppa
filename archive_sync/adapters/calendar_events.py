@@ -10,14 +10,17 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from archive_auth import CALENDAR_READONLY_SCOPES, account_name_from_email, build_google_cli_token_manager
+from archive_auth import (CALENDAR_READONLY_SCOPES, account_name_from_email,
+                          build_google_cli_token_manager)
 from archive_vault.identity import IdentityCache
 from archive_vault.schema import CalendarEventCard
-from archive_vault.thread_hash import compute_calendar_event_body_sha_from_payload
+from archive_vault.thread_hash import \
+    compute_calendar_event_body_sha_from_payload
 from archive_vault.uid import generate_uid
 from archive_vault.vault import iter_notes, read_note
 
 from .base import BaseAdapter, FetchedBatch, deterministic_provenance
+from .datetime_canon import to_utc_z_iso
 
 EVENT_SOURCE = "calendar.event"
 
@@ -611,8 +614,8 @@ class CalendarEventsAdapter(BaseAdapter):
             title=str(item.get("title", "")).strip(),
             description=str(item.get("description", "")).strip(),
             location=str(item.get("location", "")).strip(),
-            start_at=str(item.get("start_at", "")).strip(),
-            end_at=str(item.get("end_at", "")).strip(),
+            start_at=to_utc_z_iso(str(item.get("start_at", "")).strip()),
+            end_at=to_utc_z_iso(str(item.get("end_at", "")).strip()),
             timezone=str(item.get("timezone", "")).strip(),
             organizer_email=str(item.get("organizer_email", "")).strip(),
             organizer_name=str(item.get("organizer_name", "")).strip(),

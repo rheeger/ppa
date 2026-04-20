@@ -124,6 +124,7 @@ Detailed, step-by-step **execution plans** for each phase live under **`~/.curso
 | 4 — ONE full rebuild                           | [`phase_4_execution_plan_3156f3e2.plan.md`](file:///Users/rheeger/.cursor/plans/phase_4_execution_plan_3156f3e2.plan.md)                                                   |
 | 5 — Embedding pass                             | [`phase_5_embedding_pass_17a0e872.plan.md`](file:///Users/rheeger/.cursor/plans/phase_5_embedding_pass_17a0e872.plan.md)                                                   |
 | 6 — LLM enrichment                             | [`phase_6_llm_enrichment_f286b0bd.plan.md`](file:///Users/rheeger/.cursor/plans/phase_6_llm_enrichment_f286b0bd.plan.md)                                                   |
+| 6.5 — Linker framework + cross-derived linkers | [`phase_6_5_cross_derived_card_linkers_a8d4e319.plan.md`](file:///Users/rheeger/.cursor/plans/phase_6_5_cross_derived_card_linkers_a8d4e319.plan.md)                       |
 | 7 — Knowledge cache                            | [`phase_7_execution_plan_b4b2c2ef.plan.md`](file:///Users/rheeger/.cursor/plans/phase_7_execution_plan_b4b2c2ef.plan.md)                                                   |
 | 8 — Maintenance & tools                        | [`phase_8_execution_plan_a16ec5dc.plan.md`](file:///Users/rheeger/.cursor/plans/phase_8_execution_plan_a16ec5dc.plan.md)                                                   |
 | 9 — Production on Arnold                       | [`phase_9_execution_plan_794d5d32.plan.md`](file:///Users/rheeger/.cursor/plans/phase_9_execution_plan_794d5d32.plan.md)                                                   |
@@ -1158,7 +1159,7 @@ The vault has no version control. The only undo for vault writes is provenance-b
 4. **Human review gate:** Present enrichment results (per-step metrics from manifest), match resolution metrics (wikilinks per match type, confident vs disambiguated), entity resolution stats (PlaceCards/OrgCards created/merged), promotion results (cards per type), sample cards (3 per type at varying confidence), and `ppa health-check` report. User must explicitly approve before proceeding.
 5. **Vault validation:** `ppa validate` against the full vault — zero errors. All derived cards have valid `source_email` wikilinks. No duplicate UIDs. All cross-card wikilinks resolve to existing cards.
 6. **Idempotency:** Re-run `ppa enrich` and verify 0 new cards staged, 0 field updates written. `extraction_confidence` is excluded from idempotency comparison via `_card_dump_for_idempotency`. Cache hits on all LLM calls.
-7. **Re-fork seed slice:** Update `archive_tests/slice_config.json` with real UIDs for all derived card types (≥ 5 per type). Create 3 synthetic `knowledge` and 3 synthetic `observation` fixture cards (no real cards until Phase 7). Activate `"phase": "post-phase-3"` placeholders in `tests/slice_manifest.json`. Regenerate slice and verify ≥ 3 cards per type for all 37 types, zero orphaned wikilinks.
+7. **Re-fork seed slice:** Update `archive_tests/slice_config.json` with real UIDs for all derived card types (≥ 5 per type). Create 3 synthetic `knowledge` and 3 synthetic `observation` fixture cards (no real cards will ever be created since Phase 7 was skipped — these stay synthetic permanently in v2). Activate `"phase": "post-phase-3"` placeholders in `tests/slice_manifest.json`. Regenerate slice and verify ≥ 3 cards per type for all 37 types, zero orphaned wikilinks.
 8. **Test suite:** `make test-unit`, `make test-slice-verify`, `ppa health-check`. All pass. Fix manifest queries/counts if tests fail due to derived card values.
 
 At the end of this phase, the local seed vault has ~4,000-6,000 transaction cards, ~200-700 entity cards, cross-card wikilinks, and enriched field fills — all validated. None are in Postgres yet (Phase 4's ONE rebuild), and none are on Arnold yet (Phase 9's production deployment). The vault is ready for Phase 4's ONE rebuild (uses `archive_crate` from Phase 2.9).
@@ -1409,13 +1410,13 @@ This enables:
 
 1. **Quality scan and prioritization.** Query cards from the enrichment queue, prioritized by type weight:
 
-   | Priority Tier   | Card Types                                                                   | Rationale                                                                                                                                                                           |
-   | --------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-   | **1 — Highest** | `meal_order`, `purchase`, `grocery_order`, `ride`, `flight`, `accommodation` | Derived cards with structured data — enrichment adds missing entities (restaurants → PlaceCards, airlines → OrgCards) and improves summaries that feed knowledge cache aggregations |
-   | **2 — High**    | `person`, `place`, `organization`                                            | Entity cards — richer descriptions improve entity-based retrieval and graph traversal                                                                                               |
-   | **3 — Medium**  | `email_message`, `calendar_event`, `meeting_transcript`                      | High-volume types where summary improvement has the biggest search impact (generic subjects like "Re: Re: Thursday")                                                                |
-   | **4 — Lower**   | `finance`, `medical_record`, `document`, `subscription`, `payroll`           | Structured enough already; lower enrichment ROI                                                                                                                                     |
-   | **5 — Lowest**  | `email_thread`, `*_attachment`, `git_*`, `knowledge`, `observation`          | Metadata or system cards; minimal enrichment value                                                                                                                                  |
+   | Priority Tier   | Card Types                                                                   | Rationale                                                                                                                                                                                                                                                              |
+   | --------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+   | **1 — Highest** | `meal_order`, `purchase`, `grocery_order`, `ride`, `flight`, `accommodation` | Derived cards with structured data — enrichment adds missing entities (restaurants → PlaceCards, airlines → OrgCards) and improves summaries, which directly improves agent retrieval quality on `archive_query` and `archive_hybrid_search` against these projections |
+   | **2 — High**    | `person`, `place`, `organization`                                            | Entity cards — richer descriptions improve entity-based retrieval and graph traversal                                                                                                                                                                                  |
+   | **3 — Medium**  | `email_message`, `calendar_event`, `meeting_transcript`                      | High-volume types where summary improvement has the biggest search impact (generic subjects like "Re: Re: Thursday")                                                                                                                                                   |
+   | **4 — Lower**   | `finance`, `medical_record`, `document`, `subscription`, `payroll`           | Structured enough already; lower enrichment ROI                                                                                                                                                                                                                        |
+   | **5 — Lowest**  | `email_thread`, `*_attachment`, `git_*`, `knowledge`, `observation`          | Metadata or system cards; minimal enrichment value                                                                                                                                                                                                                     |
 
    Within each tier, order by recency (recent cards are more likely to be queried).
 
@@ -1504,13 +1505,185 @@ _Operational:_
 
 ---
 
-## Phase 7: Knowledge Cache Population
+## Phase 6.5: Linker Framework + Cross-Derived-Card Linkers (✅ complete, 2026-04-27)
 
-**Execution plan:** [`phase_7_execution_plan_b4b2c2ef.plan.md`](file:///Users/rheeger/.cursor/plans/phase_7_execution_plan_b4b2c2ef.plan.md)
+**Execution plan:** [`phase_6_5_cross_derived_card_linkers_a8d4e319.plan.md`](file:///Users/rheeger/.cursor/plans/phase_6_5_cross_derived_card_linkers_a8d4e319.plan.md)
+**Subplans:**
 
-**What it is:** Build a structured understanding of the archive owner's life — preferences, habits, patterns, relationships, and context — organized by domain, continuously maintained, and instantly queryable by any agent or MCP consumer. This is not just "cached SQL aggregations." It's a **living profile** derived from the archive that understands the owner from a human perspective.
+- [`phase_6_5_linker_framework_e4f2a9b7.plan.md`](file:///Users/rheeger/.cursor/plans/phase_6_5_linker_framework_e4f2a9b7.plan.md) — `LinkerSpec` + `register_linker` framework, `CatalogIndexSpec`, package split, legacy retrofit details.
+- [`phase_6_5_finance_reconcile_d2e1f3a4.plan.md`](file:///Users/rheeger/.cursor/plans/phase_6_5_finance_reconcile_d2e1f3a4.plan.md) — `MODULE_FINANCE_RECONCILE` detail.
 
-**Why now:** Knowledge cards aggregate over the full corpus. The aggregations are best after enrichment has improved card quality — better summaries, more complete entity links, richer metadata.
+**Architecture docs:** [`archive_docs/LINKER_ARCHITECTURE.md`](../LINKER_ARCHITECTURE.md), [`archive_docs/CONTRIBUTING_LINKERS.md`](../CONTRIBUTING_LINKERS.md), [`archive_docs/runbooks/linker-retirement-protocol.md`](../runbooks/linker-retirement-protocol.md).
+**Operational runbooks added during this phase:** [`archive_docs/runbooks/embedding-recovery-cache.md`](../runbooks/embedding-recovery-cache.md).
+
+### What it is
+
+Phase 6.5 does two jobs at once because doing them together costs less than doing them apart:
+
+1. **Three new deterministic linkers** — `MODULE_FINANCE_RECONCILE`, `MODULE_TRIP_CLUSTER`, `MODULE_MEETING_ARTIFACT` — that close the cross-derived-card coverage gap the retired Phase 6 Tier 3 semantic kNN was trying to fill. Predicates use structural fingerprints (`source_email`, `ical_uid`, IATA city + date window, amounts + dates) for ~100% precision at $0 LLM cost.
+2. **Lift the seed-link subsystem** out of `archive_cli/seed_links.py` (~4.4k lines of bespoke per-module code) into a declarative `LinkerSpec` + `register_linker` framework (shipped 2026-04-20 as `archive_cli/linker_framework.py` + `archive_cli/linker_modules/`; optional Step 18 package split to `archive_cli/linkers/`). Retrofits all seven legacy modules onto it; ships the `ppa linker list / info / calibrate / replay / health / impact / scaffold / deprecate / retire / revive` CLI.
+
+### Why now
+
+Phase 6 retirement runbook proved deterministic structural predicates beat embedding+LLM linkers for cross-derived-card discovery (~100% vs ~70-80% precision; $0 vs $25+ LLM cost). The framework is the primary groundwork for **v3 Phase 11** (setup wizard reads `ALL_LINKERS` to render per-linker opt-in), **v3 Phase 15** (`CONTRIBUTING_LINKERS.md` companion to `CONTRIBUTING_CONNECTORS.md`), and **v4's Rust engine rewrite** (each `archive_cli/linker_modules/{X}.py` maps 1:1 to a future `.rs` file). Building it now lets the three new linkers validate the registry before downstream phases depend on it.
+
+### What's shipped (commit `c83420b`, 2026-04-20)
+
+| step                                  | status                                            | primary artifacts                                                                                                                                    |
+| ------------------------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Step 0 audit (DeclEdgeRule coverage)  | ✅                                                | `_artifacts/_phase6_5-audit/coverage-report-20260420.md`                                                                                             |
+| Step 2 framework infra                | ✅ (pragmatic path; Step 18 file-split shipped)   | `archive_cli/linker_framework.py`; `seed_links.py` binds wiring tables + imports `archive_cli/linker_modules` so all linkers self-register           |
+| Step 3 legacy retrofit                | ✅ (declarative modules; full split shipped)      | 7 legacy modules now live in `archive_cli/linker_modules/{X}.py`; semantic `lifecycle_state="retired"`; full test suite green                        |
+| Step 4 CLI                            | ✅ (7 of 9 sub-commands)                          | `archive_cli/linker_cli.py`. `scaffold` + `impact` land in Steps 19 + 20                                                                             |
+| Step 5 lifecycle + docs               | ✅                                                | `LINKER_ARCHITECTURE.md`, `CONTRIBUTING_LINKERS.md`, `runbooks/linker-retirement-protocol.md`                                                        |
+| Step 6 `MODULE_MEETING_ARTIFACT`      | ✅                                                | `archive_cli/linker_modules/meeting_artifact.py` — 3 tiers (ical_uid, title+time, participants+time)                                                 |
+| Step 7 `MODULE_TRIP_CLUSTER`          | ✅                                                | `archive_cli/iata.py` + `data/iata_cities.csv`; `linker_modules/trip_cluster.py` — accommodation↔flight, accommodation↔car_rental, flight↔car_rental |
+| Step 8 `MODULE_FINANCE_RECONCILE`     | ✅ (5 tiers; `TIER_PHASE2875` retired in Step 17) | `merchant_normalizer.py` (fixture gate 100%/100%); `linker_modules/finance_reconcile.py`                                                             |
+| Step 9 policy version + wiring        | ✅                                                | `SEED_LINK_POLICY_VERSION = 6`                                                                                                                       |
+| Step 10 integration tests             | ✅                                                | `test_phase_6_5_linkers.py` (21 tests, hand-built catalogs)                                                                                          |
+| Step 11 behavioral queries            | ✅                                                | `archive_tests/slice_manifest.json` — 3 graph_queries + 3 semantic_queries (`post-phase-6-5`)                                                        |
+| Step 12 calibration on 1pct (initial) | ✅                                                | `_artifacts/_linkers/{module}/calibration/...`. **Zero candidates on 1pct due to data-level issues** — surfaced Steps 1, 16, 17 below                |
+
+### What's added since (2026-04-22 → 2026-04-24)
+
+| step                                              | status  | summary                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Step 1a — finance `source_email` quality fix      | ✅      | `enrich_finance` v6 prompt; `parse_finance_response` backfills date_range; `match_resolver` corroboration shipped. **The arbitrary 50% coverage gate was retired** in favor of `archive_docs/runbooks/linker-quality-gates.md` (precision-first). Broad-pass writes pruned; **kept set programmatically certified** at `_artifacts/_linkers/financeReconcileLinker/calibration/source-email-precision-2026-04-27.md` — 274/274 newly-added links have ≥2 corroborating tight-bound signals. |
+| Step 1b — shipment `linked_purchase` resolver     | ✅      | `DeclEdgeRule.target_lookup_field` (Python + Rust materializer) resolves `shipment.linked_purchase` (an order_number) → purchase card via secondary index. **1,013 `ships_for` edges live** (verified post-rebuild 2026-04-27).                                                                                                                                                                                                                                                             |
+| Step 1c — regression tests + audit re-run helpers | ✅      | `archive_scripts/phase6_5_audit_finance_source_email.py`; `test_materializer_edge_rules.py` (3 tests covering ships_for via order number + finance wikilink).                                                                                                                                                                                                                                                                                                                               |
+| Step 16 — adapter timezone canonicalization       | ✅      | `archive_sync/adapters/datetime_canon.py` (`to_utc_z_iso`, `classify_timestamp`, `AUDITED_TIMESTAMP_FIELDS`); `calendar_events.py` adapter normalizes `start_at`/`end_at` to UTC-Z; **executed 2026-04-23 on full seed**: 25,159 cards rewritten. Audit at `_artifacts/_phase6_5-timezone-audit/report-2026-04-23.md` confirms ≥99% UTC-Z consistency.                                                                                                                                      |
+| Step 17 — retire `TIER_PHASE2875_LLM_SIGNAL`      | ✅      | Tier deleted; documented in `runbooks/linker-retirement-protocol.md` Appendix A.2.                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Step 18 — full file-split refactor                | ✅      | 7 legacy generators moved from `seed_links.py` into `linker_modules/{X}.py`; legacy wrappers deleted.                                                                                                                                                                                                                                                                                                                                                                                       |
+| Step 19 — `ppa linker scaffold`                   | ✅      | New module + test stubs from template; `cmd_calibrate` real wrapper.                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Step 20 — `ppa linker impact`                     | ✅      | Wraps the health-check behavioral-query loop; `edge_type_filter` param on `_graph_neighbor_uids`; used to capture Step 14 pre/post snapshots.                                                                                                                                                                                                                                                                                                                                               |
+| **Linker-quality-gates standard (2026-04-26)**    | ✅      | New `archive_docs/runbooks/linker-quality-gates.md` codifies the precision-first contract: ≥95% precision per auto-promoting tier on a stratified ≥30-candidate sample. `RECONCILE_TIER_SOURCE_EMAIL` and `TRIP_TIER_ACCOM_FLIGHT` were tightened in code (corroboration counter + exact-match-only city) with regression tests; `LinkSurfacePolicy` descriptions reference the runbook. Plan + `LINKER_ARCHITECTURE.md` updated.                                                           |
+| Step 21 — re-calibrate (full-seed dry-run)        | ✅      | 1pct slice rebuilt + still too sparse to exercise; full-seed dry-run (`archive_scripts/phase6_5_calibrate_fullseed.py`) is canonical: 45 / 94 / 343 candidates across the 3 modules. Spot-check packets at `_artifacts/_linkers/{module}/calibration/spotcheck-{tier}-2026-04-27.md`. Verdicts: financeReconcileLinker **PROCEED**; tripClusterLinker **PROCEED**; meetingArtifactLinker **NARROW-TO-TIERS**. Verdict at `_artifacts/_linkers/phase6_5-step21-recalibration-2026-04-27.md`. |
+| Step 13 — full-seed promotion                     | ✅      | Index rebuilt safely (Migration 004 + telemetry: pre 6,770,930 == post 6,770,930 embeddings, 4,730 stale `finance_from_email` rows pruned). 9,538 enqueue → worker → 153 auto_promote → **97 `finance_reconciles` + 50 `part_of_trip` = 147 edges live** in `link_candidates` + `promotion_queue (applied)`; 6 stale `semanticLinker` rolled back per retirement protocol. Cross-type breakdown: finance ↔ {purchase: 80, meal_order: 15, subscription: 2}; accommodation ↔ flight: 50.     |
+| Step 14 — retrieval impact                        | ✅ PASS | Pre/post snapshots; counterfactual analysis: **147/147 = 100% pure neighbor uplift** (zero overlap with prior deterministic edges); zero regression on existing edge counts; embeddings preserved. Report at `_artifacts/_linkers/phase6_5-step14-retrieval-impact-2026-04-27.md`.                                                                                                                                                                                                          |
+| Step 15 — phase wrap                              | ✅      | DoD checklist green; v2vision close-out (this section); plan tracker reflects all 22 steps as ✅ or ✅-with-documented-follow-up. **Phase 6.5 closed 2026-04-27.**                                                                                                                                                                                                                                                                                                                          |
+
+### What's added because of the 2026-04-23 embedding-wipe incident
+
+While running Step 16 backfill on the full seed vault, `make rebuild-indexes` fell into `full` mode (forced by 9,757 pre-existing duplicate UIDs, not caused by the backfill itself). The full path called `DROP TABLE chunks CASCADE`, which cascaded via `embeddings.chunk_key REFERENCES chunks(chunk_key) ON DELETE CASCADE` and **wiped all 6,770,930 embeddings** of `text-embedding-3-small`. Production search broke instantly. Recovery: re-downloaded 6.05M embeddings from OpenAI's Batch API output files (still retained on their side), at $0 cost, in ~3 hours. The remaining ~720k chunks (originally embedded via the sync path) need a small fresh embed run (~$3-6).
+
+The incident produced the following permanent code fixes — all landed in this phase, all under regression test:
+
+| fix                                                                                                                                                                                                                                                            | files                                                                                                                                                            | tests                                      |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| **Migration 004** decouples `embeddings` from `chunks` lifecycle (drops the FK with CASCADE)                                                                                                                                                                   | `archive_cli/migrations/004_embeddings_decouple_from_chunks.py`, `schema_ddl.py` (FK removed from CREATE TABLE)                                                  | `test_migration_004.py` (7 tests)          |
+| `_clear()` no longer truncates embeddings                                                                                                                                                                                                                      | `archive_cli/schema_ddl.py`                                                                                                                                      | covered by migration 004 tests             |
+| `ppa embed-gc [--apply]` + `make embed-gc` to prune chunk_key-orphan embeddings on demand                                                                                                                                                                      | `archive_cli/commands/admin.py`, `__main__.py`, `Makefile`                                                                                                       | covered                                    |
+| Pre/post-rebuild embedding-preservation telemetry (`pre / post / valid_after_rebuild / orphan` log lines + WARNING / ERROR thresholds)                                                                                                                         | `archive_cli/loader.py:_log_embedding_preservation_summary`                                                                                                      | covered                                    |
+| `clean-phase3-derived-dirs.sh` defaults to `--dry-run`; refuses to run against a production-vault prefix without `PPA_ALLOW_PROD_VAULT_DELETE=1`; always writes a manifest of paths it would touch                                                             | `archive_scripts/clean-phase3-derived-dirs.sh`, `Makefile`                                                                                                       | `test_destructive_safeguards.py` (3 tests) |
+| `bootstrap()` refuses to recreate populated schemas without `force=True` (or `PPA_BOOTSTRAP_FORCE=1`)                                                                                                                                                          | `archive_cli/loader.py`, `commands/admin.py`, `__main__.py`                                                                                                      | `test_destructive_safeguards.py`           |
+| `_replace_note_manifest` and `_clear_meta_for_finalize` converted from DELETE-then-INSERT to UPSERT-and-prune (idempotent under partial failure)                                                                                                               | `archive_cli/loader.py`                                                                                                                                          | `test_destructive_safeguards.py`           |
+| Incremental rebuild no longer pre-emptively deletes embeddings; only chunks are dropped, content-addressable embeddings stay valid                                                                                                                             | `archive_cli/loader.py` (`_delete_derived_rows_for_uids`, `_delete_derived_rows_for_incremental`)                                                                | covered                                    |
+| `ProvenanceEntry.prior` chain (newest-first, capped at `MAX_PROVENANCE_HISTORY = 5`) preserves a forensic trail across re-enrichments + backfills; idempotent identical re-writes don't grow the chain                                                         | `archive_vault/provenance.py`                                                                                                                                    | `test_destructive_safeguards.py` (4 tests) |
+| `ppa embed-cache-rotate` moves ingested `*-out.jsonl` into `_artifacts/_embedding-recovery-cache/run-{ts}/` (warm cache for future re-ingest without OpenAI download); keeps only the most recent run; auto-runs as the exit step of `ppa-embed-batch-loop.sh` | `archive_cli/commands/batch_embed.py`, `__main__.py`, `Makefile`, `archive_scripts/ppa-embed-batch-loop.sh`, `archive_docs/runbooks/embedding-recovery-cache.md` | `test_embed_cache_rotate.py` (5 tests)     |
+
+The full postmortem (incident timeline, why each fix prevents recurrence, the recovery sequence, what to do if it ever happens again) lives in the **"Destructive-code postmortem (2026-04-24)"** section of the Phase 6.5 execution plan.
+
+### Why this isn't a separate Phase 6.75
+
+Each follow-up was discovered DURING Phase 6.5 calibration, not afterwards. Step 1 + Step 16 are blockers for the validated outcome the phase promised (real edges on the full seed); shipping Phase 6.5 without them would mean shipping linker code that produces ~0 useful output. Step 17 fixes a defect in the original phase. Steps 18-20 were original Phase 6.5 scope deferred by the pragmatic path; folding them back in keeps the contract whole. The destructive-code fixes were forced by recovering from a real incident during the phase's execution and apply to every future rebuild, so they belong in this phase's record.
+
+### CLI smoke-check
+
+```
+$ ppa linker list
+MODULE                  STATE    SCORING        ...
+calendarLinker          active   weighted       ...
+communicationLinker     active   weighted       ...
+financeReconcileLinker  active   deterministic  ...    <- new
+graphConsistencyLinker  active   weighted       ...
+identityLinker          active   weighted       ...
+mediaLinker             active   weighted       ...
+meetingArtifactLinker   active   deterministic  ...    <- new
+orphanRepairLinker      active   weighted       ...
+semanticLinker          retired  semantic       ...    <- retired, preserved
+tripClusterLinker       active   deterministic  ...    <- new
+```
+
+`ppa linker scaffold` and `ppa linker impact` join the table after Steps 19 + 20 (both shipped 2026-04-22).
+
+### Definition of Done
+
+_Linker correctness:_
+
+- Three new linkers' generators produce expected candidates against hand-built `SeedLinkCatalog` fixtures (Step 10 ✅)
+- Behavioral queries in `slice_manifest.json` cover each new edge type (Step 11 ✅)
+- Step 21 re-calibration produced **PROCEED** verdicts for `financeReconcileLinker` and `tripClusterLinker`, **NARROW-TO-TIERS** for `meetingArtifactLinker` (auto-promote tiers blocked by Otter timezone-recording bug) (Step 21 ✅)
+- `financeReconcileLinker.TIER_SOURCE_EMAIL` uses only quality-reviewed `source_email` links — kept set programmatically certified at ≥2 corroborating tight-bound signals per the runbook (Step 1a ✅)
+- Step 13 full-seed promotion produced **147 high-precision edges** on the production vault (97 finance_reconciles + 50 part_of_trip) (Step 13 ✅)
+- Step 14 retrieval-impact: zero precision regression + **two** new graph-query categories with measurable improvement; 100% net neighbor uplift on counterfactual analysis (Step 14 ✅)
+
+_Framework + CLI:_
+
+- `ALL_LINKERS` is the single source of truth for dispatch / wiring / catalog indexes / health (✅)
+- `ppa linker {list, info, calibrate, replay, health, impact, scaffold, deprecate, retire, revive}` all working (✅)
+- Lifecycle states (`active` / `deprecated` / `retired`) honored at registration (✅)
+- Step 18 file-split moves the 7 legacy generators into `linker_modules/` with retrofit-invariant tests passing each move (pending)
+
+_Operational invariants (added 2026-04-24):_
+
+- Migration 004 applied to all live schemas; no FK from `embeddings` to `chunks` (✅ — `ppa` schema verified)
+- `make rebuild-indexes` preserves embeddings in pre/post log; 821 → 833 unit tests pass with no regressions (✅)
+- `clean-phase3-derived-dirs.sh` and `bootstrap()` refuse production-vault destruction without explicit override (✅)
+- Embedding recovery cache is the auto-rotated exit step of the batch-loop script and is never touched by cleanup utilities (✅)
+- Phase 6.5 plan's "Destructive-code postmortem (2026-04-24)" + "Implementation guardrail #6" (preserve content-addressable embeddings) are the canonical record for any future rebuild (✅)
+
+_Documentation:_
+
+- `LINKER_ARCHITECTURE.md` + `CONTRIBUTING_LINKERS.md` + `runbooks/linker-retirement-protocol.md` (✅)
+- `runbooks/embedding-recovery-cache.md` covering the warm cache + re-ingest workflow (✅)
+- `runbooks/linker-quality-gates.md` codifying the precision-first standard — ≥95% precision per auto-promoting tier on a stratified sample, coverage is context only (✅)
+- Phase 6.5 plan updated with full postmortem, all 5 audit fixes, and the 9 landed code changes (✅)
+- Phase 6.5 plan + this document updated to reference `linker-quality-gates.md` and retire the arbitrary coverage gate (✅)
+
+---
+
+## Phase 7: Knowledge Cache Population (SKIPPED)
+
+**STATUS: SKIPPED on 2026-04-24.** Deferred indefinitely — likely revisited in v3 once production MCP usage data shows which query patterns would actually benefit from caching. The execution path skips directly from Phase 6 to Phase 8.
+
+**Execution plan:** [`phase_7_execution_plan_b4b2c2ef.plan.md`](file:///Users/rheeger/.cursor/plans/phase_7_execution_plan_b4b2c2ef.plan.md) (marked SKIPPED; original spec preserved as v3 reference)
+
+### Why this was skipped
+
+Phase 6's semantic linker calibration ([`_artifacts/_semantic-linker-calibration/calibration-20260419.md`](../../_artifacts/_semantic-linker-calibration/calibration-20260419.md)) and the 1pct review pass ([`_artifacts/_phase6-iterations/review-1pct-20260419.md`](../../_artifacts/_phase6-iterations/review-1pct-20260419.md)) demonstrated that fuzzy/inferential outputs produce confident-sounding false positives — recurring "Working Block" calendar pairs auto-promoted at emb=0.95+ being the canonical pattern. About 10 of the 45 planned Phase 7 facets (`close-friends`, `professional-network`, `relationship-changes`, `vip-contacts`, `key-dates`, `gifting-patterns`, `service-providers`, `current-residence`, `residence-history`, `cuisine-preferences`, `trip-reconstruction`) carry the same pollution risk because they cross-join data via heuristics.
+
+The remaining ~25 deterministic single-table SQL facets only buy modest latency improvements (10-50ms cached vs 200-2000ms live) — value an agent can already get by calling `archive_query` against the appropriate projection table and aggregating client-side. ~3 weeks of execution plus ongoing maintenance burden traded for marginal latency was not worth the pollution risk on the high-risk facets.
+
+Skipping Phase 7 also makes the architecture honest with Phase 8's stated principle: _"The PPA is a retrieval engine, not a conversational agent. Consuming agents do the reasoning — the PPA retrieves, ranks, and cites."_ Phase 7 violated that principle by having the PPA pre-compute inferences and serve them as fact.
+
+### What still works without Phase 7
+
+The infrastructure is already graceful about an empty knowledge layer — no code changes were made to skip:
+
+- **`archive_knowledge` MCP tool** ([`archive_cli/server.py`](../../archive_cli/server.py)) returns `{"ok": True, "fallback": True, "stale": True, "rows": [...]}` from a lexical search of the `fallback_query` whenever `knowledge_cards` is empty. Functional, just slower than a cache hit would have been.
+- **`knowledge_for_domain()`** ([`archive_cli/index_query.py`](../../archive_cli/index_query.py)) queries the empty projection, falls back to search.
+- **`knowledge` CLI command** ([`archive_cli/__main__.py`](../../archive_cli/__main__.py)) — same fallback path.
+- **`is_knowledge_stale()`** returns True for any non-existent UID — harmless.
+- **`knowledge_cards` projection table** stays empty. Zero overhead.
+- **`Knowledge/` vault directory** stays empty.
+
+### v3 revival guidance
+
+If knowledge caching is revisited, the design constraint is the Phase 6 lessons:
+
+1. **Ship only the deterministic single-table SQL facets** (~25 of the original 45). Skip every facet currently marked `algorithmic` plus the inferential SQL facets listed above.
+2. **Skip domain summary cards entirely.** They aggregate facets into one confident-sounding paragraph; if any underlying facet is noisy the summary amplifies it.
+3. **Drive the priority list from real MCP usage data.** Ship 3-5 facets that you've observed agents repeatedly querying via `archive_query`, not 25 speculatively.
+
+### Original Phase 7 design (preserved for v3 reference)
+
+The remainder of this section is the original Phase 7 specification, kept as reference material for any future v3 work. **None of the components below are built or scheduled to be built under v2.**
+
+---
+
+**What it was going to be:** Build a structured understanding of the archive owner's life — preferences, habits, patterns, relationships, and context — organized by domain, continuously maintained, and instantly queryable by any agent or MCP consumer. This is not just "cached SQL aggregations." It's a **living profile** derived from the archive that understands the owner from a human perspective.
+
+**Why it was scheduled here:** Knowledge cards aggregate over the full corpus. The aggregations are best after enrichment has improved card quality — better summaries, more complete entity links, richer metadata.
 
 **Logging:** `refresh-knowledge` / domain rebuilds over large facets must log **domain, facet, rows processed, elapsed, ETA (`M:SS` where implemented)** and use **`--log-file`** for long runs.
 
@@ -1722,7 +1895,7 @@ _Quality:_
 
 **What it is NOT:** Phase 8 does not build a query agent (`archive_ask`), discovery/pattern detection, or agent working memory. The PPA is a **retrieval engine, not a conversational agent.** Consuming agents (Claude, GPT-4o, OpenClaw agents, voice assistants) do the reasoning — the PPA retrieves, ranks, and cites. This separation ensures the PPA never interferes with the consuming agent's interpretation.
 
-**Deferred to post-v2:** Discovery mode (pattern detection, observation cards, agent working memory). These are valuable but not critical for v2 — Phase 7's knowledge facets already capture patterns via SQL. Discovery can be added once v2 is deployed and operational patterns are understood from real usage.
+**Deferred to post-v2:** Discovery mode (pattern detection, observation cards, agent working memory) and the Phase 7 knowledge cache layer (skipped 2026-04-24). Both are valuable but not critical for v2 — agents reason over the retrieval surface (`archive_query`, `archive_hybrid_search`, `archive_temporal_neighbors`, `archive_graph`, `archive_person`) directly. Knowledge caching and discovery can be revisited in v3 once production MCP usage shows which patterns warrant pre-computation.
 
 **Logging:** `ppa maintain` must log each step (ledger tail, extract, resolve, rebuild, refresh) with **per-step duration and errors** to stderr; cron should append to **`/var/log/ppa-maintain.log`** (or `ppa --log-file` when invoked manually). Implements the same structured rules as other long jobs.
 
@@ -1757,14 +1930,16 @@ Each existing retrieval tool gains two new response fields:
 
 **Confidence signaling:** Every retrieval tool includes a `confidence` field (high/medium/low) in its response:
 
-- `high` — knowledge cache hit (fresh facet), exact match, or >10 relevant results
-- `medium` — partial matches, stale knowledge, 3-10 results
-- `low` — <3 results, no knowledge cache, query hit a known gap pattern
+- `high` — exact match or >10 relevant results
+- `medium` — partial matches or 3-10 results
+- `low` — <3 results, or query hit a known gap pattern
+
+(The original spec also included "knowledge cache hit (fresh facet)" as a `high` signal — removed because Phase 7 was skipped 2026-04-24 and there is no knowledge cache.)
 
 **Gap detection:** When any retrieval tool returns sparse results (<3 cards, or no results for a query that _should_ have results based on known card types), it logs an entry in `retrieval_gaps`:
 
 - `query_text`: the original query
-- `gap_type`: `no_results`, `sparse_results`, `stale_knowledge`, `type_mismatch`
+- `gap_type`: `no_results`, `sparse_results`, `type_mismatch` (`stale_knowledge` omitted — Phase 7 skipped)
 - `card_uid`: if the gap relates to a specific card
 
 This happens transparently — the tool still returns whatever results it has. The gap log is for the maintenance cycle to act on.
@@ -1777,8 +1952,8 @@ When answering questions about the archive owner's life:
 1. For factual lookups ("who is X", "what is Y"):
    → archive_person or archive_read
 
-2. For cached knowledge ("what restaurants do I order from", "where do I live"):
-   → archive_knowledge with the relevant domain
+2. For aggregations ("what restaurants do I order from", "where do I shop most"):
+   → archive_query with type_filter (e.g. type_filter=meal_order) and aggregate client-side
 
 3. For temporal questions ("what was I doing on Dec 27", "last Tuesday"):
    → archive_temporal_neighbors with parsed timestamp
@@ -1787,14 +1962,16 @@ When answering questions about the archive owner's life:
    → archive_hybrid_search with the query
 
 5. For analytics ("how much do I spend on rides per month"):
-   → archive_knowledge with finance/transport domain, or archive_query with type_filter
+   → archive_query with type_filter=ride and aggregate, or archive_hybrid_search
 
 6. For exploration ("tell me about my relationship with Sarah"):
    → archive_person for the PersonCard, then archive_graph for connected cards
 
-Always prefer archive_knowledge first — it returns pre-computed answers instantly.
-Fall back to archive_hybrid_search for queries that don't match a knowledge domain.
-Check the confidence field in responses — low confidence means the archive may not have enough data.
+Prefer archive_hybrid_search for open-ended queries; prefer archive_query when you know
+the card type. The PPA is a retrieval engine — agents do the reasoning over the returned
+cards. Check the confidence field in responses — low confidence means the archive may
+not have enough data. archive_knowledge exists but currently only returns lexical search
+fallback (no pre-computed knowledge cache in v2).
 ```
 
 **Files touched:** Modified: `archive_cli/index_query.py` (confidence computation per query type), `archive_cli/server.py` (tool response enhancements, updated instructions), `archive_cli/schema_ddl.py` (retrieval_gaps table already created in Phase 1e).
@@ -1809,17 +1986,17 @@ A single CLI command that sequences existing operations to keep the system curre
 2. **Auto-extraction.** For new `email_message` cards from known sender patterns (matched against the extractor registry from Phase 2) → run `ppa extract-emails` for matched senders only.
 3. **Entity resolution.** For new derived cards produced by step 2 → run `ppa resolve-entities`.
 4. **Incremental rebuild.** Run `ppa rebuild-indexes` (incremental, not full) to index newly extracted cards.
-5. **Refresh knowledge.** Run `ppa refresh-knowledge` for stale facets only.
-6. **Coverage report.** Output to stdout:
+5. **Coverage report.** Output to stdout:
    - New cards ingested since last maintenance
    - Cards extracted / entities resolved in this cycle
-   - Knowledge facets refreshed
    - Enrichment queue depth
    - Retrieval gaps logged since last maintenance
    - Errors encountered (with task details)
-7. **Update watermark.** Set `last_maintenance_at` in `meta`.
+6. **Update watermark.** Set `last_maintenance_at` in `meta`.
 
-**Error handling:** If any step fails, log the error and continue to the next step. The cycle is not atomic — partial progress is better than no progress. Failed steps are reported in the coverage report. Steps 2-5 are independently idempotent — safe to re-run.
+**Error handling:** If any step fails, log the error and continue to the next step. The cycle is not atomic — partial progress is better than no progress. Failed steps are reported in the coverage report. Steps 2-4 are independently idempotent — safe to re-run.
+
+**Note on knowledge refresh:** Phase 7 was skipped (2026-04-24), so `ppa maintain` does NOT call `refresh-knowledge`. If Phase 7 is ever revived in v3, a `Refresh knowledge` step would slot in between steps 4 and 5.
 
 **Scheduling on Arnold (configured during Phase 9 deployment):**
 
@@ -1846,7 +2023,7 @@ _Tool enhancements:_
 
 _Maintenance:_
 
-- `ppa maintain` runs end-to-end: tails ledger, extracts new emails, resolves entities, rebuilds incrementally, refreshes knowledge, produces coverage report
+- `ppa maintain` runs end-to-end: tails ledger, extracts new emails, resolves entities, rebuilds incrementally, produces coverage report (knowledge refresh step omitted — Phase 7 skipped)
 - Maintenance is idempotent: running twice in a row produces the same result (second run reports "nothing to do")
 - Partial failure handling: if extraction fails for one sender, remaining steps still execute
 - Coverage report includes all specified metrics
@@ -1959,11 +2136,12 @@ The MCP server on Arnold serves over SSH tunnel. Latency targets for the v2 inde
 
 | Query Type                    | Target Latency | Bottleneck                           |
 | ----------------------------- | -------------- | ------------------------------------ |
-| `archive_knowledge`           | < 1s           | Single row read from knowledge facet |
 | `archive_search` (FTS)        | < 2s           | GIN index scan                       |
 | `archive_temporal_neighbors`  | < 2s           | B-tree index on `(activity_at, uid)` |
 | `archive_hybrid_search`       | < 5s           | Vector similarity + FTS fusion       |
 | `archive_query` (type filter) | < 2s           | Projection table scan                |
+
+(`archive_knowledge` omitted — Phase 7 skipped, tool currently always falls back to lexical search and inherits the `archive_search` budget.)
 
 If any query exceeds its target, investigate: connection pooling (`PPA_STATEMENT_TIMEOUT_MS`), Postgres GUC tuning, index stats (`ANALYZE`), or SSH tunnel overhead.
 
@@ -2015,7 +2193,7 @@ _Operational:_
 | Name                           | Type      | Phase | Profile                      | Purpose                                                                                                         |
 | ------------------------------ | --------- | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | `archive_temporal_neighbors`   | MCP tool  | 1a    | full, read-only              | Cards near a timestamp via `(activity_at, uid)` keyset pagination + interval overlap                            |
-| `archive_knowledge`            | MCP tool  | 1i    | full, read-only              | Read/check knowledge cache by domain                                                                            |
+| `archive_knowledge`            | MCP tool  | 1i    | full, read-only              | Currently always returns lexical search fallback (Phase 7 skipped — knowledge cache not built in v2)            |
 | (all existing retrieval tools) | MCP tools | 8a    | full, read-only, remote-read | Enhanced with confidence signaling and gap detection. Agent prompt guide in MCP instructions describes routing. |
 | `slice-seed`                   | CLI       | 0     | —                            | Stratified transitive-closure slice from seed vault                                                             |
 | `health-check`                 | CLI       | 0     | —                            | Structural + behavioral health assertions against any index                                                     |
@@ -2023,8 +2201,8 @@ _Operational:_
 | `temporal-neighbors`           | CLI       | 1a    | —                            | CLI version of temporal neighbors query                                                                         |
 | `extract-emails`               | CLI       | 2     | —                            | Run email extractors against vault                                                                              |
 | `resolve-entities`             | CLI       | 2c    | —                            | Create/merge PlaceCard and OrgCard files                                                                        |
-| `refresh-knowledge`            | CLI       | 7     | —                            | Recompute stale knowledge cards                                                                                 |
-| `maintain`                     | CLI       | 8b    | —                            | Run maintenance cycle (extraction, entity resolution, incremental rebuild, knowledge refresh)                   |
+| ~~`refresh-knowledge`~~        | CLI       | 7     | —                            | Not built — Phase 7 skipped 2026-04-24                                                                          |
+| `maintain`                     | CLI       | 8b    | —                            | Run maintenance cycle (extraction, entity resolution, incremental rebuild, coverage report)                     |
 | `deploy`                       | CLI       | 9     | —                            | Deploy index to remote target                                                                                   |
 
 ---
@@ -2042,9 +2220,9 @@ Phase 0 (test infrastructure + rebuild verification)
                     └── Phase 4 (ONE rebuild via archive_crate) — depends on Phase 3 vault state being final; uses the Phase 2.9 engine
                         └── Phase 5 (ONE embedding) — depends on 4 complete
                             └── Phase 6 (enrichment) — depends on 5 complete
-                                └── Phase 7 (knowledge cache) — depends on 6 complete
-                                    └── Phase 8 (maintenance + tool enhancements) — depends on 7 complete
-                                        └── Phase 9 (production deployment to Arnold) — depends on 8 complete; ONE vault sync + rebuild + embed
+                                └── Phase 7 (knowledge cache) — SKIPPED 2026-04-24 (deferred to v3)
+                                └── Phase 8 (maintenance + tool enhancements) — depends on 6 complete
+                                    └── Phase 9 (production deployment to Arnold) — depends on 8 complete; ONE vault sync + rebuild + embed
 ```
 
 **Parallelization opportunities:**
@@ -2056,7 +2234,7 @@ Phase 0 (test infrastructure + rebuild verification)
 - Phase 2.9 Tier 2.5 (entity resolution) depends on Tier 1 (needs the manifest for person index) but not on Tier 2 (materializer). Can be developed in parallel with Tier 2
 - Phase 8a (tool enhancements) and 8b (maintenance) can be developed in parallel
 
-**Critical path:** Phase 0 → Phase 1 → Phase 2.875 (vault enrichment) → Phase 2.9 (crate + entity resolution + person linking) → Phase 3 (validation + promotion) → Phase 4 → Phase 5 → Phase 6 → Phase 7 → Phase 8 → Phase 9 (ONE Arnold deployment). Phase 2.875 adds ~1-2 weeks (mostly LLM inference time) but ensures thread summaries, cross-card links, and entity mentions are in the vault before extraction. Phase 2.9 adds ~10-14 weeks (including entity resolution) but makes Phase 4 (~20 min vs ~2 hours) and every subsequent phase dramatically faster. Arnold deployment is deferred to Phase 9 so the vault is synced once in its final state — avoiding repeated rsync + rebuild + embed cycles after every intermediate phase.
+**Critical path:** Phase 0 → Phase 1 → Phase 2.875 (vault enrichment) → Phase 2.9 (crate + entity resolution + person linking) → Phase 3 (validation + promotion) → Phase 4 → Phase 5 → Phase 6 → Phase 6.5 (linker framework + cross-derived-card linkers; in progress) → Phase 8 → Phase 9 (ONE Arnold deployment). Phase 7 was skipped on 2026-04-24 (deferred to v3 — see Phase 7 section for rationale). Phase 2.875 adds ~1-2 weeks (mostly LLM inference time) but ensures thread summaries, cross-card links, and entity mentions are in the vault before extraction. Phase 2.9 adds ~10-14 weeks (including entity resolution) but makes Phase 4 (~20 min vs ~2 hours) and every subsequent phase dramatically faster. Phase 6.5 adds the cross-derived-card linker framework + the operational invariants (Migration 004, embedding recovery cache, etc.) that make subsequent rebuilds safe. Arnold deployment is deferred to Phase 9 so the vault is synced once in its final state — avoiding repeated rsync + rebuild + embed cycles after every intermediate phase.
 
 ---
 

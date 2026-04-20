@@ -105,6 +105,53 @@ fn push_edge(
     }
 }
 
+fn target_field_key(target_card_type: &str, lookup_field: &str) -> String {
+    format!("{}\u{001f}{}", target_card_type, lookup_field)
+}
+
+fn append_card_edge_via_field_index(
+    edges: &mut Vec<EdgeRow>,
+    seen: &mut HashSet<(String, String, String, String)>,
+    card_uid: &str,
+    rel_path: &str,
+    field_name: &str,
+    raw_value: &str,
+    edge_type: &str,
+    target_field_index: &HashMap<String, HashMap<String, String>>,
+    target_card_type: &str,
+    target_lookup_field: &str,
+    path_to_uid: &HashMap<String, String>,
+) -> bool {
+    let key = target_field_key(target_card_type, target_lookup_field);
+    let Some(m) = target_field_index.get(&key) else {
+        return false;
+    };
+    let v = raw_value.trim();
+    let target_path = m
+        .get(v)
+        .or_else(|| m.get(&v.to_lowercase()))
+        .cloned();
+    let Some(tp) = target_path else {
+        return false;
+    };
+    let target_uid = path_to_uid.get(&tp).cloned().unwrap_or_default();
+    push_edge(
+        edges,
+        seen,
+        EdgeRow {
+            source_uid: card_uid.to_string(),
+            source_path: rel_path.to_string(),
+            target_slug: v.to_string(),
+            target_path: tp,
+            target_uid,
+            target_kind: "card".to_string(),
+            edge_type: edge_type.to_string(),
+            field_name: field_name.to_string(),
+        },
+    );
+    true
+}
+
 fn append_card_edge(
     edges: &mut Vec<EdgeRow>,
     seen: &mut HashSet<(String, String, String, String)>,
@@ -191,6 +238,7 @@ pub fn build_edges(
     slug_map: &HashMap<String, String>,
     path_to_uid: &HashMap<String, String>,
     person_lookup: &HashMap<String, String>,
+    target_field_index: &HashMap<String, HashMap<String, String>>,
 ) -> Vec<EdgeRow> {
     let card_uid = card.uid.clone();
     let card_type = card.card_type.clone();
@@ -300,17 +348,38 @@ pub fn build_edges(
                     continue;
                 }
                 if rule.target == "card" {
-                    append_card_edge(
-                        &mut edges,
-                        &mut seen,
-                        &card_uid,
-                        rel_path,
-                        &rule.field_name,
-                        &v,
-                        &rule.edge_type,
-                        slug_map,
-                        path_to_uid,
-                    );
+                    let mut resolved = false;
+                    if let (Some(tlf), Some(tct)) = (
+                        rule.target_lookup_field.as_deref(),
+                        rule.target_card_type.as_deref(),
+                    ) {
+                        resolved = append_card_edge_via_field_index(
+                            &mut edges,
+                            &mut seen,
+                            &card_uid,
+                            rel_path,
+                            &rule.field_name,
+                            &v,
+                            &rule.edge_type,
+                            target_field_index,
+                            tct,
+                            tlf,
+                            path_to_uid,
+                        );
+                    }
+                    if !resolved {
+                        append_card_edge(
+                            &mut edges,
+                            &mut seen,
+                            &card_uid,
+                            rel_path,
+                            &rule.field_name,
+                            &v,
+                            &rule.edge_type,
+                            slug_map,
+                            path_to_uid,
+                        );
+                    }
                 } else {
                     append_person_edge(
                         &mut edges,

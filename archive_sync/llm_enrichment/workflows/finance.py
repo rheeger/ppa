@@ -7,10 +7,11 @@ import json
 from pathlib import Path
 from typing import Any
 
-from archive_sync.llm_enrichment.staging_types import EntityMention, MatchCandidate
+from archive_sync.llm_enrichment.staging_types import (EntityMention,
+                                                       MatchCandidate)
 
 PROMPT_FILE = Path(__file__).resolve().parent.parent / "prompts" / "enrich_finance.txt"
-ENRICH_FINANCE_PROMPT_VERSION = "v4"
+ENRICH_FINANCE_PROMPT_VERSION = "v6"
 
 _COUNTERPARTY_TYPES = frozenset(
     {
@@ -112,6 +113,7 @@ def parse_finance_response(
     source_uid: str,
     run_id: str,
     existing_provider_tags: list[str] | None,
+    finance_frontmatter: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[EntityMention], list[MatchCandidate]]:
     """Map LLM JSON to field updates + staging rows."""
 
@@ -166,6 +168,15 @@ def parse_finance_response(
     matches: list[MatchCandidate] = []
     em = data.get("email_match")
     if isinstance(em, dict) and em:
+        em = dict(em)
+        dr = em.get("date_range") or []
+        if not dr and finance_frontmatter:
+            for key in ("created", "activity_at"):
+                raw = str(finance_frontmatter.get(key) or "").strip()
+                day = raw[:10] if len(raw) >= 10 else ""
+                if len(day) == 10 and day[4] == "-" and day[7] == "-":
+                    em["date_range"] = [day, day]
+                    break
         matches.append(
             MatchCandidate(
                 source_card_uid=source_uid,

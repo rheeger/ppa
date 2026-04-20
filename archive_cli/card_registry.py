@@ -1041,7 +1041,15 @@ CARD_TYPE_REGISTRATIONS: tuple[CardTypeRegistration, ...] = (
         person_edge_type="mentions_person",
         edge_rules=(
             DeclEdgeRule("source_email", "derived_from", "card", ("source_email",), multi=False),
-            DeclEdgeRule("linked_purchase", "ships_for", "card", ("linked_purchase",), multi=False),
+            DeclEdgeRule(
+                "linked_purchase",
+                "ships_for",
+                "card",
+                ("linked_purchase",),
+                multi=False,
+                target_lookup_field="order_number",
+                target_card_type="purchase",
+            ),
         ),
         chunk_builder_name=None,
         chunk_types=(),

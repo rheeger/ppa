@@ -156,6 +156,7 @@ fn materialize_one_rust(
     slug_map: &HashMap<String, String>,
     path_to_uid: &HashMap<String, String>,
     person_lookup: &HashMap<String, String>,
+    target_field_index: &HashMap<String, HashMap<String, String>>,
     batch_id: &str,
     chunk_schema_version: i32,
     body_cache: Option<&HashMap<String, Vec<u8>>>,
@@ -272,6 +273,7 @@ fn materialize_one_rust(
         slug_map,
         path_to_uid,
         person_lookup,
+        target_field_index,
     );
 
     let chunk_records = build_chunks(&fm_val, body.as_str());
@@ -515,7 +517,7 @@ fn materialize_rust_to_py(py: Python<'_>, m: MaterializedOneRust) -> PyResult<Py
 /// in-memory cache (zlib-decompressed, already provenance-stripped) instead of disk.
 /// Create the `BodyCache` once via `BodyCache.load(path)` and pass it to every batch call.
 #[pyfunction]
-#[pyo3(signature = (rows, vault_root, slug_map, path_to_uid, person_lookup, batch_id=None, chunk_schema_version=5, body_cache=None))]
+#[pyo3(signature = (rows, vault_root, slug_map, path_to_uid, person_lookup, target_field_index, batch_id=None, chunk_schema_version=5, body_cache=None))]
 pub fn materialize_row_batch(
     py: Python<'_>,
     rows: &Bound<'_, PyAny>,
@@ -523,6 +525,7 @@ pub fn materialize_row_batch(
     slug_map: HashMap<String, String>,
     path_to_uid: HashMap<String, String>,
     person_lookup: HashMap<String, String>,
+    target_field_index: HashMap<String, HashMap<String, String>>,
     batch_id: Option<String>,
     chunk_schema_version: i32,
     body_cache: Option<&crate::materializer::body::BodyCache>,
@@ -544,6 +547,7 @@ pub fn materialize_row_batch(
     let sm = slug_map.clone();
     let ptu = path_to_uid.clone();
     let pl = person_lookup.clone();
+    let tfi = target_field_index.clone();
     let cache_arc = body_cache.map(|bc| bc.inner.clone());
 
     let results: Vec<Result<MaterializedOneRust, String>> = py.allow_threads(|| {
@@ -557,6 +561,7 @@ pub fn materialize_row_batch(
                     &sm,
                     &ptu,
                     &pl,
+                    &tfi,
                     bid.as_str(),
                     chunk_schema_version,
                     cache_arc.as_deref(),
@@ -584,7 +589,7 @@ pub fn materialize_row_batch(
 /// materializing each chunk in parallel then converting to Python. Logs progress to stderr.
 /// Returns a Python list of `ProjectionRowBuffer` objects.
 #[pyfunction]
-#[pyo3(signature = (rows, vault_root, slug_map, path_to_uid, person_lookup, batch_id=None, chunk_schema_version=5, body_cache=None, batch_size=5000))]
+#[pyo3(signature = (rows, vault_root, slug_map, path_to_uid, person_lookup, target_field_index, batch_id=None, chunk_schema_version=5, body_cache=None, batch_size=5000))]
 pub fn materialize_all_rows(
     py: Python<'_>,
     rows: &Bound<'_, PyAny>,
@@ -592,6 +597,7 @@ pub fn materialize_all_rows(
     slug_map: HashMap<String, String>,
     path_to_uid: HashMap<String, String>,
     person_lookup: HashMap<String, String>,
+    target_field_index: HashMap<String, HashMap<String, String>>,
     batch_id: Option<String>,
     chunk_schema_version: i32,
     body_cache: Option<&crate::materializer::body::BodyCache>,
@@ -623,6 +629,7 @@ pub fn materialize_all_rows(
         let split_at = bs.min(remaining.len());
         let chunk_vec: Vec<(String, JsonValue)> = remaining.drain(..split_at).collect();
 
+        let tfi_ref = target_field_index.clone();
         let chunk_results: Vec<Result<MaterializedOneRust, String>> = py.allow_threads(|| {
             chunk_vec
                 .into_par_iter()
@@ -634,6 +641,7 @@ pub fn materialize_all_rows(
                         &slug_map,
                         &path_to_uid,
                         &person_lookup,
+                        &tfi_ref,
                         batch_id.as_str(),
                         chunk_schema_version,
                         cache_ref,

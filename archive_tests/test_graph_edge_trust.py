@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from archive_cli.commands.formatters import format_graph
 from archive_cli.index_store import PostgresArchiveIndex
 
@@ -149,6 +148,34 @@ class TestGraphReturnsEdgeMetadata:
             conn.commit()
         neighbors = idx.fetch_graph_neighbors_for_uids(["u-a", "u-b"])
         assert neighbors == {}
+
+    def test_neighbor_uids_respects_edge_type_filter(self, pgvector_dsn, tmp_path):
+        """Hybrid / linker-impact can restrict graph expansion to specific edge types."""
+        sch = self.SCHEMA + "_etype"
+        idx = _bootstrap_test_schema(pgvector_dsn, sch, tmp_path)
+        with idx._connect() as conn:
+            _insert_card(conn, sch, "u-a", "a.md")
+            _insert_card(conn, sch, "u-b", "b.md")
+            _insert_card(conn, sch, "u-c", "c.md")
+            _insert_wikilink_edge(conn, sch, "u-a", "a.md", "u-b", "b.md")
+            _insert_applied_seed_link(
+                conn,
+                sch,
+                "u-a",
+                "a.md",
+                "u-c",
+                "c.md",
+                link_type="possible_same_person",
+                confidence=0.77,
+            )
+            conn.commit()
+        all_n = idx.fetch_graph_neighbors_for_uids(["u-a"])
+        assert all_n == {"u-b": 1.0, "u-c": 0.77}
+        filt = idx.fetch_graph_neighbors_for_uids(
+            ["u-a"],
+            edge_type_filter=["possible_same_person"],
+        )
+        assert filt == {"u-c": 0.77}
 
 
 class TestFormatGraph:

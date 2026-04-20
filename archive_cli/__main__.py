@@ -11,16 +11,12 @@ import sys
 import time
 from pathlib import Path
 
-from archive_sync.llm_enrichment.defaults import DEFAULT_ENRICH_CARD_GEMINI_MODEL, DEFAULT_ENRICH_EXTRACT_MODEL
+from archive_sync.llm_enrichment.defaults import (
+    DEFAULT_ENRICH_CARD_GEMINI_MODEL, DEFAULT_ENRICH_EXTRACT_MODEL)
 
-from .benchmark import (
-    BENCHMARK_PROFILES,
-    DEFAULT_BENCHMARK_SOURCE_VAULT,
-    benchmark_multi_size,
-    benchmark_rebuild,
-    benchmark_seed_links,
-    build_benchmark_sample,
-)
+from .benchmark import (BENCHMARK_PROFILES, DEFAULT_BENCHMARK_SOURCE_VAULT,
+                        benchmark_multi_size, benchmark_rebuild,
+                        benchmark_seed_links, build_benchmark_sample)
 from .commands import admin as admin_cmd
 from .commands import batch_embed as batch_embed_cmd
 from .commands import explain
@@ -153,7 +149,12 @@ def main() -> None:
     subparsers.add_parser("projection-status")
     projection_explain_parser = subparsers.add_parser("projection-explain")
     projection_explain_parser.add_argument("card_uid")
-    subparsers.add_parser("bootstrap-postgres")
+    bootstrap_parser = subparsers.add_parser("bootstrap-postgres")
+    bootstrap_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Allow bootstrap even if schema is already populated (DROPs all typed projections!)",
+    )
     embed_parser = subparsers.add_parser("embed-pending")
     embed_parser.add_argument("--limit", type=int, default=0)
     embed_parser.add_argument("--embedding-model", default="")
@@ -175,6 +176,15 @@ def main() -> None:
     )
     embed_estimate_parser.add_argument("--embedding-model", type=str, default="")
     embed_estimate_parser.add_argument("--embedding-version", type=int, default=0)
+    embed_gc_parser = subparsers.add_parser(
+        "embed-gc",
+        help="GC orphaned embeddings (chunk_key no longer in chunks). Idempotent.",
+    )
+    embed_gc_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Actually delete orphans. Without --apply, prints counts only (dry-run).",
+    )
     embed_batch_submit_parser = subparsers.add_parser(
         "embed-batch-submit",
         help="Submit pending chunks to OpenAI Batch API (50% discount, no TPM/TPD)",
@@ -223,6 +233,27 @@ def main() -> None:
     subparsers.add_parser(
         "embed-batch-status",
         help="Summary of OpenAI batch states + remaining pending chunks",
+    )
+    embed_cache_rotate_parser = subparsers.add_parser(
+        "embed-cache-rotate",
+        help=(
+            "Move ingested *-out.jsonl files from _artifacts/_embedding-runs/batches/ "
+            "into _artifacts/_embedding-recovery-cache/run-{ts}/ (warm cache for "
+            "future re-ingest without OpenAI download). Keeps only the most recent run."
+        ),
+    )
+    embed_cache_rotate_parser.add_argument("--artifact-dir", default="")
+    embed_cache_rotate_parser.add_argument("--cache-dir", default="")
+    embed_cache_rotate_parser.add_argument(
+        "--keep",
+        type=int,
+        default=1,
+        help="How many recent runs to retain (default 1)",
+    )
+    embed_cache_rotate_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report what would be moved/pruned without touching files",
     )
     _ = embed_batch_poll_parser  # placate linters
     subparsers.add_parser("seed-link-surface")
@@ -992,6 +1023,11 @@ def main() -> None:
     promote_parser.add_argument("--staging-dir", required=True, help="Path to staging directory")
     promote_parser.add_argument("--dry-run", action="store_true")
 
+    # Phase 6.5 `ppa linker` subcommand family.
+    from archive_cli import \
+        linker_cli as _linker_cli  # lazy to avoid import cycles
+    _linker_cli.add_parser(subparsers)
+
     parser.set_defaults(command="serve")
     args = parser.parse_args()
     if args.command == "serve" and not hasattr(args, "tunnel"):
@@ -1006,6 +1042,9 @@ def main() -> None:
     if args.command == "mcp-config":
         _emit_mcp_config()
         return
+    if args.command == "linker":
+        rc = _linker_cli.dispatch(args)
+        raise SystemExit(rc)
     if args.command == "health":
         from .health import run_health_checks
 
@@ -1155,7 +1194,8 @@ def main() -> None:
     if args.command == "template-sampler":
         try:
             from .commands._resolve import resolve_vault
-            from .commands.template_sampler import run_template_sampler, run_template_sampler_from_batch_file
+            from .commands.template_sampler import (
+                run_template_sampler, run_template_sampler_from_batch_file)
 
             vp = str(getattr(args, "vault", "") or "").strip() or str(resolve_vault())
             batch = str(getattr(args, "batch", "") or "").strip()
@@ -1222,7 +1262,8 @@ def main() -> None:
         return
     if args.command == "enrich-emails":
         try:
-            from archive_sync.llm_enrichment.enrich_runner import LlmEnrichmentRunner
+            from archive_sync.llm_enrichment.enrich_runner import \
+                LlmEnrichmentRunner
 
             from .commands._resolve import resolve_vault
 
@@ -1269,7 +1310,8 @@ def main() -> None:
         return
     if args.command == "enrich-cards":
         try:
-            from archive_sync.llm_enrichment.card_enrichment_runner import CardEnrichmentRunner
+            from archive_sync.llm_enrichment.card_enrichment_runner import \
+                CardEnrichmentRunner
 
             from .commands._resolve import resolve_vault
 
@@ -1321,7 +1363,8 @@ def main() -> None:
         return
     if args.command == "extract-document-text":
         try:
-            from archive_sync.llm_enrichment.document_text_extractor import run_document_text_extraction
+            from archive_sync.llm_enrichment.document_text_extractor import \
+                run_document_text_extraction
 
             from .commands._resolve import resolve_vault
 
@@ -1339,7 +1382,8 @@ def main() -> None:
         return
     if args.command == "enrich":
         try:
-            from archive_sync.llm_enrichment.enrichment_orchestrator import EnrichmentOrchestrator, default_run_id
+            from archive_sync.llm_enrichment.enrichment_orchestrator import (
+                EnrichmentOrchestrator, default_run_id)
 
             vault = Path(str(getattr(args, "vault", "") or "").strip())
             run_id = str(getattr(args, "run_id", "") or "").strip() or default_run_id()
@@ -1403,7 +1447,8 @@ def main() -> None:
         return
     if args.command == "resolve-entities":
         try:
-            from archive_sync.extractors.entity_resolution import run_entity_resolution
+            from archive_sync.extractors.entity_resolution import \
+                run_entity_resolution
 
             from .commands._resolve import resolve_vault
 
@@ -1433,7 +1478,8 @@ def main() -> None:
         return
     if args.command == "link-persons":
         try:
-            from archive_sync.extractors.entity_resolution import run_person_linking
+            from archive_sync.extractors.entity_resolution import \
+                run_person_linking
 
             from .commands._resolve import resolve_vault
 
@@ -1462,7 +1508,8 @@ def main() -> None:
         return
     if args.command == "resolve-matches":
         try:
-            from archive_sync.llm_enrichment.match_resolver import run_match_resolution
+            from archive_sync.llm_enrichment.match_resolver import \
+                run_match_resolution
 
             from .commands._resolve import resolve_vault
 
@@ -1497,13 +1544,16 @@ def main() -> None:
         return
     if args.command == "staging-report":
         try:
-            from .commands.staging import format_staging_report_markdown, staging_report, staging_report_to_jsonable
+            from .commands.staging import (format_staging_report_markdown,
+                                           staging_report,
+                                           staging_report_to_jsonable)
 
             report = staging_report(str(args.staging_dir))
             if bool(getattr(args, "json", False)):
                 _print_json(staging_report_to_jsonable(report))
             else:
-                from archive_sync.extractors.field_metrics import compute_field_population
+                from archive_sync.extractors.field_metrics import \
+                    compute_field_population
 
                 fp = compute_field_population(Path(str(args.staging_dir)))
                 print(format_staging_report_markdown(report, field_population=fp), file=sys.stderr)
@@ -1665,6 +1715,19 @@ def main() -> None:
         except PpaError as exc:
             _cli_fail(exc)
         return
+    if args.command == "embed-cache-rotate":
+        try:
+            out = batch_embed_cmd.embed_cache_rotate(
+                logger=_cli_log,
+                artifact_dir=str(getattr(args, "artifact_dir", "") or ""),
+                cache_dir=str(getattr(args, "cache_dir", "") or ""),
+                keep=int(getattr(args, "keep", 1) or 1),
+                dry_run=bool(getattr(args, "dry_run", False)),
+            )
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
     if args.command == "embedding-backlog":
         try:
             store = resolve_store()
@@ -1709,7 +1772,23 @@ def main() -> None:
     if args.command == "bootstrap-postgres":
         try:
             vault = resolve_store().vault
-            result = admin_cmd.bootstrap_postgres(vault=vault, logger=_cli_log)
+            result = admin_cmd.bootstrap_postgres(
+                vault=vault,
+                logger=_cli_log,
+                force=bool(getattr(args, "force", False)),
+            )
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
+        return
+    if args.command == "embed-gc":
+        try:
+            store = resolve_store()
+            result = admin_cmd.embed_gc(
+                store=store,
+                logger=_cli_log,
+                dry_run=not bool(getattr(args, "apply", False)),
+            )
             _print_cli_result(result)
         except PpaError as exc:
             print(str(exc))
@@ -1760,7 +1839,8 @@ def main() -> None:
             if copy_src:
                 # 3. copy embeddings (free, fast).
                 _cli_log.info("slice-bootstrap step=3/5 copy-embeddings from=%s", copy_src)
-                from .index_config import get_default_embedding_model, get_default_embedding_version
+                from .index_config import (get_default_embedding_model,
+                                           get_default_embedding_version)
                 model = get_default_embedding_model()
                 version = get_default_embedding_version()
                 r3 = store.index.copy_embeddings_from_schema(
@@ -2027,7 +2107,8 @@ def main() -> None:
         )
         return
     if args.command == "slice-seed":
-        from .test_slice import build_slice_docker_image, load_slice_config, slice_seed_vault
+        from .test_slice import (build_slice_docker_image, load_slice_config,
+                                 slice_seed_vault)
 
         cfg = load_slice_config(Path(args.config))
         if args.target_percent is not None:

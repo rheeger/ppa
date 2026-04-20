@@ -39,6 +39,10 @@ pub struct EdgeRuleSpec {
     pub source_fields: Vec<String>,
     #[serde(default)]
     pub multi: bool,
+    #[serde(default)]
+    pub target_lookup_field: Option<String>,
+    #[serde(default)]
+    pub target_card_type: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

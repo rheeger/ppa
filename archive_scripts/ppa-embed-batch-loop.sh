@@ -79,6 +79,10 @@ while true; do
   )
   if [[ "$remaining" == "0" ]]; then
     echo "[loop] no pending chunks and no in-flight batches — done." | tee -a "$LOOP_LOG"
+    # Rotate ingested *-out.jsonl into the long-term recovery cache so we
+    # never have to re-download from OpenAI on a future re-ingest. Keeps
+    # only the most recent run; older ones get pruned automatically.
+    $PYTHON -m archive_cli embed-cache-rotate 2>&1 | tee -a "$LOOP_LOG" || true
     exit 0
   fi
 

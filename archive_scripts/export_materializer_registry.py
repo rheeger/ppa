@@ -52,6 +52,8 @@ def main() -> None:
                         "target": rule.target,
                         "source_fields": list(rule.source_fields),
                         "multi": rule.multi,
+                        "target_lookup_field": rule.target_lookup_field,
+                        "target_card_type": rule.target_card_type,
                     }
                     for rule in reg.edge_rules
                 ],

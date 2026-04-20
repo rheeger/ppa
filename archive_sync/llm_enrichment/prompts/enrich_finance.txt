@@ -40,7 +40,9 @@ Return a single JSON object (no markdown fences).
 
 2. **entity_mentions** — 0–3 items. **Every item MUST include `"type"`: `"person"` | `"organization"` | `"place"`** (required for downstream staging). Also include `"name"` and optional `"confidence"`, `"context"` (`rails`, `raw_descriptor`).
 
-3. **email_match** — non-null only for **merchant / subscription** purchases that might have a receipt email; **null** for transfers, ATM, P2P, interest/fee-only lines, and bill-pay boilerplate.
+3. **email_match** — for **merchant** and **subscription** charges, provide your **best-effort** receipt-email search signals whenever a consumer purchase is plausible (Amazon orders, food delivery, SaaS renewals, etc.). Use **null** only for transfers, ATM, P2P, interest/fee-only lines, and bill-pay boilerplate where no merchant receipt exists. Phase 6.5 downstream linkers consume `source_email` on finance cards; sparse `email_match` directly hurts coverage — bias toward filling this object when unsure rather than leaving it null.
+
+   **Always** set `date_range` to two ISO dates when `email_match` is non-null: use the transaction **Date (created)** line from the user message for both entries (same day twice is fine), or `[created-1d, created+1d]` if the charge might post on an adjacent calendar day. Empty `date_range` breaks deterministic email matching.
 
    `{"counterparty_keywords": ["..."], "amount": <number>, "date_range": ["YYYY-MM-DD", "YYYY-MM-DD"]}`
 

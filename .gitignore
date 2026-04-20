@@ -8,10 +8,9 @@ ppa.json
 logs/
 
 # Local stratified slices (slice-seed output from make slice-local-*; large vault trees)
-.slices/smoke/
-.slices/1pct/
-.slices/5pct/
-.slices/10pct/
+# Ignore the entire .slices/ directory tree, including any pre-rebuild
+# snapshots / variants (e.g. .slices/1pct.pre-rebuild-YYYY-MM-DD/).
+.slices/
 
 # All generated artifacts (staging, caches, benchmarks, reports)
 _artifacts/

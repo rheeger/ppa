@@ -5,24 +5,21 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from .explain import projection_explain_payload, projection_inventory_payload, projection_status_payload
+from .explain import (projection_explain_payload, projection_inventory_payload,
+                      projection_status_payload)
 from .features import parse_timestamp_to_utc
-from .index_config import (
-    VECTOR_CANDIDATE_MULTIPLIER,
-    _apply_recency_boost,
-    _card_type_prior,
-    _coerce_source_fields,
-    _field_provenance_bonus,
-    _field_provenance_label,
-    _format_activity_at,
-    _vector_literal,
-    get_seed_links_enabled,
-)
+from .index_config import (VECTOR_CANDIDATE_MULTIPLIER, _apply_recency_boost,
+                           _card_type_prior, _coerce_source_fields,
+                           _field_provenance_bonus, _field_provenance_label,
+                           _format_activity_at, _vector_literal,
+                           get_seed_links_enabled)
 from .materializer import _normalize_exact_text, _normalize_slug
-from .projections.registry import PROJECTION_REGISTRY, TYPED_PROJECTIONS, projection_for_card_type
+from .projections.registry import (PROJECTION_REGISTRY, TYPED_PROJECTIONS,
+                                   projection_for_card_type)
 
 logger = logging.getLogger("ppa.index_query")
 
@@ -452,15 +449,29 @@ class QueryMixin:
         )
         return rows[:limit]
 
-    def _graph_neighbor_uids(self, conn, anchor_uids: list[str]) -> dict[str, float]:
+    def _graph_neighbor_uids(
+        self,
+        conn,
+        anchor_uids: list[str],
+        edge_type_filter: Sequence[str] | None = None,
+    ) -> dict[str, float]:
         """Return {neighbor_card_uid: trust_weight} for 1-hop neighbors of any anchor.
 
         Deterministic edges use trust 1.0; promoted seed-link edges use ``link_decisions.final_confidence``.
         Neighbor UIDs that are also anchors are excluded (not useful as expansion targets).
         When multiple edges connect the same pair, the maximum trust weight wins.
+
+        When ``edge_type_filter`` is non-empty, only edges whose ``edge_type`` / ``proposed_link_type``
+        is in that set are considered (hybrid expansion + linker impact).
         """
         if not anchor_uids:
             return {}
+        filt = [str(t).strip() for t in (edge_type_filter or ()) if str(t).strip()]
+        type_clause = ""
+        tail_params: list[Any] = []
+        if filt:
+            type_clause = " AND edge_type = ANY(%s)"
+            tail_params.append(filt)
         seed_link_union = ""
         if get_seed_links_enabled():
             seed_link_union = f"""
@@ -469,7 +480,8 @@ class QueryMixin:
                     lc.source_card_uid AS source_uid,
                     lc.target_card_uid AS target_uid,
                     lc.target_kind,
-                    COALESCE(ld.final_confidence, 0.0) AS confidence
+                    COALESCE(ld.final_confidence, 0.0) AS confidence,
+                    lc.proposed_link_type AS edge_type
                 FROM {self.schema}.link_candidates lc
                 JOIN {self.schema}.promotion_queue pq
                   ON pq.candidate_id = lc.candidate_id
@@ -484,7 +496,8 @@ class QueryMixin:
                     source_uid,
                     target_uid,
                     target_kind,
-                    1.0::double precision AS confidence
+                    1.0::double precision AS confidence,
+                    edge_type
                 FROM {self.schema}.edges
                 {seed_link_union}
             )
@@ -500,12 +513,13 @@ class QueryMixin:
                 WHERE target_kind = 'card'
                   AND target_uid <> ''
                   AND (source_uid = ANY(%s) OR target_uid = ANY(%s))
+                  {type_clause}
             ) inner_neighbors
             WHERE neighbor_uid != ALL(%s)
               AND neighbor_uid <> ''
             GROUP BY neighbor_uid
             """,
-            (anchor_uids, anchor_uids, anchor_uids, anchor_uids),
+            (anchor_uids, anchor_uids, anchor_uids, *tail_params, anchor_uids),
         ).fetchall()
         out: dict[str, float] = {}
         for row in rows:
@@ -629,13 +643,17 @@ class QueryMixin:
                 raise
         return lexical_rows, vector_rows
 
-    def fetch_graph_neighbors_for_uids(self, anchor_uids: list[str]) -> dict[str, float]:
+    def fetch_graph_neighbors_for_uids(
+        self,
+        anchor_uids: list[str],
+        edge_type_filter: Sequence[str] | None = None,
+    ) -> dict[str, float]:
         """Graph neighbors of lexical anchor cards, weighted by edge trust (see Tier 2)."""
         if not anchor_uids:
             return {}
         self.ensure_ready()
         with self._connect() as conn:
-            return self._graph_neighbor_uids(conn, anchor_uids)
+            return self._graph_neighbor_uids(conn, anchor_uids, edge_type_filter=edge_type_filter)
 
     def hybrid_search(
         self,
@@ -649,6 +667,7 @@ class QueryMixin:
         people_filter: str = "",
         start_date: str = "",
         end_date: str = "",
+        graph_edge_type_filter: str = "",
         limit: int = 20,
     ) -> list[dict[str, Any]]:
         self.ensure_ready()
@@ -676,7 +695,11 @@ class QueryMixin:
             or int(row["external_id_exact"])
             or int(row["person_exact"])
         ]
-        neighbor_trust = self.fetch_graph_neighbors_for_uids(anchor_uids)
+        gtypes = [p.strip() for p in (graph_edge_type_filter or "").split(",") if p.strip()]
+        neighbor_trust = self.fetch_graph_neighbors_for_uids(
+            anchor_uids,
+            edge_type_filter=gtypes if gtypes else None,
+        )
         from .retrieval_pipeline import HybridFetchInputs, fuse_and_rank_hybrid
 
         return fuse_and_rank_hybrid(

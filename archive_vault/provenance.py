@@ -35,6 +35,13 @@ class ProvenanceEntry:
     model: str = ""
     enrichment_version: int = 0
     input_hash: str = ""
+    # Append-only forensic trail of prior writes to this field. Each entry is
+    # a serialized ``ProvenanceEntry`` minus its own ``prior``. Newest-first.
+    # Capped to MAX_PROVENANCE_HISTORY items so cards don't grow unbounded.
+    prior: list[dict[str, Any]] | None = None
+
+
+MAX_PROVENANCE_HISTORY: int = 5
 
 
 def strip_provenance(body: str) -> str:
@@ -62,6 +69,10 @@ def read_provenance(body: str) -> dict[str, ProvenanceEntry]:
             continue
         if not isinstance(payload, dict):
             continue
+        prior_raw = payload.get("prior")
+        prior: list[dict[str, Any]] | None = None
+        if isinstance(prior_raw, list) and prior_raw:
+            prior = [dict(p) for p in prior_raw if isinstance(p, dict)]
         entries[field_name.strip()] = ProvenanceEntry(
             source=str(payload.get("source", "")),
             date=str(payload.get("date", "")),
@@ -69,6 +80,7 @@ def read_provenance(body: str) -> dict[str, ProvenanceEntry]:
             model=str(payload.get("model", "")),
             enrichment_version=int(payload.get("enrichment_version", 0) or 0),
             input_hash=str(payload.get("input_hash", "")),
+            prior=prior,
         )
     return entries
 
@@ -83,6 +95,9 @@ def write_provenance(body: str, prov: dict[str, ProvenanceEntry]) -> str:
     lines = ["<!-- provenance"]
     for field_name in sorted(prov):
         payload = asdict(prov[field_name])
+        # Drop empty ``prior`` to keep card bodies small for the common path.
+        if not payload.get("prior"):
+            payload.pop("prior", None)
         lines.append(f"{field_name}: {json.dumps(payload, sort_keys=True, separators=(',', ': '))}")
     lines.append("-->")
     block = "\n".join(lines)
@@ -91,14 +106,63 @@ def write_provenance(body: str, prov: dict[str, ProvenanceEntry]) -> str:
     return block
 
 
+def _entry_to_history_dict(entry: ProvenanceEntry) -> dict[str, Any]:
+    """Serialize an entry for the ``prior`` chain, excluding its own ``prior``."""
+    return {
+        "source": entry.source,
+        "date": entry.date,
+        "method": entry.method,
+        "model": entry.model,
+        "enrichment_version": entry.enrichment_version,
+        "input_hash": entry.input_hash,
+    }
+
+
 def merge_provenance(
     existing: dict[str, ProvenanceEntry],
     incoming: dict[str, ProvenanceEntry],
 ) -> dict[str, ProvenanceEntry]:
-    """Merge provenance maps, letting incoming entries win field-by-field."""
+    """Merge provenance maps, letting incoming entries win field-by-field.
 
-    merged = dict(existing)
-    merged.update(incoming)
+    When ``incoming`` overwrites an ``existing`` entry for the same field,
+    the existing entry is appended to the incoming entry's ``prior`` chain
+    (newest-first, capped at ``MAX_PROVENANCE_HISTORY``). This preserves a
+    forensic trail of prior writes — useful for backfills, re-enrichments,
+    and "who wrote this field last?" investigations. Only the latest entry
+    is consulted by ``validate_provenance``; ``prior`` is for humans + audits.
+    """
+    merged: dict[str, ProvenanceEntry] = dict(existing)
+    for field_name, new_entry in incoming.items():
+        old_entry = merged.get(field_name)
+        if old_entry is None:
+            merged[field_name] = new_entry
+            continue
+        # If the new entry is byte-identical to the old one, no audit signal —
+        # don't grow the history chain (keeps idempotent backfills clean).
+        if (
+            old_entry.source == new_entry.source
+            and old_entry.date == new_entry.date
+            and old_entry.method == new_entry.method
+            and old_entry.model == new_entry.model
+            and old_entry.enrichment_version == new_entry.enrichment_version
+            and old_entry.input_hash == new_entry.input_hash
+        ):
+            merged[field_name] = new_entry
+            continue
+        prior_chain: list[dict[str, Any]] = []
+        prior_chain.append(_entry_to_history_dict(old_entry))
+        if old_entry.prior:
+            prior_chain.extend(old_entry.prior)
+        prior_chain = prior_chain[:MAX_PROVENANCE_HISTORY]
+        merged[field_name] = ProvenanceEntry(
+            source=new_entry.source,
+            date=new_entry.date,
+            method=new_entry.method,
+            model=new_entry.model,
+            enrichment_version=new_entry.enrichment_version,
+            input_hash=new_entry.input_hash,
+            prior=prior_chain,
+        )
     return merged
 
 

@@ -414,7 +414,7 @@ class SchemaDDLMixin:
         conn.execute(
             f"""
             CREATE TABLE IF NOT EXISTS {self.schema}.embeddings (
-                chunk_key TEXT NOT NULL REFERENCES {self.schema}.chunks(chunk_key) ON DELETE CASCADE,
+                chunk_key TEXT NOT NULL,
                 embedding_model TEXT NOT NULL,
                 embedding_version INTEGER NOT NULL,
                 embedding vector({self.vector_dimension}) NOT NULL,
@@ -855,8 +855,17 @@ class SchemaDDLMixin:
         return runner.status()
 
     def _clear(self, conn) -> None:
+        """Truncate derived tables before a full rebuild.
+
+        Intentionally does NOT truncate ``embeddings``: embeddings are
+        content-addressable by ``chunk_key`` and survive rebuilds for free
+        (any chunk whose content is unchanged regenerates with the same
+        ``chunk_key``). Orphaned embeddings (chunks no longer present) are
+        cleaned up explicitly via ``ppa embed-gc``. Migration 004 also drops
+        the historical ``embeddings.chunk_key`` FK so chunks rebuilds no
+        longer cascade.
+        """
         table_names = [
-            "embeddings",
             *PROJECTION_NAMES,
             "meta",
             "ingestion_log",

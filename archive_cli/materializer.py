@@ -15,7 +15,8 @@ from archive_vault.vault import extract_wikilinks, read_note_file
 
 from .card_registry import REGISTRATION_BY_CARD_TYPE
 from .chunking import render_chunks_for_card
-from .features import TIMELINE_FIELDS, card_activity_at, card_activity_end_at, iter_external_ids, parse_timestamp_to_utc
+from .features import (TIMELINE_FIELDS, card_activity_at, card_activity_end_at,
+                       iter_external_ids, parse_timestamp_to_utc)
 from .index_config import CHUNK_SCHEMA_VERSION
 from .ppa_engine import ppa_engine
 from .projections.base import ProjectionRowBuffer, build_projection_row
@@ -23,6 +24,46 @@ from .projections.registry import projection_for_card_type
 from .scanner import CanonicalRow
 
 EXTERNAL_ID_TARGET_PREFIX = "external-id://"
+
+# Separates card_type and field name in target-field index keys (not valid in card types).
+_TARGET_FIELD_KEY_SEP = "\x1f"
+
+
+def target_field_index_key(card_type: str, field_name: str) -> str:
+    return f"{card_type}{_TARGET_FIELD_KEY_SEP}{field_name}"
+
+
+def build_target_field_index(rows: list[CanonicalRow]) -> dict[str, dict[str, str]]:
+    """Map (target_card_type, lookup_field) -> normalized value -> rel_path for DeclEdgeRule lookups."""
+    from .card_registry import CARD_TYPE_REGISTRATIONS
+
+    keys_needed: set[tuple[str, str]] = set()
+    for reg in CARD_TYPE_REGISTRATIONS:
+        for rule in reg.edge_rules:
+            if rule.target_lookup_field and rule.target_card_type:
+                keys_needed.add((rule.target_card_type, rule.target_lookup_field))
+
+    index: dict[str, dict[str, str]] = {
+        target_field_index_key(ct, f): {} for ct, f in keys_needed
+    }
+    for row in rows:
+        ct = row.card.type
+        fm = row.frontmatter
+        for tct, field in keys_needed:
+            if ct != tct:
+                continue
+            raw = fm.get(field)
+            if raw is None or raw == "":
+                continue
+            val = str(raw).strip()
+            if not val:
+                continue
+            k = target_field_index_key(tct, field)
+            index[k][val] = row.rel_path
+            low = val.lower()
+            if low != val:
+                index[k][low] = row.rel_path
+    return index
 
 
 def _normalize_slug(value: str) -> str:
@@ -210,6 +251,7 @@ def _build_edges(
     slug_map: dict[str, str],
     path_to_uid: dict[str, str],
     person_lookup: dict[str, str],
+    target_field_index: dict[str, dict[str, str]] | None = None,
 ) -> list[dict[str, str]]:
     edges: list[dict[str, str]] = []
     seen: set[tuple[str, str, str, str]] = set()
@@ -290,7 +332,34 @@ def _build_edges(
                 if not v.strip():
                     continue
                 if rule.target == "card":
-                    append_card_edge(rule.field_name, v, rule.edge_type)
+                    resolved_by_field = False
+                    if (
+                        rule.target_lookup_field
+                        and rule.target_card_type
+                        and target_field_index
+                    ):
+                        tkey = target_field_index_key(
+                            rule.target_card_type, rule.target_lookup_field
+                        )
+                        sub = target_field_index.get(tkey) or {}
+                        raw_v = v.strip()
+                        target_path = sub.get(raw_v) or sub.get(raw_v.lower())
+                        if target_path:
+                            _append_edge(
+                                edges,
+                                seen,
+                                source_uid=card.uid,
+                                source_path=rel_path,
+                                target_slug=raw_v,
+                                target_path=target_path,
+                                target_uid=path_to_uid.get(target_path, ""),
+                                target_kind="card",
+                                edge_type=rule.edge_type,
+                                field_name=rule.field_name,
+                            )
+                            resolved_by_field = True
+                    if not resolved_by_field:
+                        append_card_edge(rule.field_name, v, rule.edge_type)
                 else:
                     append_person_edge(rule.field_name, v, rule.edge_type)
 
@@ -336,6 +405,7 @@ def _materialize_row(
     slug_map: dict[str, str],
     path_to_uid: dict[str, str],
     person_lookup: dict[str, str],
+    target_field_index: dict[str, dict[str, str]] | None = None,
     batch_id: str = "",
 ) -> ProjectionRowBuffer:
     from .index_config import CHUNK_SCHEMA_VERSION
@@ -416,6 +486,7 @@ def _materialize_row(
         slug_map=slug_map,
         path_to_uid=path_to_uid,
         person_lookup=person_lookup,
+        target_field_index=target_field_index,
     ):
         batch.add(
             "edges",
@@ -464,6 +535,7 @@ def _materialize_row_batch(
     slug_map: dict[str, str],
     path_to_uid: dict[str, str],
     person_lookup: dict[str, str],
+    target_field_index: dict[str, dict[str, str]] | None = None,
     batch_id: str = "",
     body_cache: object | None = None,
 ) -> ProjectionRowBuffer:
@@ -474,6 +546,7 @@ def _materialize_row_batch(
     read from in-memory cache instead of re-reading ``.md`` files from disk.
     Set ``PPA_ENGINE=python`` to force the legacy Python implementation.
     """
+    tfi = target_field_index if target_field_index is not None else build_target_field_index(rows)
     if ppa_engine() == "rust":
         try:
             import archive_crate
@@ -484,6 +557,7 @@ def _materialize_row_batch(
                 slug_map,
                 path_to_uid,
                 person_lookup,
+                tfi,
                 batch_id,
                 CHUNK_SCHEMA_VERSION,
                 body_cache=body_cache,
@@ -502,6 +576,7 @@ def _materialize_row_batch(
                 slug_map=slug_map,
                 path_to_uid=path_to_uid,
                 person_lookup=person_lookup,
+                target_field_index=tfi,
                 batch_id=batch_id,
             )
         )

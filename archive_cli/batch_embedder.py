@@ -773,14 +773,31 @@ def _ingest_one_batch(
 
     out_path = art_dir / f"{batch_id}-out.jsonl"
     t_start = time.monotonic()
-    size = download_file(file_id=output_file_id, dest_path=out_path, api_key=api_key, base_url=base_url)
-    logger_.info(
-        "ingest_downloaded batch=%s bytes=%d elapsed=%.1fs path=%s",
-        batch_id,
-        size,
-        time.monotonic() - t_start,
-        out_path,
-    )
+    # Skip the OpenAI download if a non-empty local file already exists (e.g.
+    # operator pre-staged the file via the platform UI after a CDN failure,
+    # or a prior ingest pass already pulled it). Saves up to ~5 min/batch on
+    # 1.5GB downloads + sidesteps OpenAI's "short download" CDN issue.
+    if out_path.is_file() and out_path.stat().st_size > 0:
+        size = out_path.stat().st_size
+        logger_.info(
+            "ingest_skipping_download_local_file_exists batch=%s bytes=%d path=%s",
+            batch_id,
+            size,
+            out_path,
+        )
+    else:
+        if not api_key:
+            raise RuntimeError(
+                f"OPENAI_API_KEY required to download batch {batch_id} (no local file at {out_path})"
+            )
+        size = download_file(file_id=output_file_id, dest_path=out_path, api_key=api_key, base_url=base_url)
+        logger_.info(
+            "ingest_downloaded batch=%s bytes=%d elapsed=%.1fs path=%s",
+            batch_id,
+            size,
+            time.monotonic() - t_start,
+            out_path,
+        )
 
     with index._connect() as conn:  # noqa: SLF001
         map_rows = conn.execute(
@@ -846,19 +863,25 @@ def _ingest_one_batch(
     error_count = 0
     if error_file_id:
         err_path = art_dir / f"{batch_id}-err.jsonl"
-        try:
-            download_file(
-                file_id=error_file_id,
-                dest_path=err_path,
-                api_key=api_key,
-                base_url=base_url,
-            )
+        if err_path.is_file() and err_path.stat().st_size > 0:
             with err_path.open("r", encoding="utf-8") as fh:
                 for line in fh:
                     if line.strip():
                         error_count += 1
-        except Exception as exc:
-            logger_.warning("ingest_error_file_download_failed batch=%s error=%s", batch_id, exc)
+        elif api_key:
+            try:
+                download_file(
+                    file_id=error_file_id,
+                    dest_path=err_path,
+                    api_key=api_key,
+                    base_url=base_url,
+                )
+                with err_path.open("r", encoding="utf-8") as fh:
+                    for line in fh:
+                        if line.strip():
+                            error_count += 1
+            except Exception as exc:
+                logger_.warning("ingest_error_file_download_failed batch=%s error=%s", batch_id, exc)
 
     with index._connect() as conn:  # noqa: SLF001
         conn.execute(
@@ -902,10 +925,17 @@ def ingest_completed_batches(
     Thread-safe: each batch updates only its own row, and each writer uses its
     own short-lived connection.
     """
-    api_key = _resolve_api_key()
+    # Lazy API key resolution: only fetch credentials if we'll actually need
+    # to download from OpenAI. Lets operators pre-stage files via the platform
+    # UI and ingest without OPENAI_API_KEY in the shell environment.
     base_url = _base_url()
     art_dir = Path(artifact_dir or DEFAULT_BATCH_ARTIFACT_DIR)
     art_dir.mkdir(parents=True, exist_ok=True)
+    api_key = ""
+    try:
+        api_key = _resolve_api_key()
+    except Exception as exc:
+        logger_.info("ingest_api_key_unresolved (will fall back to local files only): %s", exc)
 
     index.ensure_ready()
     with index._connect() as conn:  # noqa: SLF001

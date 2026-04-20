@@ -712,6 +712,7 @@ class CardEnrichmentRunner:
             source_uid=uid,
             run_id=self.run_id,
             existing_provider_tags=[str(t) for t in ex_list],
+            finance_frontmatter=fm,
         )
 
         if llm_invoked and str(parsed.get("counterparty_type") or "").strip():

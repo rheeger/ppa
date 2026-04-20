@@ -196,7 +196,7 @@ $ ppa setup
   ║  Setup                               ║
   ╚══════════════════════════════════════╝
 
-  Step 1/7: Vault location
+  Step 1/8: Vault location
 
   Where should PPA store your archive?
   This directory will contain your vault (markdown files)
@@ -204,7 +204,7 @@ $ ppa setup
 
   Vault path [/srv/ppa]: █
 
-  Step 2/7: Encryption
+  Step 2/8: Encryption
 
   Set a passphrase to encrypt your vault.
   You'll need this passphrase to start PPA after a reboot.
@@ -215,7 +215,7 @@ $ ppa setup
   ✓ Created encrypted volume at /srv/ppa/vault.img (50 GB sparse)
   ✓ Mounted at /srv/ppa/secure
 
-  Step 3/7: Database
+  Step 3/8: Database
 
   PPA uses PostgreSQL for indexing. Choose a configuration:
 
@@ -228,7 +228,7 @@ $ ppa setup
   ✓ Started PostgreSQL container (pgvector/pgvector:pg17)
   ✓ Database initialized
 
-  Step 4/7: API keys
+  Step 4/8: API keys
 
   PPA uses AI models for semantic search and enrichment.
   Provide your API key, or skip to use keyword search only.
@@ -243,7 +243,7 @@ $ ppa setup
   ✓ API key verified (text-embedding-3-small accessible)
   ✓ Stored securely
 
-  Step 5/7: Data sources
+  Step 5/8: Data sources
 
   Connect your accounts. Data flows directly from the provider
   to this machine — no intermediary.
@@ -272,7 +272,7 @@ $ ppa setup
     [ ] GitHub (paste personal access token)
     [ ] Skip remaining
 
-  Step 6/7: MCP access
+  Step 6/8: MCP access
 
   How will AI tools connect to this PPA instance?
 
@@ -297,7 +297,7 @@ $ ppa setup
     }
   }
 
-  Step 7/7: Initial sync
+  Step 7/8: Initial sync
 
   Starting initial data import. This may take a while for large inboxes.
   Progress will be shown below. You can also check 'ppa status' from
@@ -323,8 +323,30 @@ $ ppa setup
   Each step shows its own progress. Total time depends on inbox size.
   Run 'ppa status' anytime to check.
 
+  Step 8/8: Linkers
+
+  PPA discovers relationships between your data. Based on the sources
+  you connected, these linkers will run:
+
+  [x] identityLinker          — merge duplicate people across sources
+  [x] communicationLinker     — link emails to threads, messages to chats
+  [x] calendarLinker          — link invites and transcripts to events
+  [x] financeReconcileLinker  — match bank charges to purchases
+  [x] tripClusterLinker       — cluster flights/hotels/rentals into trips
+  [x] meetingArtifactLinker   — match meeting transcripts to events
+  [x] orphanLinker            — repair broken wikilinks
+  [x] graphConsistencyLinker  — fill in missing reverse links
+  [ ] mediaLinker             — (Apple Photos not connected)
+  [ ] semanticLinker          — (retired, see runbook)
+
+  Continue? [y/N]: █
+
+  ✓ 8 linkers enabled, 2 unavailable or retired.
+
   ✓ Setup complete.
 ```
+
+The linker list is rendered dynamically from `archive_cli.linkers.ALL_LINKERS` — the registry established by Phase 6.5. Linkers whose source card types have no connected data sources are auto-disabled; retired linkers (like `semanticLinker`) are shown but unchecked with a pointer to the retirement runbook.
 
 ### `ppa status` — the ongoing dashboard
 
@@ -408,13 +430,11 @@ Use `rich` (Python) for all terminal output:
 
 The wizard should feel as polished as `npm init`, `gh auth login`, or `railway init`.
 
-**Files touched:** New: `archive_cli/commands/setup.py` (interactive wizard), `archive_cli/commands/connect.py` (add data sources), `archive_cli/commands/config_cmd.py` (manage configuration). Modified: `archive_cli/__main__.py` (new subcommands), `archive_cli/commands/status.py` (enhanced status display with `rich`). New dependency: `rich` in `pyproject.toml`.
-
 ### Definition of Done
 
-- `ppa setup` completes end-to-end: vault, encryption, database, API key, Gmail OAuth, MCP config
+- `ppa setup` completes end-to-end: vault, encryption, database, API key, Gmail OAuth, MCP config, linker selection
 - Wizard handles errors gracefully (invalid API key, OAuth failure, Docker not installed) with clear messages and recovery options
-- `ppa status` shows comprehensive archive health with formatted output
+- `ppa status` shows comprehensive archive health with formatted output — including a Linkers panel that reads from `archive_cli.linkers.ALL_LINKERS`
 - `ppa connect` adds new data sources after initial setup
 - `ppa config` manages all configuration without editing files
 - Progress bars on all long operations (sync, extract, rebuild, embed) with ETA and throughput
@@ -422,6 +442,9 @@ The wizard should feel as polished as `npm init`, `gh auth login`, or `railway i
 - Wizard detects an existing vault and offers to import/reconnect
 - OAuth guide (Google Cloud project creation) is clear enough for a first-timer to follow in 5 minutes
 - All credentials stored in secure store (Keychain / libsecret / encrypted file)
+- Wizard reads `archive_cli.linkers.ALL_LINKERS` to render the linker-selection step; linkers whose source card types have no connected data are auto-disabled; retired linkers are shown but unchecked
+
+**Files touched:** New: `archive_cli/commands/setup.py` (interactive wizard), `archive_cli/commands/connect.py` (add data sources), `archive_cli/commands/config_cmd.py` (manage configuration). Modified: `archive_cli/__main__.py` (new subcommands), `archive_cli/commands/status.py` (enhanced status display with `rich` + Linkers panel reading `archive_cli.linkers.ALL_LINKERS`). New dependency: `rich` in `pyproject.toml`. **Prerequisite:** Phase 6.5 ships the `ALL_LINKERS` registry + `ppa linker health` data source that the wizard and status panel consume.
 
 ---
 
@@ -784,6 +807,35 @@ GitHub Actions workflow that runs automatically on PRs touching `archive_sync/ex
 - Verify sender patterns don't overlap with existing extractors
 - Generate a quality report (yield rate, field population rates)
 
+### Linker contribution framework (parallel to connectors)
+
+Linkers are PPA's next contribution surface after extractors. While connectors bring data in, linkers wire it together — finding that this Amazon charge corresponds to that Amazon order, that this flight and this hotel are part of the same trip, that this transcript records that calendar event.
+
+The linker contribution framework parallels the connector framework established above, and was ground-laid by **Phase 6.5**, which consolidated the linker subsystem onto a declarative `LinkerSpec` + `register_linker` protocol and retrofitted all pre-existing linkers onto it. Any new linker — core or community — ships as a single file under `archive_cli/linkers/modules/` with one `register_linker(LinkerSpec(...))` call.
+
+Phase 15 formalizes the community-contribution path on top of that groundwork:
+
+- **`archive_docs/CONTRIBUTING_LINKERS.md`** — step-by-step guide (shipped by Phase 6.5 Step 5; Phase 15 extends it with the PR + CI submission path).
+- **`archive_docs/LINKER_ARCHITECTURE.md`** — the `LinkerSpec` contract and package layout (shipped by Phase 6.5).
+- **`archive_docs/runbooks/linker-retirement-protocol.md`** — retirement template for linkers that don't pan out (shipped by Phase 6.5; the Phase 6 Tier 3 `MODULE_SEMANTIC` retirement is the first worked example in its appendix).
+- **`ppa-dev/ppa-linker-template`** — template repo with a scaffolded module, plan file (from `.cursor/plans/_templates/linker.plan.md`), test skeleton, and CI config. Parallels `ppa-dev/ppa-connector-template`. Added in Phase 15.
+- **`ppa linker scaffold --name X --source-types Y --emits Z`** — generates the contribution starting point (shipped by Phase 6.5 Step 4).
+- **`.github/workflows/linker-ci.yml`** — runs retrofit-invariant tests on submitted linkers against fixed 1pct fixture snapshots; asserts spec compilation, scoring-mode routing, catalog-index population. Added in Phase 15.
+
+Acceptance flow for a community-contributed linker:
+
+```
+1. Contributor clones ppa-dev/ppa-linker-template
+2. Runs `ppa linker scaffold --name my_linker --source-types foo --emits bar`
+3. Fills in the per-tier predicates + unit tests
+4. Runs `ppa linker calibrate --module myLinker --scope ppa_1pct --report` locally
+5. Opens a PR with the module file, test file, calibration-cache fixture, and
+   calibration report
+6. CI runs retrofit invariants + scoring-mode routing + catalog-index population
+7. Maintainer reviews the calibration report + spot-check
+8. Merge lands the linker as `lifecycle_state="active"` or the PR iterates
+```
+
 ### Documentation
 
 `archive_docs/CONTRIBUTING_CONNECTORS.md`:
@@ -813,26 +865,32 @@ GitHub Actions workflow that runs automatically on PRs touching `archive_sync/ex
 ```
 v2 Complete (Phase 9)
 │
+├── Phase 6.5: Linker framework + cross-derived linkers
+│     (prerequisite for Phase 11 + Phase 15 — ships ALL_LINKERS registry,
+│      `ppa linker` CLI surface, LINKER_ARCHITECTURE + CONTRIBUTING_LINKERS docs)
+│
 ├── Phase 10: Vault encryption + passkey auth
 │
-├── Phase 11: CLI setup wizard ← uses 10 for encryption steps
+├── Phase 11: CLI setup wizard ← uses 10 for encryption, 6.5 for linker registry
 │   └── Phase 12: Docker Compose packaging ← wizard generates Docker configs
 │       └── Phase 14: Documentation ← documents everything from 10-13
 │
 ├── Phase 13: Progress UX overhaul (parallel with 10-12)
 │
-└── Phase 15: Connector contribution framework (anytime, no hard dependencies)
+└── Phase 15: Connector + linker contribution framework ← uses 6.5 for
+              linker scaffold CLI + template repo + retirement protocol
 ```
 
-**Critical path:** Phase 10 → Phase 11 → Phase 12 → Phase 14
+**Critical path:** Phase 6.5 → Phase 10 → Phase 11 → Phase 12 → Phase 14
 
 **Parallel work:**
 
 - Phase 13 (progress UX) has no dependencies — can start immediately and land incrementally
-- Phase 15 (connector framework) is documentation + CI — can start anytime
+- Phase 15 (connector + linker framework) gets its linker half from Phase 6.5; the connector half has no hard dependencies and can start anytime
 - Phases 10 and 13 can run in parallel from day one
+- Phase 6.5 can run in parallel with Phase 10 (different parts of the codebase)
 
-**Calendar time with 2 workstreams:** ~15-20 weeks (~4-5 months) from v2 completion.
+**Calendar time with 2 workstreams:** ~17-22 weeks (~4-5.5 months) from v2 completion, with Phase 6.5 adding ~2-3 weeks serial on top of the original v3 plan (framework + retrofit + 3 new linkers).
 
 ---
 
@@ -866,17 +924,18 @@ v3 proves PPA works for multiple users. v4 packages it for everyone.
 
 ## Summary Table
 
-| Phase  | What                             | Effort    | Depends On             | Ships to Users          |
-| ------ | -------------------------------- | --------- | ---------------------- | ----------------------- |
-| **10** | Vault encryption + passkey auth  | 3-4 weeks | v2 complete            | No (internal)           |
-| **11** | **CLI setup wizard**             | 4-6 weeks | 10                     | **Yes — the v3 launch** |
-| **12** | Docker Compose packaging         | 2-3 weeks | 11                     | Yes                     |
-| **13** | Progress UX overhaul             | 2-3 weeks | v2 complete (parallel) | Yes                     |
-| **14** | Self-hosting documentation       | 2-3 weeks | 11, 12                 | Yes                     |
-| **15** | Connector contribution framework | 2-3 weeks | Anytime                | Yes (community)         |
+| Phase   | What                                       | Effort    | Depends On             | Ships to Users          |
+| ------- | ------------------------------------------ | --------- | ---------------------- | ----------------------- |
+| **6.5** | Linker framework + cross-derived linkers   | 2-3 weeks | v2 complete            | No (internal — registry + ops surface) |
+| **10**  | Vault encryption + passkey auth            | 3-4 weeks | v2 complete            | No (internal)           |
+| **11**  | **CLI setup wizard**                       | 4-6 weeks | 10, 6.5                | **Yes — the v3 launch** |
+| **12**  | Docker Compose packaging                   | 2-3 weeks | 11                     | Yes                     |
+| **13**  | Progress UX overhaul                       | 2-3 weeks | v2 complete (parallel) | Yes                     |
+| **14**  | Self-hosting documentation                 | 2-3 weeks | 11, 12                 | Yes                     |
+| **15**  | Connector + linker contribution framework  | 2-3 weeks | 6.5 (linker half)      | Yes (community)         |
 
-**Total effort:** ~15-22 weeks of work across all phases.
+**Total effort:** ~17-24 weeks of work across all phases.
 
-**Calendar time with parallelization (2 workstreams):** ~12-16 weeks (~3-4 months) from v2 completion.
+**Calendar time with parallelization (2 workstreams):** ~14-18 weeks (~3.5-4.5 months) from v2 completion.
 
-**Critical path:** 10 (4 wk) → 11 (6 wk) → 12 (3 wk) → 14 (3 wk) = **~16 weeks serial.**
+**Critical path:** 6.5 (3 wk, parallel-able with 10) → 11 (6 wk, needs 10 + 6.5) → 12 (3 wk) → 14 (3 wk) = **~15-18 weeks serial.**

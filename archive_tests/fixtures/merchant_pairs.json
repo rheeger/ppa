@@ -1,0 +1,82 @@
+[
+  {
+    "a": "AMZN MKTPLACE",
+    "b": "Amazon.com",
+    "should_match": true,
+    "note": "amazon alias + dot-com suffix"
+  },
+  { "a": "AMZN MKTPL", "b": "Amazon", "should_match": true, "note": "amazon alias short form" },
+  {
+    "a": "SQ *BLUE BOTTLE",
+    "b": "Blue Bottle Coffee",
+    "should_match": true,
+    "note": "square processor prefix"
+  },
+  {
+    "a": "SQ *LANDMARK THEATRES",
+    "b": "Landmark Theatres",
+    "should_match": true,
+    "note": "square prefix + direct match"
+  },
+  {
+    "a": "TST* JOES PIZZA",
+    "b": "Joe's Pizza",
+    "should_match": true,
+    "note": "toast prefix + possessive"
+  },
+  {
+    "a": "TST* CHARLIES KITCHEN",
+    "b": "Charlie's Kitchen",
+    "should_match": true,
+    "note": "toast prefix + possessive"
+  },
+  { "a": "DOORDASH*MCDONALDS", "b": "McDonald's", "should_match": true, "note": "doordash prefix" },
+  {
+    "a": "DOORDASH*CHIPOTLE",
+    "b": "Chipotle Mexican Grill",
+    "should_match": true,
+    "note": "doordash + extra words"
+  },
+  { "a": "UBER*EATS", "b": "Uber Eats", "should_match": true, "note": "uber prefix star" },
+  { "a": "UBER*TRIP", "b": "Uber", "should_match": true, "note": "uber prefix trip" },
+  { "a": "PAYPAL *NETFLIX", "b": "Netflix", "should_match": true, "note": "paypal prefix" },
+  {
+    "a": "PAYPAL *SPOTIFYUSA",
+    "b": "Spotify USA Inc",
+    "should_match": true,
+    "note": "paypal + corp suffix"
+  },
+  { "a": "SPOTIFY USA INC", "b": "Spotify", "should_match": true, "note": "corp suffix" },
+  { "a": "Netflix.com", "b": "NETFLIX", "should_match": true, "note": "dot-com + caps" },
+  { "a": "HULU LLC", "b": "Hulu", "should_match": true, "note": "llc suffix" },
+  { "a": "APPLE.COM/BILL", "b": "Apple", "should_match": true, "note": "substring with slash" },
+  { "a": "STARBUCKS #12345", "b": "Starbucks", "should_match": true, "note": "store number" },
+  {
+    "a": "CVS/PHARMACY #1234",
+    "b": "CVS Pharmacy",
+    "should_match": true,
+    "note": "slash + store num"
+  },
+  {
+    "a": "WHOLEFDS #12345",
+    "b": "Whole Foods Market",
+    "should_match": true,
+    "note": "abbreviated"
+  },
+  { "a": "TRADER JOE'S", "b": "Trader Joes", "should_match": true, "note": "apostrophe" },
+  { "a": "CHEVRON #12345", "b": "Chevron", "should_match": true, "note": "gas station number" },
+  { "a": "SHELL OIL 12345", "b": "Shell", "should_match": true, "note": "oil suffix" },
+  { "a": "DELTA AIR LINES", "b": "Delta", "should_match": true, "note": "air lines suffix" },
+  {
+    "a": "AMERICAN AIRLINES",
+    "b": "American Airlines",
+    "should_match": true,
+    "note": "exact after upcase"
+  },
+  { "a": "UNITED AIRLINES", "b": "United", "should_match": true, "note": "airlines suffix" },
+  { "a": "HERTZ RENT A CAR", "b": "Hertz", "should_match": true, "note": "descriptive suffix" },
+  { "a": "AVIS RENT A CAR", "b": "Avis", "should_match": true, "note": "descriptive suffix" },
+  { "a": "MARRIOTT HOTELS", "b": "Marriott", "should_match": true, "note": "hotels suffix" },
+  { "a": "HILTON HOTELS", "b": "Hilton", "should_match": true, "note": "hotels suffix" },
+  { "a": "AIRBNB", "b": "Airbnb.com", "should_match": true, "note": "dot-com" }
+]

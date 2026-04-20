@@ -50,6 +50,12 @@ PGVECTOR_IMAGE = "pgvector/pgvector:pg17"
 @pytest.fixture(scope="session")
 def pgvector_dsn() -> str:
     """Ephemeral Postgres+pgvector in Docker for integration tests."""
+    # Tests reuse fixed schema names like "archive_resume_test"; bootstrap()
+    # refuses to recreate populated schemas (added 2026-04-24 after the embedding
+    # wipe incident). Tests get a session-scoped force so reruns against a
+    # persistent local Postgres don't regress. Production callers must opt in
+    # explicitly via --force / PPA_BOOTSTRAP_FORCE=1.
+    os.environ["PPA_BOOTSTRAP_FORCE"] = "1"
     preferred = os.environ.get("PPA_TEST_PG_DSN", "").strip()
     if preferred:
         wait_for_postgres(preferred)

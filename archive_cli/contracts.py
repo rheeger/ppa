@@ -56,6 +56,10 @@ class DeclEdgeRule:
     target: Literal["card", "person"]
     source_fields: tuple[str, ...]
     multi: bool = True
+    # When set, resolve target by this field on cards of target_card_type (e.g.
+    # shipment.linked_purchase order id -> purchase.order_number).
+    target_lookup_field: str | None = None
+    target_card_type: str | None = None
 
 
 @dataclass(frozen=True)

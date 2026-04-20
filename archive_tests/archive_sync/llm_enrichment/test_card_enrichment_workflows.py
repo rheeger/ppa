@@ -292,6 +292,27 @@ def test_parse_finance_response() -> None:
     assert matches[0].target_card_type == "email_message"
 
 
+def test_parse_finance_email_match_backfills_date_range_from_created() -> None:
+    data = {
+        "counterparty_type": "merchant",
+        "entity_mentions": [{"type": "organization", "name": "Acme"}],
+        "email_match": {
+            "counterparty_keywords": ["Acme"],
+            "amount": 12.34,
+            "date_range": [],
+        },
+    }
+    _, _, matches = wf_fin.parse_finance_response(
+        data,
+        source_uid="hfa-finance-x",
+        run_id="r1",
+        existing_provider_tags=[],
+        finance_frontmatter={"created": "2025-03-15T12:00:00Z"},
+    )
+    assert len(matches) == 1
+    assert matches[0].match_signals["date_range"] == ["2025-03-15", "2025-03-15"]
+
+
 def test_parse_finance_response_defaults_missing_entity_type() -> None:
     """When the LLM omits entity mention type, infer from counterparty_type."""
     data = {

@@ -32,6 +32,33 @@
       "expect_confidence_range": [0.0, 1.0],
       "description": "Phase 6 Tier 1: anchor with mixed deterministic + applied seed-link edges. Until the slice has applied seed-link promotions, this entry is intentionally PLACEHOLDER and run_behavioral_checks will report it as failed; populate `anchor_rel_path` after the seed-link workers run.",
       "phase": "post-phase-6-tier3"
+    },
+    {
+      "start_uid": "hfa-finance-02838e64b16d",
+      "hops": 2,
+      "expect_edge_types_to_include": ["finance_reconciles", "derived_from"],
+      "expect_confidence_range": [0.8, 1.0],
+      "expect_at_least_one_seed_edge": true,
+      "description": "Phase 6.5: Uber Eats finance card -> reconciled meal_order card via finance_reconciles edge. Validates MODULE_FINANCE_RECONCILE TIER_SOURCE_EMAIL / TIER_HIGH.",
+      "phase": "post-phase-6-5"
+    },
+    {
+      "start_uid": "hfa-accommodation-26c14256c28f",
+      "hops": 2,
+      "expect_edge_types_to_include": ["part_of_trip"],
+      "expect_confidence_range": [0.8, 1.0],
+      "expect_at_least_one_seed_edge": true,
+      "description": "Phase 6.5: Handlery Union Square SF accommodation -> part_of_trip -> flight/car_rental cluster. Validates MODULE_TRIP_CLUSTER IATA-city + date-window predicate.",
+      "phase": "post-phase-6-5"
+    },
+    {
+      "start_uid": "hfa-meeting-transcript-0005c1126403",
+      "hops": 1,
+      "expect_edge_types_to_include": ["transcript_has_calendar_event"],
+      "expect_confidence_range": [0.8, 1.0],
+      "expect_at_least_one_seed_edge": true,
+      "description": "Phase 6.5: Endaoment-Gitcoin meeting transcript -> calendar_event via ical_uid or title+start_at match. Validates MODULE_MEETING_ARTIFACT.",
+      "phase": "post-phase-6-5"
     }
   ],
   "semantic_queries": [
@@ -55,6 +82,27 @@
       "min_hits": 1,
       "description": "Route description finds ride via semantic search",
       "phase": "post-phase-4"
+    },
+    {
+      "query": "DoorDash",
+      "expected_types": ["finance", "meal_order"],
+      "min_hits": 2,
+      "description": "Phase 6.5: DoorDash merchant name should retrieve both the finance charge and the meal_order via finance_reconciles edge",
+      "phase": "post-phase-6-5"
+    },
+    {
+      "query": "Handlery Union Square",
+      "expected_types": ["accommodation", "flight"],
+      "min_hits": 1,
+      "description": "Phase 6.5: SF hotel name; with part_of_trip edges promoted, connected flights and car_rentals should co-rank",
+      "phase": "post-phase-6-5"
+    },
+    {
+      "query": "Endaoment Gitcoin Universal Impact Pool",
+      "expected_types": ["meeting_transcript", "calendar_event"],
+      "min_hits": 1,
+      "description": "Phase 6.5: meeting title; transcript + calendar_event should co-rank via transcript_has_calendar_event edge",
+      "phase": "post-phase-6-5"
     }
   ],
   "structural_invariants": {

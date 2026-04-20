@@ -1,0 +1,152 @@
+iata_code,city,country
+ATL,Atlanta,US
+LAX,Los Angeles,US
+ORD,Chicago,US
+DFW,Dallas,US
+DEN,Denver,US
+JFK,New York,US
+SFO,San Francisco,US
+LAS,Las Vegas,US
+SEA,Seattle,US
+MIA,Miami,US
+CLT,Charlotte,US
+EWR,Newark,US
+MCO,Orlando,US
+PHX,Phoenix,US
+IAH,Houston,US
+BOS,Boston,US
+MSP,Minneapolis,US
+DTW,Detroit,US
+FLL,Fort Lauderdale,US
+PHL,Philadelphia,US
+LGA,New York,US
+BWI,Baltimore,US
+DCA,Washington,US
+IAD,Washington,US
+SLC,Salt Lake City,US
+MDW,Chicago,US
+HNL,Honolulu,US
+DAL,Dallas,US
+TPA,Tampa,US
+SAN,San Diego,US
+BNA,Nashville,US
+AUS,Austin,US
+STL,St Louis,US
+OAK,Oakland,US
+MSY,New Orleans,US
+RDU,Raleigh,US
+MKE,Milwaukee,US
+PIT,Pittsburgh,US
+CLE,Cleveland,US
+CMH,Columbus,US
+IND,Indianapolis,US
+PDX,Portland,US
+SJC,San Jose,US
+SMF,Sacramento,US
+SNA,Santa Ana,US
+ABQ,Albuquerque,US
+ANC,Anchorage,US
+ORF,Norfolk,US
+ELP,El Paso,US
+OMA,Omaha,US
+TUS,Tucson,US
+BUF,Buffalo,US
+OKC,Oklahoma City,US
+RIC,Richmond,US
+ROC,Rochester,US
+JAX,Jacksonville,US
+RSW,Fort Myers,US
+PBI,West Palm Beach,US
+SYR,Syracuse,US
+TUL,Tulsa,US
+BHM,Birmingham,US
+BOI,Boise,US
+DSM,Des Moines,US
+GRR,Grand Rapids,US
+GSP,Greenville,US
+ICT,Wichita,US
+LIT,Little Rock,US
+MEM,Memphis,US
+PNS,Pensacola,US
+ROA,Roanoke,US
+SAV,Savannah,US
+SHV,Shreveport,US
+YYZ,Toronto,CA
+YVR,Vancouver,CA
+YUL,Montreal,CA
+YYC,Calgary,CA
+YOW,Ottawa,CA
+YEG,Edmonton,CA
+YHZ,Halifax,CA
+LHR,London,GB
+LGW,London,GB
+STN,London,GB
+LCY,London,GB
+CDG,Paris,FR
+ORY,Paris,FR
+AMS,Amsterdam,NL
+FRA,Frankfurt,DE
+MUC,Munich,DE
+BER,Berlin,DE
+MAD,Madrid,ES
+BCN,Barcelona,ES
+FCO,Rome,IT
+MXP,Milan,IT
+ZRH,Zurich,CH
+VIE,Vienna,AT
+CPH,Copenhagen,DK
+ARN,Stockholm,SE
+OSL,Oslo,NO
+HEL,Helsinki,FI
+DUB,Dublin,IE
+LIS,Lisbon,PT
+ATH,Athens,GR
+IST,Istanbul,TR
+CAI,Cairo,EG
+DXB,Dubai,AE
+AUH,Abu Dhabi,AE
+DOH,Doha,QA
+SIN,Singapore,SG
+HKG,Hong Kong,HK
+NRT,Tokyo,JP
+HND,Tokyo,JP
+KIX,Osaka,JP
+ICN,Seoul,KR
+TPE,Taipei,TW
+PEK,Beijing,CN
+PVG,Shanghai,CN
+SHA,Shanghai,CN
+CAN,Guangzhou,CN
+BKK,Bangkok,TH
+KUL,Kuala Lumpur,MY
+CGK,Jakarta,ID
+MNL,Manila,PH
+SYD,Sydney,AU
+MEL,Melbourne,AU
+BNE,Brisbane,AU
+PER,Perth,AU
+AKL,Auckland,NZ
+GRU,Sao Paulo,BR
+GIG,Rio de Janeiro,BR
+EZE,Buenos Aires,AR
+SCL,Santiago,CL
+LIM,Lima,PE
+BOG,Bogota,CO
+MEX,Mexico City,MX
+CUN,Cancun,MX
+SJD,San Jose del Cabo,MX
+PVR,Puerto Vallarta,MX
+YVR,Vancouver,CA
+ZAG,Zagreb,HR
+PRG,Prague,CZ
+BUD,Budapest,HU
+WAW,Warsaw,PL
+TLV,Tel Aviv,IL
+JNB,Johannesburg,ZA
+CPT,Cape Town,ZA
+NBO,Nairobi,KE
+LOS,Lagos,NG
+DEL,Delhi,IN
+BOM,Mumbai,IN
+BLR,Bangalore,IN
+MAA,Chennai,IN

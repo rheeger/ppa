@@ -10,7 +10,9 @@
           "source_fields": [
             "reports_to"
           ],
-          "target": "person"
+          "target": "person",
+          "target_card_type": null,
+          "target_lookup_field": null
         }
       ],
       "person_edge_type": "mentions_person",
@@ -319,7 +321,9 @@
           "source_fields": [
             "counterparty"
           ],
-          "target": "person"
+          "target": "person",
+          "target_card_type": null,
+          "target_lookup_field": null
         },
         {
           "edge_type": "finance_from_email",
@@ -328,7 +332,9 @@
           "source_fields": [
             "source_email"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         }
       ],
       "person_edge_type": "mentions_person",
@@ -556,7 +562,9 @@
           "source_fields": [
             "provider_name"
           ],
-          "target": "person"
+          "target": "person",
+          "target_card_type": null,
+          "target_lookup_field": null
         }
       ],
       "person_edge_type": "mentions_person",
@@ -1155,7 +1163,9 @@
           "source_fields": [
             "messages"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         },
         {
           "edge_type": "thread_has_calendar_event",
@@ -1164,7 +1174,9 @@
           "source_fields": [
             "calendar_events"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         },
         {
           "edge_type": "thread_has_person",
@@ -1174,7 +1186,9 @@
             "account_email",
             "participants"
           ],
-          "target": "person"
+          "target": "person",
+          "target_card_type": null,
+          "target_lookup_field": null
         }
       ],
       "person_edge_type": "thread_has_person",
@@ -1402,7 +1416,9 @@
           "source_fields": [
             "attachments"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         },
         {
           "edge_type": "message_has_calendar_event",
@@ -1411,7 +1427,9 @@
           "source_fields": [
             "calendar_events"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         },
         {
           "edge_type": "message_in_thread",
@@ -1420,7 +1438,9 @@
           "source_fields": [
             "thread"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         },
         {
           "edge_type": "message_mentions_person",
@@ -1433,7 +1453,9 @@
             "cc_emails",
             "bcc_emails"
           ],
-          "target": "person"
+          "target": "person",
+          "target_card_type": null,
+          "target_lookup_field": null
         }
       ],
       "person_edge_type": "message_mentions_person",
@@ -1969,7 +1991,9 @@
           "source_fields": [
             "messages"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         },
         {
           "edge_type": "thread_has_attachment",
@@ -1978,7 +2002,9 @@
           "source_fields": [
             "attachments"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         },
         {
           "edge_type": "thread_has_person",
@@ -1987,7 +2013,9 @@
           "source_fields": [
             "participant_handles"
           ],
-          "target": "person"
+          "target": "person",
+          "target_card_type": null,
+          "target_lookup_field": null
         }
       ],
       "person_edge_type": "thread_has_person",
@@ -2251,7 +2279,9 @@
           "source_fields": [
             "thread"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         },
         {
           "edge_type": "message_has_attachment",
@@ -2260,7 +2290,9 @@
           "source_fields": [
             "attachments"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         },
         {
           "edge_type": "message_mentions_person",
@@ -2270,7 +2302,9 @@
             "sender_handle",
             "participant_handles"
           ],
-          "target": "person"
+          "target": "person",
+          "target_card_type": null,
+          "target_lookup_field": null
         }
       ],
       "person_edge_type": "message_mentions_person",
@@ -3523,7 +3557,9 @@
           "source_fields": [
             "source_messages"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         },
         {
           "edge_type": "event_has_thread",
@@ -3532,7 +3568,9 @@
           "source_fields": [
             "source_threads"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         },
         {
           "edge_type": "event_has_transcript",
@@ -3541,7 +3579,9 @@
           "source_fields": [
             "meeting_transcripts"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         },
         {
           "edge_type": "event_has_person",
@@ -3551,7 +3591,9 @@
             "organizer_email",
             "attendee_emails"
           ],
-          "target": "person"
+          "target": "person",
+          "target_card_type": null,
+          "target_lookup_field": null
         }
       ],
       "person_edge_type": "event_has_person",
@@ -4584,7 +4626,9 @@
           "source_fields": [
             "calendar_events"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         }
       ],
       "person_edge_type": "mentions_person",
@@ -5111,7 +5155,9 @@
           "source_fields": [
             "repository"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         }
       ],
       "person_edge_type": "commit_authored_by_person",
@@ -5339,7 +5385,9 @@
           "source_fields": [
             "repository"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         },
         {
           "edge_type": "thread_has_message",
@@ -5348,7 +5396,9 @@
           "source_fields": [
             "messages"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         }
       ],
       "person_edge_type": "thread_has_person",
@@ -5639,7 +5689,9 @@
           "source_fields": [
             "thread"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         },
         {
           "edge_type": "message_in_repo",
@@ -5648,7 +5700,9 @@
           "source_fields": [
             "repository"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         }
       ],
       "person_edge_type": "message_authored_by_person",
@@ -5885,7 +5939,9 @@
           "source_fields": [
             "source_email"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         },
         {
           "edge_type": "located_at",
@@ -5894,7 +5950,9 @@
           "source_fields": [
             "address"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         },
         {
           "edge_type": "provided_by",
@@ -5903,7 +5961,9 @@
           "source_fields": [
             "booking_source"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         }
       ],
       "person_edge_type": "mentions_person",
@@ -6153,7 +6213,9 @@
           "source_fields": [
             "source_email"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         },
         {
           "edge_type": "provided_by",
@@ -6162,7 +6224,9 @@
           "source_fields": [
             "company"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         }
       ],
       "person_edge_type": "mentions_person",
@@ -6394,7 +6458,9 @@
           "source_fields": [
             "source_email"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         },
         {
           "edge_type": "located_at",
@@ -6403,7 +6469,9 @@
           "source_fields": [
             "venue"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         }
       ],
       "person_edge_type": "mentions_person",
@@ -6653,7 +6721,9 @@
           "source_fields": [
             "source_email"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         },
         {
           "edge_type": "provided_by",
@@ -6662,7 +6732,9 @@
           "source_fields": [
             "airline"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         }
       ],
       "person_edge_type": "mentions_person",
@@ -6921,7 +6993,9 @@
           "source_fields": [
             "source_email"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         },
         {
           "edge_type": "located_at",
@@ -6930,7 +7004,9 @@
           "source_fields": [
             "store"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         },
         {
           "edge_type": "provided_by",
@@ -6939,7 +7015,9 @@
           "source_fields": [
             "service"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         }
       ],
       "person_edge_type": "mentions_person",
@@ -7356,7 +7434,9 @@
           "source_fields": [
             "source_email"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         },
         {
           "edge_type": "located_at",
@@ -7365,7 +7445,9 @@
           "source_fields": [
             "restaurant"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         },
         {
           "edge_type": "provided_by",
@@ -7374,7 +7456,9 @@
           "source_fields": [
             "service"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         }
       ],
       "person_edge_type": "mentions_person",
@@ -7624,7 +7708,9 @@
           "source_fields": [
             "evidence_uids"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         }
       ],
       "person_edge_type": "mentions_person",
@@ -8032,7 +8118,9 @@
           "source_fields": [
             "source_email"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         },
         {
           "edge_type": "provided_by",
@@ -8041,7 +8129,9 @@
           "source_fields": [
             "employer"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         }
       ],
       "person_edge_type": "mentions_person",
@@ -8503,7 +8593,9 @@
           "source_fields": [
             "source_email"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         },
         {
           "edge_type": "provided_by",
@@ -8512,7 +8604,9 @@
           "source_fields": [
             "vendor"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         }
       ],
       "person_edge_type": "mentions_person",
@@ -8753,7 +8847,9 @@
           "source_fields": [
             "source_email"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         },
         {
           "edge_type": "provided_by",
@@ -8762,16 +8858,9 @@
           "source_fields": [
             "service"
           ],
-          "target": "card"
-        },
-        {
-          "edge_type": "ride_has_driver",
-          "field_name": "driver_name",
-          "multi": false,
-          "source_fields": [
-            "driver_name"
-          ],
-          "target": "person"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         },
         {
           "edge_type": "located_at",
@@ -8780,7 +8869,9 @@
           "source_fields": [
             "pickup_location"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         },
         {
           "edge_type": "located_at",
@@ -8789,7 +8880,9 @@
           "source_fields": [
             "dropoff_location"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         }
       ],
       "person_edge_type": "mentions_person",
@@ -9057,7 +9150,9 @@
           "source_fields": [
             "source_email"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         },
         {
           "edge_type": "ships_for",
@@ -9066,7 +9161,9 @@
           "source_fields": [
             "linked_purchase"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": "purchase",
+          "target_lookup_field": "order_number"
         }
       ],
       "person_edge_type": "mentions_person",
@@ -9297,7 +9394,9 @@
           "source_fields": [
             "source_email"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         },
         {
           "edge_type": "provided_by",
@@ -9306,7 +9405,9 @@
           "source_fields": [
             "service_name"
           ],
-          "target": "card"
+          "target": "card",
+          "target_card_type": null,
+          "target_lookup_field": null
         }
       ],
       "person_edge_type": "mentions_person",
