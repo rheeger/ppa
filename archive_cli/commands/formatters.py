@@ -16,6 +16,12 @@ from typing import Any
 from archive_cli.index_config import _activity_date
 
 
+def _confidence_footer(*, confidence: str = "", row_count: int = 0) -> str:
+    if not confidence:
+        return ""
+    return f"\n--- Confidence: {confidence} | {row_count} results ---"
+
+
 def format_search_line(row: dict) -> str:
     """Render a search/query result row with type, date, and fuller summary."""
     rel_path = row.get("rel_path", "")
@@ -30,8 +36,10 @@ def format_search(result: dict) -> str:
     """Format archive_search / archive_query result as text lines."""
     rows = result.get("rows", [])
     if not rows:
-        return "No matches"
-    return "\n".join(format_search_line(r) for r in rows)
+        base = "No matches"
+    else:
+        base = "\n".join(format_search_line(r) for r in rows)
+    return base + _confidence_footer(confidence=str(result.get("confidence", "")), row_count=len(rows))
 
 
 def format_graph(rel_path: str, graph: dict[str, Any]) -> str:
@@ -461,45 +469,49 @@ def format_link_quality_gate(gate: dict) -> str:
     return "\n".join(lines)
 
 
-def format_vector_search(model: str, version: int, rows: list[dict]) -> str:
+def format_vector_search(model: str, version: int, rows: list[dict], *, confidence: str = "") -> str:
     """Format archive_vector_search result."""
     if not rows:
-        return f"No vector matches for {model} v{version}"
-    lines = [f"Vector matches for {model} v{version}:"]
-    for row in rows:
-        card_type = str(row.get("type", ""))
-        date = _activity_date(row.get("activity_at"))
-        summary = str(row.get("summary", ""))[:200]
-        lines.append(
-            f"- {row['rel_path']} [{card_type}, {date}] matched_by={row['matched_by']} score={float(row['score']):.4f} "
-            f"sim={float(row['similarity']):.4f} chunk={row['chunk_type']}#{row['chunk_index']} "
-            f"provenance_bias={row['provenance_bias']} matched_chunks={row['matched_chunk_count']}\n"
-            f"  summary: {summary}\n"
-            f"  preview: {row['preview']}"
-        )
-    return "\n".join(lines)
+        base = f"No vector matches for {model} v{version}"
+    else:
+        lines = [f"Vector matches for {model} v{version}:"]
+        for row in rows:
+            card_type = str(row.get("type", ""))
+            date = _activity_date(row.get("activity_at"))
+            summary = str(row.get("summary", ""))[:200]
+            lines.append(
+                f"- {row['rel_path']} [{card_type}, {date}] matched_by={row['matched_by']} score={float(row['score']):.4f} "
+                f"sim={float(row['similarity']):.4f} chunk={row['chunk_type']}#{row['chunk_index']} "
+                f"provenance_bias={row['provenance_bias']} matched_chunks={row['matched_chunk_count']}\n"
+                f"  summary: {summary}\n"
+                f"  preview: {row['preview']}"
+            )
+        base = "\n".join(lines)
+    return base + _confidence_footer(confidence=confidence, row_count=len(rows))
 
 
-def format_hybrid_search(query: str, rows: list[dict]) -> str:
+def format_hybrid_search(query: str, rows: list[dict], *, confidence: str = "") -> str:
     """Format archive_hybrid_search result."""
     if not rows:
-        return f"No hybrid matches for '{query}'"
-    lines = [f"Hybrid matches for '{query}':"]
-    for row in rows:
-        card_type = str(row.get("type", ""))
-        date = _activity_date(row.get("activity_at"))
-        graph_hops = f" graph_hops={row['graph_hops']}" if row.get("graph_hops") else ""
-        chunk = ""
-        if int(row.get("chunk_index", -1)) >= 0 and str(row.get("chunk_type", "")):
-            chunk = f" chunk={row['chunk_type']}#{row['chunk_index']}"
-        summary = str(row.get("summary", ""))[:200]
-        preview = str(row.get("preview", ""))
-        lines.append(
-            f"- {row['rel_path']} [{card_type}, {date}] matched_by={row['matched_by']} score={float(row['score']):.4f} "
-            f"lexical={float(row['lexical_score']):.4f} vector={float(row['vector_similarity']):.4f} "
-            f"exact_match={str(bool(row['exact_match'])).lower()}{graph_hops}{chunk} "
-            f"provenance_bias={row['provenance_bias']}\n"
-            f"  summary: {summary}\n"
-            f"  preview: {preview}"
-        )
-    return "\n".join(lines)
+        base = f"No hybrid matches for '{query}'"
+    else:
+        lines = [f"Hybrid matches for '{query}':"]
+        for row in rows:
+            card_type = str(row.get("type", ""))
+            date = _activity_date(row.get("activity_at"))
+            graph_hops = f" graph_hops={row['graph_hops']}" if row.get("graph_hops") else ""
+            chunk = ""
+            if int(row.get("chunk_index", -1)) >= 0 and str(row.get("chunk_type", "")):
+                chunk = f" chunk={row['chunk_type']}#{row['chunk_index']}"
+            summary = str(row.get("summary", ""))[:200]
+            preview = str(row.get("preview", ""))
+            lines.append(
+                f"- {row['rel_path']} [{card_type}, {date}] matched_by={row['matched_by']} score={float(row['score']):.4f} "
+                f"lexical={float(row['lexical_score']):.4f} vector={float(row['vector_similarity']):.4f} "
+                f"exact_match={str(bool(row['exact_match'])).lower()}{graph_hops}{chunk} "
+                f"provenance_bias={row['provenance_bias']}\n"
+                f"  summary: {summary}\n"
+                f"  preview: {preview}"
+            )
+        base = "\n".join(lines)
+    return base + _confidence_footer(confidence=confidence, row_count=len(rows))

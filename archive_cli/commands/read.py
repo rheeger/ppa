@@ -7,6 +7,7 @@ from typing import Any
 
 from ..errors import InvalidInputError
 from ..store import DefaultArchiveStore
+from .confidence import compute_confidence
 
 
 def read(path_or_uid: str, *, store: DefaultArchiveStore, logger: logging.Logger) -> dict[str, Any]:
@@ -14,6 +15,12 @@ def read(path_or_uid: str, *, store: DefaultArchiveStore, logger: logging.Logger
     logger.info("read_start path_or_uid=%r", path_or_uid)
     result = store.read(path_or_uid)
     logger.info("read_done found=%s", bool(result.get("found")))
+    found = bool(result.get("found"))
+    result["confidence"] = compute_confidence(
+        result_count=1 if found else 0,
+        exact_match=found,
+        query_text=path_or_uid,
+    ).value
     return result
 
 

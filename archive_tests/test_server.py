@@ -267,6 +267,31 @@ class FakeIndex:
             )
         return lexical_rows, vector_rows
 
+    def log_retrieval_gaps(self, gaps):
+        if not hasattr(self, "gap_log_calls"):
+            self.gap_log_calls = []
+        self.gap_log_calls.append(list(gaps))
+
+    def temporal_neighbors(self, timestamp: str, **kwargs):
+        return {
+            "results": [
+                {
+                    "rel_path": "People/jane-smith.md",
+                    "summary": "Jane Smith",
+                }
+            ]
+        }
+
+    def knowledge_for_domain(self, domain: str, **kwargs):
+        return {
+            "ok": True,
+            "fallback": True,
+            "rows": [
+                {"rel_path": "People/a.md", "summary": "one"},
+                {"rel_path": "People/b.md", "summary": "two"},
+            ],
+        }
+
     def fetch_graph_neighbors_for_uids(self, anchor_uids, edge_type_filter=None):
         return {}
 

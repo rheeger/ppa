@@ -1028,6 +1028,16 @@ def main() -> None:
         linker_cli as _linker_cli  # lazy to avoid import cycles
     _linker_cli.add_parser(subparsers)
 
+    sub_maintain = subparsers.add_parser(
+        "maintain",
+        help="Run maintenance cycle: tail ingestion, extract, resolve, rebuild, report",
+    )
+    sub_maintain.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report what would be done without executing",
+    )
+
     parser.set_defaults(command="serve")
     args = parser.parse_args()
     if args.command == "serve" and not hasattr(args, "tunnel"):
@@ -1051,6 +1061,16 @@ def main() -> None:
         result = run_health_checks()
         print(json.dumps(result, indent=2))
         raise SystemExit(0 if result["ok"] else 1)
+    if args.command == "maintain":
+        from .commands.maintain import run_maintenance
+
+        try:
+            store = resolve_store()
+            report = run_maintenance(store=store, logger=_cli_log, dry_run=args.dry_run)
+            _print_json(report.to_dict())
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
     if args.command == "search":
         try:
             store = resolve_store()

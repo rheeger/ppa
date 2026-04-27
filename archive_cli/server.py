@@ -36,7 +36,8 @@ from .commands import status as status_cmd
 from .commands._resolve import resolve_index, resolve_store
 from .errors import InvalidInputError, PpaError, SeedLinksDisabledError
 from .index_config import get_seed_links_enabled
-from .index_store import get_default_embedding_model, get_default_embedding_version
+from .index_store import (get_default_embedding_model,
+                          get_default_embedding_version)
 
 _SEED_LINKS_DISABLED_MSG = "Seed links are not enabled. Set PPA_SEED_LINKS_ENABLED=1 to enable."
 
@@ -67,9 +68,27 @@ def _log_tool_return_error(tool_name: str, message: str) -> str:
 _instance_name = os.environ.get("PPA_INSTANCE_NAME", "Personal Private Archives").strip()
 _server_instructions = (
     f"{_instance_name}\n\n"
-    "Retrieval order: (1) archive_read for known UIDs/paths (2) archive_query for structured filters "
-    "(3) archive_search_json for keywords (4) archive_hybrid_search_json for semantic queries "
-    "(5) archive_graph for relationships. Always read canonical cards before factual claims. "
+    "When answering questions about the archive owner's life:\n\n"
+    "1. For factual lookups (\"who is X\", \"what is Y\"):\n"
+    "   -> archive_person or archive_read\n\n"
+    "2. For aggregations (\"what restaurants do I order from\", \"where do I shop most\"):\n"
+    "   -> archive_query with type_filter and aggregate client-side\n\n"
+    "3. For temporal questions (\"what was I doing on Dec 27\", \"last Tuesday\"):\n"
+    "   -> archive_temporal_neighbors with parsed timestamp\n\n"
+    "4. For recall (\"where did I get that banh mi\", \"that flight to NYC\"):\n"
+    "   -> archive_hybrid_search with the query\n\n"
+    "5. For analytics (\"how much do I spend on rides per month\"):\n"
+    "   -> archive_query with type_filter=ride and aggregate, or archive_hybrid_search\n\n"
+    "6. For exploration (\"tell me about my relationship with Sarah\"):\n"
+    "   -> archive_person for the PersonCard, "
+    "then archive_graph for connected cards\n\n"
+    "Prefer archive_hybrid_search for open-ended queries; "
+    "prefer archive_query when you know the card type. "
+    "The PPA is a retrieval engine -- agents do the reasoning over returned cards. "
+    "Check the confidence field in responses -- "
+    "low confidence means the archive may not have enough data. "
+    "archive_knowledge exists but currently only returns lexical search fallback "
+    "(no pre-computed knowledge cache in v2).\n"
     "Prefer _json tool variants when available."
 )
 mcp = FastMCP("ppa", _server_instructions)
@@ -1080,7 +1099,9 @@ def archive_vector_search(
             end_date=end_date,
         )
         rows = result["rows"]
-        out = fmt.format_vector_search(model, version, rows)
+        out = fmt.format_vector_search(
+            model, version, rows, confidence=str(result.get("confidence", ""))
+        )
         _log_tool_done("archive_vector_search", t0, result_count=len(rows))
         return out
     except PpaError as exc:
@@ -1170,7 +1191,7 @@ def archive_hybrid_search(
             end_date=end_date,
         )
         rows = payload["rows"]
-        out = fmt.format_hybrid_search(query, rows)
+        out = fmt.format_hybrid_search(query, rows, confidence=str(payload.get("confidence", "")))
         _log_tool_done("archive_hybrid_search", t0, result_count=len(rows))
         return out
     except PpaError as exc:

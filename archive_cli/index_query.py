@@ -9,17 +9,21 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from .explain import (projection_explain_payload, projection_inventory_payload,
-                      projection_status_payload)
+from .explain import projection_explain_payload, projection_inventory_payload, projection_status_payload
 from .features import parse_timestamp_to_utc
-from .index_config import (VECTOR_CANDIDATE_MULTIPLIER, _apply_recency_boost,
-                           _card_type_prior, _coerce_source_fields,
-                           _field_provenance_bonus, _field_provenance_label,
-                           _format_activity_at, _vector_literal,
-                           get_seed_links_enabled)
+from .index_config import (
+    VECTOR_CANDIDATE_MULTIPLIER,
+    _apply_recency_boost,
+    _card_type_prior,
+    _coerce_source_fields,
+    _field_provenance_bonus,
+    _field_provenance_label,
+    _format_activity_at,
+    _vector_literal,
+    get_seed_links_enabled,
+)
 from .materializer import _normalize_exact_text, _normalize_slug
-from .projections.registry import (PROJECTION_REGISTRY, TYPED_PROJECTIONS,
-                                   projection_for_card_type)
+from .projections.registry import PROJECTION_REGISTRY, TYPED_PROJECTIONS, projection_for_card_type
 
 logger = logging.getLogger("ppa.index_query")
 
@@ -1098,3 +1102,44 @@ class QueryMixin:
                 (limit,),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def log_retrieval_gaps(self, gaps: list[dict]) -> None:
+        """Write gap entries to retrieval_gaps table.
+
+        Silently skip if the table doesn't exist (Phase 1e migration
+        not applied). Called by commands/confidence.py.
+        """
+        if not gaps:
+            return
+        try:
+            with self._connect() as conn:
+                for gap in gaps:
+                    conn.execute(
+                        f"""INSERT INTO {self.schema}.retrieval_gaps
+                            (query_text, gap_type, detail, card_uid)
+                            VALUES (%s, %s, %s, %s)""",
+                        (
+                            gap["query_text"],
+                            gap["gap_type"],
+                            gap.get("detail", ""),
+                            gap.get("card_uid", ""),
+                        ),
+                    )
+                conn.commit()
+        except Exception as exc:
+            try:
+                from psycopg import errors as pg_errors
+            except ImportError:  # pragma: no cover
+                pg_errors = None  # type: ignore[assignment]
+            if pg_errors is not None and isinstance(exc, pg_errors.UndefinedTable):
+                logging.getLogger("ppa.index_query").warning(
+                    "retrieval_gaps table not found; gap logging skipped"
+                )
+                return
+            err_str = str(exc).lower()
+            if "undefined_table" in err_str or "does not exist" in err_str:
+                logging.getLogger("ppa.index_query").warning(
+                    "retrieval_gaps table not found; gap logging skipped"
+                )
+            else:
+                raise
