@@ -133,7 +133,7 @@ class SchemaDDLMixin:
                     self.dsn,
                     row_factory=dict_row,
                     connect_timeout=5,
-                    options="-c statement_timeout=600000",
+                    options="-c statement_timeout=0",
                     autocommit=True,
                 )
                 c.execute("SET maintenance_work_mem = '1GB'")
@@ -259,6 +259,7 @@ class SchemaDDLMixin:
             )
             """
         )
+        self._ensure_cards_activity_columns(conn)
         if ensure_indexes:
             conn.execute(f"CREATE INDEX IF NOT EXISTS idx_cards_slug ON {self.schema}.cards(slug)")
             conn.execute(f"CREATE INDEX IF NOT EXISTS idx_cards_type ON {self.schema}.cards(type)")
@@ -272,6 +273,7 @@ class SchemaDDLMixin:
             conn.execute(
                 f"CREATE INDEX IF NOT EXISTS idx_cards_search_document ON {self.schema}.cards USING GIN(search_document)"
             )
+
         conn.execute(
             f"""
             CREATE TABLE IF NOT EXISTS {self.schema}.card_sources (
@@ -448,6 +450,7 @@ class SchemaDDLMixin:
             )
             """
         )
+        self._ensure_note_manifest_columns(conn)
         conn.execute(
             f"""
             CREATE TABLE IF NOT EXISTS {self.schema}.rebuild_checkpoint (
@@ -542,6 +545,73 @@ class SchemaDDLMixin:
             self._ensure_embeddings_vector_index(conn)
         conn.commit()
         self._mark_all_migrations_applied(conn)
+
+    def _ensure_cards_activity_columns(self, conn) -> None:
+        """Repair pre-v2 cards.activity_at drift on already-created schemas."""
+        row = conn.execute(
+            """
+            SELECT data_type, is_nullable
+            FROM information_schema.columns
+            WHERE table_schema = %s AND table_name = 'cards' AND column_name = 'activity_at'
+            """,
+            (self.schema,),
+        ).fetchone()
+        if row is None:
+            conn.execute(f"ALTER TABLE {self.schema}.cards ADD COLUMN activity_at TIMESTAMPTZ")
+        else:
+            data_type = row["data_type"] if isinstance(row, dict) else row[0]
+            is_nullable = row["is_nullable"] if isinstance(row, dict) else row[1]
+            if data_type == "text":
+                conn.execute(f"ALTER TABLE {self.schema}.cards ADD COLUMN IF NOT EXISTS activity_at_tz TIMESTAMPTZ")
+                conn.execute(
+                    f"""
+                    UPDATE {self.schema}.cards SET activity_at_tz = CASE
+                        WHEN activity_at::text ~ '^\\d{{4}}-\\d{{2}}-\\d{{2}}T' THEN activity_at::TIMESTAMPTZ
+                        WHEN activity_at::text ~ '^\\d{{4}}-\\d{{2}}-\\d{{2}}$' THEN (activity_at::text || 'T00:00:00')::TIMESTAMPTZ
+                        ELSE NULL
+                    END
+                    """
+                )
+                conn.execute(f"ALTER TABLE {self.schema}.cards DROP COLUMN activity_at")
+                conn.execute(f"ALTER TABLE {self.schema}.cards RENAME COLUMN activity_at_tz TO activity_at")
+            elif data_type != "timestamp with time zone":
+                raise RuntimeError(f"Unexpected cards.activity_at type {data_type!r}; cannot migrate automatically.")
+            elif is_nullable == "NO":
+                conn.execute(f"ALTER TABLE {self.schema}.cards ALTER COLUMN activity_at DROP NOT NULL")
+        conn.execute(f"ALTER TABLE {self.schema}.cards ADD COLUMN IF NOT EXISTS activity_end_at TIMESTAMPTZ")
+
+    def _ensure_note_manifest_columns(self, conn) -> None:
+        """Repair note_manifest drift from earlier manifest schemas."""
+        conn.execute(f"ALTER TABLE {self.schema}.note_manifest ADD COLUMN IF NOT EXISTS card_uid TEXT NOT NULL DEFAULT ''")
+        conn.execute(f"ALTER TABLE {self.schema}.note_manifest ADD COLUMN IF NOT EXISTS slug TEXT NOT NULL DEFAULT ''")
+        conn.execute(
+            f"ALTER TABLE {self.schema}.note_manifest ADD COLUMN IF NOT EXISTS frontmatter_hash TEXT NOT NULL DEFAULT ''"
+        )
+        conn.execute(f"ALTER TABLE {self.schema}.note_manifest ADD COLUMN IF NOT EXISTS file_size BIGINT NOT NULL DEFAULT 0")
+        conn.execute(f"ALTER TABLE {self.schema}.note_manifest ADD COLUMN IF NOT EXISTS mtime_ns BIGINT NOT NULL DEFAULT 0")
+        conn.execute(f"ALTER TABLE {self.schema}.note_manifest ADD COLUMN IF NOT EXISTS card_type TEXT NOT NULL DEFAULT ''")
+        conn.execute(
+            f"ALTER TABLE {self.schema}.note_manifest ADD COLUMN IF NOT EXISTS typed_projection TEXT NOT NULL DEFAULT ''"
+        )
+        conn.execute(
+            f"ALTER TABLE {self.schema}.note_manifest ADD COLUMN IF NOT EXISTS people_json TEXT NOT NULL DEFAULT '[]'"
+        )
+        conn.execute(f"ALTER TABLE {self.schema}.note_manifest ADD COLUMN IF NOT EXISTS orgs_json TEXT NOT NULL DEFAULT '[]'")
+        conn.execute(
+            f"ALTER TABLE {self.schema}.note_manifest ADD COLUMN IF NOT EXISTS scan_version INTEGER NOT NULL DEFAULT 0"
+        )
+        conn.execute(
+            f"ALTER TABLE {self.schema}.note_manifest ADD COLUMN IF NOT EXISTS chunk_schema_version INTEGER NOT NULL DEFAULT 0"
+        )
+        conn.execute(
+            f"ALTER TABLE {self.schema}.note_manifest ADD COLUMN IF NOT EXISTS projection_registry_version INTEGER NOT NULL DEFAULT 0"
+        )
+        conn.execute(
+            f"ALTER TABLE {self.schema}.note_manifest ADD COLUMN IF NOT EXISTS index_schema_version INTEGER NOT NULL DEFAULT 0"
+        )
+        conn.execute(
+            f"ALTER TABLE {self.schema}.note_manifest ADD COLUMN IF NOT EXISTS last_built_at TIMESTAMPTZ NOT NULL DEFAULT NOW()"
+        )
 
     def _create_seed_link_schema(self, conn, *, ensure_indexes: bool = True) -> None:
         conn.execute(

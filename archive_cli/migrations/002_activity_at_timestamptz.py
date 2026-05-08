@@ -24,6 +24,7 @@ def _activity_at_column_type(conn, schema: str) -> str | None:
 def upgrade(conn, schema: str) -> None:
     dt = _activity_at_column_type(conn, schema)
     if dt == "timestamp with time zone":
+        _ensure_cards_columns(conn, schema)
         _ensure_infra_tables(conn, schema)
         return
 
@@ -43,31 +44,26 @@ def upgrade(conn, schema: str) -> None:
     conn.execute(f"ALTER TABLE {schema}.cards DROP COLUMN activity_at")
     conn.execute(f"ALTER TABLE {schema}.cards RENAME COLUMN activity_at_tz TO activity_at")
 
+    _ensure_cards_columns(conn, schema)
+
+    _ensure_infra_tables(conn, schema)
+
+
+def _ensure_cards_columns(conn, schema: str) -> None:
+    conn.execute(f"ALTER TABLE {schema}.cards ALTER COLUMN activity_at DROP NOT NULL")
     conn.execute(f"ALTER TABLE {schema}.cards ADD COLUMN IF NOT EXISTS activity_end_at TIMESTAMPTZ")
 
     conn.execute(
         f"ALTER TABLE {schema}.cards ADD COLUMN IF NOT EXISTS quality_score DOUBLE PRECISION NOT NULL DEFAULT 0.0"
     )
-    conn.execute(
-        f"ALTER TABLE {schema}.cards ADD COLUMN IF NOT EXISTS quality_flags TEXT[] NOT NULL DEFAULT '{{}}'"
-    )
-    conn.execute(
-        f"ALTER TABLE {schema}.cards ADD COLUMN IF NOT EXISTS enrichment_version INTEGER NOT NULL DEFAULT 0"
-    )
-    conn.execute(
-        f"ALTER TABLE {schema}.cards ADD COLUMN IF NOT EXISTS enrichment_status TEXT NOT NULL DEFAULT 'none'"
-    )
+    conn.execute(f"ALTER TABLE {schema}.cards ADD COLUMN IF NOT EXISTS quality_flags TEXT[] NOT NULL DEFAULT '{{}}'")
+    conn.execute(f"ALTER TABLE {schema}.cards ADD COLUMN IF NOT EXISTS enrichment_version INTEGER NOT NULL DEFAULT 0")
+    conn.execute(f"ALTER TABLE {schema}.cards ADD COLUMN IF NOT EXISTS enrichment_status TEXT NOT NULL DEFAULT 'none'")
     conn.execute(f"ALTER TABLE {schema}.cards ADD COLUMN IF NOT EXISTS last_enriched_at TIMESTAMPTZ")
 
     conn.execute(f"DROP INDEX IF EXISTS {schema}.idx_cards_activity_at")
-    conn.execute(
-        f"CREATE INDEX IF NOT EXISTS idx_cards_activity_at_uid ON {schema}.cards(activity_at, uid)"
-    )
-    conn.execute(
-        f"CREATE INDEX IF NOT EXISTS idx_cards_activity_end_at ON {schema}.cards(activity_end_at)"
-    )
-
-    _ensure_infra_tables(conn, schema)
+    conn.execute(f"CREATE INDEX IF NOT EXISTS idx_cards_activity_at_uid ON {schema}.cards(activity_at, uid)")
+    conn.execute(f"CREATE INDEX IF NOT EXISTS idx_cards_activity_end_at ON {schema}.cards(activity_end_at)")
 
 
 def _ensure_infra_tables(conn, schema: str) -> None:
@@ -83,12 +79,8 @@ def _ensure_infra_tables(conn, schema: str) -> None:
         )
         """
     )
-    conn.execute(
-        f"CREATE INDEX IF NOT EXISTS idx_ingestion_log_logged_at ON {schema}.ingestion_log(logged_at)"
-    )
-    conn.execute(
-        f"CREATE INDEX IF NOT EXISTS idx_ingestion_log_card_uid ON {schema}.ingestion_log(card_uid)"
-    )
+    conn.execute(f"CREATE INDEX IF NOT EXISTS idx_ingestion_log_logged_at ON {schema}.ingestion_log(logged_at)")
+    conn.execute(f"CREATE INDEX IF NOT EXISTS idx_ingestion_log_card_uid ON {schema}.ingestion_log(card_uid)")
 
     conn.execute(
         f"""
@@ -106,9 +98,7 @@ def _ensure_infra_tables(conn, schema: str) -> None:
         )
         """
     )
-    conn.execute(
-        f"CREATE INDEX IF NOT EXISTS idx_eq_status_priority ON {schema}.enrichment_queue(status, priority)"
-    )
+    conn.execute(f"CREATE INDEX IF NOT EXISTS idx_eq_status_priority ON {schema}.enrichment_queue(status, priority)")
 
     conn.execute(
         f"""

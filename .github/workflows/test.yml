@@ -173,3 +173,36 @@ jobs:
         with:
           name: benchmark-results
           path: /tmp/bench-results/
+
+  deploy-gate:
+    name: Deployment Gate
+    needs: [lint, unit, integration]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - run: pip install -e ".[dev]"
+      - name: Verify archive_cli importable
+        run: python -c "import archive_cli; print('OK')"
+      - name: Verify archive_crate built
+        run: python -c "import archive_crate; print('OK')"
+      - name: Verify Phase 9 commands exist
+        run: |
+          python -m archive_cli deploy --help
+          python -m archive_cli latency-check --help
+          python -m archive_cli health-check --help
+          python -m archive_cli import-embedding-cache --help
+          python -m archive_cli export-embedding-cache --help
+      - name: Run Phase 9 unit tests
+        run: |
+          python -m pytest \
+            archive_tests/test_postgres_guc_parity.py \
+            archive_tests/test_deploy.py \
+            archive_tests/test_latency_check.py \
+            archive_tests/test_health_check_v2.py \
+            archive_tests/test_restore_path.py \
+            -v -m "not integration"

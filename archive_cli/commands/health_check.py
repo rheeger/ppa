@@ -5,15 +5,55 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 log = logging.getLogger("ppa.health_check")
+
+PHASE9_SKIPPED_CARD_TYPES = frozenset({"knowledge", "observation"})
+
+
+def _row_first_int(row: Any) -> int:
+    if isinstance(row, dict):
+        return int(next(iter(row.values())))
+    return int(row[0])
+
+
+def _projection_column_for_source_field(reg: Any, field_name: str) -> str | None:
+    candidates = (field_name, f"{field_name}_json")
+    for column in reg.projection_columns:
+        if column.name in candidates or column.source_field == field_name:
+            return str(column.name)
+    return None
+
+
+def _source_field_has_values(conn: Any, schema: str, table_name: str, column_name: str) -> bool:
+    row = conn.execute(
+        """
+        SELECT data_type
+        FROM information_schema.columns
+        WHERE table_schema = %s AND table_name = %s AND column_name = %s
+        """,
+        (schema, table_name, column_name),
+    ).fetchone()
+    if row is None:
+        return False
+    data_type = str(row["data_type"] if isinstance(row, dict) else row[0])
+    if data_type == "jsonb":
+        predicate = f"{column_name} IS NOT NULL AND {column_name} <> '[]'::jsonb AND {column_name} <> '{{}}'::jsonb"
+    elif data_type == "ARRAY":
+        predicate = f"{column_name} IS NOT NULL AND cardinality({column_name}) > 0"
+    else:
+        predicate = f"{column_name} IS NOT NULL AND {column_name}::text <> ''"
+    count_row = conn.execute(f"SELECT 1 FROM {schema}.{table_name} WHERE {predicate} LIMIT 1").fetchone()
+    return count_row is not None
 
 
 def _check_embedding_coverage(conn: Any, schema: str) -> dict[str, Any]:
     """Report how many chunks have embeddings for the default model/version."""
     try:
-        from ..index_config import get_default_embedding_model, get_default_embedding_version
+        from ..index_config import (get_default_embedding_model,
+                                    get_default_embedding_version)
 
         chunk_row = conn.execute(f"SELECT COUNT(*) AS count FROM {schema}.chunks").fetchone()
         chunk_count = int(chunk_row["count"] if isinstance(chunk_row, dict) else chunk_row[0])
@@ -55,6 +95,22 @@ class StructuralReport:
 
 
 @dataclass
+class DeploymentReport:
+    card_type_coverage: dict[str, int] = field(default_factory=dict)
+    missing_types: list[str] = field(default_factory=list)
+    edge_rules_with_zero_edges: list[str] = field(default_factory=list)
+    temporal_index_present: bool = False
+    embedding_coverage_pct: float = 0.0
+    index_card_count: int = 0
+    vault_file_count: int = 0
+    card_count_match: bool = False
+    ok: bool = True
+
+    def to_dict(self) -> dict[str, Any]:
+        return dict(self.__dict__)
+
+
+@dataclass
 class FTSQueryResult:
     query: str
     expected_types: list[str]
@@ -90,9 +146,7 @@ def run_structural_checks(conn: Any, schema: str, manifest: dict[str, Any] | Non
     if report.duplicate_uids:
         report.ok = False
 
-    type_rows = conn.execute(
-        f"SELECT type, COUNT(*) AS c FROM {schema}.cards GROUP BY type ORDER BY type"
-    ).fetchall()
+    type_rows = conn.execute(f"SELECT type, COUNT(*) AS c FROM {schema}.cards GROUP BY type ORDER BY type").fetchall()
     by_type: dict[str, int] = {}
     for row in type_rows:
         t = str(row["type"] if isinstance(row, dict) else row[0])
@@ -107,7 +161,11 @@ def run_structural_checks(conn: Any, schema: str, manifest: dict[str, Any] | Non
                 if by_type.get(t, 0) < int(min_count):
                     report.ok = False
                     report.missing_field_entries.append(
-                        {"check": "card_count_by_type", "type": str(t), "detail": f"count {by_type.get(t, 0)} < {min_count}"}
+                        {
+                            "check": "card_count_by_type",
+                            "type": str(t),
+                            "detail": f"count {by_type.get(t, 0)} < {min_count}",
+                        }
                     )
 
     invariants = manifest.get("structural_invariants", {}) if manifest else {}
@@ -189,7 +247,9 @@ def run_structural_checks(conn: Any, schema: str, manifest: dict[str, Any] | Non
         empty_summary = conn.execute(
             f"SELECT COUNT(*) FROM {schema}.cards WHERE summary IS NULL OR summary = ''"
         ).fetchone()
-        empty_summary_count = int(empty_summary[0] if not isinstance(empty_summary, dict) else next(iter(empty_summary.values())))
+        empty_summary_count = int(
+            empty_summary[0] if not isinstance(empty_summary, dict) else next(iter(empty_summary.values()))
+        )
         if empty_summary_count > 0:
             report.ok = False
             report.missing_field_entries.append(
@@ -200,10 +260,10 @@ def run_structural_checks(conn: Any, schema: str, manifest: dict[str, Any] | Non
             )
 
     if invariants.get("all_cards_have_activity_at"):
-        null_activity = conn.execute(
-            f"SELECT COUNT(*) FROM {schema}.cards WHERE activity_at IS NULL"
-        ).fetchone()
-        null_activity_count = int(null_activity[0] if not isinstance(null_activity, dict) else next(iter(null_activity.values())))
+        null_activity = conn.execute(f"SELECT COUNT(*) FROM {schema}.cards WHERE activity_at IS NULL").fetchone()
+        null_activity_count = int(
+            null_activity[0] if not isinstance(null_activity, dict) else next(iter(null_activity.values()))
+        )
         if null_activity_count > 0:
             report.ok = False
             report.missing_field_entries.append(
@@ -217,6 +277,77 @@ def run_structural_checks(conn: Any, schema: str, manifest: dict[str, Any] | Non
     if not report.embedding_coverage.get("ok", False):
         report.ok = False
 
+    return report
+
+
+def run_deployment_checks(conn: Any, schema: str, vault_path: str | Path | None = None) -> DeploymentReport:
+    """v2 deployment checks.
+
+    Knowledge cache checks are intentionally absent because Phase 7 was skipped.
+    """
+    report = DeploymentReport()
+    from archive_vault.schema import CARD_TYPES
+
+    rows = conn.execute(f"SELECT type, COUNT(*) AS c FROM {schema}.cards GROUP BY type").fetchall()
+    type_counts: dict[str, int] = {}
+    for row in rows:
+        t = str(row["type"] if isinstance(row, dict) else row[0])
+        c = int(row["c"] if isinstance(row, dict) else row[1])
+        type_counts[t] = c
+    report.card_type_coverage = type_counts
+    report.missing_types = [
+        t for t in CARD_TYPES if t not in PHASE9_SKIPPED_CARD_TYPES and type_counts.get(t, 0) == 0
+    ]
+    if report.missing_types:
+        report.ok = False
+
+    from ..card_registry import CARD_TYPE_REGISTRATIONS
+
+    edge_rows = conn.execute(f"SELECT edge_type, COUNT(*) AS c FROM {schema}.edges GROUP BY edge_type").fetchall()
+    edge_counts = {
+        str(r["edge_type"] if isinstance(r, dict) else r[0]): int(r["c"] if isinstance(r, dict) else r[1])
+        for r in edge_rows
+    }
+    zero_edges: set[str] = set()
+    for reg in CARD_TYPE_REGISTRATIONS:
+        if reg.card_type in PHASE9_SKIPPED_CARD_TYPES or type_counts.get(reg.card_type, 0) == 0:
+            continue
+        for rule in reg.edge_rules:
+            if rule.edge_type == "wikilink" or edge_counts.get(rule.edge_type, 0) > 0:
+                continue
+            source_column = _projection_column_for_source_field(reg, rule.field_name)
+            if source_column and _source_field_has_values(conn, schema, reg.projection_table, source_column):
+                zero_edges.add(rule.edge_type)
+    report.edge_rules_with_zero_edges = sorted(zero_edges)
+
+    idx_row = conn.execute(
+        "SELECT 1 FROM pg_indexes WHERE schemaname = %s AND indexname = 'idx_cards_activity_at_uid'",
+        (schema,),
+    ).fetchone()
+    report.temporal_index_present = idx_row is not None
+    if not report.temporal_index_present:
+        report.ok = False
+
+    chunk_count = _row_first_int(conn.execute(f"SELECT COUNT(*) FROM {schema}.chunks").fetchone())
+    embedded_count = _row_first_int(conn.execute(f"SELECT COUNT(*) FROM {schema}.embeddings").fetchone())
+    report.embedding_coverage_pct = (embedded_count / chunk_count * 100) if chunk_count else 100.0
+
+    report.index_card_count = _row_first_int(conn.execute(f"SELECT COUNT(*) FROM {schema}.cards").fetchone())
+    if vault_path is not None:
+        vault = Path(vault_path)
+        if vault.is_dir():
+            try:
+                import archive_crate
+
+                report.vault_file_count = len(archive_crate.walk_vault(str(vault)))
+            except Exception:
+                report.vault_file_count = sum(1 for _ in vault.rglob("*.md"))
+            duplicate_count = _row_first_int(conn.execute(f"SELECT COUNT(*) FROM {schema}.duplicate_uid_rows").fetchone())
+            expected_card_count = report.vault_file_count - duplicate_count
+            tolerance = max(1, int(expected_card_count * 0.001))
+            report.card_count_match = abs(report.index_card_count - expected_card_count) <= tolerance
+            if not report.card_count_match:
+                report.ok = False
     return report
 
 
@@ -263,7 +394,9 @@ def run_behavioral_checks(index: Any, manifest: dict[str, Any]) -> BehavioralRep
     for entry in manifest.get("graph_queries", []) or []:
         anchor_path = str(entry.get("anchor_rel_path", "")).strip()
         if anchor_path.startswith("PLACEHOLDER:"):
-            report.graph_results.append({"entry": entry, "passed": True, "skipped": True, "reason": "placeholder anchor"})
+            report.graph_results.append(
+                {"entry": entry, "passed": True, "skipped": True, "reason": "placeholder anchor"}
+            )
             continue
         if not anchor_path:
             start_uid = str(entry.get("start_uid", "")).strip()

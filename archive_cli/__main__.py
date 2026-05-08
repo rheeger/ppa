@@ -255,6 +255,22 @@ def main() -> None:
         action="store_true",
         help="Report what would be moved/pruned without touching files",
     )
+    export_embedding_cache_parser = subparsers.add_parser(
+        "export-embedding-cache",
+        help="Export existing Postgres embeddings to a direct TSV recovery cache",
+    )
+    export_embedding_cache_parser.add_argument("--output-dir", required=True)
+    export_embedding_cache_parser.add_argument("--embedding-model", default="text-embedding-3-small")
+    export_embedding_cache_parser.add_argument("--embedding-version", type=int, default=1)
+    export_embedding_cache_parser.add_argument("--force", action="store_true")
+    export_embedding_cache_parser.add_argument("--allow-artifacts-dir", action="store_true")
+    export_embedding_cache_parser.add_argument("--allow-low-space", action="store_true")
+    import_embedding_cache_parser = subparsers.add_parser(
+        "import-embedding-cache",
+        help="Import a direct TSV embedding recovery cache into Postgres",
+    )
+    import_embedding_cache_parser.add_argument("--input-dir", required=True)
+    import_embedding_cache_parser.add_argument("--no-verify-sha", action="store_true")
     _ = embed_batch_poll_parser  # placate linters
     subparsers.add_parser("seed-link-surface")
     seed_link_enqueue_parser = subparsers.add_parser("seed-link-enqueue")
@@ -412,6 +428,7 @@ def main() -> None:
     health_check_parser.add_argument("--manifest", default="", help="Path to slice_manifest.json")
     health_check_parser.add_argument("--report-format", choices=["json", "md", "both"], default="both")
     health_check_parser.add_argument("--report-dir", default=".", help="Directory for report files")
+    health_check_parser.add_argument("--v2", action="store_true", help="Include Phase 9 deployment checks")
 
     bench_multi_parser = subparsers.add_parser("benchmark", help="Multi-size performance benchmark")
     bench_multi_parser.add_argument(
@@ -537,7 +554,9 @@ def main() -> None:
         "enrich-emails",
         help="LLM extraction from known-sender email threads (Phase 2.75 — no triage, writes staging)",
     )
-    enrich_parser.add_argument("--staging-dir", default="_artifacts/_staging-llm", help="Output directory for derived cards")
+    enrich_parser.add_argument(
+        "--staging-dir", default="_artifacts/_staging-llm", help="Output directory for derived cards"
+    )
     enrich_parser.add_argument(
         "--provider",
         default="ollama",
@@ -885,8 +904,12 @@ def main() -> None:
     census_parser.add_argument("--out", default="", help="Write output to file (default: stdout)")
     census_parser.add_argument("--vault", default="", help="Vault path (default: PPA_PATH)")
 
-    sampler_parser = subparsers.add_parser("template-sampler", help="Sample email bodies by year for template era discovery")
-    sampler_parser.add_argument("--domain", default="", help="Sender domain (e.g., doordash.com); required unless --batch")
+    sampler_parser = subparsers.add_parser(
+        "template-sampler", help="Sample email bodies by year for template era discovery"
+    )
+    sampler_parser.add_argument(
+        "--domain", default="", help="Sender domain (e.g., doordash.com); required unless --batch"
+    )
     sampler_parser.add_argument("--category", default="", help="Filter by subject keyword (e.g., receipt)")
     sampler_parser.add_argument("--per-year", dest="per_year", type=int, default=3)
     sampler_parser.add_argument("--out-dir", dest="out_dir", default="", help="Output root; required unless --batch")
@@ -1026,6 +1049,7 @@ def main() -> None:
     # Phase 6.5 `ppa linker` subcommand family.
     from archive_cli import \
         linker_cli as _linker_cli  # lazy to avoid import cycles
+
     _linker_cli.add_parser(subparsers)
 
     sub_maintain = subparsers.add_parser(
@@ -1037,6 +1061,23 @@ def main() -> None:
         action="store_true",
         help="Report what would be done without executing",
     )
+    deploy_parser = subparsers.add_parser("deploy", help="Run Phase 9 Arnold-side deployment sequence")
+    deploy_parser.add_argument("--dry-run", action="store_true", help="Pre-flight only")
+    deploy_parser.add_argument(
+        "--skip-to",
+        choices=["migrate", "rebuild", "geocode-places", "restore-embeddings", "verify", "restart-mcp"],
+        help="Resume from step",
+    )
+    deploy_parser.add_argument("--workers", type=int, default=4, help="Rebuild worker count")
+    deploy_parser.add_argument(
+        "--embedding-cache-dir",
+        default="",
+        help="Safe old-embedding cache directory. Defaults to PPA_EMBEDDING_RECOVERY_CACHE_DIR.",
+    )
+    deploy_parser.add_argument("--timeout-hours", type=float, default=5.0, help="Rebuild timeout cap")
+    latency_parser = subparsers.add_parser("latency-check", help="Verify query latency targets")
+    latency_parser.add_argument("--iterations", type=int, default=3, help="Runs per query type")
+    latency_parser.add_argument("--format", choices=["json", "table"], default="table", dest="output_format")
 
     parser.set_defaults(command="serve")
     args = parser.parse_args()
@@ -1068,6 +1109,41 @@ def main() -> None:
             store = resolve_store()
             report = run_maintenance(store=store, logger=_cli_log, dry_run=args.dry_run)
             _print_json(report.to_dict())
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "deploy":
+        from .commands.deploy import run_deploy
+
+        try:
+            store = resolve_store()
+            result = run_deploy(
+                store=store,
+                logger=_cli_log,
+                dry_run=bool(args.dry_run),
+                skip_to=args.skip_to,
+                workers=int(args.workers),
+                embedding_cache_dir=str(args.embedding_cache_dir or ""),
+                timeout_hours=float(args.timeout_hours),
+            )
+            _print_json(result.to_dict())
+            raise SystemExit(0 if result.overall_status == "success" else 1)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "latency-check":
+        from .commands.latency_check import run_latency_check
+
+        try:
+            index = resolve_index()
+            results = run_latency_check(index, iterations=int(args.iterations))
+            if args.output_format == "json":
+                _print_json([r.to_dict() for r in results])
+            else:
+                for r in results:
+                    status = "PASS" if r.passed else "FAIL"
+                    print(f"  {status}  {r.query_type:<22} target={r.target_ms}ms actual={r.actual_ms}ms")
+            raise SystemExit(1 if any(not r.passed for r in results) else 0)
         except PpaError as exc:
             _cli_fail(exc)
         return
@@ -1224,9 +1300,7 @@ def main() -> None:
                 odir = str(getattr(args, "out_dir", "") or "").strip()
                 cat = str(getattr(args, "category", "") or "").strip()
                 if dom or odir or cat:
-                    _cli_fail(
-                        PpaError("--batch cannot be combined with --domain, --out-dir, or --category")
-                    )
+                    _cli_fail(PpaError("--batch cannot be combined with --domain, --out-dir, or --category"))
                 result = run_template_sampler_from_batch_file(
                     vault_path=vp,
                     batch_path=batch,
@@ -1342,11 +1416,7 @@ def main() -> None:
             prov = str(getattr(args, "provider", "gemini") or "gemini").strip()
             model = str(getattr(args, "model", "") or "").strip()
             if not model:
-                model = (
-                    DEFAULT_ENRICH_CARD_GEMINI_MODEL
-                    if prov == "gemini"
-                    else DEFAULT_ENRICH_EXTRACT_MODEL
-                )
+                model = DEFAULT_ENRICH_CARD_GEMINI_MODEL if prov == "gemini" else DEFAULT_ENRICH_EXTRACT_MODEL
             vp = float(getattr(args, "vault_percent", 0.0) or 0.0)
             lim = int(getattr(args, "limit", 0) or 0)
             uid_filter_path = str(getattr(args, "uid_filter_file", "") or "").strip()
@@ -1362,7 +1432,10 @@ def main() -> None:
                 cache_db=cache_db,
                 run_id=str(getattr(args, "run_id", "") or ""),
                 staging_dir=Path(
-                    str(getattr(args, "staging_dir", "_artifacts/_staging-enrichment") or "_artifacts/_staging-enrichment")
+                    str(
+                        getattr(args, "staging_dir", "_artifacts/_staging-enrichment")
+                        or "_artifacts/_staging-enrichment"
+                    )
                 ),
                 dry_run=bool(getattr(args, "dry_run", False)),
                 progress_every=max(1, int(getattr(args, "progress_every", 1) or 1)),
@@ -1554,9 +1627,7 @@ def main() -> None:
                 dry_run=bool(getattr(args, "dry_run", False)),
                 run_id=str(getattr(args, "run_id", "") or "phase3-match"),
                 progress_every=int(getattr(args, "progress_every", 50) or 0),
-                vault_cache_progress_every=int(
-                    getattr(args, "vault_cache_progress_every", 5000) or 0
-                ),
+                vault_cache_progress_every=int(getattr(args, "vault_cache_progress_every", 5000) or 0),
             )
             _print_json(out)
         except PpaError as exc:
@@ -1748,6 +1819,36 @@ def main() -> None:
         except PpaError as exc:
             _cli_fail(exc)
         return
+    if args.command == "export-embedding-cache":
+        try:
+            from .commands.embedding_cache import export_embedding_cache
+
+            out = export_embedding_cache(
+                output_dir=str(args.output_dir),
+                embedding_model=str(args.embedding_model),
+                embedding_version=int(args.embedding_version),
+                force=bool(args.force),
+                allow_artifacts_dir=bool(args.allow_artifacts_dir),
+                allow_low_space=bool(args.allow_low_space),
+                logger=_cli_log,
+            )
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "import-embedding-cache":
+        try:
+            from .commands.embedding_cache import import_embedding_cache
+
+            out = import_embedding_cache(
+                input_dir=str(args.input_dir),
+                verify_sha=not bool(args.no_verify_sha),
+                logger=_cli_log,
+            )
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
     if args.command == "embedding-backlog":
         try:
             store = resolve_store()
@@ -1838,6 +1939,7 @@ def main() -> None:
             from typing import Any as _Any
 
             from .commands import admin as _admin
+
             store = resolve_store()
             steps: list[dict[str, _Any]] = []
             t0 = time.monotonic()
@@ -1861,6 +1963,7 @@ def main() -> None:
                 _cli_log.info("slice-bootstrap step=3/5 copy-embeddings from=%s", copy_src)
                 from .index_config import (get_default_embedding_model,
                                            get_default_embedding_version)
+
                 model = get_default_embedding_model()
                 version = get_default_embedding_version()
                 r3 = store.index.copy_embeddings_from_schema(
@@ -2135,7 +2238,9 @@ def main() -> None:
             cfg.target_percent = float(args.target_percent)
         if args.cluster_cap is not None:
             cfg.cluster_cap = int(args.cluster_cap)
-        src = Path(args.source_vault or os.environ.get("PPA_BENCHMARK_SOURCE_VAULT", str(DEFAULT_BENCHMARK_SOURCE_VAULT)))
+        src = Path(
+            args.source_vault or os.environ.get("PPA_BENCHMARK_SOURCE_VAULT", str(DEFAULT_BENCHMARK_SOURCE_VAULT))
+        )
         out = Path(args.output)
         res = slice_seed_vault(
             src,
@@ -2177,6 +2282,11 @@ def main() -> None:
             manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
         with index._connect() as conn:
             structural = health_check_cmd.run_structural_checks(conn, schema, manifest or None)
+            deployment = (
+                health_check_cmd.run_deployment_checks(conn, schema, vault)
+                if bool(getattr(args, "v2", False))
+                else None
+            )
         behavioral = None
         if manifest:
             behavioral = health_check_cmd.run_behavioral_checks(index, manifest)
@@ -2187,6 +2297,11 @@ def main() -> None:
             report_dir=args.report_dir,
         )
         ok = structural.ok if behavioral is None else structural.ok and behavioral.ok
+        if deployment is not None:
+            dep_path = Path(args.report_dir) / "deployment-report.json"
+            dep_path.parent.mkdir(parents=True, exist_ok=True)
+            dep_path.write_text(json.dumps(deployment.to_dict(), indent=2, default=str), encoding="utf-8")
+            ok = ok and deployment.ok
         raise SystemExit(0 if ok else 1)
     if args.command == "benchmark":
         out_dir = Path(args.output)

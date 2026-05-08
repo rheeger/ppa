@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import time
+from collections import deque
 from collections.abc import Iterable
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -42,10 +43,7 @@ PERSON_ESCALATION_THRESHOLD = 5000
 
 def _compute_run_id(vault_manifest_hash: str) -> str:
     """Deterministic run_id; schema bumps invalidate stale checkpoints."""
-    components = (
-        f"{vault_manifest_hash}:{INDEX_SCHEMA_VERSION}"
-        f":{CHUNK_SCHEMA_VERSION}:{PROJECTION_REGISTRY_VERSION}"
-    )
+    components = f"{vault_manifest_hash}:{INDEX_SCHEMA_VERSION}:{CHUNK_SCHEMA_VERSION}:{PROJECTION_REGISTRY_VERSION}"
     return hashlib.sha256(components.encode()).hexdigest()[:16]
 
 
@@ -306,9 +304,7 @@ class LoaderMixin:
                 ).fetchone()
                 cards_exists = bool(row.get("exists")) if isinstance(row, dict) else bool(row)
                 if cards_exists:
-                    cnt_row = conn.execute(
-                        f"SELECT COUNT(*) AS c FROM {self.schema}.cards"
-                    ).fetchone()
+                    cnt_row = conn.execute(f"SELECT COUNT(*) AS c FROM {self.schema}.cards").fetchone()
                     if isinstance(cnt_row, dict):
                         existing_card_count = int(cnt_row.get("c") or 0)
                     elif cnt_row is not None:
@@ -426,7 +422,7 @@ class LoaderMixin:
                 self.dsn,
                 row_factory=dict_row,
                 connect_timeout=5,
-                options="-c statement_timeout=300000",
+                options="-c statement_timeout=300000 -c synchronous_commit=off",
             )
             conns.append(c)
         return conns
@@ -465,9 +461,7 @@ class LoaderMixin:
                 return table_name, 0
             columns = ", ".join(columns_tuple)
             with conn.cursor() as cur:
-                with cur.copy(
-                    f"COPY {self.schema}.{target} ({columns}) FROM STDIN"
-                ) as copy:
+                with cur.copy(f"COPY {self.schema}.{target} ({columns}) FROM STDIN") as copy:
                     copy.write(data)
             return table_name, n_rows
 
@@ -715,6 +709,17 @@ class LoaderMixin:
             conn.execute(f"INSERT INTO {self.schema}.{table} SELECT * FROM {self.schema}.{stage}")
             conn.execute(f"DROP TABLE IF EXISTS {self.schema}.{stage}")
 
+    def _set_bulk_load_autovacuum(self, conn, *, enabled: bool) -> None:
+        """Toggle autovacuum on projection tables during full rebuild loads."""
+        value = "true" if enabled else "false"
+        for table in (*PROJECTION_NAMES, "ingestion_log", "duplicate_uid_rows"):
+            conn.execute(
+                f"""
+                ALTER TABLE {self.schema}.{table}
+                SET (autovacuum_enabled = {value}, toast.autovacuum_enabled = {value})
+                """
+            )
+
     def _clear_rebuild_checkpoint(self, conn) -> None:
         conn.execute(
             f"""
@@ -877,6 +882,12 @@ class LoaderMixin:
         _body_cache = None
         _use_all_rows = False
         _cache_sqlite = VaultScanCache.cache_path_for_vault(self.vault)
+        use_rust_all_rows = os.environ.get("PPA_MATERIALIZE_ALL_ROWS", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
         if ppa_engine() == "rust":
             try:
                 import archive_crate
@@ -885,24 +896,30 @@ class LoaderMixin:
                     logger.info("Loading body cache from %s", _cache_sqlite)
                     _body_cache = archive_crate.BodyCache.load(str(_cache_sqlite))
                     logger.info("Body cache loaded: %d entries", len(_body_cache))
-                logger.info("Using materialize_all_rows (single Rust call, maps converted once)")
-                _all_batches: list[ProjectionRowBuffer] = archive_crate.materialize_all_rows(
-                    rows_to_process,
-                    str(self.vault),
-                    slug_map,
-                    path_to_uid,
-                    person_lookup,
-                    target_field_index,
-                    run_id,
-                    CHUNK_SCHEMA_VERSION,
-                    body_cache=_body_cache,
-                    batch_size=commit_interval,
-                )
-                _use_all_rows = True
-                logger.info("materialize_all_rows complete: %d batches", len(_all_batches))
+                if use_rust_all_rows:
+                    logger.info("Using materialize_all_rows (single Rust call, maps converted once)")
+                    _all_batches: list[ProjectionRowBuffer] = archive_crate.materialize_all_rows(
+                        rows_to_process,
+                        str(self.vault),
+                        slug_map,
+                        path_to_uid,
+                        person_lookup,
+                        target_field_index,
+                        run_id,
+                        CHUNK_SCHEMA_VERSION,
+                        body_cache=_body_cache,
+                        batch_size=commit_interval,
+                    )
+                    _use_all_rows = True
+                    logger.info("materialize_all_rows complete: %d batches", len(_all_batches))
+                else:
+                    logger.info(
+                        "Using batched Rust materialization (set PPA_MATERIALIZE_ALL_ROWS=1 for single-call mode)"
+                    )
             except Exception as exc:
                 logger.warning("materialize_all_rows failed (%s), falling back to Python loop", exc)
                 import traceback
+
                 traceback.print_exc()
                 _use_all_rows = False
 
@@ -930,10 +947,38 @@ class LoaderMixin:
                         1,
                         min(32, materialize_batches_total // max(workers * 4, 1) or 1),
                     )
+                raw_max_pending = os.environ.get("PPA_MATERIALIZE_MAX_PENDING_BATCHES", "").strip()
+                try:
+                    max_pending = max(1, int(raw_max_pending)) if raw_max_pending else max(1, workers + 1)
+                except ValueError:
+                    max_pending = max(1, workers + 1)
+                logger.info(
+                    "Using bounded %s materialization workers=%d max_pending_batches=%d batch_size=%d",
+                    executor_kind,
+                    workers,
+                    max_pending,
+                    batch_size,
+                )
                 with executor_cls(max_workers=workers) as executor:
-                    yield from executor.map(materialize_fn, chunked_rows, **map_kwargs)
+                    row_iter = iter(chunked_rows)
+                    pending = deque()
+                    for _ in range(max_pending):
+                        try:
+                            pending.append(executor.submit(materialize_fn, next(row_iter)))
+                        except StopIteration:
+                            break
+                    while pending:
+                        future = pending.popleft()
+                        yield future.result()
+                        try:
+                            pending.append(executor.submit(materialize_fn, next(row_iter)))
+                        except StopIteration:
+                            pass
 
-            _all_batches = list(_consume_materialized_batches())
+            # Stream batches directly into the load/flush loop. Building a full
+            # list here materializes the whole 1.8M-card corpus in memory before
+            # any COPY flush can run, which can exhaust Arnold during Phase 9.
+            _all_batches = _consume_materialized_batches()
 
         _copy_conns: list = []
         if _use_all_rows:
@@ -952,7 +997,9 @@ class LoaderMixin:
                     load_started_at = time.time()
                     if _copy_conns:
                         batch_counts = self._flush_copy_buffer_parallel(
-                            materialized, _copy_conns, dest_suffix=dest_suffix,
+                            materialized,
+                            _copy_conns,
+                            dest_suffix=dest_suffix,
                         )
                         for tn, rc in batch_counts.items():
                             counts[tn] = counts.get(tn, 0) + rc
@@ -975,7 +1022,9 @@ class LoaderMixin:
                     load_elapsed = time.time() - load_started_at
                     load_seconds += load_elapsed
                     _log_rebuild_step(
-                        5, 6, "load flush",
+                        5,
+                        6,
+                        "load flush",
                         f"buffer_cards={batch_cards} edges={counts.get('edges', 0)} "
                         f"chunks={counts.get('chunks', 0)} elapsed={round(load_elapsed, 3)}s",
                     )
@@ -983,21 +1032,30 @@ class LoaderMixin:
                         committed_cards,
                         extra=f"edges={counts.get('edges', 0)} chunks={counts.get('chunks', 0)}",
                     )
-                    self._upsert_meta(conn, {
-                        "rebuild_stage": "loading",
-                        "rebuild_loaded_cards": str(committed_cards),
-                        "rebuild_loaded_edges": str(counts.get("edges", 0)),
-                        "rebuild_loaded_chunks": str(counts.get("chunks", 0)),
-                    })
+                    self._upsert_meta(
+                        conn,
+                        {
+                            "rebuild_stage": "loading",
+                            "rebuild_loaded_cards": str(committed_cards),
+                            "rebuild_loaded_edges": str(counts.get("edges", 0)),
+                            "rebuild_loaded_chunks": str(counts.get("chunks", 0)),
+                        },
+                    )
                     conn.commit()
                     if write_checkpoint:
                         self._save_rebuild_checkpoint(
-                            conn, run_id=run_id, mode=rebuild_mode,
-                            last_rel_path="", last_card_uid="",
+                            conn,
+                            run_id=run_id,
+                            mode=rebuild_mode,
+                            last_rel_path="",
+                            last_card_uid="",
                             loaded_cards=committed_cards,
-                            row_counts=dict(counts), bytes_estimate=0,
-                            vault_fp=vault_fp, versions=versions,
-                            dup_loaded=True, status="in_progress",
+                            row_counts=dict(counts),
+                            bytes_estimate=0,
+                            vault_fp=vault_fp,
+                            versions=versions,
+                            dup_loaded=True,
+                            status="in_progress",
                         )
                         conn.commit()
                 else:
@@ -1032,7 +1090,9 @@ class LoaderMixin:
                         load_seconds += load_elapsed
                         committed_cards += flushed["cards"]
                         _log_rebuild_step(
-                            5, 6, "load flush",
+                            5,
+                            6,
+                            "load flush",
                             (
                                 f"buffer_cards={flushed['cards']} buffer_rows_total={buffer_rows_total} "
                                 f"buffer_bytes_estimate={load_buffer_pending_bytes} edges={buffer_edges} "
@@ -1043,22 +1103,30 @@ class LoaderMixin:
                             committed_cards,
                             extra=f"edges={counts['edges']} chunks={counts['chunks']}",
                         )
-                        self._upsert_meta(conn, {
-                            "rebuild_stage": "loading",
-                            "rebuild_loaded_cards": str(committed_cards),
-                            "rebuild_loaded_edges": str(counts["edges"]),
-                            "rebuild_loaded_chunks": str(counts["chunks"]),
-                        })
+                        self._upsert_meta(
+                            conn,
+                            {
+                                "rebuild_stage": "loading",
+                                "rebuild_loaded_cards": str(committed_cards),
+                                "rebuild_loaded_edges": str(counts["edges"]),
+                                "rebuild_loaded_chunks": str(counts["chunks"]),
+                            },
+                        )
                         conn.commit()
                         if write_checkpoint:
                             self._save_rebuild_checkpoint(
-                                conn, run_id=run_id, mode=rebuild_mode,
-                                last_rel_path=last_rel, last_card_uid=last_uid,
+                                conn,
+                                run_id=run_id,
+                                mode=rebuild_mode,
+                                last_rel_path=last_rel,
+                                last_card_uid=last_uid,
                                 loaded_cards=committed_cards,
                                 row_counts=dict(counts),
                                 bytes_estimate=load_buffer_pending_bytes,
-                                vault_fp=vault_fp, versions=versions,
-                                dup_loaded=True, status="in_progress",
+                                vault_fp=vault_fp,
+                                versions=versions,
+                                dup_loaded=True,
+                                status="in_progress",
                             )
                             conn.commit()
                         load_buffer.clear()
@@ -1207,8 +1275,7 @@ class LoaderMixin:
             3,
             6,
             "build lookup maps complete",
-            f"slug_map={len(slug_map)} person_lookup={len(person_lookup)} "
-            f"target_field_keys={len(target_field_index)}",
+            f"slug_map={len(slug_map)} person_lookup={len(person_lookup)} target_field_keys={len(target_field_index)}",
         )
 
         rebuild_mode = "full"
@@ -1220,17 +1287,14 @@ class LoaderMixin:
 
         with self._connect() as conn:
             conn.execute("SET statement_timeout = '300s'")
+            conn.execute("SET synchronous_commit = off")
             conn.commit()
             self._create_schema(conn, recreate_typed=False, ensure_indexes=False)
             conn.commit()
             self._run_pending_migrations(conn)
             try:
-                pre_emb_row = conn.execute(
-                    f"SELECT COUNT(*) AS c FROM {self.schema}.embeddings"
-                ).fetchone()
-                pre_embedding_count = int(
-                    pre_emb_row["c"] if isinstance(pre_emb_row, dict) else pre_emb_row[0]
-                )
+                pre_emb_row = conn.execute(f"SELECT COUNT(*) AS c FROM {self.schema}.embeddings").fetchone()
+                pre_embedding_count = int(pre_emb_row["c"] if isinstance(pre_emb_row, dict) else pre_emb_row[0])
             except Exception:
                 pre_embedding_count = 0
             if pre_embedding_count:
@@ -1265,7 +1329,9 @@ class LoaderMixin:
                 deleted_paths = set(manifest_map.keys()) - {r.rel_path for r in rows}
                 if rebuild_mode == "person_triggered":
                     changed_person_uids = {
-                        str(row.card.uid) for row in rows if row.card.type == "person" and str(row.card.uid) in materialize_uids
+                        str(row.card.uid)
+                        for row in rows
+                        if row.card.type == "person" and str(row.card.uid) in materialize_uids
                     }
                     path_by_person_uid = {str(r.card.uid): r.rel_path for r in rows if r.card.type == "person"}
                     affected_uids: set[str] = set()
@@ -1601,6 +1667,8 @@ class LoaderMixin:
                 },
             )
             conn.commit()
+            self._set_bulk_load_autovacuum(conn, enabled=False)
+            conn.commit()
             if not resuming_full:
                 dropped = self._drop_indexes_for_bulk_load(conn)
                 if dropped:
@@ -1657,7 +1725,9 @@ class LoaderMixin:
             try:
                 idx_elapsed = self._create_indexes_parallel(n_connections=4)
                 _log_rebuild_step(
-                    6, 6, "ensure indexes complete (parallel)",
+                    6,
+                    6,
+                    "ensure indexes complete (parallel)",
                     f"elapsed={round(idx_elapsed, 3)}s",
                 )
             except Exception as exc:
@@ -1665,9 +1735,14 @@ class LoaderMixin:
                 self._create_schema(conn, recreate_typed=False, ensure_indexes=True)
                 conn.commit()
                 _log_rebuild_step(
-                    6, 6, "ensure indexes complete (sequential fallback)",
+                    6,
+                    6,
+                    "ensure indexes complete (sequential fallback)",
                     f"elapsed={round(time.time() - ensure_indexes_started_at, 3)}s",
                 )
+            finally:
+                self._set_bulk_load_autovacuum(conn, enabled=True)
+                conn.commit()
             total_seconds = round(time.time() - started_at, 6)
             manifest_entries = _build_manifest_rows_from_canonical(
                 rows, self.vault, file_stats, versions, cache=_vault_cache
@@ -1760,12 +1835,8 @@ class LoaderMixin:
         ``ppa embed-gc --apply``. Until that runs they cost only disk.
         """
         try:
-            post_row = conn.execute(
-                f"SELECT COUNT(*) AS c FROM {self.schema}.embeddings"
-            ).fetchone()
-            post_count = int(
-                post_row["c"] if isinstance(post_row, dict) else post_row[0]
-            )
+            post_row = conn.execute(f"SELECT COUNT(*) AS c FROM {self.schema}.embeddings").fetchone()
+            post_count = int(post_row["c"] if isinstance(post_row, dict) else post_row[0])
             orphan_row = conn.execute(
                 f"""
                 SELECT COUNT(*) AS c FROM {self.schema}.embeddings e
@@ -1774,16 +1845,13 @@ class LoaderMixin:
                 )
                 """
             ).fetchone()
-            orphan_count = int(
-                orphan_row["c"] if isinstance(orphan_row, dict) else orphan_row[0]
-            )
+            orphan_count = int(orphan_row["c"] if isinstance(orphan_row, dict) else orphan_row[0])
         except Exception as exc:
             logger.warning("rebuild_embeddings_summary_query_failed error=%s", exc)
             return
         valid = max(post_count - orphan_count, 0)
         logger.info(
-            "rebuild_embeddings_summary pre=%d post=%d valid_after_rebuild=%d "
-            "orphan=%d gc_with=`ppa embed-gc --apply`",
+            "rebuild_embeddings_summary pre=%d post=%d valid_after_rebuild=%d orphan=%d gc_with=`ppa embed-gc --apply`",
             pre_count,
             post_count,
             valid,

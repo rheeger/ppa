@@ -24,10 +24,9 @@ dev = [
   "pytest>=7.0",
   "ruff>=0.1",
 ]
-# Native extension: `cd archive_crate && maturin develop` then `pip install -e ".[rust]"` optional path:
-rust = [
-  "archive_crate @ file:./archive_crate",
-]
+# Native extension: build explicitly with `cd archive_crate && maturin develop`.
+# Do not declare a relative direct-url optional dependency here; pip rejects
+# `file:./archive_crate` during metadata resolution on deployment hosts.
 
 [tool.ruff]
 line-length = 120
