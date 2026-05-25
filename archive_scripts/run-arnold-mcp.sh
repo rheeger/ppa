@@ -1,6 +1,5 @@
 #!/bin/zsh
-# Cursor MCP: tunnel to Arnold Postgres + local mirror of the vault at /srv/hfa-secure/vault on Arnold.
-# Default local mirror matches ppa/Makefile PPA_PATH (production). Override: PPA_PATH=...
+# Cursor MCP: tunnel to Arnold Postgres + local seed vault mirror. Override: PPA_PATH=...
 # Lives under archive_scripts/; repo root is one level up.
 set -euo pipefail
 
@@ -14,7 +13,7 @@ if ! lsof -i :"$LOCAL_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
   exit 1
 fi
 
-export PPA_PATH="${PPA_PATH:-$HOME/Archive/production/hf-archives}"
+export PPA_PATH="${PPA_PATH:-$HOME/Archive/seed/hf-archives-seed-20260307-235127}"
 export PPA_INDEX_DSN="postgresql://archive:archive@127.0.0.1:${LOCAL_PORT}/archive"
 export PPA_INDEX_SCHEMA="${PPA_INDEX_SCHEMA:-archive_seed}"
 
