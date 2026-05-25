@@ -21,12 +21,12 @@ from archive_cli.index_store import PostgresArchiveIndex
 from archive_cli.server import (  # type: ignore[import-not-found]
     archive_bootstrap_postgres, archive_duplicate_uids, archive_duplicates,
     archive_embed_pending, archive_embedding_backlog, archive_embedding_status,
-    archive_graph, archive_hybrid_search, archive_index_status,
-    archive_link_candidate, archive_link_candidates, archive_link_quality_gate,
-    archive_person, archive_query, archive_read, archive_rebuild_indexes,
-    archive_review_link_candidate, archive_search, archive_seed_link_backfill,
-    archive_seed_link_surface, archive_stats, archive_timeline,
-    archive_validate, archive_vector_search)
+    archive_fetch_attachment, archive_graph, archive_hybrid_search,
+    archive_index_status, archive_link_candidate, archive_link_candidates,
+    archive_link_quality_gate, archive_person, archive_query, archive_read,
+    archive_rebuild_indexes, archive_review_link_candidate, archive_search,
+    archive_seed_link_backfill, archive_seed_link_surface, archive_stats,
+    archive_timeline, archive_validate, archive_vector_search)
 from archive_vault.provenance import ProvenanceEntry
 from archive_vault.schema import FinanceCard, PersonCard
 from archive_vault.vault import write_card
@@ -424,6 +424,47 @@ def test_archive_read_person_and_timeline(tmp_vault, fake_index):
 def test_archive_read_rejects_path_traversal(tmp_vault, fake_index):
     _seed_vault(tmp_vault)
     assert archive_read("../../etc/passwd.md") == "Not found"
+
+
+def test_archive_fetch_attachment_downloads_gmail_payload(
+    tmp_vault, fake_index, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    rel_path = "EmailAttachments/2022-08/hfa-email-attachment-test.md"
+    note_path = tmp_vault / rel_path
+    note_path.parent.mkdir(parents=True)
+    note_path.write_text(
+        """---
+uid: hfa-email-attachment-test
+type: email_attachment
+source: [gmail.attachment]
+source_id: rheeger@gmail.com:msg-1:att-1
+created: '2022-08-26'
+summary: example.pdf
+gmail_message_id: msg-1
+gmail_thread_id: thread-1
+attachment_id: att-1
+account_email: rheeger@gmail.com
+filename: example.pdf
+mime_type: application/pdf
+size_bytes: 7
+---
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "archive_cli.commands.attachments.GmailMessagesAdapter.fetch_attachment_bytes",
+        lambda self, message_id, attachment_id, *, account_email="": b"pdfdata",
+    )
+
+    result = json.loads(
+        archive_fetch_attachment(rel_path, download=True, download_dir=str(tmp_path), include_base64=True)
+    )
+
+    assert result["found"] is True
+    assert result["attachment"]["gmail_message_id"] == "msg-1"
+    assert result["download"]["downloaded"] is True
+    assert Path(result["download"]["path"]).read_bytes() == b"pdfdata"
+    assert result["data"]["content"] == "cGRmZGF0YQ=="
 
 
 def test_archive_graph_stats_and_duplicates(tmp_vault, fake_index):

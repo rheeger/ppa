@@ -25,7 +25,7 @@ except ImportError:  # pragma: no cover
             raise RuntimeError("mcp package is required to run ppa")
 
 
-from .commands import admin, explain
+from .commands import admin, attachments, explain
 from .commands import formatters as fmt
 from .commands import graph as graph_cmd
 from .commands import query as query_cmd
@@ -1288,6 +1288,53 @@ def archive_read_many(paths_json: str) -> str:
         t0 = _log_tool_call("archive_read_many", requested=len(paths))
         result = read_cmd.read_many(paths, store=store, logger=_log)
         _log_tool_done("archive_read_many", t0, requested=len(paths))
+        return json.dumps(result, indent=2)
+    except InvalidInputError as exc:
+        return str(exc)
+    except PpaError as exc:
+        return str(exc)
+
+
+@mcp.tool()
+def archive_fetch_attachment(
+    path_or_uid: str,
+    download: bool = False,
+    download_dir: str = "",
+    filename: str = "",
+    overwrite: bool = False,
+    include_base64: bool = False,
+) -> str:
+    """Fetch Gmail metadata for an email_attachment card, optionally downloading the binary payload."""
+
+    profile_error = _tool_profile_error("archive_fetch_attachment")
+    if profile_error:
+        return profile_error
+    t0 = _log_tool_call(
+        "archive_fetch_attachment",
+        path_or_uid=path_or_uid,
+        download=download,
+        download_dir=download_dir,
+        include_base64=include_base64,
+    )
+    try:
+        store = resolve_store()
+        result = attachments.fetch_attachment(
+            path_or_uid,
+            store=store,
+            logger=_log,
+            download=download,
+            download_dir=download_dir,
+            filename=filename,
+            overwrite=overwrite,
+            include_base64=include_base64,
+        )
+        download_result = result.get("download") if isinstance(result, dict) else {}
+        _log_tool_done(
+            "archive_fetch_attachment",
+            t0,
+            found=bool(result.get("found")) if isinstance(result, dict) else False,
+            downloaded=bool(download_result.get("downloaded")) if isinstance(download_result, dict) else False,
+        )
         return json.dumps(result, indent=2)
     except InvalidInputError as exc:
         return str(exc)

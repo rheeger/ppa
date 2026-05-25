@@ -20,12 +20,12 @@ from typing import Any
 
 from archive_auth import build_google_cli_token_manager
 from archive_vault.identity import IdentityCache
-from archive_vault.schema import EmailAttachmentCard, EmailMessageCard, EmailThreadCard
+from archive_vault.schema import (EmailAttachmentCard, EmailMessageCard,
+                                  EmailThreadCard)
 from archive_vault.thread_hash import (
     compute_email_attachment_metadata_sha_from_payload,
     compute_email_message_body_sha_from_payload,
-    compute_email_thread_body_sha_from_payload,
-)
+    compute_email_thread_body_sha_from_payload)
 from archive_vault.uid import generate_uid
 from archive_vault.vault import iter_notes, read_note
 
@@ -122,13 +122,19 @@ def _iter_parts(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return parts
 
 
-def _decode_body_data(data: str) -> str:
+def _decode_body_bytes(data: str) -> bytes:
     if not data:
-        return ""
+        return b""
     padding = "=" * (-len(data) % 4)
     try:
-        raw = base64.urlsafe_b64decode((data + padding).encode("utf-8"))
+        return base64.urlsafe_b64decode((data + padding).encode("utf-8"))
     except Exception:
+        return b""
+
+
+def _decode_body_data(data: str) -> str:
+    raw = _decode_body_bytes(data)
+    if not raw:
         return ""
     return raw.decode("utf-8", errors="replace")
 
@@ -678,6 +684,31 @@ class GmailMessagesAdapter(BaseAdapter):
             ]
         )
         return _decode_body_data(str(payload.get("data", "")))
+
+    def fetch_attachment_bytes(self, message_id: str, attachment_id: str, *, account_email: str = "") -> bytes:
+        """Fetch a Gmail attachment payload as raw bytes.
+
+        The ingest path normally stores attachment metadata only. This helper is
+        for explicit retrieval, where binary payloads need to be downloaded from
+        Gmail without UTF-8 coercion.
+        """
+
+        if account_email:
+            self._ensure_token_manager(account_email)
+        if not message_id or not attachment_id:
+            return b""
+        payload = self._gws_with_retry(
+            [
+                "gmail",
+                "users",
+                "messages",
+                "attachments",
+                "get",
+                "--params",
+                json.dumps({"userId": "me", "messageId": message_id, "id": attachment_id}),
+            ]
+        )
+        return _decode_body_bytes(str(payload.get("data", "")))
 
     def _calendar_attachment_refs(self, message: dict[str, Any]) -> list[tuple[str, str]]:
         message_id = str(message.get("id", "")).strip()

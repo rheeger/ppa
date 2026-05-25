@@ -18,6 +18,7 @@ from .benchmark import (BENCHMARK_PROFILES, DEFAULT_BENCHMARK_SOURCE_VAULT,
                         benchmark_multi_size, benchmark_rebuild,
                         benchmark_seed_links, build_benchmark_sample)
 from .commands import admin as admin_cmd
+from .commands import attachments as attachments_cmd
 from .commands import batch_embed as batch_embed_cmd
 from .commands import explain
 from .commands import graph as graph_cmd
@@ -458,6 +459,16 @@ def main() -> None:
     read_parser.add_argument("path_or_uid")
     read_many_parser = subparsers.add_parser("read-many", help="Read multiple notes (JSON)")
     read_many_parser.add_argument("paths", nargs="+", metavar="PATH_OR_UID")
+    fetch_attachment_parser = subparsers.add_parser(
+        "fetch-attachment",
+        help="Resolve an email_attachment card and optionally download its Gmail payload (JSON)",
+    )
+    fetch_attachment_parser.add_argument("path_or_uid")
+    fetch_attachment_parser.add_argument("--download", action="store_true")
+    fetch_attachment_parser.add_argument("--download-dir", default="")
+    fetch_attachment_parser.add_argument("--filename", default="")
+    fetch_attachment_parser.add_argument("--overwrite", action="store_true")
+    fetch_attachment_parser.add_argument("--include-base64", action="store_true")
     query_parser = subparsers.add_parser("query", help="Structured query (JSON)")
     query_parser.add_argument("--type", dest="type_filter", default="")
     query_parser.add_argument("--source", dest="source_filter", default="")
@@ -1167,6 +1178,23 @@ def main() -> None:
         try:
             store = resolve_store()
             out = read_cmd.read_many(args.paths, store=store, logger=_cli_log)
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "fetch-attachment":
+        try:
+            store = resolve_store()
+            out = attachments_cmd.fetch_attachment(
+                args.path_or_uid,
+                store=store,
+                logger=_cli_log,
+                download=args.download,
+                download_dir=args.download_dir,
+                filename=args.filename,
+                overwrite=args.overwrite,
+                include_base64=args.include_base64,
+            )
             _print_json(out)
         except PpaError as exc:
             _cli_fail(exc)
