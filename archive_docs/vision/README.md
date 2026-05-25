@@ -5,6 +5,7 @@ Long-form planning documents for PPA — kept out of the repo root for clarity.
 | File                       | Notes                                   |
 | -------------------------- | --------------------------------------- |
 | [v2vision.md](v2vision.md) | Phase 2 / extraction + index era        |
+| [v2.5vision.md](v2.5vision.md) | Arnold production-hardening plan        |
 | [v3vision.md](v3vision.md) | Phase 3+ product shape                  |
 | [v4vision.md](v4vision.md) | Consumer product / native app direction |
 
