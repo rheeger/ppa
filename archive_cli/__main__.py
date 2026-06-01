@@ -1067,6 +1067,10 @@ def main() -> None:
 
     _gates_cli.add_parser(subparsers)
 
+    from archive_cli.corpus_hygiene import cli as _corpus_hygiene_cli
+
+    _corpus_hygiene_cli.add_parser(subparsers)
+
     sub_maintain = subparsers.add_parser(
         "maintain",
         help="Run maintenance cycle: tail ingestion, extract, resolve, rebuild, report",
@@ -1113,6 +1117,9 @@ def main() -> None:
         raise SystemExit(rc)
     if args.command == "gates":
         rc = _gates_cli.dispatch(args)
+        raise SystemExit(rc)
+    if args.command == "corpus-hygiene":
+        rc = _corpus_hygiene_cli.dispatch(args)
         raise SystemExit(rc)
     if args.command == "health":
         from .health import run_health_checks

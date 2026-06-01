@@ -325,7 +325,12 @@ def test_build_policy_report_shape() -> None:
         assert key in first
 
 
-def test_write_section_a_completion_artifacts() -> None:
+def test_write_section_a_completion_artifacts(monkeypatch: pytest.MonkeyPatch) -> None:
+    fixed_ts = "2026-06-01T02:01:24+00:00"
+    monkeypatch.setattr(
+        "archive_sync.llm_enrichment.email_promotion_policy._utc_now_iso",
+        lambda: fixed_ts,
+    )
     decisions = [_POLICY.evaluate(i) for i in _required_example_inputs()]
     report = build_policy_report(decisions)
 
