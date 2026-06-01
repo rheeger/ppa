@@ -5,10 +5,10 @@ does not call LLMs or mutate vault/DB state.
 
 Completion scope (v2.5 Section A)
 ---------------------------------
-This module is **Section A / Validation Gate 1 (synthetic fixtures) complete** only.
-It proves policy semantics in isolation. Section G's full gate/refusal framework is
-**not** implemented. Do **not** proceed to Section B apply, slice apply, seed apply,
-Arnold dry-run apply, or Arnold apply based on this module alone.
+This module is **Section A / Validation Gate 1 (synthetic fixtures) complete**.
+It proves policy semantics in isolation. The validation gate framework lives in
+``archive_cli.validation_gates``. Section B apply, slice apply, seed apply, Arnold dry-run apply,
+and Arnold apply remain blocked until the relevant validation gates pass.
 
 Rule ordering (earlier rules win)
 ---------------------------------
@@ -56,7 +56,7 @@ EMAIL_PROMOTION_POLICY_VERSION = "email-promotion-v1"
 
 # Section A synthetic-fixture gate only. Not sufficient for Section B apply or Arnold.
 SECTION_A_COMPLETION_STATE = "section_a_gate_1_complete"
-SECTION_G_FRAMEWORK_STATE = "not_implemented"
+SECTION_G_FRAMEWORK_STATE = "validation_gates_complete"
 SECTION_A_GATE_NAME = "synthetic-fixtures"
 SECTION_A_RUN_ID = "section-a-synthetic"
 SECTION_A_VALIDATION_MATRIX_GATE = "Synthetic fixtures"
@@ -785,19 +785,14 @@ def build_policy_report(
     }
     if gate == SECTION_A_GATE_NAME:
         report["completion_state"] = SECTION_A_COMPLETION_STATE
+        report["gate_framework_state"] = SECTION_G_FRAMEWORK_STATE
         report["section_g_framework"] = SECTION_G_FRAMEWORK_STATE
         report["section_b_apply_unlocked"] = False
-        report["next_recommended_gate"] = "section_g_validation_ladder"
-        report["blocked_without_section_g"] = [
-            "section_b_corpus_cleanup_apply",
-            "slice_apply",
-            "local_seed_staging_apply",
-            "arnold_dry_run_apply",
-            "arnold_apply",
-        ]
-        report["artifact_root"] = (
-            f"ppa/logs/v2_5/gate-{gate}/{run_id}/"
-        )
+        report["next_recommended_gate"] = "small_slice"
+        report["blocked_without_section_g"] = []
+        from archive_cli.validation_gates.constants import VALIDATION_GATE_LOG_ROOT
+
+        report["artifact_root"] = f"ppa/logs/{VALIDATION_GATE_LOG_ROOT}/gate-{gate}/{run_id}/"
     return report
 
 
@@ -807,10 +802,11 @@ def gate_artifact_dir(
     gate: str = SECTION_A_GATE_NAME,
     run_id: str = SECTION_A_RUN_ID,
 ) -> Any:
-    """Return ``ppa/logs/v2_5/gate-<gate>/<run_id>/`` per v2.5 README."""
-    from pathlib import Path
+    """Return validation gate artifact directory for this run."""
 
-    return Path(repo_root) / "logs" / "v2_5" / f"gate-{gate}" / run_id
+    from archive_cli.validation_gates.report import gate_artifact_dir as _gate_artifact_dir
+
+    return _gate_artifact_dir(repo_root, gate=gate, run_id=run_id)
 
 
 def write_samples_jsonl(path: str | Any, decisions: list[EmailPromotionDecision]) -> None:
@@ -828,7 +824,7 @@ def write_section_a_gate_artifacts(
     *,
     run_id: str = SECTION_A_RUN_ID,
 ) -> dict[str, str]:
-    """Write Gate 1 report.json, summary.md, and samples.jsonl under logs/v2_5/."""
+    """Write Gate 1 report.json, summary.md, and samples.jsonl under validation gate logs."""
 
     report = build_policy_report(decisions, run_id=run_id)
     out_dir = gate_artifact_dir(repo_root, run_id=run_id)
@@ -843,7 +839,7 @@ def write_section_a_gate_artifacts(
         "# Section A — Gate 1 Synthetic Fixtures",
         "",
         f"**Completion state:** `{SECTION_A_COMPLETION_STATE}`",
-        f"**Section G framework:** `{SECTION_G_FRAMEWORK_STATE}` (full gate/refusal not implemented)",
+        f"**Validation gate framework:** `{SECTION_G_FRAMEWORK_STATE}`",
         f"**Section B apply unlocked:** no",
         "",
         f"- policy_version: `{EMAIL_PROMOTION_POLICY_VERSION}`",

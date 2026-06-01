@@ -75,11 +75,13 @@ All new v2.5 commands should default to safe behavior:
 
 - `--dry-run` by default for corpus hygiene and future-sync evaluation.
 - `--apply` requires a `decision_run_id`.
-- Arnold apply requires an explicit Arnold confirmation flag or equivalent guard.
+- production apply requires an explicit confirmation flag (`--confirm-production`) and `PPA_ARCHIVE_INSTANCE_ROLE=production`.
 - full reclassification requires an explicit flag.
 - full embedding/linker reruns require explicit flags.
 - every long operation writes JSON and human summaries.
 - every report includes engine mode, counts, elapsed runtime, throughput, and next recommended gate.
+
+Section G implements the control plane as `archive_cli/validation_gates/` with CLI entrypoint `ppa gates` (`status`, `readiness`, `record`, `guard-production-apply`, `guard-expensive`). Production apply guards key off `PPA_ARCHIVE_INSTANCE_ROLE=production` (or a `production:` instance label prefix).
 
 ## Standard Exit Codes
 
@@ -94,13 +96,14 @@ New v2.5 CLI commands should use predictable exit codes:
 | `4` | Blocked by external dependency. Auth, provider, source, database, or model unavailable. |
 
 Commands that refuse unsafe work should return `3`, not `1`, so automation can distinguish a guardrail from a broken command.
+Section G should expose reusable refusal guards that return this code when prior gate evidence, a reviewed decision run, production instance confirmation (`PPA_ARCHIVE_INSTANCE_ROLE=production`), or explicit expensive-work opt-in is missing.
 
 ## Required Artifact Paths
 
 Implementation can refine exact names, but every long v2.5 operation must write artifacts under stable run directories:
 
 ```text
-ppa/logs/v2_5/
+ppa/logs/validation-gates/
   gate-<gate_name>/
     <run_id>/
       report.json
@@ -183,7 +186,38 @@ Do not start the next section until the previous section commit exists and the t
 
 These are logical contracts. Implementation may use Postgres, SQLite, or staged files, but the fields and semantics should remain stable.
 
+### `gate_runs`
+
+Section G owns the parent run registry for v2.5 gate evidence. This contract is modeled on the existing `schema_migrations` applied-at ledger, the `link_jobs` status/version/input-hash pattern, and the `meta` watermark store.
+
+| Field | Meaning |
+| ----- | ------- |
+| `run_id` | Stable parent run ID issued by the Section G gate registry |
+| `gate` | Validation ladder gate, e.g. `synthetic_fixtures`, `small_slice`, `local_seed_staging_apply`, `production_dry_run`, `production_reviewed_apply` |
+| `archive_instance` | Canonical instance label for fixture, slice, seed staging, production dry-run, or production apply |
+| `vault_path` | Vault path evaluated by the run |
+| `index_schema` | Postgres schema or staged schema evaluated by the run |
+| `engine_mode` | `rust`, `python`, or `parity` |
+| `policy_version` | Policy version active for the run, when relevant |
+| `input_hash` | Hash/fingerprint of important inputs used to prove determinism or detect drift |
+| `status` | `pending`, `running`, `passed`, `failed`, `blocked`, or `refused` |
+| `reviewed` | Whether a human/operator review was recorded for gates that require review |
+| `approved` | Whether the reviewed run is approved for the next gate or apply action |
+| `report_path` | Path to JSON report artifact |
+| `summary_path` | Path to human-readable summary artifact |
+| `created_at`, `started_at`, `completed_at` | Run timing metadata |
+| `applied_at` | Empty unless this run performed an apply |
+| `error` | Failure/refusal summary |
+
+Section-specific run and decision tables should reference or mirror `gate_runs.run_id`; they should not invent unrelated run IDs.
+
+### Archive Instance Identity
+
+Section G should define one canonical archive instance label derived from existing `ArchiveConfig` inputs: `index_schema`, a safe `index_dsn` descriptor or fingerprint, and `vault_path`. Optional `PPA_ARCHIVE_INSTANCE_ROLE` prefixes labels (`fixture:`, `slice:`, `production:`, etc.) and production apply guards require role `production`.
+
 ### `email_corpus_decisions`
+
+`decision_run_id` is issued by the Section G gate registry and should reference or mirror `gate_runs.run_id`. Section B owns the email decision rows; Section G owns the parent run/gate state.
 
 | Field | Meaning |
 | ----- | ------- |
@@ -224,6 +258,8 @@ These are logical contracts. Implementation may use Postgres, SQLite, or staged 
 
 ### `source_updater_runs`
 
+`run_id` should reference or mirror `gate_runs.run_id`. Section D owns source-updater accounting; Section G owns the parent run/gate state and archive-instance evidence.
+
 | Field | Meaning |
 | ----- | ------- |
 | `run_id` | Source run ID |
@@ -237,6 +273,8 @@ These are logical contracts. Implementation may use Postgres, SQLite, or staged 
 | `engine_mode` | `rust`, `python`, or `parity` where relevant |
 
 ### `processor_runs`
+
+`run_id` should reference or mirror `gate_runs.run_id`. Section E owns processor state; Section G owns the parent run/gate state and readiness evidence.
 
 | Field | Meaning |
 | ----- | ------- |
@@ -269,6 +307,14 @@ Every long v2.5 operation should produce a report with:
 - rollback token or decision run ID.
 - next recommended gate.
 
+Report shape implementation binding:
+
+- Use a dataclass-backed schema with `to_dict()` JSON serialization, following the existing `DeployStep` / `DeployResult` pattern.
+- Include status literals, elapsed timing, warnings/errors, details dictionaries, and artifact paths.
+- Extend the shared report shape with section-specific summaries rather than creating separate report formats per section.
+- `archive_instance` comes from the Section G instance-identity helper.
+- `run ID` / `decision run ID` comes from the Section G gate registry.
+
 ## Validation Matrix
 
 | Gate | Purpose | Required before moving on |
@@ -278,9 +324,9 @@ Every long v2.5 operation should produce a report with:
 | Larger slice | Prove runtime/report scale | bounded runtime, no broad LLM work |
 | Local seed dry-run | Evaluate full seed without mutation | report reviewed, classification reuse acceptable |
 | Local seed staging apply | Prove seed-scale apply/rollback safely | copied vault/staging schema only, rollback passes |
-| Arnold dry-run | Evaluate production without mutation | report and samples reviewed |
-| Arnold reviewed apply | Apply reviewed production decision run | DB-first, non-destructive, rollback available |
-| Arnold soak/readiness | Prove ongoing health | normal maintain cycles pass, v3 readiness passes |
+| Production dry-run | Evaluate production without mutation | report and samples reviewed |
+| Production reviewed apply | Apply reviewed production decision run | DB-first, non-destructive, rollback available |
+| Production soak/readiness | Prove ongoing health | normal maintain cycles pass, v3 readiness passes |
 
 ## Stop Conditions
 

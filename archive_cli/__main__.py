@@ -1063,6 +1063,10 @@ def main() -> None:
 
     _linker_cli.add_parser(subparsers)
 
+    from archive_cli.validation_gates import cli as _gates_cli
+
+    _gates_cli.add_parser(subparsers)
+
     sub_maintain = subparsers.add_parser(
         "maintain",
         help="Run maintenance cycle: tail ingestion, extract, resolve, rebuild, report",
@@ -1106,6 +1110,9 @@ def main() -> None:
         return
     if args.command == "linker":
         rc = _linker_cli.dispatch(args)
+        raise SystemExit(rc)
+    if args.command == "gates":
+        rc = _gates_cli.dispatch(args)
         raise SystemExit(rc)
     if args.command == "health":
         from .health import run_health_checks

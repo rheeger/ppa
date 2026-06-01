@@ -304,8 +304,8 @@ def test_build_policy_report_shape() -> None:
     assert report["completion_state"] == SECTION_A_COMPLETION_STATE
     assert report["section_g_framework"] == SECTION_G_FRAMEWORK_STATE
     assert report["section_b_apply_unlocked"] is False
-    assert report["next_recommended_gate"] == "section_g_validation_ladder"
-    assert "section_b_corpus_cleanup_apply" in report["blocked_without_section_g"]
+    assert report["next_recommended_gate"] == "small_slice"
+    assert report["blocked_without_section_g"] == []
     assert report["engine_mode"] == "n/a"
     assert report["safety"]["production_mutation"] is False
     assert report["safety"]["vault_access"] is False
