@@ -8,8 +8,11 @@ import sys
 from pathlib import Path
 
 from archive_cli.config import load_archive_config
+from archive_cli.errors import IndexUnavailableError, VaultNotFoundError
 from archive_cli.ppa_engine import ppa_engine
+from archive_cli.store import DefaultArchiveStore
 from archive_cli.validation_gates.constants import (
+    EXIT_BLOCKED,
     EXIT_REFUSED,
     EXIT_RUNTIME_FAILURE,
     EXIT_SUCCESS,
@@ -37,10 +40,47 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def _resolve_store(args: argparse.Namespace):
+def _resolve_store(args: argparse.Namespace) -> DefaultArchiveStore:
     from archive_cli.commands._resolve import resolve_store
 
-    return resolve_store(getattr(args, "vault", None) or None)
+    vault_override = (getattr(args, "vault", None) or "").strip()
+    vault_path = Path(vault_override) if vault_override else None
+    return resolve_store(vault_path)
+
+
+def _emit_cli_payload(payload: dict, args: argparse.Namespace) -> None:
+    """Print structured JSON for operator-facing apply/rollback outcomes."""
+
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def _resolve_apply_rollback_environment(
+    args: argparse.Namespace,
+) -> tuple[DefaultArchiveStore, str] | int:
+    """Resolve vault, index, and archive instance; return exit code on dependency failure."""
+
+    try:
+        store = _resolve_store(args)
+        cfg = load_archive_config()
+        archive_instance = derive_archive_instance(
+            vault_path=str(store.vault),
+            index_dsn=cfg.index_dsn,
+            index_schema=store.index.schema,
+            instance_role=getattr(args, "instance_role", None) or None,
+        )
+        return store, archive_instance
+    except VaultNotFoundError as exc:
+        _emit_cli_payload(
+            {"blocked": True, "reason": "vault_not_found", "message": str(exc)},
+            args,
+        )
+        return EXIT_BLOCKED
+    except IndexUnavailableError as exc:
+        _emit_cli_payload(
+            {"blocked": True, "reason": "index_unavailable", "message": str(exc)},
+            args,
+        )
+        return EXIT_BLOCKED
 
 
 def cmd_email_census(args: argparse.Namespace) -> int:
@@ -125,14 +165,10 @@ def cmd_email_census(args: argparse.Namespace) -> int:
 
 
 def cmd_email_apply(args: argparse.Namespace) -> int:
-    store = _resolve_store(args)
-    cfg = load_archive_config()
-    archive_instance = derive_archive_instance(
-        vault_path=str(store.vault),
-        index_dsn=cfg.index_dsn,
-        index_schema=store.index.schema,
-        instance_role=getattr(args, "instance_role", None) or None,
-    )
+    resolved = _resolve_apply_rollback_environment(args)
+    if isinstance(resolved, int):
+        return resolved
+    store, archive_instance = resolved
     decision_run_id = args.decision_run_id.strip()
     repo_root = _repo_root()
 
@@ -159,10 +195,10 @@ def cmd_email_apply(args: argparse.Namespace) -> int:
                 registry=registry,
             )
     except GateRefusalError as exc:
-        print(json.dumps({"refused": True, "reason": exc.reason, "message": str(exc)}, indent=2))
+        _emit_cli_payload({"refused": True, "reason": exc.reason, "message": str(exc)}, args)
         return EXIT_REFUSED
     except (ValueError, FileNotFoundError) as exc:
-        print(json.dumps({"error": str(exc)}, indent=2))
+        _emit_cli_payload({"error": str(exc), "validation_failed": True}, args)
         return EXIT_VALIDATION_FAILED
 
     payload = {
@@ -184,14 +220,10 @@ def cmd_email_apply(args: argparse.Namespace) -> int:
 
 
 def cmd_email_rollback(args: argparse.Namespace) -> int:
-    store = _resolve_store(args)
-    cfg = load_archive_config()
-    archive_instance = derive_archive_instance(
-        vault_path=str(store.vault),
-        index_dsn=cfg.index_dsn,
-        index_schema=store.index.schema,
-        instance_role=getattr(args, "instance_role", None) or None,
-    )
+    resolved = _resolve_apply_rollback_environment(args)
+    if isinstance(resolved, int):
+        return resolved
+    store, archive_instance = resolved
     decision_run_id = args.decision_run_id.strip()
 
     try:
@@ -213,8 +245,11 @@ def cmd_email_rollback(args: argparse.Namespace) -> int:
                 repo_root=_repo_root(),
             )
     except GateRefusalError as exc:
-        print(json.dumps({"refused": True, "reason": exc.reason, "message": str(exc)}, indent=2))
+        _emit_cli_payload({"refused": True, "reason": exc.reason, "message": str(exc)}, args)
         return EXIT_REFUSED
+    except (ValueError, FileNotFoundError) as exc:
+        _emit_cli_payload({"error": str(exc), "validation_failed": True}, args)
+        return EXIT_VALIDATION_FAILED
 
     payload = {
         "decision_run_id": decision_run_id,
