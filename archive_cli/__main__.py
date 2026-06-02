@@ -531,10 +531,14 @@ def main() -> None:
     emb_back_parser.add_argument("--limit", type=int, default=20)
     emb_back_parser.add_argument("--embedding-model", default="")
     emb_back_parser.add_argument("--embedding-version", type=int, default=0)
-    subparsers.add_parser(
+    status_parser = subparsers.add_parser(
         "status",
-        help="Index and runtime status as JSON (same as archive_status_json MCP tool)",
+        help="Index/runtime status JSON, or Section F production status with --format",
     )
+    from archive_cli.status import cli as _status_cli
+
+    _status_cli.patch_status_parser(status_parser)
+    _status_cli.add_readiness_parser(subparsers)
 
     extract_parser = subparsers.add_parser("extract-emails", help="Extract derived cards from email bodies")
     extract_parser.add_argument("--sender", default="", help="Filter to single extractor id (e.g. doordash)")
@@ -1935,7 +1939,15 @@ def main() -> None:
         except PpaError as exc:
             _cli_fail(exc)
         return
+    if args.command == "readiness":
+        from archive_cli.status.cli import dispatch as _readiness_dispatch
+
+        raise SystemExit(_readiness_dispatch(args))
     if args.command == "status":
+        if getattr(args, "format", None):
+            from archive_cli.status.cli import cmd_status
+
+            raise SystemExit(cmd_status(args))
         try:
             store = resolve_store()
             out = status_cmd.status_json(store=store, logger=_cli_log)

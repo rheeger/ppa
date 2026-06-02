@@ -4,6 +4,7 @@ from __future__ import annotations
 
 GATE_FRAMEWORK_STATE = "validation_gates_complete"
 GATE_FRAMEWORK_COMPLETION_STATE = "validation_gate_framework_complete"
+SECTION_F_COMPLETION_STATE = "section_f_observability_v3_gate_complete"
 
 VALIDATION_GATE_LOG_ROOT = "validation-gates"
 
