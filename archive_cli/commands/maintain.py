@@ -132,6 +132,7 @@ class MaintenanceReport:
     enrichment_queue_depth: int = 0
     retrieval_gaps_since_last: int = 0
     source_updater_snapshots: int = 0
+    processor_status_snapshots: int = 0
     errors: list[dict[str, str]] = field(default_factory=list)
     skipped_steps: list[str] = field(default_factory=list)
     nothing_to_do: bool = False
@@ -171,12 +172,57 @@ def _record_source_updater_snapshots(store: DefaultArchiveStore, schema: str) ->
         return len(records)
 
 
+def _record_processor_status_snapshots(store: DefaultArchiveStore, schema: str) -> int:
+    """Seed processor_state from declarations; does not run processors."""
+
+    from pathlib import Path
+
+    from archive_sync.processors.declarations import iter_processor_declarations
+    from archive_sync.processors.state_store import ProcessorStateRecord, ProcessorStateStore
+
+    meta_path = Path(store.vault) / "_meta" / "processors.json"
+    try:
+        with store.index._connect() as conn:
+            state_store = ProcessorStateStore(conn, schema, meta_path=meta_path)
+            state_store.ensure_tables()
+            count = 0
+            for decl in iter_processor_declarations():
+                existing = state_store.get_state(decl.processor_key)
+                if existing is None:
+                    state_store.upsert_state(
+                        ProcessorStateRecord(
+                            processor_key=decl.processor_key,
+                            processor_version=decl.processor_version,
+                            enabled=decl.enabled,
+                        )
+                    )
+                    count += 1
+            conn.commit()
+            return count
+    except Exception:
+        state_store = ProcessorStateStore(None, meta_path=meta_path)
+        count = 0
+        for decl in iter_processor_declarations():
+            existing = state_store.get_state(decl.processor_key)
+            if existing is None:
+                state_store.upsert_state(
+                    ProcessorStateRecord(
+                        processor_key=decl.processor_key,
+                        processor_version=decl.processor_version,
+                        enabled=decl.enabled,
+                    )
+                )
+                count += 1
+        return count
+
+
 def run_maintenance(
     *,
     store: DefaultArchiveStore,
     logger: logging.Logger,
     dry_run: bool = False,
     record_source_status: bool = False,
+    record_processor_status: bool = False,
 ) -> MaintenanceReport:
     report = MaintenanceReport()
     report.started_at = datetime.now(timezone.utc).isoformat()
@@ -191,6 +237,15 @@ def run_maintenance(
             report.errors.append({"step": "source_updater_snapshot", "error": str(exc)})
     elif record_source_status:
         report.skipped_steps.append("source_updater_snapshot (dry-run)")
+
+    if record_processor_status and not dry_run:
+        try:
+            report.processor_status_snapshots = _record_processor_status_snapshots(store, schema)
+        except Exception as exc:
+            logger.exception("maintain_processor_status_snapshot_failed")
+            report.errors.append({"step": "processor_status_snapshot", "error": str(exc)})
+    elif record_processor_status:
+        report.skipped_steps.append("processor_status_snapshot (dry-run)")
 
     from ..providers import resolve_provider
 

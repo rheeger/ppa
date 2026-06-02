@@ -38,14 +38,20 @@ The source updater contract in Section D produces dirty inputs. The processor DA
 Before implementation:
 
 - Read `README.md`, `v2.5vision.md`, Sections D, F, G, and this plan.
+- Confirm Section A, Section B dry-run, Section B apply/rollback, Section C, Section D, and Section G commits are present.
+- Confirm Section D leaves a source state/run surface that Section E can consume without running live source sync.
+- Run `git status --short --branch` and stop if the tree is not clean.
 - Start with processor declarations and stale-output detection before scheduling broad work.
 - Represent existing extractors/enrichment/embedding/linkers in the DAG before adding new abstractions.
 - Do not run full embeddings or all linkers by default.
+- Implement report/status surfaces before wiring broad `ppa maintain` behavior.
 
 Likely implementation files:
 
-- processor declaration/status module.
+- processor declaration/status module, likely under `archive_cli/processors/`.
+- processor state/run store or migration.
 - `archive_cli/commands/maintain.py`
+- `archive_cli/__main__.py` only for a small processor status/report CLI if needed.
 - `archive_sync/extractors/runner.py`
 - `archive_sync/llm_enrichment/enrichment_orchestrator.py`
 - `archive_cli/embedder.py`
@@ -57,6 +63,8 @@ Required first tests:
 - processor version bump marks expected inputs stale.
 - suppressed inputs skip active-only processors.
 - dirty input triggers only expected processors.
+- processor status can be read without running processors.
+- missing vault/config/provider-like blocked states return structured output and documented exit code, not traceback.
 
 Stop conditions:
 
@@ -64,6 +72,9 @@ Stop conditions:
 - suppressed cards can still be embedded or linked.
 - processor output identity is not deterministic.
 - rollback cannot identify outputs by run ID or output identity.
+- implementation starts rewriting extractors or embedding/linker internals before declarations/staleness/reporting are in place.
+- CLI/status paths produce tracebacks for normal missing config/vault/provider misuse.
+- implementation runs full embeddings, all linkers, or broad LLM jobs by default.
 
 ## Core Concept
 
@@ -102,6 +113,20 @@ Every processor should declare:
 | `llm_dependent` | Whether provider/model availability matters |
 | `rollback_strategy` | How outputs can be reverted or superseded |
 
+Initial implementation should define processor declarations without running processors. Prefer a registry that can be inspected by tests, `ppa status`, and Section F.
+
+Recommended first declarations:
+
+| Processor | Key | Active only | LLM dependent | Output kind |
+| --------- | --- | ----------- | ------------- | ----------- |
+| Email promotion policy | `email_promotion_policy` | No | No by default | `email_corpus_decisions` |
+| Email typed extraction | `email_typed_extraction` | Yes | Sometimes | derived cards |
+| Email thread enrichment | `email_thread_enrichment` | Yes | Yes | summaries/entities/matches |
+| Materialization | `materialization` | No, but corpus-state aware | No | cards/chunks/projections |
+| Embedding | `embedding` | Yes | External provider | embeddings |
+| Linkers | `linkers` | Yes | Sometimes | graph edges/link decisions |
+| Entity resolution | `entity_resolution` | Yes | Sometimes | person/place/org links |
+
 ## Processor Run Record
 
 Every processor run should record:
@@ -121,6 +146,43 @@ Every processor run should record:
 | `started_at`, `completed_at` | Timing |
 
 This can be implemented through an existing `enrichment_queue` evolution, a new processor table, or a lightweight sidecar store. The execution preference is Postgres once the design is proven, because Section F needs production status.
+
+Preferred first implementation:
+
+- Add a durable `processor_runs` / `processor_state` store when an index connection exists.
+- Allow in-memory or fixture-only stores for tests.
+- Do not treat report files as the primary state source.
+- Link `processor_runs.run_id` to Section G `gate_runs.run_id` or mirror it exactly.
+
+Recommended `processor_state` fields:
+
+| Field | Meaning |
+| ----- | ------- |
+| `processor_key` | Primary processor identity |
+| `processor_version` | Current version |
+| `enabled` | Whether processor participates in maintenance |
+| `last_success_at` | Last successful run |
+| `last_attempt_at` | Last attempted run |
+| `last_error` | Error payload |
+| `pending_count` | Current pending count |
+| `stale_count` | Current stale count |
+| `failed_count` | Current failed count |
+| `last_run_id` | Last processor run |
+
+Recommended `processor_runs` fields:
+
+| Field | Meaning |
+| ----- | ------- |
+| `run_id` | Gate-linked run ID |
+| `processor_key` | Processor identity |
+| `processor_version` | Version used |
+| `archive_instance` | Section G archive instance |
+| `status` | `success`, `partial`, `failed`, `blocked`, `skipped` |
+| `input_count`, `dirty_count`, `stale_count`, `skipped_count`, `output_count` | Counts |
+| `skip_reasons` | JSON counts by reason |
+| `stale_reasons` | JSON counts by reason |
+| `engine_mode` | `rust`, `python`, `n/a`, or `mixed` |
+| `started_at`, `completed_at` | Timing |
 
 ## Staleness Rules
 
@@ -279,6 +341,15 @@ flowchart LR
 
 The implementation can run independent processors in parallel later, but the first version should favor clarity and idempotency.
 
+Section E first implementation should not fully rewrite `ppa maintain`. Preferred first slice:
+
+1. Add processor declaration registry.
+2. Add staleness evaluation helpers.
+3. Add processor state/run reports.
+4. Add a dry-run/status CLI that reports pending/stale/skipped work.
+5. Wire only a minimal `ppa maintain` reporting step if it is low-risk.
+6. Do not execute broad processor work automatically.
+
 ## Versioning
 
 Processor versions should be explicit constants or metadata values.
@@ -339,6 +410,9 @@ Future implementation should include:
 - Integration tests proving suppressed email is not embedded or linked.
 - Integration tests proving re-promoted email queues processors.
 - Failure tests proving LLM-dependent processor failure does not block deterministic processors.
+- CLI test proving processor status/dry-run works without executing processors.
+- CLI test proving missing provider/config-like blocked states return structured output and exit `4`, not traceback.
+- Test proving full embedding/all-linker/broad LLM work requires explicit opt-in.
 
 ## Validation Ladder and Rust Standard
 
@@ -375,6 +449,30 @@ Processor status should report:
 - LLM-dependent skipped count due to provider unavailability.
 - top errors and retryability.
 
+Recommended CLI surface:
+
+```bash
+ppa processors status --format json
+ppa processors plan --dirty-uids PATH --format json
+ppa processors run --processor <key> --run-id <run_id> --apply
+```
+
+Exact names can change, but Section F must have a programmatic way to read processor status and stale-work estimates without scraping logs.
+
+Report fields should include:
+
+| Field | Meaning |
+| ----- | ------- |
+| `run_id` | Gate-linked run ID |
+| `processor_key` | Processor identity |
+| `processor_version` | Version used |
+| `archive_instance` | Section G archive instance |
+| `status` | `success`, `partial`, `failed`, `blocked`, `skipped` |
+| `input_count`, `dirty_count`, `stale_count`, `skipped_count`, `output_count` | Counts |
+| `skip_reasons`, `stale_reasons` | JSON reason maps |
+| `artifact_paths` | JSON report / summary paths |
+| `engine_mode` | `rust`, `python`, `n/a`, or `mixed` |
+
 ## Rollback / Recovery
 
 Processor rollback strategies:
@@ -400,6 +498,9 @@ Section E implementation is ready when:
 - Tests cover staleness, idempotency, version bumps, and suppression-aware downstream behavior.
 - Section G gates pass through processor slice/staging validation before Arnold processor execution.
 - Processor reports prove no default full embedding, full linker, or broad LLM rerun occurs.
+- Processor declaration/status read paths work without running processors.
+- Missing config/provider-like blocked states return structured output and documented exit code, not tracebacks.
+- Full embeddings, all linkers, and broad LLM jobs require explicit opt-in flags and report blast radius before running.
 
 ## Completion Artifacts
 
@@ -411,6 +512,9 @@ The implementation agent must leave:
 - active-only suppression skip report.
 - processor run report with engine mode, throughput, stale reasons, skipped reasons, and output identities.
 - rollback evidence for generated processor outputs.
+- blocked/failure report examples for missing provider/config.
+- processor status sample consumed by Section F.
+- blast-radius report proving no default full embedding/linker/LLM work.
 
 ## Commit Instructions
 

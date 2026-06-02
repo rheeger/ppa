@@ -43,13 +43,18 @@ Section F turns the concepts from Sections A-E into operator-visible status:
 Before implementation:
 
 - Read `README.md`, `v2.5vision.md`, Sections B, D, E, G, and this plan.
+- Confirm Section A, Section B dry-run/apply, Section C, Section D, Section E, and Section G commits are present.
+- Confirm Section D and E provide machine-readable source/processor state without requiring live sync/processor execution.
+- Run `git status --short --branch` and stop if the tree is not clean.
 - Build machine-readable status before polished text UI.
 - Make readiness fail closed until all required reports/gates exist.
 - Do not declare v3 ready based only on docs or partial implementation.
+- Prefer aggregating existing status stores over inventing new Section F-only state.
 
 Likely implementation files:
 
 - `archive_cli/commands/status.py` or equivalent.
+- `archive_cli/status/` or equivalent aggregation module.
 - `archive_cli/commands/maintain.py`
 - report/status modules introduced by Sections B, D, E, G.
 - `archive_cli/server.py` only if MCP should expose health later.
@@ -60,6 +65,8 @@ Required first tests:
 - readiness pass/fail logic.
 - source failure appears in status.
 - suppressed email visibility failure blocks readiness.
+- missing vault/config/database returns structured blocked/failed status, not traceback.
+- readiness can be evaluated without running source sync or processors.
 
 Stop conditions:
 
@@ -67,6 +74,9 @@ Stop conditions:
 - readiness can pass without Section G gate evidence.
 - reports do not include engine mode or decision run IDs.
 - Arnold status hides partial failures behind a green summary.
+- status implementation starts mutating source cursors, corpus state, embeddings, or processors.
+- Section F builds a separate source/processor state model instead of consuming Sections B/D/E/G.
+- normal operator misuse produces tracebacks instead of structured status/errors.
 
 ## Production Status Surfaces
 
@@ -77,6 +87,14 @@ v2.5 should define three status surfaces:
 3. **Historical reports:** append-only maintenance reports for trend/debugging.
 
 The first implementation can be plain text and JSON. v3 can later make it pretty with `rich`.
+
+Section F first implementation should:
+
+1. Add machine-readable status aggregation.
+2. Add human-readable summary from the same payload.
+3. Add readiness evaluation that fails closed.
+4. Add tests with fixture state from Sections B, D, E, and G.
+5. Avoid changing maintenance execution semantics except to emit or reference reports.
 
 ## `ppa status` Required Sections
 
@@ -217,6 +235,29 @@ Future implementation should expose JSON roughly like:
 
 Exact fields may change, but the categories above are required.
 
+Required top-level status fields:
+
+| Field | Meaning |
+| ----- | ------- |
+| `archive` | Instance, vault, schema, build/git info |
+| `sources` | Section D source state summaries |
+| `corpus` | Section B active/suppressed/quarantine summaries |
+| `email_hygiene` | Policy/classification/decision-run coverage |
+| `processors` | Section E processor state summaries |
+| `embeddings` | Active chunk embedding status |
+| `linkers` | Linker backlog/failure/suppression filtering status |
+| `maintenance` | Last maintain/report state |
+| `validation_gates` | Section G gate evidence |
+| `v3_readiness` | Fail-closed readiness result |
+| `errors`, `warnings` | Structured issues |
+
+Status command behavior:
+
+- `--format json` emits only JSON on stdout.
+- text output is concise but includes failing gate/source/processor names.
+- missing config/vault/database should produce structured output and documented exit code.
+- status must not run live source sync, processor execution, embeddings, or linkers.
+
 ## Maintenance Report Shape
 
 Every `ppa maintain` run should write an append-only report.
@@ -241,6 +282,8 @@ Reports should be both:
 
 - machine-readable JSON.
 - summarized to stderr/stdout for operators.
+
+Section F should not require fully rewriting `ppa maintain` in its first implementation. It can start by aggregating existing source/corpus/processor/gate reports and adding a report writer hook for future maintain cycles.
 
 ## Health Thresholds
 
@@ -353,6 +396,9 @@ Future implementation should include:
 - Integration tests proving suppressed email is absent from retrieval and reported as suppressed.
 - Integration tests for maintenance report creation.
 - Golden-output tests for human-readable status.
+- CLI tests proving status does not mutate source/corpus/processor state.
+- CLI tests proving missing vault/config/database returns structured output and exit `4`, not traceback.
+- Tests proving readiness fails when Section B/D/E/G evidence is missing, failed, unreviewed, or from the wrong archive instance.
 
 ## Validation Ladder and Rust Standard
 
@@ -397,6 +443,9 @@ Section F implementation is ready when:
 - Operator docs explain dry-run, apply, rollback, status, and maintenance report interpretation.
 - v3 readiness cannot pass unless Section G gate evidence exists through Arnold soak.
 - status includes report paths, decision run IDs, engine mode, rollback status, and failed gate details.
+- status/readiness can run without executing live sync, processors, embeddings, or linkers.
+- missing config/vault/database cases return structured output and documented exit code, not tracebacks.
+- Section F consumes Sections B, D, E, and G state; it does not duplicate their state models.
 
 ## Completion Artifacts
 
@@ -408,6 +457,9 @@ The implementation agent must leave:
 - readiness pass/fail fixture reports.
 - operator runbook references.
 - proof that readiness fails when any required Section G gate evidence is missing.
+- blocked/failure status examples for missing vault/config/database.
+- status sample proving partial failures are visible and not hidden by a green summary.
+- status sample proving no live source sync or processor execution occurred.
 
 ## Commit Instructions
 

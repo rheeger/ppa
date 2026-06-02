@@ -1075,6 +1075,10 @@ def main() -> None:
 
     _source_updaters_cli.add_parser(subparsers)
 
+    from archive_cli.processors import cli as _processors_cli
+
+    _processors_cli.add_parser(subparsers)
+
     sub_maintain = subparsers.add_parser(
         "maintain",
         help="Run maintenance cycle: tail ingestion, extract, resolve, rebuild, report",
@@ -1088,6 +1092,11 @@ def main() -> None:
         "--record-source-status",
         action="store_true",
         help="Snapshot source updater state from vault cursors only (no adapter fetch)",
+    )
+    sub_maintain.add_argument(
+        "--record-processor-status",
+        action="store_true",
+        help="Snapshot processor declaration state into durable store (no processor execution)",
     )
     deploy_parser = subparsers.add_parser("deploy", help="Run Phase 9 Arnold-side deployment sequence")
     deploy_parser.add_argument("--dry-run", action="store_true", help="Pre-flight only")
@@ -1130,6 +1139,9 @@ def main() -> None:
     if args.command == "source-updaters":
         rc = _source_updaters_cli.dispatch(args)
         raise SystemExit(rc)
+    if args.command == "processors":
+        rc = _processors_cli.dispatch(args)
+        raise SystemExit(rc)
     if args.command == "corpus-hygiene":
         rc = _corpus_hygiene_cli.dispatch(args)
         raise SystemExit(rc)
@@ -1149,6 +1161,7 @@ def main() -> None:
                 logger=_cli_log,
                 dry_run=args.dry_run,
                 record_source_status=getattr(args, "record_source_status", False),
+                record_processor_status=getattr(args, "record_processor_status", False),
             )
             _print_json(report.to_dict())
         except PpaError as exc:
