@@ -1071,6 +1071,10 @@ def main() -> None:
 
     _corpus_hygiene_cli.add_parser(subparsers)
 
+    from archive_cli.source_updaters import cli as _source_updaters_cli
+
+    _source_updaters_cli.add_parser(subparsers)
+
     sub_maintain = subparsers.add_parser(
         "maintain",
         help="Run maintenance cycle: tail ingestion, extract, resolve, rebuild, report",
@@ -1079,6 +1083,11 @@ def main() -> None:
         "--dry-run",
         action="store_true",
         help="Report what would be done without executing",
+    )
+    sub_maintain.add_argument(
+        "--record-source-status",
+        action="store_true",
+        help="Snapshot source updater state from vault cursors only (no adapter fetch)",
     )
     deploy_parser = subparsers.add_parser("deploy", help="Run Phase 9 Arnold-side deployment sequence")
     deploy_parser.add_argument("--dry-run", action="store_true", help="Pre-flight only")
@@ -1118,6 +1127,9 @@ def main() -> None:
     if args.command == "gates":
         rc = _gates_cli.dispatch(args)
         raise SystemExit(rc)
+    if args.command == "source-updaters":
+        rc = _source_updaters_cli.dispatch(args)
+        raise SystemExit(rc)
     if args.command == "corpus-hygiene":
         rc = _corpus_hygiene_cli.dispatch(args)
         raise SystemExit(rc)
@@ -1132,7 +1144,12 @@ def main() -> None:
 
         try:
             store = resolve_store()
-            report = run_maintenance(store=store, logger=_cli_log, dry_run=args.dry_run)
+            report = run_maintenance(
+                store=store,
+                logger=_cli_log,
+                dry_run=args.dry_run,
+                record_source_status=getattr(args, "record_source_status", False),
+            )
             _print_json(report.to_dict())
         except PpaError as exc:
             _cli_fail(exc)

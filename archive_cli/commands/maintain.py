@@ -131,6 +131,7 @@ class MaintenanceReport:
     cards_rebuilt: int = 0
     enrichment_queue_depth: int = 0
     retrieval_gaps_since_last: int = 0
+    source_updater_snapshots: int = 0
     errors: list[dict[str, str]] = field(default_factory=list)
     skipped_steps: list[str] = field(default_factory=list)
     nothing_to_do: bool = False
@@ -139,16 +140,57 @@ class MaintenanceReport:
         return {k: v for k, v in self.__dict__.items()}
 
 
+def _record_source_updater_snapshots(store: DefaultArchiveStore, schema: str) -> int:
+    """Read vault cursors into source_updater_state; does not run adapters."""
+
+    from pathlib import Path
+
+    from archive_sync.source_updaters.declarations import iter_declaration_templates
+    from archive_sync.source_updaters.snapshot import snapshot_all_declarations
+    from archive_sync.source_updaters.state_store import SourceUpdaterStateStore
+
+    meta_path = Path(store.vault) / "_meta" / "source-updaters.json"
+    try:
+        with store.index._connect() as conn:
+            state_store = SourceUpdaterStateStore(conn, schema, meta_path=meta_path)
+            state_store.ensure_tables()
+            records = snapshot_all_declarations(
+                state_store,
+                list(iter_declaration_templates()),
+                vault_path=str(store.vault),
+            )
+            conn.commit()
+            return len(records)
+    except Exception:
+        state_store = SourceUpdaterStateStore(None, meta_path=meta_path)
+        records = snapshot_all_declarations(
+            state_store,
+            list(iter_declaration_templates()),
+            vault_path=str(store.vault),
+        )
+        return len(records)
+
+
 def run_maintenance(
     *,
     store: DefaultArchiveStore,
     logger: logging.Logger,
     dry_run: bool = False,
+    record_source_status: bool = False,
 ) -> MaintenanceReport:
     report = MaintenanceReport()
     report.started_at = datetime.now(timezone.utc).isoformat()
     idx = store.index
     schema = str(getattr(idx, "schema", "ppa"))
+
+    if record_source_status and not dry_run:
+        try:
+            report.source_updater_snapshots = _record_source_updater_snapshots(store, schema)
+        except Exception as exc:
+            logger.exception("maintain_source_updater_snapshot_failed")
+            report.errors.append({"step": "source_updater_snapshot", "error": str(exc)})
+    elif record_source_status:
+        report.skipped_steps.append("source_updater_snapshot (dry-run)")
 
     from ..providers import resolve_provider
 

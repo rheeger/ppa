@@ -322,3 +322,19 @@ def get_adapter_spec(source_id: str) -> AdapterSpec:
 
 def iter_adapter_specs() -> tuple[AdapterSpec, ...]:
     return tuple(ADAPTER_SPECS[source_id] for source_id in sorted(ADAPTER_SPECS))
+
+
+# Section D: adapter source_id → source updater contract (see archive_sync.source_updaters).
+SOURCE_UPDATER_ADAPTER_SOURCE_IDS: frozenset[str] = frozenset(
+    {
+        "gmail-messages",
+        "calendar-events",
+        "imessage",
+        "photos",
+        "apple-health",
+    }
+)
+
+
+def adapter_has_source_updater_contract(source_id: str) -> bool:
+    return source_id in SOURCE_UPDATER_ADAPTER_SOURCE_IDS
