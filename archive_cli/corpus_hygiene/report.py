@@ -75,3 +75,66 @@ def render_census_summary(result: object, report: GateRunReport) -> str:
         ]
     )
     return "\n".join(lines) + "\n"
+
+
+def render_apply_summary(result: object, report: GateRunReport) -> str:
+    from .apply import ApplyResult
+
+    assert isinstance(result, ApplyResult)
+    lines = [
+        "# Section B — email corpus hygiene apply",
+        "",
+        f"- decision_run_id: `{report.decision_run_id}`",
+        f"- archive_instance: `{report.archive_instance}`",
+        f"- engine_mode: `{report.engine_mode}`",
+        f"- completion_state: `{report.completion_state}`",
+        "",
+        "## Apply counts",
+        "",
+        f"- threads_applied: {result.counts.threads_applied}",
+        f"- cards_updated: {result.counts.cards_updated}",
+        "",
+    ]
+    if result.counts.by_corpus_state:
+        lines.append("## Corpus state updates")
+        lines.append("")
+        for state, count in sorted(result.counts.by_corpus_state.items()):
+            lines.append(f"- {state}: {count}")
+    lines.extend(
+        [
+            "",
+            "## Safety",
+            "",
+            "- vault markdown deleted: no",
+            "- rollback available: yes",
+            "",
+            f"next_recommended_gate: `{report.next_recommended_gate}`",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def render_rollback_summary(result: object, report: GateRunReport) -> str:
+    from .rollback import RollbackResult
+
+    assert isinstance(result, RollbackResult)
+    lines = [
+        "# Section B — email corpus hygiene rollback",
+        "",
+        f"- decision_run_id: `{report.decision_run_id}`",
+        f"- archive_instance: `{report.archive_instance}`",
+        f"- engine_mode: `{report.engine_mode}`",
+        "",
+        "## Rollback counts",
+        "",
+        f"- cards_restored: {result.counts.cards_restored}",
+        f"- threads_restored: {result.counts.threads_restored}",
+        "",
+        "## Safety",
+        "",
+        "- llm_calls: no",
+        "- vault markdown deleted: no",
+        "",
+        f"next_recommended_gate: `{report.next_recommended_gate}`",
+    ]
+    return "\n".join(lines) + "\n"

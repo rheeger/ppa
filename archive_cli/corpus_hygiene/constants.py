@@ -5,8 +5,11 @@ from __future__ import annotations
 from archive_cli.validation_gates.constants import GATE_SYNTHETIC_FIXTURES
 
 SECTION_B_COMPLETION_STATE = "section_b_dry_run_complete"
+SECTION_B_APPLY_COMPLETION_STATE = "section_b_apply_rollback_complete"
 SECTION_B_DRY_RUN_GATE = GATE_SYNTHETIC_FIXTURES
 SECTION_B_CENSUS_ARTIFACT_GATE = "corpus_hygiene_email_dry_run"
+SECTION_B_APPLY_ARTIFACT_GATE = "corpus_hygiene_email_apply"
+SECTION_B_ROLLBACK_ARTIFACT_GATE = "corpus_hygiene_email_rollback"
 
 CLASSIFICATION_SOURCES: tuple[str, ...] = (
     "card_classifications",

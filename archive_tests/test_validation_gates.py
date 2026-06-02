@@ -206,6 +206,7 @@ def test_gate_registry_records_passed_gate(pgvector_dsn: str) -> None:
 def test_migration_discovers_validation_gate_runs_migration() -> None:
     migrations = discover_migrations()
     assert any(m.version == 5 and m.name == "validation_gate_runs" for m in migrations)
+    assert any(m.version == 6 and m.name == "email_corpus_state" for m in migrations)
 
 
 def test_gate_artifact_dir_matches_readme_convention() -> None:

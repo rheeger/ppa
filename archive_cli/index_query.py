@@ -188,7 +188,24 @@ class QueryMixin:
                 ed = f"{ed}T23:59:59.999999+00:00"
             clauses.append(f"{alias}.activity_at <= %s::timestamptz")
             params.append(ed)
+        corpus_clause = self._active_corpus_clause(alias)
+        if corpus_clause:
+            clauses.append(corpus_clause)
         return clauses, params
+
+    def _active_corpus_clause(self, alias: str) -> str:
+        cached = getattr(self, "_corpus_state_filter_enabled", None)
+        if cached is None:
+            from archive_cli.corpus_hygiene.state_store import corpus_state_table_exists
+
+            with self._connect() as conn:
+                self._corpus_state_filter_enabled = corpus_state_table_exists(conn, self.schema)
+            cached = self._corpus_state_filter_enabled
+        if not cached:
+            return ""
+        from archive_cli.corpus_hygiene.state_store import active_corpus_sql_filter
+
+        return active_corpus_sql_filter(schema=self.schema, card_alias=alias).strip()
 
     @staticmethod
     def _merge_lexical_uid_rows(a: list[dict[str, Any]], b: list[dict[str, Any]]) -> list[dict[str, Any]]:
