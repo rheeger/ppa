@@ -78,6 +78,7 @@ class FetchedBatch:
     sequence: int = 0
     skipped_count: int = 0
     skip_details: dict[str, int] = field(default_factory=dict)
+    commit_cursor: bool = True
 
 
 @dataclass
@@ -907,7 +908,7 @@ class BaseAdapter(ABC):
                 if identity_cache is not None:
                     identity_cache.flush()
                 _log(f"identity cache flush done: elapsed_s={perf_counter() - flush_started_at:.2f}")
-                if batch.cursor_patch and batch_error_count == 0:
+                if batch.cursor_patch and batch_error_count == 0 and batch.commit_cursor:
                     _log(f"batch {batch.sequence} cursor patch apply start: keys={sorted(batch.cursor_patch.keys())}")
                     cursor.update(batch.cursor_patch)
                     _log(f"batch {batch.sequence} cursor patch apply done")

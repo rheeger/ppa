@@ -494,6 +494,11 @@ class GmailMessagesAdapter(BaseAdapter):
             raise last_exc
         raise RuntimeError("gws retry failed without an exception")
 
+    def _promotion_gate_enabled(self, **kwargs) -> bool:
+        from archive_sync.gmail_promotion.gate import promotion_gate_enabled
+
+        return promotion_gate_enabled(kwargs)
+
     def _worker_count(self, explicit_value: int | None, *, env_var: str, default: int) -> int:
         raw_value = explicit_value if explicit_value is not None else os.environ.get(env_var)
         try:
@@ -1130,6 +1135,32 @@ class GmailMessagesAdapter(BaseAdapter):
             default=min(4, fetch_workers),
         )
         sequence = 0
+        promotion_gate = None
+        if self._promotion_gate_enabled(**kwargs):
+            from archive_sync.gmail_promotion.factory import build_promotion_gate
+
+            decision_run_id = str(
+                kwargs.get("promotion_decision_run_id")
+                or kwargs.get("decision_run_id")
+                or f"gmail-promotion-{account}"
+            ).strip()
+            promotion_gate = build_promotion_gate(
+                vault_path,
+                account_email=account,
+                decision_run_id=decision_run_id,
+                conn=kwargs.get("promotion_db_conn"),
+                schema=str(kwargs.get("promotion_db_schema") or ""),
+                card_classification_rows=kwargs.get("promotion_card_classifications"),
+                allow_new_llm=bool(kwargs.get("promotion_allow_new_llm")),
+                fail_on_missing_classification=bool(kwargs.get("promotion_fail_on_missing_classification")),
+            )
+            if not existing_thread_state:
+                existing_thread_state, existing_message_hashes, existing_attachment_hashes = (
+                    self._load_existing_quick_update_state(
+                        vault_path,
+                        account_email=account,
+                    )
+                )
 
         while True:
             if self._limits_reached(
@@ -1270,6 +1301,37 @@ class GmailMessagesAdapter(BaseAdapter):
                     skipped_unchanged_messages += batch_skip_details["skipped_unchanged_messages"]
                     skipped_unchanged_attachments += batch_skip_details["skipped_unchanged_attachments"]
                     batch_items: list[dict[str, Any]] = []
+                    commit_cursor = True
+
+                    if promotion_gate is not None and thread_records:
+                        thread_id = str(thread_record.get("thread_id", "")).strip()
+                        vault_has_active = thread_id in existing_thread_state
+                        promo_result = promotion_gate.evaluate_loaded_thread(
+                            thread_record,
+                            message_records,
+                            account_email=account,
+                            own_emails=own_emails,
+                            vault_has_active_card=vault_has_active,
+                        )
+                        try:
+                            promotion_gate.persist_decision(promo_result)
+                        except OSError:
+                            commit_cursor = False
+                            promo_result = promo_result.__class__(
+                                outcome=promo_result.outcome,
+                                record=promo_result.record,
+                                commit_cursor=False,
+                                emit_cards=False,
+                                dirty_card_uids=promo_result.dirty_card_uids,
+                                classification_source=promo_result.classification_source,
+                            )
+                        if promotion_gate.metrics is not None:
+                            promotion_gate.metrics.merge_skip_details(batch_skip_details)
+                        if not promo_result.emit_cards:
+                            thread_records = []
+                            message_records = []
+                            attachment_records = []
+                        commit_cursor = commit_cursor and promo_result.commit_cursor
 
                     if (max_threads is None or emitted_threads < max_threads) and thread_records:
                         batch_items.extend(thread_records)
@@ -1285,7 +1347,8 @@ class GmailMessagesAdapter(BaseAdapter):
                         batch_items.append(attachment_record)
                         emitted_attachments += 1
 
-                    page_index += 1
+                    if commit_cursor:
+                        page_index += 1
                     yield FetchedBatch(
                         items=batch_items,
                         cursor_patch={
@@ -1304,6 +1367,7 @@ class GmailMessagesAdapter(BaseAdapter):
                         sequence=sequence,
                         skipped_count=sum(batch_skip_details.values()),
                         skip_details=batch_skip_details,
+                        commit_cursor=commit_cursor,
                     )
                     sequence += 1
 
