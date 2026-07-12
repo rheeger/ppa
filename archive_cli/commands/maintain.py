@@ -135,6 +135,9 @@ class MaintenanceReport:
     source_updater_runs: int = 0
     source_updater_reports: list[dict[str, Any]] = field(default_factory=list)
     processor_status_snapshots: int = 0
+    processor_runs: int = 0
+    processor_reports: list[dict[str, Any]] = field(default_factory=list)
+    processor_output_count: int = 0
     errors: list[dict[str, str]] = field(default_factory=list)
     skipped_steps: list[str] = field(default_factory=list)
     nothing_to_do: bool = False
@@ -282,6 +285,88 @@ def _record_processor_status_snapshots(store: DefaultArchiveStore, schema: str) 
         return count
 
 
+def _run_processors(
+    store: DefaultArchiveStore,
+    schema: str,
+    *,
+    apply: bool,
+    dirty_uids_path: str = "",
+    source_updater_reports: list[dict[str, Any]] | None = None,
+    processor_keys: list[str] | None = None,
+    allow_full_embedding: bool = False,
+    allow_all_linkers: bool = False,
+    allow_broad_llm: bool = False,
+    logger: logging.Logger,
+) -> tuple[int, list[dict[str, Any]], int]:
+    """Execute processor DAG on dirty UIDs (Section E Phase 2)."""
+
+    from pathlib import Path
+
+    from archive_cli.config import load_archive_config
+    from archive_cli.ppa_engine import ppa_engine
+    from archive_cli.validation_gates.constants import GATE_SYNTHETIC_FIXTURES
+    from archive_cli.validation_gates.instance_identity import derive_archive_instance
+    from archive_sync.processors.runner import run_processors
+    from archive_sync.processors.state_store import ProcessorStateStore
+
+    repo_root = Path(__file__).resolve().parents[2]
+    meta_path = Path(store.vault) / "_meta" / "processors.json"
+    cfg = load_archive_config()
+    archive_instance = derive_archive_instance(
+        vault_path=str(store.vault),
+        index_dsn=cfg.index_dsn,
+        index_schema=schema,
+    )
+
+    keys = list(processor_keys or [])
+    result = run_processors(
+                dirty_uids_path=Path(dirty_uids_path) if dirty_uids_path else None,
+                source_updater_reports=source_updater_reports,
+                vault_path=str(store.vault),
+                store=store,
+                state_store=state_store,
+                processor_keys=keys or None,
+                apply=apply,
+                dry_run=not apply,
+                allow_full_embedding=allow_full_embedding,
+                allow_all_linkers=allow_all_linkers,
+                allow_broad_llm=allow_broad_llm,
+                archive_instance=archive_instance,
+                engine_mode=ppa_engine(),
+                ladder_gate=GATE_SYNTHETIC_FIXTURES,
+                repo_root=repo_root,
+            )
+            conn.commit()
+    except Exception:
+        state_store = ProcessorStateStore(None, meta_path=meta_path)
+        keys = list(processor_keys or [])
+        result = run_processors(
+            dirty_uids_path=Path(dirty_uids_path) if dirty_uids_path else None,
+            source_updater_reports=source_updater_reports,
+            vault_path=str(store.vault),
+            store=store,
+            state_store=state_store,
+            processor_keys=keys or None,
+            apply=apply,
+            dry_run=not apply,
+            allow_full_embedding=allow_full_embedding,
+            allow_all_linkers=allow_all_linkers,
+            allow_broad_llm=allow_broad_llm,
+            archive_instance=archive_instance,
+            engine_mode=ppa_engine(),
+            ladder_gate=GATE_SYNTHETIC_FIXTURES,
+            repo_root=repo_root,
+        )
+    logger.info(
+        "run_processors executed=%s stale=%s skipped=%s outputs=%s",
+        result.executed,
+        result.report.stale_count,
+        result.report.skipped_count,
+        result.report.output_count,
+    )
+    return 1, [result.to_dict()], int(result.report.output_count or 0)
+
+
 def run_maintenance(
     *,
     store: DefaultArchiveStore,
@@ -292,6 +377,13 @@ def run_maintenance(
     run_source_updaters: bool = False,
     source_updater_keys: list[str] | None = None,
     apply_source_updaters: bool = False,
+    run_processors: bool = False,
+    apply_processors: bool = False,
+    dirty_uids_path: str = "",
+    processor_keys: list[str] | None = None,
+    allow_full_embedding: bool = False,
+    allow_all_linkers: bool = False,
+    allow_broad_llm: bool = False,
 ) -> MaintenanceReport:
     report = MaintenanceReport()
     report.started_at = datetime.now(timezone.utc).isoformat()
@@ -334,6 +426,30 @@ def run_maintenance(
             report.errors.append({"step": "processor_status_snapshot", "error": str(exc)})
     elif record_processor_status:
         report.skipped_steps.append("processor_status_snapshot (dry-run)")
+
+    if run_processors:
+        try:
+            apply = bool(apply_processors) and not dry_run
+            count, payloads, outputs = _run_processors(
+                store,
+                schema,
+                apply=apply,
+                dirty_uids_path=dirty_uids_path,
+                source_updater_reports=report.source_updater_reports or None,
+                processor_keys=processor_keys,
+                allow_full_embedding=allow_full_embedding,
+                allow_all_linkers=allow_all_linkers,
+                allow_broad_llm=allow_broad_llm,
+                logger=logger,
+            )
+            report.processor_runs = count
+            report.processor_reports = payloads
+            report.processor_output_count = outputs
+            if not apply:
+                report.skipped_steps.append("processor_execution (dry-run)")
+        except Exception as exc:
+            logger.exception("maintain_run_processors_failed")
+            report.errors.append({"step": "run_processors", "error": str(exc)})
 
     from ..providers import resolve_provider
 

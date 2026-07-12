@@ -314,9 +314,12 @@ def test_run_embedding_without_opt_in_returns_refused_exit_3(capsys: pytest.Capt
         ladder_gate="synthetic_fixtures",
         dirty_uids="",
         apply=True,
+        dry_run=False,
         allow_full_embedding=False,
         allow_all_linkers=False,
         allow_broad_llm=False,
+        require_full_embedding_opt_in=True,
+        require_all_linkers_opt_in=False,
         require_provider=False,
     )
     rc = cmd_run(args)
@@ -338,9 +341,12 @@ def test_run_linkers_without_opt_in_returns_refused_exit_3(capsys: pytest.Captur
         ladder_gate="synthetic_fixtures",
         dirty_uids="",
         apply=True,
+        dry_run=False,
         allow_full_embedding=False,
         allow_all_linkers=False,
         allow_broad_llm=False,
+        require_full_embedding_opt_in=False,
+        require_all_linkers_opt_in=True,
         require_provider=False,
     )
     rc = cmd_run(args)
@@ -349,26 +355,37 @@ def test_run_linkers_without_opt_in_returns_refused_exit_3(capsys: pytest.Captur
     assert payload["refused"] is True
 
 
-def test_run_without_apply_returns_refused_exit_3(capsys: pytest.CaptureFixture) -> None:
+def test_run_without_apply_is_plan_only_not_refused(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    vault = _minimal_vault(tmp_path)
+    monkeypatch.setenv("PPA_PATH", str(vault))
+    monkeypatch.delenv("PPA_INDEX_DSN", raising=False)
     args = argparse.Namespace(
         processor=PROCESSOR_MATERIALIZATION,
-        vault="",
-        instance_role="",
+        vault=str(vault),
+        instance_role="fixture",
         format="json",
-        run_id="",
+        run_id="plan-only-run",
         decision_run_id="",
         ladder_gate="synthetic_fixtures",
         dirty_uids="",
         apply=False,
+        dry_run=True,
         allow_full_embedding=False,
         allow_all_linkers=False,
         allow_broad_llm=False,
+        require_full_embedding_opt_in=False,
+        require_all_linkers_opt_in=False,
         require_provider=False,
     )
     rc = cmd_run(args)
-    assert rc == EXIT_REFUSED
+    assert rc == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["reason"] == "missing_apply_flag"
+    assert payload["executed"] is False
+    assert payload["plan_only"] is True
 
 
 def test_run_llm_processor_without_provider_returns_blocked_exit_4(
@@ -391,9 +408,12 @@ def test_run_llm_processor_without_provider_returns_blocked_exit_4(
         ladder_gate="synthetic_fixtures",
         dirty_uids="",
         apply=True,
+        dry_run=False,
         allow_full_embedding=False,
         allow_all_linkers=False,
         allow_broad_llm=True,
+        require_full_embedding_opt_in=False,
+        require_all_linkers_opt_in=False,
         require_provider=True,
     )
     rc = cmd_run(args)

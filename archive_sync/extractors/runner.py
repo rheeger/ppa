@@ -175,6 +175,7 @@ class ExtractionRunner:
         limit: int | None = None,
         progress_every: int = 5000,
         vault_percent: float | None = None,
+        uid_allowlist: set[str] | frozenset[str] | None = None,
     ) -> None:
         self.vault_path = str(vault_path)
         self.registry = registry
@@ -186,6 +187,7 @@ class ExtractionRunner:
         self.limit = limit
         self.progress_every = max(1, int(progress_every))
         self.vault_percent = float(vault_percent) if vault_percent is not None and vault_percent > 0 else None
+        self.uid_allowlist = set(uid_allowlist) if uid_allowlist else None
 
     def _out_root(self) -> Path:
         return Path(self.staging_dir) if self.staging_dir else Path(self.vault_path)
@@ -281,6 +283,8 @@ class ExtractionRunner:
             fm = note.frontmatter
             scanned += 1
             uid = str(fm.get("uid") or "")
+            if self.uid_allowlist is not None and uid not in self.uid_allowlist:
+                continue
             if self.vault_percent is not None and uid and not uid_in_vault_percent_sample(uid, self.vault_percent):
                 if self.progress_every and scanned % self.progress_every == 0:
                     log.info(

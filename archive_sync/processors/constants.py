@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 SECTION_E_COMPLETION_STATE = "processor_dag_contract_complete"
+SECTION_E_EXECUTION_STATE = "processor_dag_execution_complete"
 
 PROCESSOR_LOG_ROOT = "processors"
 

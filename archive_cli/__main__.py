@@ -1119,7 +1119,44 @@ def main() -> None:
         action="store_true",
         help="Snapshot processor declaration state into durable store (no processor execution)",
     )
-    deploy_parser = subparsers.add_parser("deploy", help="Run Phase 9 Arnold-side deployment sequence")
+    sub_maintain.add_argument(
+        "--run-processors",
+        action="store_true",
+        help="Plan/execute processor DAG on dirty UIDs (dry-run unless --apply-processors)",
+    )
+    sub_maintain.add_argument(
+        "--apply-processors",
+        action="store_true",
+        help="With --run-processors, execute pending/stale processor work",
+    )
+    sub_maintain.add_argument(
+        "--dirty-uids",
+        default="",
+        help="Optional dirty_uids.jsonl / JSON path for --run-processors",
+    )
+    sub_maintain.add_argument(
+        "--processor",
+        action="append",
+        default=[],
+        dest="processor_keys",
+        help="Limit --run-processors to processor_key (repeatable)",
+    )
+    sub_maintain.add_argument(
+        "--allow-full-embedding",
+        action="store_true",
+        help="Opt-in for full embedding regeneration during --run-processors",
+    )
+    sub_maintain.add_argument(
+        "--allow-all-linkers",
+        action="store_true",
+        help="Opt-in for all-linker rerun during --run-processors",
+    )
+    sub_maintain.add_argument(
+        "--allow-broad-llm",
+        action="store_true",
+        help="Opt-in for broad LLM processors during --run-processors",
+    )
+    deploy_parser = subparsers.add_parser("deploy", help="Phase 9 Arnold-side deployment sequence")
     deploy_parser.add_argument("--dry-run", action="store_true", help="Pre-flight only")
     deploy_parser.add_argument(
         "--skip-to",
@@ -1186,6 +1223,13 @@ def main() -> None:
                 run_source_updaters=getattr(args, "run_source_updaters", False),
                 source_updater_keys=list(getattr(args, "source_updater_keys", None) or []),
                 apply_source_updaters=getattr(args, "apply_source_updaters", False),
+                run_processors=getattr(args, "run_processors", False),
+                apply_processors=getattr(args, "apply_processors", False),
+                dirty_uids_path=str(getattr(args, "dirty_uids", "") or ""),
+                processor_keys=list(getattr(args, "processor_keys", None) or []),
+                allow_full_embedding=getattr(args, "allow_full_embedding", False),
+                allow_all_linkers=getattr(args, "allow_all_linkers", False),
+                allow_broad_llm=getattr(args, "allow_broad_llm", False),
             )
             _print_json(report.to_dict())
         except PpaError as exc:

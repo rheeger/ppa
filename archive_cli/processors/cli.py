@@ -1,4 +1,4 @@
-"""``ppa processors`` CLI — declarations, staleness plans, and status (Section E)."""
+"""``ppa processors`` CLI — declarations, staleness plans, and execution (Section E)."""
 
 from __future__ import annotations
 
@@ -19,16 +19,16 @@ from archive_cli.validation_gates.constants import (
 )
 from archive_cli.validation_gates.guards import GateRefusalError, guard_expensive_work_opt_in, refuse
 from archive_cli.validation_gates.instance_identity import derive_archive_instance
-from archive_sync.processors.batch import ProcessorRunReport
 from archive_sync.processors.constants import (
     BROAD_LLM_PROCESSOR_KEYS,
-    EXPENSIVE_PROCESSOR_KEYS,
+    PROCESSOR_EMAIL_TYPED_EXTRACTION,
+    PROCESSOR_EMBEDDING,
+    PROCESSOR_LINKERS,
     SECTION_E_COMPLETION_STATE,
+    SECTION_E_EXECUTION_STATE,
 )
 from archive_sync.processors.declarations import declaration_for_key, iter_processor_declarations, validate_all_declarations
-from archive_sync.processors.plan import build_processor_plan
-from archive_sync.processors.report import write_processor_report
-from archive_sync.processors.staleness import ProcessorInputSnapshot
+from archive_sync.processors.runner import run_processors
 from archive_sync.processors.state_store import ProcessorStateStore
 from archive_sync.processors.status import status_payload
 
@@ -103,49 +103,22 @@ def _resolve_environment(
     return store, archive_instance, state_store
 
 
-def _load_inputs_from_file(path: Path) -> list[ProcessorInputSnapshot]:
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    items = raw if isinstance(raw, list) else raw.get("inputs", [])
-    snapshots: list[ProcessorInputSnapshot] = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        snapshots.append(
-            ProcessorInputSnapshot(
-                input_uid=str(item.get("input_uid") or ""),
-                card_type=str(item.get("card_type") or ""),
-                corpus_state=str(item.get("corpus_state") or "active"),
-                processor_decision=str(item.get("processor_decision") or ""),
-                field_values=dict(item.get("field_values") or {}),
-                source_dirty=bool(item.get("source_dirty", False)),
-                upstream_complete=bool(item.get("upstream_complete", True)),
-                recorded_input_hash=str(item.get("recorded_input_hash") or ""),
-                recorded_processor_version=str(item.get("recorded_processor_version") or ""),
-                recorded_corpus_state=str(item.get("recorded_corpus_state") or ""),
-                output_exists=bool(item.get("output_exists", False)),
-                output_failed=bool(item.get("output_failed", False)),
-                upstream_output_hash=str(item.get("upstream_output_hash") or ""),
-                recorded_upstream_output_hash=str(item.get("recorded_upstream_output_hash") or ""),
-            )
-        )
-    return snapshots
+def _guard_expensive_opt_ins(processor_key: str, args: argparse.Namespace) -> None:
+    """Refuse full-corpus expensive work without Section G opt-in flags."""
 
-
-def _guard_processor_run(processor_key: str, args: argparse.Namespace) -> None:
-    if processor_key in EXPENSIVE_PROCESSOR_KEYS:
-        if processor_key == "embedding":
-            guard_expensive_work_opt_in("full_embedding_regeneration", getattr(args, "allow_full_embedding", False))
-        elif processor_key == "linkers":
-            guard_expensive_work_opt_in("all_linker_rerun", getattr(args, "allow_all_linkers", False))
-    if processor_key in BROAD_LLM_PROCESSOR_KEYS and not getattr(args, "allow_broad_llm", False):
+    if getattr(args, "require_full_embedding_opt_in", False) and processor_key == PROCESSOR_EMBEDDING:
+        guard_expensive_work_opt_in("full_embedding_regeneration", getattr(args, "allow_full_embedding", False))
+    if getattr(args, "require_all_linkers_opt_in", False) and processor_key == PROCESSOR_LINKERS:
+        guard_expensive_work_opt_in("all_linker_rerun", getattr(args, "allow_all_linkers", False))
+    if (
+        processor_key in BROAD_LLM_PROCESSOR_KEYS
+        and processor_key != PROCESSOR_EMAIL_TYPED_EXTRACTION
+        and getattr(args, "apply", False)
+        and not getattr(args, "allow_broad_llm", False)
+    ):
         refuse(
             f"processor {processor_key} requires --allow-broad-llm",
             reason="missing_broad_llm_opt_in",
-        )
-    if not getattr(args, "apply", False):
-        refuse(
-            "processor run requires --apply (default is plan/status only)",
-            reason="missing_apply_flag",
         )
 
 
@@ -168,55 +141,39 @@ def cmd_plan(args: argparse.Namespace) -> int:
     resolved = _resolve_environment(args)
     if isinstance(resolved, int):
         return resolved
-    _store, archive_instance, state_store = resolved
+    store, archive_instance, state_store = resolved
 
-    inputs: list[ProcessorInputSnapshot] = []
     dirty_path = (getattr(args, "dirty_uids", None) or "").strip()
-    if dirty_path:
-        inputs = _load_inputs_from_file(Path(dirty_path))
-    elif getattr(args, "dirty_uid", None):
-        for uid in args.dirty_uid:
-            inputs.append(
-                ProcessorInputSnapshot(
-                    input_uid=uid.strip(),
-                    card_type=args.card_type or "email_thread",
-                    corpus_state=args.corpus_state or "active",
-                    processor_decision=args.processor_decision or "",
-                    source_dirty=True,
-                    field_values={"body_sha": args.body_sha or uid, "thread_uid": uid},
-                )
-            )
-
+    dirty_uid_list = [u.strip() for u in (getattr(args, "dirty_uid", None) or []) if u.strip()]
     processor_keys = None
     if getattr(args, "processor", None):
         processor_keys = [args.processor.strip()]
 
-    plan = build_processor_plan(inputs, processor_keys=processor_keys)
-    report = ProcessorRunReport(
+    result = run_processors(
+        dirty_uids_path=Path(dirty_path) if dirty_path else None,
+        dirty_uids=dirty_uid_list or None,
+        vault_path=str(store.vault),
+        store=store,
+        state_store=state_store,
+        processor_keys=processor_keys,
+        apply=False,
+        dry_run=True,
         run_id=args.run_id or "processor-plan-dry-run",
-        processor_key=processor_keys[0] if processor_keys else "all",
-        processor_version="",
         archive_instance=archive_instance,
-        status="skipped",
-        input_count=plan.input_count,
-        dirty_count=plan.dirty_count,
-        stale_count=plan.stale_count,
-        skipped_count=plan.skipped_count,
-        skip_reasons=plan.skip_reasons,
-        stale_reasons=plan.stale_reasons,
-        plan=plan,
         engine_mode=ppa_engine(),
         ladder_gate=args.ladder_gate or GATE_SYNTHETIC_FIXTURES,
+        repo_root=_repo_root(),
+        default_card_type=getattr(args, "card_type", None) or "email_thread",
+        default_processor_decision=getattr(args, "processor_decision", None) or "",
     )
-    paths = write_processor_report(_repo_root(), report)
-    state_store.record_run(report)
     payload = {
         "completion_state": SECTION_E_COMPLETION_STATE,
+        "execution_state": SECTION_E_EXECUTION_STATE,
         "archive_instance": archive_instance,
         "dry_run": True,
         "executed": False,
-        "plan": plan.to_dict(),
-        "artifact_paths": paths,
+        "plan": result.report.plan.to_dict(),
+        "artifact_paths": result.artifact_paths,
         "declaration_validation_errors": validate_all_declarations(),
     }
     _emit(payload, args)
@@ -224,33 +181,39 @@ def cmd_plan(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    """Plan-only by default; --apply with opt-in flags required for expensive/LLM processors."""
+    """Dry-run/plan by default; ``--apply`` executes pending/stale work."""
 
     processor_key = (args.processor or "").strip()
     if not processor_key:
-        _emit({"error": "processor key required", "usage": "--processor embedding"}, args)
+        _emit({"error": "processor key required", "usage": "--processor materialization"}, args)
         return EXIT_RUNTIME_FAILURE
     decl = declaration_for_key(processor_key)
     if decl is None:
         _emit({"error": f"unknown processor: {processor_key}"}, args)
         return EXIT_RUNTIME_FAILURE
 
-    try:
-        _guard_processor_run(processor_key, args)
-    except GateRefusalError as exc:
-        _emit({"refused": True, "reason": exc.reason, "message": str(exc)}, args)
-        return EXIT_REFUSED
+    apply = bool(getattr(args, "apply", False))
+    if apply:
+        try:
+            _guard_expensive_opt_ins(processor_key, args)
+        except GateRefusalError as exc:
+            _emit({"refused": True, "reason": exc.reason, "message": str(exc)}, args)
+            return EXIT_REFUSED
 
     resolved = _resolve_environment(args)
     if isinstance(resolved, int):
         return resolved
-    _store, archive_instance, state_store = resolved
+    store, archive_instance, state_store = resolved
 
-    if getattr(args, "require_provider", False) or decl.llm_dependent:
+    provider_available = None
+    if getattr(args, "require_provider", False) or (
+        apply and decl.llm_dependent and processor_key != PROCESSOR_EMAIL_TYPED_EXTRACTION
+    ):
         from archive_cli.providers import resolve_provider
 
         provider = resolve_provider(refresh=True)
-        if provider is None or not provider.is_available():
+        provider_available = bool(provider is not None and provider.is_available())
+        if getattr(args, "require_provider", False) and not provider_available:
             _emit(
                 {
                     "blocked": True,
@@ -262,42 +225,41 @@ def cmd_run(args: argparse.Namespace) -> int:
             )
             return EXIT_BLOCKED
 
-    # Section E first slice: record plan only — no broad processor execution.
-    inputs: list[ProcessorInputSnapshot] = []
-    if getattr(args, "dirty_uids", None):
-        inputs = _load_inputs_from_file(Path(args.dirty_uids))
-    plan = build_processor_plan(inputs, processor_keys=[processor_key])
-    report = ProcessorRunReport(
+    dirty_path = (getattr(args, "dirty_uids", None) or "").strip()
+    result = run_processors(
+        dirty_uids_path=Path(dirty_path) if dirty_path else None,
+        vault_path=str(store.vault),
+        store=store,
+        state_store=state_store,
+        processor_keys=[processor_key],
+        apply=apply,
+        dry_run=not apply,
+        allow_full_embedding=bool(getattr(args, "allow_full_embedding", False)),
+        allow_all_linkers=bool(getattr(args, "allow_all_linkers", False)),
+        allow_broad_llm=bool(getattr(args, "allow_broad_llm", False)),
+        provider_available=provider_available,
         run_id=args.run_id or f"processor-run-{processor_key}",
-        processor_key=processor_key,
-        processor_version=decl.processor_version,
         archive_instance=archive_instance,
-        status="skipped",
-        input_count=plan.input_count,
-        dirty_count=plan.dirty_count,
-        stale_count=plan.stale_count,
-        skipped_count=plan.skipped_count,
-        skip_reasons=plan.skip_reasons,
-        stale_reasons=plan.stale_reasons,
-        plan=plan,
-        warnings=["Section E: run records plan only; processor execution not invoked"],
         engine_mode=ppa_engine(),
         ladder_gate=args.ladder_gate or GATE_SYNTHETIC_FIXTURES,
-        decision_run_id=args.decision_run_id or "",
+        decision_run_id=getattr(args, "decision_run_id", "") or "",
+        repo_root=_repo_root(),
     )
-    paths = write_processor_report(_repo_root(), report)
-    state_store.record_run(report)
-    _emit(
-        {
-            "completion_state": SECTION_E_COMPLETION_STATE,
-            "executed": False,
-            "plan_only": True,
-            "processor_key": processor_key,
-            "artifact_paths": paths,
-            "plan": plan.to_dict(),
-        },
-        args,
-    )
+    payload = {
+        "completion_state": SECTION_E_COMPLETION_STATE,
+        "execution_state": SECTION_E_EXECUTION_STATE,
+        "executed": result.executed,
+        "plan_only": not result.executed,
+        "processor_key": processor_key,
+        "artifact_paths": result.artifact_paths,
+        "plan": result.report.plan.to_dict(),
+        "report": result.report.to_dict(),
+        "item_results": [r.to_dict() for r in result.item_results],
+        "output_count": result.report.output_count,
+    }
+    _emit(payload, args)
+    if result.report.status == "failed":
+        return EXIT_RUNTIME_FAILURE
     return EXIT_SUCCESS
 
 
@@ -314,7 +276,7 @@ def cmd_declarations(args: argparse.Namespace) -> int:
 def add_parser(subparsers: argparse._SubParsersAction) -> None:
     parser = subparsers.add_parser(
         "processors",
-        help="Processor DAG declarations, staleness, and status (Section E)",
+        help="Processor DAG declarations, staleness, and execution (Section E)",
     )
     sub = parser.add_subparsers(dest="processors_command", required=True)
 
@@ -332,7 +294,11 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
     p_plan.add_argument("--vault", default="")
     p_plan.add_argument("--instance-role", default="")
     p_plan.add_argument("--format", choices=["text", "json"], default="json")
-    p_plan.add_argument("--dirty-uids", default="", help="JSON file with input snapshots or dirty UID list")
+    p_plan.add_argument(
+        "--dirty-uids",
+        default="",
+        help="dirty_uids.jsonl (one UID/line) or JSON snapshot list",
+    )
     p_plan.add_argument("--dirty-uid", action="append", default=[], help="Inline dirty UID (repeatable)")
     p_plan.add_argument("--card-type", default="email_thread")
     p_plan.add_argument("--corpus-state", default="active")
@@ -343,7 +309,10 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
     p_plan.add_argument("--ladder-gate", default=GATE_SYNTHETIC_FIXTURES)
     p_plan.set_defaults(func=cmd_plan)
 
-    p_run = sub.add_parser("run", help="Record processor run plan (execution requires opt-in flags)")
+    p_run = sub.add_parser(
+        "run",
+        help="Plan by default; execute pending/stale work with --apply",
+    )
     p_run.add_argument("--processor", required=True)
     p_run.add_argument("--vault", default="")
     p_run.add_argument("--instance-role", default="")
@@ -351,11 +320,26 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
     p_run.add_argument("--run-id", default="")
     p_run.add_argument("--decision-run-id", default="")
     p_run.add_argument("--ladder-gate", default=GATE_SYNTHETIC_FIXTURES)
-    p_run.add_argument("--dirty-uids", default="")
-    p_run.add_argument("--apply", action="store_true", help="Required to proceed past plan-only refusal")
+    p_run.add_argument(
+        "--dirty-uids",
+        default="",
+        help="dirty_uids.jsonl (one UID/line) or JSON snapshot list",
+    )
+    p_run.add_argument("--apply", action="store_true", help="Execute pending/stale processor work")
+    p_run.add_argument("--dry-run", action="store_true", help="Force plan-only (default without --apply)")
     p_run.add_argument("--allow-full-embedding", action="store_true")
     p_run.add_argument("--allow-all-linkers", action="store_true")
     p_run.add_argument("--allow-broad-llm", action="store_true")
+    p_run.add_argument(
+        "--require-full-embedding-opt-in",
+        action="store_true",
+        help="Refuse embedding apply without --allow-full-embedding (exit 3)",
+    )
+    p_run.add_argument(
+        "--require-all-linkers-opt-in",
+        action="store_true",
+        help="Refuse linkers apply without --allow-all-linkers (exit 3)",
+    )
     p_run.add_argument("--require-provider", action="store_true", help="Fail with exit 4 if provider missing")
     p_run.set_defaults(func=cmd_run)
 
