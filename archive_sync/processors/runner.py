@@ -131,16 +131,19 @@ def _is_already_current(
 
 
 def _execute_materialization(ctx: ExecuteContext, items: list[ProcessorPlanItem]) -> BatchExecuteResult:
-    """Thin adapter: optional store.rebuild once, then record output identities."""
+    """Thin adapter: record output identities for dirty UIDs without a full vault rebuild.
+
+    Full rebuild remains maintain/admin responsibility; dirty-scoped Phase 2 runs
+    must not trigger a corpus-wide index rebuild.
+    """
 
     out = BatchExecuteResult()
-    if ctx.apply and not ctx.dry_run and ctx.store is not None and hasattr(ctx.store, "rebuild"):
-        try:
-            ctx.store.rebuild()
-        except Exception as exc:
-            # Vault-only / fixture paths may lack index — still record deterministic outputs.
-            out.warnings.append(f"materialization rebuild skipped: {exc}")
-            log.info("materialization_rebuild_skipped error=%s", exc)
+    if ctx.apply and not ctx.dry_run and items:
+        out.warnings.append(
+            "materialization: skipped full vault rebuild for dirty-only batch; "
+            "outputs recorded without index rebuild"
+        )
+        log.info("materialization_dirty_only_skip_full_rebuild count=%s", len(items))
     for item in items:
         out.results.append(
             ItemExecuteResult(

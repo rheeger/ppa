@@ -318,8 +318,12 @@ def _run_processors(
         index_schema=schema,
     )
 
-    keys = list(processor_keys or [])
-    result = run_processors(
+    try:
+        with store.index._connect() as conn:
+            state_store = ProcessorStateStore(conn, schema, meta_path=meta_path)
+            state_store.ensure_tables()
+            keys = list(processor_keys or [])
+            result = run_processors(
                 dirty_uids_path=Path(dirty_uids_path) if dirty_uids_path else None,
                 source_updater_reports=source_updater_reports,
                 vault_path=str(store.vault),
