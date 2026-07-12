@@ -84,7 +84,74 @@ def test_personal_reply_thread_active_enrichment() -> None:
     )
     assert d.corpus_decision == CorpusDecision.ACTIVE
     assert d.processor_decision == ProcessorDecision.THREAD_ENRICHMENT
-    assert d.decision_reason == "owner_participation"
+    # Multi-party + owner outbound → back_and_forth (still active enrichment)
+    assert d.decision_reason == "back_and_forth_participation"
+
+
+def test_github_notification_storm_not_back_and_forth() -> None:
+    """Multi-message GitHub notifications without owner outbound must not go active via back_and_forth."""
+
+    d = _decide(
+        gmail_thread_id="t-github-storm",
+        classification="",
+        confidence=0.0,
+        classification_source="missing",
+        participant_emails=(
+            "notifications@github.com",
+            "endaoment-frontend@noreply.github.com",
+            "subscribed@noreply.github.com",
+        ),
+        from_emails=("notifications@github.com",),
+        message_count=22,
+        owner_sent_message=False,
+        owner_replied=False,
+    )
+    assert d.decision_reason != "back_and_forth_participation"
+    assert d.corpus_decision != CorpusDecision.ACTIVE or d.decision_reason != "back_and_forth_participation"
+    # Missing/unknown → quarantine
+    assert d.corpus_decision == CorpusDecision.QUARANTINE
+    assert d.decision_reason in {"missing_classification", "low_confidence", "low_confidence_with_attachment"}
+
+
+def test_bay_clubs_inbound_promo_not_back_and_forth() -> None:
+    """Two inbound promo messages with owner only in participants ≠ back_and_forth."""
+
+    d = _decide(
+        gmail_thread_id="t-bay-clubs",
+        classification="",
+        confidence=0.0,
+        classification_source="missing",
+        label_ids=("CATEGORY_PROMOTIONS",),
+        participant_emails=("bayclubs@mail-bayclubs.com", "owner@example.com"),
+        from_emails=("bayclubs@mail-bayclubs.com",),
+        message_count=2,
+        owner_email="owner@example.com",
+        owner_sent_message=False,
+        owner_replied=False,
+    )
+    assert d.decision_reason != "back_and_forth_participation"
+    assert d.corpus_decision == CorpusDecision.QUARANTINE
+
+
+def test_real_reply_thread_stays_active_via_back_and_forth() -> None:
+    """Owner outbound + multi-party multi-message → active (back_and_forth)."""
+
+    d = _decide(
+        gmail_thread_id="t-aspiriant-like",
+        classification="",
+        confidence=0.0,
+        classification_source="missing",
+        participant_emails=("lsanchez@aspiriant.com", "owner@example.com", "hdietz@aspiriant.com"),
+        from_emails=("lsanchez@aspiriant.com", "owner@example.com"),
+        message_count=4,
+        owner_email="owner@example.com",
+        owner_sent_message=True,
+        owner_replied=False,
+        label_ids=("IMPORTANT", "CATEGORY_PERSONAL", "SENT"),
+    )
+    assert d.corpus_decision == CorpusDecision.ACTIVE
+    assert d.decision_reason == "back_and_forth_participation"
+    assert "owner_sent_message" in d.decision_signals
 
 
 def test_starred_promotional_thread_quarantine() -> None:

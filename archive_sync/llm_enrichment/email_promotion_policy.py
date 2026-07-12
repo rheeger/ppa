@@ -243,9 +243,20 @@ def _has_owner_participation(inp: EmailPromotionInput) -> bool:
 
 
 def _has_back_and_forth(inp: EmailPromotionInput) -> bool:
-    participants = {e.strip().lower() for e in inp.participant_emails if e.strip()}
-    return inp.message_count >= 2 and len(participants) >= 2
+    """Multi-party multi-message thread with real owner outbound.
 
+    ``message_count >= 2`` and ``participants >= 2`` alone is not enough —
+    mailbox owners appear on inbound mail, and notification storms (e.g. GitHub)
+    look multi-party without any owner participation. Require the same outbound
+    signals as owner participation (From=owner / direction=outbound / flags).
+    """
+
+    participants = {e.strip().lower() for e in inp.participant_emails if e.strip()}
+    return (
+        inp.message_count >= 2
+        and len(participants) >= 2
+        and _has_owner_participation(inp)
+    )
 
 def _is_high_confidence_noise(canonical: str, confidence: float) -> bool:
     return canonical == "noise" and confidence >= SUPPRESS_CONFIDENCE_MIN
@@ -366,7 +377,27 @@ class EmailPromotionPolicy:
     ) -> _RuleOutcome | None:
         # Rule 2 — owner participation beats marketing/automated/noise suppression (rule 5)
         # and beats the rule-6 quarantine alternative for "marketing + owner replied".
-        # Result: active + thread_enrichment, not quarantine.
+        # Multi-party threads with owner outbound use back_and_forth (still active +
+        # enrichment). Bare multi-message/multi-participant without outbound does NOT
+        # promote — notification storms and inbound-only promos fall through.
+        if _has_back_and_forth(inp):
+            signals.append("back_and_forth_participation")
+            if inp.owner_sent_message:
+                signals.append("owner_sent_message")
+            if inp.owner_replied:
+                signals.append("owner_replied")
+            proc = (
+                ProcessorDecision.THREAD_ENRICHMENT
+                if canonical in {"personal", "marketing", "automated", "noise", "unknown"}
+                else ProcessorDecision.NO_DOWNSTREAM_PROCESSING
+            )
+            return _RuleOutcome(
+                CorpusDecision.ACTIVE,
+                proc,
+                "back_and_forth_participation",
+                signals.copy(),
+            )
+
         if _has_owner_participation(inp):
             reason = "owner_participation"
             if inp.owner_sent_message:
@@ -379,15 +410,6 @@ class EmailPromotionPolicy:
                 else ProcessorDecision.NO_DOWNSTREAM_PROCESSING
             )
             return _RuleOutcome(CorpusDecision.ACTIVE, proc, reason, signals.copy())
-
-        if _has_back_and_forth(inp):
-            signals.append("back_and_forth_participation")
-            return _RuleOutcome(
-                CorpusDecision.ACTIVE,
-                ProcessorDecision.THREAD_ENRICHMENT,
-                "back_and_forth_participation",
-                signals.copy(),
-            )
 
         if _starred_or_important(labels) and not _is_high_confidence_noise(canonical, inp.confidence):
             if not _promotions_marketing_conflict(inp, canonical):

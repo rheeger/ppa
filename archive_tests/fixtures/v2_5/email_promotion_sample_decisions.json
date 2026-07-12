@@ -54,8 +54,9 @@
     "confidence": 0.88,
     "content_hash": "",
     "corpus_decision": "active",
-    "decision_reason": "owner_participation",
+    "decision_reason": "back_and_forth_participation",
     "decision_signals": [
+      "back_and_forth_participation",
       "owner_sent_message"
     ],
     "evaluated_at": "2026-06-01T02:01:24+00:00",

@@ -372,7 +372,9 @@ def test_true_outbound_from_owner_sets_owner_sent() -> None:
         context=CensusContext(decision_run_id=_FIXTURE_RUN_ID),
     )
     rec = result.records[0]
-    assert rec.decision_reason == "owner_participation"
+    assert rec.corpus_decision == "active"
+    # Multi-party + outbound → back_and_forth (still active)
+    assert rec.decision_reason in {"back_and_forth_participation", "owner_participation"}
     assert rec.corpus_decision == "active"
 
 
@@ -418,7 +420,7 @@ def test_outbound_direction_sets_owner_sent_without_participants_trick() -> None
 
 
 def test_back_and_forth_without_outbound_is_not_owner_participation() -> None:
-    """Multi-participant inbound traffic is a weaker signal, not owner_sent."""
+    """Multi-participant inbound traffic is not owner_sent and not back_and_forth."""
 
     from archive_cli.corpus_hygiene.classification_reuse import thread_from_frontmatter
 
@@ -442,6 +444,6 @@ def test_back_and_forth_without_outbound_is_not_owner_participation() -> None:
     )
     rec = result.records[0]
     assert rec.decision_reason != "owner_participation"
-    # back_and_forth may still keep some threads active under policy, but must not
-    # claim owner_participation
+    assert rec.decision_reason != "back_and_forth_participation"
     assert "owner_sent_message" not in rec.decision_signals
+    assert rec.corpus_decision == "quarantine"

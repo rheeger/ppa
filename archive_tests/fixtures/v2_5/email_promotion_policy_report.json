@@ -58,8 +58,9 @@
       "confidence": 0.88,
       "content_hash": "",
       "corpus_decision": "active",
-      "decision_reason": "owner_participation",
+      "decision_reason": "back_and_forth_participation",
       "decision_signals": [
+        "back_and_forth_participation",
         "owner_sent_message"
       ],
       "evaluated_at": "2026-06-01T02:01:24+00:00",
@@ -149,9 +150,9 @@
       "suppressed": 1
     },
     "by_decision_reason": {
+      "back_and_forth_participation": 1,
       "low_confidence_with_attachment": 1,
       "marketing_classification_with_promotions_label": 1,
-      "owner_participation": 1,
       "starred_marketing_conflict": 1,
       "transactional_extractable": 1
     },
