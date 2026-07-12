@@ -2453,7 +2453,7 @@ def main() -> None:
     if args.command == "serve" and getattr(args, "tunnel", ""):
         from .tunnel import TunnelManager
 
-        local_port = int(os.environ.get("PPA_TUNNEL_PORT", "5433"))
+        local_port = int(os.environ.get("PPA_TUNNEL_PORT", "58471"))
         remote_port = int(os.environ.get("PPA_TUNNEL_REMOTE_PORT", "5432"))
         tunnel_mgr = TunnelManager(args.tunnel, local_port=local_port, remote_port=remote_port)
         tunnel_mgr.start()

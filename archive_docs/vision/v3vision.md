@@ -14,6 +14,8 @@ The v3 user is someone who already lives inside Claude, Cursor, and chatbots —
 
 **v4 builds on v3** with a native Mac app, OAuth proxy service, signed connector feed, billing, and a full Rust engine rewrite. See `v4vision.md`. v3 is the foundation that proves PPA works for people who aren't its creator.
 
+**Prerequisite:** v3 packaging assumes v2.5 readiness on Arnold — a high-signal corpus, source updaters that actually refresh, processors that run on dirty inputs, and `ppa readiness` reporting ready after soak. Do not start Phase 10+ until that gate passes. See `v2.5vision.md`.
+
 ---
 
 ## Principles
@@ -924,15 +926,15 @@ v3 proves PPA works for multiple users. v4 packages it for everyone.
 
 ## Summary Table
 
-| Phase   | What                                       | Effort    | Depends On             | Ships to Users          |
-| ------- | ------------------------------------------ | --------- | ---------------------- | ----------------------- |
-| **6.5** | Linker framework + cross-derived linkers   | 2-3 weeks | v2 complete            | No (internal — registry + ops surface) |
-| **10**  | Vault encryption + passkey auth            | 3-4 weeks | v2 complete            | No (internal)           |
-| **11**  | **CLI setup wizard**                       | 4-6 weeks | 10, 6.5                | **Yes — the v3 launch** |
-| **12**  | Docker Compose packaging                   | 2-3 weeks | 11                     | Yes                     |
-| **13**  | Progress UX overhaul                       | 2-3 weeks | v2 complete (parallel) | Yes                     |
-| **14**  | Self-hosting documentation                 | 2-3 weeks | 11, 12                 | Yes                     |
-| **15**  | Connector + linker contribution framework  | 2-3 weeks | 6.5 (linker half)      | Yes (community)         |
+| Phase   | What                                      | Effort    | Depends On             | Ships to Users                         |
+| ------- | ----------------------------------------- | --------- | ---------------------- | -------------------------------------- |
+| **6.5** | Linker framework + cross-derived linkers  | 2-3 weeks | v2 complete            | No (internal — registry + ops surface) |
+| **10**  | Vault encryption + passkey auth           | 3-4 weeks | v2 complete            | No (internal)                          |
+| **11**  | **CLI setup wizard**                      | 4-6 weeks | 10, 6.5                | **Yes — the v3 launch**                |
+| **12**  | Docker Compose packaging                  | 2-3 weeks | 11                     | Yes                                    |
+| **13**  | Progress UX overhaul                      | 2-3 weeks | v2 complete (parallel) | Yes                                    |
+| **14**  | Self-hosting documentation                | 2-3 weeks | 11, 12                 | Yes                                    |
+| **15**  | Connector + linker contribution framework | 2-3 weeks | 6.5 (linker half)      | Yes (community)                        |
 
 **Total effort:** ~17-24 weeks of work across all phases.
 

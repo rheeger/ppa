@@ -113,21 +113,21 @@ Fields:
 
 For each source:
 
-| Field | Meaning |
-| ----- | ------- |
-| `source_key` | Source/account identity |
-| `source_type` | Gmail, Calendar, iMessage, Photos, etc. |
-| `enabled` | Whether source participates in maintenance |
-| `state` | `fresh`, `stale`, `failed`, `blocked`, `never_synced` |
-| `last_success_at` | Last successful sync |
-| `last_attempt_at` | Last attempted sync |
-| `cursor_summary` | Human-readable cursor |
-| `observed_last_run` | Last run observed count |
-| `promoted_last_run` | Last run promoted count |
-| `suppressed_last_run` | Last run suppressed count |
-| `quarantined_last_run` | Last run quarantine count |
-| `deleted_last_run` | Last run deleted/tombstoned count |
-| `last_error` | Last error summary |
+| Field                  | Meaning                                               |
+| ---------------------- | ----------------------------------------------------- |
+| `source_key`           | Source/account identity                               |
+| `source_type`          | Gmail, Calendar, iMessage, Photos, etc.               |
+| `enabled`              | Whether source participates in maintenance            |
+| `state`                | `fresh`, `stale`, `failed`, `blocked`, `never_synced` |
+| `last_success_at`      | Last successful sync                                  |
+| `last_attempt_at`      | Last attempted sync                                   |
+| `cursor_summary`       | Human-readable cursor                                 |
+| `observed_last_run`    | Last run observed count                               |
+| `promoted_last_run`    | Last run promoted count                               |
+| `suppressed_last_run`  | Last run suppressed count                             |
+| `quarantined_last_run` | Last run quarantine count                             |
+| `deleted_last_run`     | Last run deleted/tombstoned count                     |
+| `last_error`           | Last error summary                                    |
 
 ### 3. Corpus Health
 
@@ -237,19 +237,19 @@ Exact fields may change, but the categories above are required.
 
 Required top-level status fields:
 
-| Field | Meaning |
-| ----- | ------- |
-| `archive` | Instance, vault, schema, build/git info |
-| `sources` | Section D source state summaries |
-| `corpus` | Section B active/suppressed/quarantine summaries |
-| `email_hygiene` | Policy/classification/decision-run coverage |
-| `processors` | Section E processor state summaries |
-| `embeddings` | Active chunk embedding status |
-| `linkers` | Linker backlog/failure/suppression filtering status |
-| `maintenance` | Last maintain/report state |
-| `validation_gates` | Section G gate evidence |
-| `v3_readiness` | Fail-closed readiness result |
-| `errors`, `warnings` | Structured issues |
+| Field                | Meaning                                             |
+| -------------------- | --------------------------------------------------- |
+| `archive`            | Instance, vault, schema, build/git info             |
+| `sources`            | Section D source state summaries                    |
+| `corpus`             | Section B active/suppressed/quarantine summaries    |
+| `email_hygiene`      | Policy/classification/decision-run coverage         |
+| `processors`         | Section E processor state summaries                 |
+| `embeddings`         | Active chunk embedding status                       |
+| `linkers`            | Linker backlog/failure/suppression filtering status |
+| `maintenance`        | Last maintain/report state                          |
+| `validation_gates`   | Section G gate evidence                             |
+| `v3_readiness`       | Fail-closed readiness result                        |
+| `errors`, `warnings` | Structured issues                                   |
 
 Status command behavior:
 
@@ -289,15 +289,15 @@ Section F should not require fully rewriting `ppa maintain` in its first impleme
 
 Initial status thresholds:
 
-| Check | Healthy | Warning | Failed |
-| ----- | ------- | ------- | ------ |
-| Source updater | Last run succeeded | Stale or partial | Failed/blocked |
-| Gmail classification coverage | >= 98% | 95-98% | < 95% |
-| Quarantine backlog | Small and reviewed | Growing | Unreviewed large backlog |
-| Processor failures | 0 blocking failures | Non-blocking failures | Blocking failures |
-| Embedding coverage | Active chunks embedded | Pending backlog | Embedding failures |
-| Suppression filter | Suppressed excluded | Unknown | Suppressed visible in default retrieval |
-| Rebuild safety | Verified | Not recently verified | Failed verification |
+| Check                         | Healthy                | Warning               | Failed                                  |
+| ----------------------------- | ---------------------- | --------------------- | --------------------------------------- |
+| Source updater                | Last run succeeded     | Stale or partial      | Failed/blocked                          |
+| Gmail classification coverage | >= 98%                 | 95-98%                | < 95%                                   |
+| Quarantine backlog            | Small and reviewed     | Growing               | Unreviewed large backlog                |
+| Processor failures            | 0 blocking failures    | Non-blocking failures | Blocking failures                       |
+| Embedding coverage            | Active chunks embedded | Pending backlog       | Embedding failures                      |
+| Suppression filter            | Suppressed excluded    | Unknown               | Suppressed visible in default retrieval |
+| Rebuild safety                | Verified               | Not recently verified | Failed verification                     |
 
 The implementation can tune exact numeric thresholds, but failures should be explicit.
 
@@ -331,18 +331,21 @@ v3 should not resume packaging until Arnold passes this gate after v2.5 implemen
 
 5. **Source freshness working**
    - Gmail, Calendar, iMessage, and Photos source states are visible.
-   - Cursor safety verified.
+   - **At least one successful real updater run** (not status snapshot alone) exists per required source within freshness policy, with cursor before/after and dirty UID counts in the run report.
+   - Cursor safety verified (cursor advances only after persisted side effects).
    - Source failure isolation verified.
 
 6. **Processor DAG working**
    - Dirty inputs queue only affected processors.
+   - **At least one successful real processor run** on dirty UIDs from an updater batch (plan → apply), not declaration/status seed alone.
    - Processor version bump creates expected stale outputs.
    - Suppressed cards skip active-only processors.
 
 7. **Maintenance stable**
-   - `ppa maintain` can run through normal source/update/process/status flow.
+   - `ppa maintain --run-source-updaters --run-processors` (or equivalent) can run through normal source/update/process/status flow.
    - Reports are written.
    - Partial failure behavior is visible and recoverable.
+   - `--record-source-status` / `--record-processor-status` alone **do not** satisfy this check.
 
 8. **Rebuild safety verified**
    - Full or incremental rebuild preserves corpus decisions.
@@ -442,6 +445,7 @@ Section F implementation is ready when:
 - Arnold can show why it is or is not ready for v3.
 - Operator docs explain dry-run, apply, rollback, status, and maintenance report interpretation.
 - v3 readiness cannot pass unless Section G gate evidence exists through Arnold soak.
+- **v3 readiness cannot pass on snapshot-only source/processor status;** required checks 5–7 need real run reports from D/E Phase 2.
 - status includes report paths, decision run IDs, engine mode, rollback status, and failed gate details.
 - status/readiness can run without executing live sync, processors, embeddings, or linkers.
 - missing config/vault/database cases return structured output and documented exit code, not tracebacks.
@@ -469,4 +473,5 @@ Commit this section by itself.
 - Stage only Section F implementation, tests, docs, and artifacts.
 - Commit subject: `v2.5 section F: arnold observability v3 gate`
 - Commit body must follow the shared pattern in `README.md`.
-- After commit, `git status --short` must be clean before Arnold reviewed apply/soak work starts.
+- After commit, `git status --short` must be clean before D/E Phase 2 or Section H work starts.
+- If readiness hardening is needed after D/E Phase 2, use a separate commit: `v2.5 section F: readiness real-run evidence`.

@@ -5,7 +5,9 @@ set -euo pipefail
 
 SCRIPT_DIR="${0:A:h}"
 PPA_ROOT="${SCRIPT_DIR:h}"
-LOCAL_PORT="${PPA_TUNNEL_PORT:-5433}"
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/ppa-tunnel-env.sh"
+LOCAL_PORT="${PPA_TUNNEL_PORT}"
 
 if ! lsof -i :"$LOCAL_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
   echo "Arnold SSH tunnel not running on port $LOCAL_PORT." >&2
