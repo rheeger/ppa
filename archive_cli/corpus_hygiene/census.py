@@ -280,7 +280,8 @@ def load_threads_from_vault_cache(vault_path: Path) -> list[EmailThreadRecord]:
         for raw_ref in fm.get("messages") or []:
             ref = str(raw_ref).strip()
             if ref.startswith("[[") and ref.endswith("]]"):
-                ref = ref[2:-1].strip()
+                # Strip both opening [[ and closing ]] ([-2], not [-1]).
+                ref = ref[2:-2].strip()
             # Wikilink may be "uid|alias" — keep uid stem
             uid = ref.split("|", 1)[0].strip()
             msg_rel = uid_to_rel.get(uid)

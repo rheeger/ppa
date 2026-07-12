@@ -447,3 +447,65 @@ def test_back_and_forth_without_outbound_is_not_owner_participation() -> None:
     assert rec.decision_reason != "back_and_forth_participation"
     assert "owner_sent_message" not in rec.decision_signals
     assert rec.corpus_decision == "quarantine"
+
+
+def test_load_threads_resolves_wikilink_message_outbound(tmp_path: Path) -> None:
+    """Census must strip [[uid]] with [2:-2], not [2:-1] (trailing ] bug)."""
+    from archive_cli.corpus_hygiene.census import load_threads_from_vault_cache
+
+    vault = tmp_path / "vault"
+    (vault / "EmailThreads/2025").mkdir(parents=True)
+    (vault / "Email/2025").mkdir(parents=True)
+    (vault / "EmailThreads/2025/hfa-email-thread-wl.md").write_text(
+        "\n".join(
+            [
+                "---",
+                "uid: hfa-email-thread-wl",
+                "type: email_thread",
+                "account_email: owner@example.com",
+                "subject: Outbound reply",
+                "participants: [owner@example.com, friend@example.com]",
+                "message_count: 2",
+                "messages: ['[[hfa-email-message-out]]', '[[hfa-email-message-in]]']",
+                "has_attachments: false",
+                "---",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (vault / "Email/2025/hfa-email-message-out.md").write_text(
+        "\n".join(
+            [
+                "---",
+                "uid: hfa-email-message-out",
+                "type: email_message",
+                "account_email: owner@example.com",
+                "direction: outbound",
+                "from_email: owner@example.com",
+                "---",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (vault / "Email/2025/hfa-email-message-in.md").write_text(
+        "\n".join(
+            [
+                "---",
+                "uid: hfa-email-message-in",
+                "type: email_message",
+                "account_email: owner@example.com",
+                "direction: inbound",
+                "from_email: friend@example.com",
+                "---",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    threads = load_threads_from_vault_cache(vault)
+    assert len(threads) == 1
+    assert threads[0].owner_sent_message is True
+    assert "owner@example.com" in threads[0].from_emails
