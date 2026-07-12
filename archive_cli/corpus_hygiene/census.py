@@ -261,16 +261,49 @@ def write_census_artifacts(repo_root: Path, result: CensusResult) -> dict[str, s
 
 
 def load_threads_from_vault_cache(vault_path: Path) -> list[EmailThreadRecord]:
-    """Load email_thread records via vault scan cache (Rust-preferred path)."""
+    """Load email_thread records via vault scan cache (Rust-preferred path).
+
+    Resolves outbound signals from linked email_message cards (From=owner or
+    direction=outbound). Owner ∈ thread.participants alone is never enough.
+    """
 
     from archive_cli.vault_cache import VaultScanCache
 
     scan_cache = VaultScanCache.build_or_load(vault_path, tier=1, progress_every=0)
     paths = list(scan_cache.rel_paths_by_type().get("email_thread") or [])
+    uid_to_rel = scan_cache.uid_to_rel_path()
     threads: list[EmailThreadRecord] = []
     for rel in sorted(paths):
         fm = scan_cache.frontmatter_for_rel_path(rel)
-        threads.append(thread_from_frontmatter(rel, fm))
+        message_from: list[str] = []
+        message_dirs: list[str] = []
+        for raw_ref in fm.get("messages") or []:
+            ref = str(raw_ref).strip()
+            if ref.startswith("[[") and ref.endswith("]]"):
+                ref = ref[2:-1].strip()
+            # Wikilink may be "uid|alias" — keep uid stem
+            uid = ref.split("|", 1)[0].strip()
+            msg_rel = uid_to_rel.get(uid)
+            if not msg_rel:
+                # Also try slug / path stem lookup
+                msg_rel = scan_cache.rel_path_for_slug(uid)
+            if not msg_rel:
+                continue
+            msg_fm = scan_cache.frontmatter_for_rel_path(msg_rel)
+            from_email = str(msg_fm.get("from_email") or msg_fm.get("from") or "").strip().lower()
+            if from_email:
+                message_from.append(from_email)
+            direction = str(msg_fm.get("direction") or "").strip().lower()
+            if direction:
+                message_dirs.append(direction)
+        threads.append(
+            thread_from_frontmatter(
+                rel,
+                fm,
+                message_from_emails=tuple(message_from),
+                message_directions=tuple(message_dirs),
+            )
+        )
     return threads
 
 

@@ -310,3 +310,138 @@ def test_input_hash_stable_for_fixed_threads() -> None:
     h1 = compute_input_hash(threads, policy_version=EMAIL_PROMOTION_POLICY_VERSION)
     h2 = compute_input_hash(list(reversed(threads)), policy_version=EMAIL_PROMOTION_POLICY_VERSION)
     assert h1 == h2
+
+
+# ---------------------------------------------------------------------------
+# Owner participation detection (frontmatter)
+# ---------------------------------------------------------------------------
+
+
+def test_inbound_marketing_owner_in_participants_is_not_owner_sent() -> None:
+    """Mailbox owner is listed on inbound mail — that must not count as outbound."""
+
+    from archive_cli.corpus_hygiene.classification_reuse import thread_from_frontmatter
+
+    thread = thread_from_frontmatter(
+        "EmailThreads/promo.md",
+        {
+            "uid": "uid-inbound-promo",
+            "account_email": "owner@example.com",
+            "subject": "Store notice 48291",
+            "participants": ["deals@retailer.com", "owner@example.com"],
+            "label_ids": ["CATEGORY_PROMOTIONS"],
+            "message_count": 1,
+            "messages": ["[[uid-msg-1]]"],
+        },
+    )
+    assert thread.owner_sent_message is False
+    assert thread.owner_replied is False
+    assert "owner@example.com" in thread.participant_emails
+
+    result = run_email_census_dry_run(
+        [thread],
+        context=CensusContext(decision_run_id=_FIXTURE_RUN_ID),
+    )
+    rec = result.records[0]
+    assert rec.decision_reason != "owner_participation"
+    assert "owner_sent_message" not in rec.decision_signals
+    # Missing/unknown classification without outbound → quarantine, not active override
+    assert rec.corpus_decision == "quarantine"
+    assert rec.classification_source == "missing"
+
+
+def test_true_outbound_from_owner_sets_owner_sent() -> None:
+    from archive_cli.corpus_hygiene.classification_reuse import thread_from_frontmatter
+
+    thread = thread_from_frontmatter(
+        "EmailThreads/outbound.md",
+        {
+            "uid": "uid-outbound",
+            "account_email": "owner@example.com",
+            "subject": "Re: lunch?",
+            "participants": ["friend@gmail.com", "owner@example.com"],
+            "message_count": 2,
+        },
+        message_from_emails=("friend@gmail.com", "owner@example.com"),
+    )
+    assert thread.owner_sent_message is True
+    assert thread.owner_replied is False
+
+    result = run_email_census_dry_run(
+        [thread],
+        context=CensusContext(decision_run_id=_FIXTURE_RUN_ID),
+    )
+    rec = result.records[0]
+    assert rec.decision_reason == "owner_participation"
+    assert rec.corpus_decision == "active"
+
+
+def test_explicit_owner_sent_flag_sets_owner_participation() -> None:
+    from archive_cli.corpus_hygiene.classification_reuse import thread_from_frontmatter
+
+    thread = thread_from_frontmatter(
+        "EmailThreads/flagged.md",
+        {
+            "uid": "uid-flagged-sent",
+            "account_email": "owner@example.com",
+            "subject": "Sent from me",
+            "participants": ["other@example.com", "owner@example.com"],
+            "owner_sent_message": True,
+            "message_count": 1,
+        },
+    )
+    assert thread.owner_sent_message is True
+    assert thread.owner_replied is False
+
+    result = run_email_census_dry_run(
+        [thread],
+        context=CensusContext(decision_run_id=_FIXTURE_RUN_ID),
+    )
+    assert result.records[0].decision_reason == "owner_participation"
+
+
+def test_outbound_direction_sets_owner_sent_without_participants_trick() -> None:
+    from archive_cli.corpus_hygiene.classification_reuse import thread_from_frontmatter
+
+    thread = thread_from_frontmatter(
+        "EmailThreads/dir.md",
+        {
+            "uid": "uid-dir-outbound",
+            "account_email": "owner@example.com",
+            "subject": "Ping",
+            "participants": ["owner@example.com", "x@y.com"],
+            "message_count": 1,
+        },
+        message_directions=("outbound",),
+    )
+    assert thread.owner_sent_message is True
+
+
+def test_back_and_forth_without_outbound_is_not_owner_participation() -> None:
+    """Multi-participant inbound traffic is a weaker signal, not owner_sent."""
+
+    from archive_cli.corpus_hygiene.classification_reuse import thread_from_frontmatter
+
+    thread = thread_from_frontmatter(
+        "EmailThreads/group.md",
+        {
+            "uid": "uid-group-inbound",
+            "account_email": "owner@example.com",
+            "subject": "Team update",
+            "participants": ["a@ex.com", "b@ex.com", "owner@example.com"],
+            "message_count": 3,
+        },
+        message_from_emails=("a@ex.com", "b@ex.com"),
+    )
+    assert thread.owner_sent_message is False
+    assert thread.owner_replied is False
+
+    result = run_email_census_dry_run(
+        [thread],
+        context=CensusContext(decision_run_id=_FIXTURE_RUN_ID),
+    )
+    rec = result.records[0]
+    assert rec.decision_reason != "owner_participation"
+    # back_and_forth may still keep some threads active under policy, but must not
+    # claim owner_participation
+    assert "owner_sent_message" not in rec.decision_signals

@@ -239,20 +239,89 @@ def open_classify_index(vault_path: Path | None) -> ClassifyIndex | None:
     return ClassifyIndex(db)
 
 
+def _normalize_email_tuple(raw: Any) -> tuple[str, ...]:
+    if raw is None:
+        return ()
+    if isinstance(raw, str):
+        value = raw.strip().lower()
+        return (value,) if value else ()
+    if isinstance(raw, (list, tuple)):
+        out: list[str] = []
+        for item in raw:
+            value = str(item).strip().lower()
+            if value and value not in out:
+                out.append(value)
+        return tuple(out)
+    return ()
+
+
+def _from_emails_from_frontmatter(fm: dict[str, Any]) -> tuple[str, ...]:
+    """Collect From addresses stored on a thread card (if any)."""
+
+    emails = list(_normalize_email_tuple(fm.get("from_emails")))
+    for key in ("from_email", "from"):
+        for email in _normalize_email_tuple(fm.get(key)):
+            if email not in emails:
+                emails.append(email)
+    return tuple(emails)
+
+
+def infer_owner_outbound(
+    *,
+    owner_email: str,
+    explicit_owner_sent: bool = False,
+    explicit_owner_replied: bool = False,
+    from_emails: tuple[str, ...] = (),
+    message_directions: tuple[str, ...] = (),
+) -> tuple[bool, bool]:
+    """Infer (owner_sent_message, owner_replied) from real outbound signals only.
+
+    Owner appearing in ``participants`` is **not** outbound — mailbox owners are
+    listed on inbound mail too. Prefer explicit flags, From=owner, or outbound
+    message direction.
+    """
+
+    owner = owner_email.strip().lower()
+    owner_sent = bool(explicit_owner_sent)
+    if not owner_sent and owner:
+        owner_sent = any(fe.strip().lower() == owner for fe in from_emails if fe.strip())
+    if not owner_sent:
+        owner_sent = any(str(d).strip().lower() == "outbound" for d in message_directions)
+    owner_replied = bool(explicit_owner_replied)
+    return owner_sent, owner_replied
+
+
 def thread_from_frontmatter(
     rel_path: str,
     fm: dict[str, Any],
     *,
     owner_email: str = "",
+    message_from_emails: tuple[str, ...] = (),
+    message_directions: tuple[str, ...] = (),
 ) -> EmailThreadRecord:
+    """Build a thread record from vault frontmatter.
+
+    ``owner_sent_message`` / ``owner_replied`` require real outbound signals
+    (explicit flags, From=owner, or outbound direction) — not merely
+    ``owner ∈ participants``.
+    """
+
     uid = str(fm.get("uid") or Path(rel_path).stem)
     participants = tuple(str(x).strip().lower() for x in (fm.get("participants") or []) if str(x).strip())
     owner = (owner_email or str(fm.get("account_email") or "")).strip().lower()
-    owner_sent = any(
-        p == owner for p in participants if owner
-    ) or bool(fm.get("owner_sent_message"))
     messages = fm.get("messages") or []
-    outbound = owner_sent or bool(fm.get("owner_replied"))
+    from_emails = _from_emails_from_frontmatter(fm)
+    for email in message_from_emails:
+        value = email.strip().lower()
+        if value and value not in from_emails:
+            from_emails = (*from_emails, value)
+    owner_sent, owner_replied = infer_owner_outbound(
+        owner_email=owner,
+        explicit_owner_sent=bool(fm.get("owner_sent_message")),
+        explicit_owner_replied=bool(fm.get("owner_replied")),
+        from_emails=from_emails,
+        message_directions=message_directions,
+    )
     return EmailThreadRecord(
         thread_uid=uid,
         gmail_thread_id=str(fm.get("gmail_thread_id") or ""),
@@ -261,7 +330,7 @@ def thread_from_frontmatter(
         account_email=str(fm.get("account_email") or owner_email or ""),
         source_key=f"gmail-messages:{fm.get('account_email') or owner_email or 'unknown'}",
         subject=str(fm.get("subject") or ""),
-        from_emails=tuple(),  # thread cards may not store from; stubs optional
+        from_emails=from_emails,
         participant_emails=participants,
         owner_email=owner,
         label_ids=tuple(str(x) for x in (fm.get("label_ids") or [])),
@@ -271,7 +340,7 @@ def thread_from_frontmatter(
         has_attachments=bool(fm.get("has_attachments")),
         calendar_event_hints=bool(fm.get("calendar_events") or fm.get("invite_event_id_hints")),
         owner_sent_message=owner_sent,
-        owner_replied=outbound,
+        owner_replied=owner_replied,
         message_uids=tuple(str(x) for x in messages),
         triage_classification=str(fm.get("triage_classification") or ""),
         triage_confidence=float(fm.get("triage_confidence") or 0.0),
