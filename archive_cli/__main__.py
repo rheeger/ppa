@@ -1098,6 +1098,23 @@ def main() -> None:
         help="Snapshot source updater state from vault cursors only (no adapter fetch)",
     )
     sub_maintain.add_argument(
+        "--run-source-updaters",
+        action="store_true",
+        help="Execute enabled source updaters (dry-run unless --apply-source-updaters)",
+    )
+    sub_maintain.add_argument(
+        "--apply-source-updaters",
+        action="store_true",
+        help="With --run-source-updaters, persist side effects and commit cursors",
+    )
+    sub_maintain.add_argument(
+        "--source-updater",
+        action="append",
+        default=[],
+        dest="source_updater_keys",
+        help="Limit --run-source-updaters to source_key (repeatable)",
+    )
+    sub_maintain.add_argument(
         "--record-processor-status",
         action="store_true",
         help="Snapshot processor declaration state into durable store (no processor execution)",
@@ -1166,6 +1183,9 @@ def main() -> None:
                 dry_run=args.dry_run,
                 record_source_status=getattr(args, "record_source_status", False),
                 record_processor_status=getattr(args, "record_processor_status", False),
+                run_source_updaters=getattr(args, "run_source_updaters", False),
+                source_updater_keys=list(getattr(args, "source_updater_keys", None) or []),
+                apply_source_updaters=getattr(args, "apply_source_updaters", False),
             )
             _print_json(report.to_dict())
         except PpaError as exc:

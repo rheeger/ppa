@@ -22,6 +22,11 @@ def write_source_updater_report(repo_root: Path, report: SourceUpdaterRunReport)
     report_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     summary_path.write_text(_summary_md(report), encoding="utf-8")
     paths = {"report": str(report_path), "summary": str(summary_path)}
+    dirty = report.batch.dirty_card_uids
+    if dirty:
+        dirty_path = base / "dirty_uids.jsonl"
+        dirty_path.write_text("".join(f"{uid}\n" for uid in dirty), encoding="utf-8")
+        paths["dirty_uids"] = str(dirty_path)
     report.artifact_paths = paths
     return paths
 

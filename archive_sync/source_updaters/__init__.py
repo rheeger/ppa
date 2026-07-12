@@ -8,6 +8,7 @@ from .batch import (
 )
 from .constants import (
     SECTION_D_COMPLETION_STATE,
+    SECTION_D_EXECUTION_STATE,
     STALENESS_BLOCKED,
     STALENESS_FAILED,
     STALENESS_FRESH,
@@ -22,10 +23,12 @@ from .declarations import (
     validate_declaration,
     validate_all_declarations,
 )
+from .runner import run_source_updater, run_source_updaters
 from .state_store import SourceUpdaterStateStore
 
 __all__ = [
     "SECTION_D_COMPLETION_STATE",
+    "SECTION_D_EXECUTION_STATE",
     "STALENESS_BLOCKED",
     "STALENESS_FAILED",
     "STALENESS_FRESH",
@@ -40,6 +43,8 @@ __all__ = [
     "declaration_for_adapter_source_id",
     "expand_declarations",
     "iter_declaration_templates",
+    "run_source_updater",
+    "run_source_updaters",
     "validate_declaration",
     "validate_all_declarations",
 ]

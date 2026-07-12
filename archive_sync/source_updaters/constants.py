@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 SECTION_D_COMPLETION_STATE = "source_updater_contract_complete"
+SECTION_D_EXECUTION_STATE = "source_updater_execution_complete"
 
 SOURCE_UPDATER_LOG_ROOT = "source-updaters"
+
+# Executable adapters for Phase 2 (Gmail + Calendar first).
+EXECUTABLE_ADAPTER_SOURCE_IDS: frozenset[str] = frozenset({"gmail-messages", "calendar-events"})
 
 STALENESS_FRESH = "fresh"
 STALENESS_STALE = "stale"

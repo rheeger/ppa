@@ -132,6 +132,8 @@ class MaintenanceReport:
     enrichment_queue_depth: int = 0
     retrieval_gaps_since_last: int = 0
     source_updater_snapshots: int = 0
+    source_updater_runs: int = 0
+    source_updater_reports: list[dict[str, Any]] = field(default_factory=list)
     processor_status_snapshots: int = 0
     errors: list[dict[str, str]] = field(default_factory=list)
     skipped_steps: list[str] = field(default_factory=list)
@@ -170,6 +172,70 @@ def _record_source_updater_snapshots(store: DefaultArchiveStore, schema: str) ->
             vault_path=str(store.vault),
         )
         return len(records)
+
+
+def _run_source_updaters(
+    store: DefaultArchiveStore,
+    schema: str,
+    *,
+    apply: bool,
+    source_keys: list[str] | None = None,
+    logger: logging.Logger,
+) -> tuple[int, list[dict[str, Any]]]:
+    """Execute enabled source updaters (Section D Phase 2). Isolates per-source failures."""
+
+    from pathlib import Path
+
+    from archive_cli.config import load_archive_config
+    from archive_cli.ppa_engine import ppa_engine
+    from archive_cli.validation_gates.constants import GATE_SYNTHETIC_FIXTURES
+    from archive_cli.validation_gates.instance_identity import derive_archive_instance
+    from archive_sync.source_updaters.runner import default_maintain_source_keys, run_source_updaters
+    from archive_sync.source_updaters.state_store import SourceUpdaterStateStore
+
+    repo_root = Path(__file__).resolve().parents[2]
+    meta_path = Path(store.vault) / "_meta" / "source-updaters.json"
+    cfg = load_archive_config()
+    archive_instance = derive_archive_instance(
+        vault_path=str(store.vault),
+        index_dsn=cfg.index_dsn,
+        index_schema=schema,
+    )
+    keys = list(source_keys or [])
+    if not keys:
+        keys = default_maintain_source_keys()
+    if not keys:
+        logger.info("run_source_updaters skipped: no executable source keys configured")
+        return 0, []
+
+    try:
+        with store.index._connect() as conn:
+            state_store = SourceUpdaterStateStore(conn, schema, meta_path=meta_path)
+            state_store.ensure_tables()
+            multi = run_source_updaters(
+                source_keys=keys,
+                vault_path=str(store.vault),
+                apply=apply,
+                archive_instance=archive_instance,
+                engine_mode=ppa_engine(),
+                ladder_gate=GATE_SYNTHETIC_FIXTURES,
+                repo_root=repo_root,
+                state_store=state_store,
+            )
+            conn.commit()
+    except Exception:
+        state_store = SourceUpdaterStateStore(None, meta_path=meta_path)
+        multi = run_source_updaters(
+            source_keys=keys,
+            vault_path=str(store.vault),
+            apply=apply,
+            archive_instance=archive_instance,
+            engine_mode=ppa_engine(),
+            ladder_gate=GATE_SYNTHETIC_FIXTURES,
+            repo_root=repo_root,
+            state_store=state_store,
+        )
+    return len(multi.reports), [r.to_dict() for r in multi.reports]
 
 
 def _record_processor_status_snapshots(store: DefaultArchiveStore, schema: str) -> int:
@@ -223,11 +289,33 @@ def run_maintenance(
     dry_run: bool = False,
     record_source_status: bool = False,
     record_processor_status: bool = False,
+    run_source_updaters: bool = False,
+    source_updater_keys: list[str] | None = None,
+    apply_source_updaters: bool = False,
 ) -> MaintenanceReport:
     report = MaintenanceReport()
     report.started_at = datetime.now(timezone.utc).isoformat()
     idx = store.index
     schema = str(getattr(idx, "schema", "ppa"))
+
+    if run_source_updaters:
+        try:
+            # Default dry-run unless explicitly applying source updaters.
+            apply = bool(apply_source_updaters) and not dry_run
+            count, payloads = _run_source_updaters(
+                store,
+                schema,
+                apply=apply,
+                source_keys=source_updater_keys,
+                logger=logger,
+            )
+            report.source_updater_runs = count
+            report.source_updater_reports = payloads
+            if not apply:
+                report.skipped_steps.append("source_updater_cursor_commit (dry-run)")
+        except Exception as exc:
+            logger.exception("maintain_run_source_updaters_failed")
+            report.errors.append({"step": "run_source_updaters", "error": str(exc)})
 
     if record_source_status and not dry_run:
         try:

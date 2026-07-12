@@ -1,0 +1,345 @@
+"""Section D Phase 2 — source updater execution tests."""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Iterable
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from archive_sync.adapters.base import BaseAdapter, FetchedBatch, IngestResult, deterministic_provenance
+from archive_sync.source_updaters.batch import commit_cursor_after_persisted
+from archive_sync.source_updaters.constants import (
+    RUN_STATUS_BLOCKED,
+    RUN_STATUS_FAILED,
+    RUN_STATUS_SUCCESS,
+    SECTION_D_EXECUTION_STATE,
+)
+from archive_sync.source_updaters.runner import (
+    batch_summary_from_ingest,
+    classify_run_exception,
+    parse_source_key,
+    resolve_declaration,
+    run_source_updater,
+    run_source_updaters,
+)
+from archive_sync.source_updaters.state_store import SourceUpdaterStateStore
+from archive_vault.schema import CalendarEventCard
+from archive_vault.sync_state import load_sync_state, update_cursor
+
+
+def _minimal_vault(tmp_path: Path) -> Path:
+    vault = tmp_path / "hf-archives"
+    for name in ("People", "Finance", "Calendar", "EmailThreads", "Documents", "_templates", ".obsidian", "_meta"):
+        (vault / name).mkdir(parents=True, exist_ok=True)
+    (vault / "_meta" / "identity-map.json").write_text("{}", encoding="utf-8")
+    (vault / "_meta" / "sync-state.json").write_text("{}", encoding="utf-8")
+    (vault / "_meta" / "nicknames.json").write_text("{}", encoding="utf-8")
+    return vault
+
+
+class _FixtureCalendarAdapter(BaseAdapter):
+    source_id = "calendar-events"
+    enable_person_resolution = False
+    preload_existing_uid_index = False
+
+    def __init__(self, items: list[dict[str, Any]] | None = None, *, fail: Exception | None = None) -> None:
+        self._items = list(items or [])
+        self._fail = fail
+
+    def get_cursor_key(self, **kwargs) -> str:
+        account = str(kwargs.get("account_email", "")).strip().lower()
+        return f"{self.source_id}:{account}:primary" if account else self.source_id
+
+    def fetch(self, vault_path: str, cursor: dict[str, Any], config=None, **kwargs) -> list[dict[str, Any]]:
+        if self._fail is not None:
+            raise self._fail
+        return list(self._items)
+
+    def fetch_batches(self, vault_path: str, cursor: dict[str, Any], config=None, **kwargs) -> Iterable[FetchedBatch]:
+        if self._fail is not None:
+            raise self._fail
+        patch = {"sync_token": "token-after", "event_etag": "etag-2"}
+        yield FetchedBatch(items=list(self._items), cursor_patch=patch, sequence=0)
+
+    def to_card(self, item: dict[str, Any]):
+        card = CalendarEventCard(
+            uid=str(item["uid"]),
+            type="calendar_event",
+            source=["calendar-events"],
+            source_id=str(item.get("source_id", item["uid"])),
+            created="2026-05-01",
+            updated="2026-05-01",
+            summary=str(item.get("title", "Event")),
+            calendar_id="primary",
+            event_id=str(item.get("event_id", item["uid"])),
+            event_etag=str(item.get("event_etag", "etag-1")),
+            title=str(item.get("title", "Event")),
+            account_email=str(item.get("account_email", "cal@example.com")),
+            start_at="2026-05-01T10:00:00Z",
+            end_at="2026-05-01T11:00:00Z",
+        )
+        return card, deterministic_provenance(card, "calendar-events"), ""
+
+
+class _FixtureGmailAdapter(BaseAdapter):
+    """Minimal Gmail-shaped adapter for promotion batch accounting tests."""
+
+    source_id = "gmail-messages"
+    enable_person_resolution = False
+    preload_existing_uid_index = False
+
+    def __init__(
+        self,
+        items: list[dict[str, Any]] | None = None,
+        *,
+        skip_details: dict[str, int] | None = None,
+        fail: Exception | None = None,
+    ) -> None:
+        self._items = list(items or [])
+        self._skip_details = dict(skip_details or {})
+        self._fail = fail
+
+    def get_cursor_key(self, **kwargs) -> str:
+        account = str(kwargs.get("account_email", "")).strip().lower()
+        return f"{self.source_id}:{account}" if account else self.source_id
+
+    def fetch(self, vault_path: str, cursor: dict[str, Any], config=None, **kwargs) -> list[dict[str, Any]]:
+        if self._fail is not None:
+            raise self._fail
+        return list(self._items)
+
+    def fetch_batches(self, vault_path: str, cursor: dict[str, Any], config=None, **kwargs) -> Iterable[FetchedBatch]:
+        if self._fail is not None:
+            raise self._fail
+        yield FetchedBatch(
+            items=list(self._items),
+            cursor_patch={"gmail_history_id": "200"},
+            sequence=0,
+            skipped_count=sum(self._skip_details.values()),
+            skip_details=dict(self._skip_details),
+        )
+
+    def to_card(self, item: dict[str, Any]):
+        # Reuse calendar card path shape via CalendarEventCard is wrong for gmail;
+        # use CalendarEventCard only if we must — better DocumentCard via type document.
+        from archive_vault.schema import DocumentCard
+
+        card = DocumentCard(
+            uid=str(item["uid"]),
+            type="document",
+            source=["gmail-messages"],
+            source_id=str(item.get("source_id", item["uid"])),
+            created="2026-05-01",
+            updated="2026-05-01",
+            summary=str(item.get("subject", "Thread")),
+            title=str(item.get("subject", "Thread")),
+            content_sha=str(item.get("sha", "sha1")),
+        )
+        return card, deterministic_provenance(card, "gmail-messages"), ""
+
+
+def test_parse_and_resolve_gmail_calendar_keys() -> None:
+    assert parse_source_key("gmail-messages:me@example.com") == ("gmail-messages", "me@example.com")
+    decl = resolve_declaration("gmail-messages:me@example.com")
+    assert decl.source_type == "gmail"
+    assert decl.default_active_policy == "promotion_gated"
+    cal = resolve_declaration("calendar-events:cal@example.com")
+    assert cal.source_type == "calendar"
+
+
+def test_calendar_dry_run_does_not_advance_cursor(tmp_path: Path) -> None:
+    vault = _minimal_vault(tmp_path)
+    cursor_key = "calendar-events:cal@example.com:primary"
+    update_cursor(vault, cursor_key, {"sync_token": "token-before"})
+    adapter = _FixtureCalendarAdapter(
+        [
+            {
+                "uid": "hfa-cal-uid-1",
+                "event_id": "evt-1",
+                "title": "Standup",
+                "account_email": "cal@example.com",
+            }
+        ]
+    )
+    meta = vault / "_meta" / "source-updaters.json"
+    store = SourceUpdaterStateStore(None, meta_path=meta)
+    result = run_source_updater(
+        source_key="calendar-events:cal@example.com",
+        vault_path=vault,
+        apply=False,
+        adapter=adapter,
+        state_store=store,
+        repo_root=tmp_path,
+        archive_instance="fixture:test",
+    )
+    assert result.report.status == RUN_STATUS_SUCCESS
+    assert result.report.cursor_before.get("sync_token") == "token-before"
+    assert result.report.cursor_after.get("sync_token") == "token-before"
+    assert load_sync_state(vault)[cursor_key]["sync_token"] == "token-before"
+    assert result.report.batch.promoted >= 1
+    assert result.report.batch.dirty_card_uids_count >= 1
+
+
+def test_calendar_apply_advances_cursor_after_persist(tmp_path: Path) -> None:
+    vault = _minimal_vault(tmp_path)
+    cursor_key = "calendar-events:cal@example.com:primary"
+    update_cursor(vault, cursor_key, {"sync_token": "token-before"})
+    adapter = _FixtureCalendarAdapter(
+        [
+            {
+                "uid": "hfa-cal-uid-2",
+                "event_id": "evt-2",
+                "title": "Review",
+                "account_email": "cal@example.com",
+                "event_etag": "etag-new",
+            }
+        ]
+    )
+    result = run_source_updater(
+        source_key="calendar-events:cal@example.com",
+        vault_path=vault,
+        apply=True,
+        adapter=adapter,
+        repo_root=tmp_path,
+    )
+    assert result.report.status == RUN_STATUS_SUCCESS
+    assert result.report.cursor_after.get("sync_token") == "token-after"
+    live = load_sync_state(vault)[cursor_key]
+    assert live.get("sync_token") == "token-after"
+    assert result.report.batch.dirty_card_uids
+    dirty_path = Path(result.report.artifact_paths["dirty_uids"])
+    assert dirty_path.is_file()
+    assert "hfa-cal-uid-2" in dirty_path.read_text(encoding="utf-8")
+
+
+def test_gmail_promotion_batch_counts_and_cursor_safety(tmp_path: Path) -> None:
+    vault = _minimal_vault(tmp_path)
+    cursor_key = "gmail-messages:me@example.com"
+    update_cursor(vault, cursor_key, {"gmail_history_id": "100"})
+    adapter = _FixtureGmailAdapter(
+        items=[{"uid": "hfa-mail-uid-1", "subject": "Receipt", "sha": "abc"}],
+        skip_details={
+            "promotion_observed": 4,
+            "promotion_promoted": 1,
+            "promotion_suppressed": 2,
+            "promotion_quarantined": 1,
+        },
+    )
+    dry = run_source_updater(
+        source_key="gmail-messages:me@example.com",
+        vault_path=vault,
+        apply=False,
+        adapter=adapter,
+        repo_root=tmp_path,
+    )
+    assert dry.report.batch.promoted == 1
+    assert dry.report.batch.suppressed == 2
+    assert dry.report.batch.quarantined == 1
+    assert dry.report.cursor_after.get("gmail_history_id") == "100"
+
+    adapter2 = _FixtureGmailAdapter(
+        items=[{"uid": "hfa-mail-uid-2", "subject": "Receipt 2", "sha": "def"}],
+        skip_details={
+            "promotion_observed": 4,
+            "promotion_promoted": 1,
+            "promotion_suppressed": 2,
+            "promotion_quarantined": 1,
+        },
+    )
+    applied = run_source_updater(
+        source_key="gmail-messages:me@example.com",
+        vault_path=vault,
+        apply=True,
+        adapter=adapter2,
+        repo_root=tmp_path,
+    )
+    assert applied.report.cursor_after.get("gmail_history_id") == "200"
+    assert load_sync_state(vault)[cursor_key].get("gmail_history_id") == "200"
+
+
+def test_one_source_failure_does_not_block_others(tmp_path: Path) -> None:
+    vault = _minimal_vault(tmp_path)
+    good = _FixtureCalendarAdapter(
+        [{"uid": "hfa-ok-1", "event_id": "e1", "title": "Ok", "account_email": "a@x.com"}]
+    )
+    bad = _FixtureGmailAdapter(fail=PermissionError("oauth token revoked"))
+
+    def factory(adapter_source_id: str) -> BaseAdapter:
+        if adapter_source_id == "gmail-messages":
+            return bad
+        return good
+
+    multi = run_source_updaters(
+        source_keys=["gmail-messages:me@example.com", "calendar-events:a@x.com"],
+        vault_path=vault,
+        apply=False,
+        adapter_factory=factory,
+        repo_root=tmp_path,
+    )
+    assert len(multi.reports) == 2
+    statuses = {r.source_key: r.status for r in multi.reports}
+    assert statuses["gmail-messages:me@example.com"] == RUN_STATUS_BLOCKED
+    assert statuses["calendar-events:a@x.com"] == RUN_STATUS_SUCCESS
+    assert multi.exit_code == 4
+
+
+def test_auth_failure_classified_blocked() -> None:
+    assert classify_run_exception(PermissionError("oauth refresh failed")) == RUN_STATUS_BLOCKED
+    assert classify_run_exception(RuntimeError("network timeout")) == RUN_STATUS_FAILED
+
+
+def test_cursor_patch_helper_still_gates_unpersisted() -> None:
+    before = {"gmail_history_id": "1"}
+    after = commit_cursor_after_persisted(
+        side_effects_persisted=False,
+        cursor_before=before,
+        cursor_patch={"gmail_history_id": "2"},
+    )
+    assert after == before
+
+
+def test_batch_summary_from_ingest_maps_created_to_promoted() -> None:
+    result = IngestResult(created=3, merged=1, skipped=2)
+    result.skip_details = {"skipped_unchanged_threads": 2}
+    summary = batch_summary_from_ingest(result, dirty_card_uids=["a", "b"])
+    assert summary.promoted == 3
+    assert summary.updated == 1
+    assert summary.unchanged == 2
+    assert summary.dirty_card_uids_count == 2
+
+
+def test_cli_run_missing_vault_exit_4(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+    import argparse
+
+    from archive_cli.source_updaters.cli import cmd_run
+    from archive_cli.validation_gates.constants import EXIT_BLOCKED
+
+    monkeypatch.setenv("PPA_PATH", "/nonexistent/vault-d2")
+    monkeypatch.delenv("PPA_INDEX_DSN", raising=False)
+    args = argparse.Namespace(
+        apply=False,
+        dry_run=True,
+        source=["gmail-messages:me@example.com"],
+        sources="",
+        vault="",
+        instance_role="",
+        format="json",
+        gmail_account="",
+        calendar_account="",
+        ladder_gate="synthetic_fixtures",
+        run_id="",
+        max_items=None,
+        confirm_production=False,
+    )
+    rc = cmd_run(args)
+    assert rc == EXIT_BLOCKED
+    out = capsys.readouterr()
+    assert "Traceback" not in out.err
+    assert json.loads(out.out)["blocked"] is True
+
+
+def test_execution_state_constant() -> None:
+    assert SECTION_D_EXECUTION_STATE == "source_updater_execution_complete"
