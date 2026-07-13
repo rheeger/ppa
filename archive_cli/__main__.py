@@ -1115,6 +1115,14 @@ def main() -> None:
         help="Limit --run-source-updaters to source_key (repeatable)",
     )
     sub_maintain.add_argument(
+        "--max-items",
+        type=int,
+        default=None,
+        dest="source_updater_max_items",
+        help="Cap threads/events per source updater during --run-source-updaters "
+        "(keeps gmail promotion gate on; bounds volume only)",
+    )
+    sub_maintain.add_argument(
         "--record-processor-status",
         action="store_true",
         help="Snapshot processor declaration state into durable store (no processor execution)",
@@ -1223,6 +1231,7 @@ def main() -> None:
                 run_source_updaters=getattr(args, "run_source_updaters", False),
                 source_updater_keys=list(getattr(args, "source_updater_keys", None) or []),
                 apply_source_updaters=getattr(args, "apply_source_updaters", False),
+                source_updater_max_items=getattr(args, "source_updater_max_items", None),
                 run_processors=getattr(args, "run_processors", False),
                 apply_processors=getattr(args, "apply_processors", False),
                 dirty_uids_path=str(getattr(args, "dirty_uids", "") or ""),

@@ -515,6 +515,68 @@ class GmailMessagesAdapter(BaseAdapter):
                 links.append(resolved)
         return links
 
+    def _load_gmail_thread_presence_from_cache(
+        self,
+        vault_path: str,
+        *,
+        account_email: str,
+    ) -> dict[str, dict[str, str]] | None:
+        """Load gmail_thread_id → stub state from vault-scan cache (promotion gate).
+
+        Returns None when the cache file is missing so callers can fall back.
+        Presence-only stubs are enough for ``vault_has_active_card``; full
+        history/sha maps remain the job of ``_load_existing_quick_update_state``.
+        """
+        import json
+        import logging
+        import sqlite3
+        from pathlib import Path
+
+        cache_path = Path(vault_path) / "_meta" / "vault-scan-cache.sqlite3"
+        if not cache_path.is_file():
+            return None
+        normalized_account = account_email.strip().lower()
+        thread_state: dict[str, dict[str, str]] = {}
+        log = logging.getLogger("ppa.gmail")
+        try:
+            conn = sqlite3.connect(f"file:{cache_path}?mode=ro", uri=True)
+            try:
+                rows = conn.execute(
+                    "SELECT frontmatter_json FROM notes WHERE card_type = ?",
+                    ("email_thread",),
+                )
+                for (frontmatter_json,) in rows:
+                    try:
+                        frontmatter = json.loads(frontmatter_json or "{}")
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(frontmatter, dict):
+                        continue
+                    if (
+                        normalized_account
+                        and str(frontmatter.get("account_email", "")).strip().lower()
+                        != normalized_account
+                    ):
+                        continue
+                    thread_id = str(frontmatter.get("gmail_thread_id", "")).strip()
+                    if not thread_id:
+                        continue
+                    thread_state[thread_id] = {
+                        "gmail_history_id": str(frontmatter.get("gmail_history_id", "")).strip(),
+                        "thread_body_sha": str(frontmatter.get("thread_body_sha", "")).strip(),
+                    }
+            finally:
+                conn.close()
+        except OSError as exc:
+            log.warning("gmail_thread_presence_cache_unavailable path=%s err=%s", cache_path, exc)
+            return None
+        log.info(
+            "gmail_thread_presence_from_cache account=%s threads=%d",
+            normalized_account or "*",
+            len(thread_state),
+        )
+        return thread_state
+
     def _load_existing_quick_update_state(
         self,
         vault_path: str,
@@ -1155,12 +1217,20 @@ class GmailMessagesAdapter(BaseAdapter):
                 fail_on_missing_classification=bool(kwargs.get("promotion_fail_on_missing_classification")),
             )
             if not existing_thread_state:
-                existing_thread_state, existing_message_hashes, existing_attachment_hashes = (
-                    self._load_existing_quick_update_state(
-                        vault_path,
-                        account_email=account,
-                    )
+                # Prefer vault-scan cache (~1s) over full markdown walk (seed-scale hang).
+                cached = self._load_gmail_thread_presence_from_cache(
+                    vault_path,
+                    account_email=account,
                 )
+                if cached is not None:
+                    existing_thread_state = cached
+                else:
+                    existing_thread_state, existing_message_hashes, existing_attachment_hashes = (
+                        self._load_existing_quick_update_state(
+                            vault_path,
+                            account_email=account,
+                        )
+                    )
 
         while True:
             if self._limits_reached(

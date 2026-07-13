@@ -183,6 +183,7 @@ def _run_source_updaters(
     *,
     apply: bool,
     source_keys: list[str] | None = None,
+    max_items: int | None = None,
     logger: logging.Logger,
 ) -> tuple[int, list[dict[str, Any]]]:
     """Execute enabled source updaters (Section D Phase 2). Isolates per-source failures."""
@@ -224,6 +225,7 @@ def _run_source_updaters(
                 ladder_gate=GATE_SYNTHETIC_FIXTURES,
                 repo_root=repo_root,
                 state_store=state_store,
+                max_items=max_items,
             )
             conn.commit()
     except Exception:
@@ -237,6 +239,7 @@ def _run_source_updaters(
             ladder_gate=GATE_SYNTHETIC_FIXTURES,
             repo_root=repo_root,
             state_store=state_store,
+            max_items=max_items,
         )
     return len(multi.reports), [r.to_dict() for r in multi.reports]
 
@@ -381,6 +384,7 @@ def run_maintenance(
     run_source_updaters: bool = False,
     source_updater_keys: list[str] | None = None,
     apply_source_updaters: bool = False,
+    source_updater_max_items: int | None = None,
     run_processors: bool = False,
     apply_processors: bool = False,
     dirty_uids_path: str = "",
@@ -403,6 +407,7 @@ def run_maintenance(
                 schema,
                 apply=apply,
                 source_keys=source_updater_keys,
+                max_items=source_updater_max_items,
                 logger=logger,
             )
             report.source_updater_runs = count

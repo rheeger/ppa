@@ -250,9 +250,9 @@ def run_source_updater(
     if max_items is not None:
         if decl.adapter_source_id == "gmail-messages":
             ingest_kwargs["max_threads"] = max_items
-            # Cap proofs must not force a full-vault promotion-state scan
-            # (would O(n) walk seed-scale vaults before fetching max_items threads).
-            ingest_kwargs["gmail_promotion_gate"] = False
+            # Keep gmail_promotion_gate=True (from adapter_ingest_kwargs). Volume
+            # is bounded by max_threads; vault presence for the gate uses the
+            # vault-scan cache, not a full markdown walk.
         elif decl.adapter_source_id == "calendar-events":
             ingest_kwargs["max_events"] = max_items
 
@@ -268,6 +268,10 @@ def run_source_updater(
     warnings: list[str] = []
     if dry_run:
         warnings.append("dry_run: cursor will not advance; cards will not be written")
+    if decl.adapter_source_id == "gmail-messages" and ingest_kwargs.get("gmail_promotion_gate") is True:
+        warnings.append("gmail_promotion_gate=true")
+        if max_items is not None:
+            warnings.append(f"max_threads={max_items} (bounded fetch; promotion gate remains on)")
 
     try:
         result = adapter_obj.ingest(str(vault), dry_run=dry_run, **ingest_kwargs)
@@ -369,6 +373,7 @@ def run_source_updaters(
     repo_root: Path | None = None,
     state_store: SourceUpdaterStateStore | None = None,
     adapter_factory: Callable[[str], BaseAdapter] | None = None,
+    max_items: int | None = None,
 ) -> SourceUpdaterMultiRunResult:
     """Run multiple sources with failure isolation."""
 
@@ -391,6 +396,7 @@ def run_source_updaters(
             repo_root=repo_root,
             state_store=state_store,
             adapter=adapter,
+            max_items=max_items,
         )
         multi.reports.append(one.report)
         if one.exit_hint > worst:

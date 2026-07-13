@@ -95,9 +95,12 @@ def _resolve_environment(
     )
     meta_path = Path(store.vault) / "_meta" / "processors.json"
     try:
-        with store.index._connect() as conn:
-            state_store = ProcessorStateStore(conn, store.index.schema, meta_path=meta_path)
-            state_store.ensure_tables()
+        # Keep connection open for the CLI command lifetime (same as source-updaters).
+        conn = store.index._connect()
+        state_store = ProcessorStateStore(conn, store.index.schema, meta_path=meta_path)
+        state_store.ensure_tables()
+        conn.commit()
+        setattr(store, "_processor_conn", conn)
     except (IndexUnavailableError, AttributeError, OSError):
         state_store = ProcessorStateStore(None, meta_path=meta_path)
     return store, archive_instance, state_store
