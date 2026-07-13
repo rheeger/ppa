@@ -95,9 +95,13 @@ def _resolve_environment(
     meta_path = Path(store.vault) / "_meta" / "source-updaters.json"
     state_store: SourceUpdaterStateStore
     try:
-        with store.index._connect() as conn:
-            state_store = SourceUpdaterStateStore(conn, store.index.schema, meta_path=meta_path)
-            state_store.ensure_tables()
+        # Keep the connection open for the duration of the CLI command. A
+        # context-managed connect() closes before status/run can use the store.
+        conn = store.index._connect()
+        state_store = SourceUpdaterStateStore(conn, store.index.schema, meta_path=meta_path)
+        state_store.ensure_tables()
+        conn.commit()
+        setattr(store, "_source_updater_conn", conn)
     except (IndexUnavailableError, AttributeError, OSError):
         state_store = SourceUpdaterStateStore(None, meta_path=meta_path)
     return store, archive_instance, state_store
@@ -217,6 +221,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             **one.report.to_dict(),
         }
         _emit(payload, args)
+        _commit_state_store(store)
         if one.exit_hint == 4:
             return EXIT_BLOCKED
         if one.exit_hint == 2:
@@ -239,6 +244,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     payload["apply"] = apply
     payload["dry_run"] = not apply
     _emit(payload, args)
+    _commit_state_store(store)
     if multi.exit_code == 4:
         return EXIT_BLOCKED
     if multi.exit_code == 2:
@@ -246,6 +252,15 @@ def cmd_run(args: argparse.Namespace) -> int:
     if multi.exit_code == 1:
         return EXIT_RUNTIME_FAILURE
     return EXIT_SUCCESS
+
+
+def _commit_state_store(store: object) -> None:
+    conn = getattr(store, "_source_updater_conn", None)
+    if conn is not None:
+        try:
+            conn.commit()
+        except Exception:
+            pass
 
 
 def cmd_record_run(args: argparse.Namespace) -> int:

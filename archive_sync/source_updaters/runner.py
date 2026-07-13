@@ -250,6 +250,9 @@ def run_source_updater(
     if max_items is not None:
         if decl.adapter_source_id == "gmail-messages":
             ingest_kwargs["max_threads"] = max_items
+            # Cap proofs must not force a full-vault promotion-state scan
+            # (would O(n) walk seed-scale vaults before fetching max_items threads).
+            ingest_kwargs["gmail_promotion_gate"] = False
         elif decl.adapter_source_id == "calendar-events":
             ingest_kwargs["max_events"] = max_items
 

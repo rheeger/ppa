@@ -90,8 +90,17 @@ class CalendarEventsAdapter(BaseAdapter):
         token_manager = getattr(self, "_token_manager", None)
         if token_manager is None:
             raise RuntimeError("Calendar HTTP fallback requires a token manager")
-        query = urllib.parse.urlencode({key: value for key, value in params.items() if value not in (None, "")})
-        url = f"https://www.googleapis.com/calendar/v3/calendars/{params['calendarId']}/events?{query}"
+        encoded: dict[str, str] = {}
+        for key, value in params.items():
+            if value in (None, ""):
+                continue
+            if isinstance(value, bool):
+                encoded[key] = "true" if value else "false"
+            else:
+                encoded[key] = str(value)
+        calendar_id = urllib.parse.quote(str(params["calendarId"]), safe="@.")
+        query = urllib.parse.urlencode(encoded)
+        url = f"https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events?{query}"
 
         def _request(force_refresh: bool = False) -> dict[str, Any]:
             token = token_manager.get_access_token(force_refresh=force_refresh)
@@ -105,7 +114,8 @@ class CalendarEventsAdapter(BaseAdapter):
         except urllib.error.HTTPError as exc:
             if exc.code == 401:
                 return _request(force_refresh=True)
-            raise RuntimeError(exc.read().decode("utf-8") or str(exc)) from exc
+            body = exc.read().decode("utf-8") if hasattr(exc, "read") else ""
+            raise RuntimeError(body or str(exc)) from exc
 
     def _calendar_events_list_proxy(self, account_email: str, params: dict[str, Any]) -> dict[str, Any]:
         from arnoldlib.auth import build_service_proxied
@@ -438,6 +448,15 @@ class CalendarEventsAdapter(BaseAdapter):
         self._last_fetch_skipped_count = 0
         self._last_fetch_skip_details = {"skipped_unchanged_events": 0}
 
+        # Google Calendar API: orderBy=startTime requires timeMin (HTTP 400 otherwise).
+        effective_time_min = time_min
+        if not effective_time_min and not cursor.get("sync_token") and not cursor.get("syncToken"):
+            from datetime import datetime, timedelta, timezone
+
+            effective_time_min = (
+                datetime.now(timezone.utc) - timedelta(days=90)
+            ).strftime("%Y-%m-%dT%H:%M:%SZ")
+
         while True:
             params: dict[str, Any] = {
                 "calendarId": calendar_id,
@@ -449,8 +468,8 @@ class CalendarEventsAdapter(BaseAdapter):
                 params["pageToken"] = page_token
             if query:
                 params["q"] = query
-            if time_min:
-                params["timeMin"] = time_min
+            if effective_time_min:
+                params["timeMin"] = effective_time_min
             if time_max:
                 params["timeMax"] = time_max
             response = self._list_events(params, account_email=account_email)
