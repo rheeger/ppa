@@ -59,11 +59,18 @@ class CalendarEventsAdapter(BaseAdapter):
         if getattr(self, "_token_manager_key", None) == token_key:
             return
         try:
+            # Prefer service profile over hard-coded readonly scopes — local
+            # refresh tokens often reject CALENDAR_READONLY_SCOPES with invalid_scope.
             self._token_manager = build_google_cli_token_manager(
                 account_email=account,
-                scopes=CALENDAR_READONLY_SCOPES,
+                services=["calendar"],
             )
-        except RuntimeError:
+            if self._token_manager is None:
+                self._token_manager = build_google_cli_token_manager(
+                    account_email=account,
+                    scopes=CALENDAR_READONLY_SCOPES,
+                )
+        except (RuntimeError, TypeError, ValueError, OSError):
             self._token_manager = None
         self._token_manager_key = token_key
 
@@ -154,6 +161,9 @@ class CalendarEventsAdapter(BaseAdapter):
                 "claude-gmail-mcp",
                 '"reason": "forbidden"',
                 '"reason":"forbidden"',
+                "HTTP Error 400",
+                "Bad Request",
+                "invalid_scope",
             )
         )
 
@@ -171,6 +181,12 @@ class CalendarEventsAdapter(BaseAdapter):
             if not self._should_fallback_to_http(message):
                 raise
             return self._calendar_events_list_http(params)
+        except Exception as exc:
+            # gws / urllib may surface urllib.error.HTTPError for bad scope tokens
+            message = f"{type(exc).__name__}: {exc}"
+            if self._token_manager is not None and self._should_fallback_to_http(message):
+                return self._calendar_events_list_http(params)
+            raise
 
     def _invite_lookup(
         self,
