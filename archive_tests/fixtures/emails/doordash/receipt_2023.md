@@ -1,9 +1,9 @@
 ---
-uid: fx-dd-receipt-1
+uid: hfa-email-fx-dd-receipt-1
 type: email_message
 from_email: orders@doordash.com
 subject: Your order from Burma Love
-sent_at: 2023-06-01T12:00:00-07:00
+sent_at: "2023-06-01T12:00:00-07:00"
 summary: Your order from Burma Love
 source: [gmail]
 source_id: gmail.dd1

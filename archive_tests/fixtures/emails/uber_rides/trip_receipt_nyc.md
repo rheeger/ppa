@@ -1,9 +1,9 @@
 ---
-uid: fx-uber-1
+uid: hfa-email-fx-uber-1
 type: email_message
 from_email: noreply@uber.com
 subject: Your Thursday trip with Uber
-sent_at: 2024-03-15T22:00:00-04:00
+sent_at: "2024-03-15T22:00:00-04:00"
 summary: Trip receipt
 source: [gmail]
 source_id: gmail.u1
