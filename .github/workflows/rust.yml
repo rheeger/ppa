@@ -11,21 +11,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-workspaces: archive_crate -> target
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install maturin
-        run: pip install maturin
+      - name: Create Python virtualenv
+        run: |
+          python -m venv .venv
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
+      - name: Install Python test dependencies
+        run: python -m pip install -e ".[dev]" maturin
       - name: Build archive_crate
-        run: cd archive_crate && maturin develop
+        working-directory: archive_crate
+        run: maturin develop
       - name: Run Rust tests
-        run: cd archive_crate && cargo test
+        working-directory: archive_crate
+        run: cargo test
       - name: Run archive_crate Python tests
         run: |
-          python -m pytest archive_tests/test_archive_crate_smoke.py tests/test_archive_crate_walk.py \
-            tests/test_archive_crate_hasher.py tests/test_archive_crate_frontmatter.py \
-            tests/test_archive_crate_cache.py tests/test_archive_crate_scanner.py \
-            tests/test_archive_crate_benchmark_tier1.py \
-            tests/test_archive_crate_materializer_chunker.py tests/test_chunk_hash_parity.py \
-            tests/test_archive_crate_correctness.py \
-            tests/test_ppa_engine_vault_cache.py -v
+          python -m pytest archive_tests/test_archive_crate_smoke.py archive_tests/test_archive_crate_walk.py \
+            archive_tests/test_archive_crate_hasher.py archive_tests/test_archive_crate_frontmatter.py \
+            archive_tests/test_archive_crate_cache.py archive_tests/test_archive_crate_scanner.py \
+            archive_tests/test_archive_crate_benchmark_tier1.py \
+            archive_tests/test_archive_crate_materializer_chunker.py archive_tests/test_chunk_hash_parity.py \
+            archive_tests/test_archive_crate_correctness.py \
+            archive_tests/test_ppa_engine_vault_cache.py -v
