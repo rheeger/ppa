@@ -263,6 +263,4 @@ def test_card_type_priors_values_are_in_valid_range():
     from archive_cli.index_config import CARD_TYPE_PRIORS
 
     for card_type, prior in CARD_TYPE_PRIORS.items():
-        assert 0.0 < prior < 1.0, (
-            f"CARD_TYPE_PRIORS['{card_type}'] = {prior} is out of range (0, 1)"
-        )
+        assert 0.0 < prior < 1.0, f"CARD_TYPE_PRIORS['{card_type}'] = {prior} is out of range (0, 1)"

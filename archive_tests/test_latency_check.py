@@ -1,7 +1,6 @@
 """Tests for Phase 9 latency check definitions."""
 
-from archive_cli.commands.latency_check import (LATENCY_TARGETS_MS,
-                                                LatencyResult)
+from archive_cli.commands.latency_check import LATENCY_TARGETS_MS, LatencyResult
 
 
 def test_all_query_types_have_targets() -> None:

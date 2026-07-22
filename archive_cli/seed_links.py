@@ -19,13 +19,11 @@ from archive_vault.schema import validate_card_permissive, validate_card_strict
 from archive_vault.vault import extract_wikilinks, read_note, write_card
 
 from .features import card_activity_at, external_ids_by_provider
-from .index_config import (get_default_embedding_model,
-                           get_default_embedding_version)
+from .index_config import get_default_embedding_model, get_default_embedding_version
 from .vault_cache import VaultScanCache
 
 try:
-    from archive_vault.llm_provider import (GROUNDING_INSTRUCTION,
-                                            get_provider_chain)
+    from archive_vault.llm_provider import GROUNDING_INSTRUCTION, get_provider_chain
 except Exception:  # pragma: no cover
     GROUNDING_INSTRUCTION = "Use only the provided data. Do not invent facts."
 
@@ -138,13 +136,13 @@ DEFAULT_SEMANTIC_ALLOW_SAME_TYPE = frozenset(
 # regardless of type. (The major offenders observed in the 1pct sweep.)
 DEFAULT_SEMANTIC_NOISE_SUMMARY_RE = re.compile(
     r"^("
-    r"HK\w+Identifier|"           # Apple Health aggregate metric classes
-    r"IMG[_-]?\d|"                 # iPhone photos
-    r"MOV[_-]?\d|"                 # iPhone videos
-    r"DSC[_-]?\d|"                 # Sony / generic camera blobs
-    r"image\d+\.|"                 # embedded inline email images
-    r"~WRD\d|"                     # Word temp attachments
-    r"giphy"                       # giphy stickers
+    r"HK\w+Identifier|"  # Apple Health aggregate metric classes
+    r"IMG[_-]?\d|"  # iPhone photos
+    r"MOV[_-]?\d|"  # iPhone videos
+    r"DSC[_-]?\d|"  # Sony / generic camera blobs
+    r"image\d+\.|"  # embedded inline email images
+    r"~WRD\d|"  # Word temp attachments
+    r"giphy"  # giphy stickers
     r")",
     re.IGNORECASE,
 )
@@ -291,7 +289,10 @@ CARD_TYPE_MODULES = {
 # LinkerSpec.requires_llm_judge. The three new Phase 6.5 modules are
 # deterministic (requires_llm_judge=False) so they do NOT end up here.
 LLM_REVIEW_MODULES: set[str] = {
-    MODULE_IDENTITY, MODULE_CALENDAR, MODULE_MEDIA, MODULE_ORPHAN,
+    MODULE_IDENTITY,
+    MODULE_CALENDAR,
+    MODULE_MEDIA,
+    MODULE_ORPHAN,
 }
 HIGH_PRIORITY_CARD_TYPES = frozenset(
     {
@@ -973,6 +974,7 @@ def build_seed_link_catalog(
     # finance_reconcile, trip_cluster, meeting_artifact and any future new
     # linker populates its private indexes (attached via linker_framework.set_private_index).
     from archive_cli import linker_framework as _lf
+
     _lf.run_post_build_hooks(catalog)
     return catalog
 
@@ -1834,6 +1836,7 @@ def generate_seed_link_candidates(
     catalog: SeedLinkCatalog, source: SeedCardSketch, module_name: str
 ) -> list[SeedLinkCandidate]:
     from archive_cli import linker_framework as _lf
+
     return _lf.generate_via_spec(catalog, source, module_name)
 
 
@@ -1914,6 +1917,7 @@ def _component_scores(candidate: SeedLinkCandidate) -> tuple[float, float, float
     features = candidate.features
     module_name = candidate.module_name
     from archive_cli import linker_framework as _lf
+
     _spec = _lf.ALL_LINKERS.get(module_name)
     if _spec is not None:
         return _spec.scoring_fn(features)
@@ -1937,6 +1941,7 @@ def evaluate_seed_link_candidate(
     # finance_reconcile) bypass the legacy weighted formula — their det_score
     # encodes the full signal and the weighted formula would cap them at 0.45.
     from archive_cli import linker_framework as _lf
+
     _spec = _lf.ALL_LINKERS.get(candidate.module_name)
     _deterministic_mode = _spec is not None and _spec.scoring_mode == "deterministic"
     if _deterministic_mode:
@@ -2842,9 +2847,7 @@ def run_seed_link_workers(
                             raise ValueError("source card missing from catalog")
                         job_module = str(job["module_name"])
                         if job_module == MODULE_SEMANTIC:
-                            raw_candidates = _generate_semantic_candidates(
-                                conn, index.schema, catalog, source.uid
-                            )
+                            raw_candidates = _generate_semantic_candidates(conn, index.schema, catalog, source.uid)
                         else:
                             raw_candidates = generate_seed_link_candidates(catalog, source, job_module)
                         candidates = _dedupe_candidates(raw_candidates)
@@ -3405,21 +3408,13 @@ _lf._bind_wiring_tables(
 )
 
 
-
-
-
-
-
-
-
-
-
 # Import linker modules so every LinkerSpec self-registers.
 try:
-    from archive_cli import \
-        linker_modules as _new_linker_modules  # noqa: F401, E402
+    from archive_cli import linker_modules as _new_linker_modules  # noqa: F401, E402
 except Exception as _e:  # pragma: no cover - defensive
     import logging as _logging
+
     _logging.getLogger("ppa.linkers").warning(
-        "Phase 6.5 linker_modules import failed: %s", _e,
+        "Phase 6.5 linker_modules import failed: %s",
+        _e,
     )

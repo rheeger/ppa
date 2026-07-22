@@ -105,8 +105,8 @@ def extract_cards_for_thread(
         + "\n\n--- THREAD BODY ---\n"
         + rendered
         + "\n--- END THREAD ---\n\n"
-        "Return JSON: {\"cards\": [{\"type\": \"meal_order\", ...}, ...], \"reasoning\": \"...\"}. "
-        "Each card MUST include a string \"type\" field matching one of the target types."
+        'Return JSON: {"cards": [{"type": "meal_order", ...}, ...], "reasoning": "..."}. '
+        'Each card MUST include a string "type" field matching one of the target types.'
     )
 
     messages = [
@@ -167,9 +167,7 @@ def _build_extract_result(
             logger.debug("pydantic validation failed for %s: %s", ct, exc)
         data = cd
         warns = validate_provenance_round_trip(data, source_blob, ct) if val else []
-        extracted.append(
-            ExtractedCard(card_type=ct, data=data, validated=val, round_trip_warnings=warns)
-        )
+        extracted.append(ExtractedCard(card_type=ct, data=data, validated=val, round_trip_warnings=warns))
     return ExtractResult(cards=extracted, reasoning=reasoning, raw=parsed, cache_hit=cache_hit)
 
 

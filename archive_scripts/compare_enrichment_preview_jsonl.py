@@ -187,9 +187,7 @@ def _report_three_way(args: argparse.Namespace) -> None:
         row_uids = ordered_uids
         rest = 0
     else:
-        lines.append(
-            f"\n## Side-by-side — largest max pairwise length delta (up to {max_rows} rows)\n\n"
-        )
+        lines.append(f"\n## Side-by-side — largest max pairwise length delta (up to {max_rows} rows)\n\n")
         row_uids = []
         shown = 0
         for _, __, u in divergent:
@@ -202,14 +200,9 @@ def _report_three_way(args: argparse.Namespace) -> None:
     lines.append(f"| Subject | {l1} | {l2} | {l3} |\n")
     lines.append("| --- | --- | --- | --- |\n")
     for u in row_uids:
-        subj = (
-            _cell_unlimited(A[u].get("subject") or "")
-            if no_trunc
-            else _cell(A[u].get("subject") or "", 72)
-        )
+        subj = _cell_unlimited(A[u].get("subject") or "") if no_trunc else _cell(A[u].get("subject") or "", 72)
         lines.append(
-            f"| {subj} | {_cell(_summary(A[u]), cc)} | {_cell(_summary(B[u]), cc)} | "
-            f"{_cell(_summary(C[u]), cc)} |\n"
+            f"| {subj} | {_cell(_summary(A[u]), cc)} | {_cell(_summary(B[u]), cc)} | {_cell(_summary(C[u]), cc)} |\n"
         )
     if not include_all and rest > 0:
         lines.append(
@@ -228,16 +221,12 @@ def _report_three_way(args: argparse.Namespace) -> None:
             else:
                 lines.append(f"| {_cell(subj, 72)} | {_cell(sa, cc)} |\n")
         if not no_trunc and len(triple_nonempty_identical) > 40:
-            lines.append(
-                f"\n_…and {len(triple_nonempty_identical) - 40} more (trimmed for size)._\n"
-            )
+            lines.append(f"\n_…and {len(triple_nonempty_identical) - 40} more (trimmed for size)._\n")
     else:
         lines.append("_None._\n")
 
     if triple_all_empty_subjects:
-        lines.append(
-            f"\n## All three empty `thread_summary` ({len(triple_all_empty_subjects)} threads)\n\n"
-        )
+        lines.append(f"\n## All three empty `thread_summary` ({len(triple_all_empty_subjects)} threads)\n\n")
         lines.append("| Subject |\n")
         lines.append("| --- |\n")
         for subj in sorted(triple_all_empty_subjects, key=lambda x: x.lower()):
@@ -336,9 +325,7 @@ def _report_two_way(args: argparse.Namespace) -> None:
     )
 
     cc = args.cell_chars
-    lines.append(
-        f"\n## Side-by-side — largest length deltas (up to {args.max_side_by_side} rows)\n\n"
-    )
+    lines.append(f"\n## Side-by-side — largest length deltas (up to {args.max_side_by_side} rows)\n\n")
     lines.append("| Subject | " + args.baseline_label + " | " + args.compare_label + " |\n")
     lines.append("| --- | --- | --- |\n")
     shown = 0
@@ -358,9 +345,7 @@ def _report_two_way(args: argparse.Namespace) -> None:
         )
 
     if only_b:
-        lines.append(
-            f"\n## Compare-only non-empty summaries (baseline empty) ({len(only_b)} threads)\n\n"
-        )
+        lines.append(f"\n## Compare-only non-empty summaries (baseline empty) ({len(only_b)} threads)\n\n")
         lines.append("| Subject | " + args.compare_label + " |\n")
         lines.append("| --- | --- |\n")
         for _uid, subj, sb in sorted(only_b, key=lambda x: x[1].lower()):
@@ -373,17 +358,11 @@ def _report_two_way(args: argparse.Namespace) -> None:
         for subj, sa in sorted(identical_nonempty, key=lambda x: x[0].lower()):
             lines.append(f"| {_cell(subj, 80)} | {_cell(sa, cc)} |\n")
     else:
-        lines.append(
-            "_None — all matching strings in this run were empty on both sides (see below)._\n"
-        )
+        lines.append("_None — all matching strings in this run were empty on both sides (see below)._\n")
 
     if both_empty_subjects:
-        lines.append(
-            f"\n## Both empty `thread_summary` ({len(both_empty_subjects)} threads)\n\n"
-        )
-        lines.append(
-            "_Same empty summary on baseline and compare (often filtered/noise threads)._\n\n"
-        )
+        lines.append(f"\n## Both empty `thread_summary` ({len(both_empty_subjects)} threads)\n\n")
+        lines.append("_Same empty summary on baseline and compare (often filtered/noise threads)._\n\n")
         lines.append("| Subject |\n")
         lines.append("| --- |\n")
         for subj in sorted(both_empty_subjects, key=lambda x: x.lower()):

@@ -10,14 +10,18 @@ Covers:
 
 from __future__ import annotations
 
-import json
 import subprocess
 from pathlib import Path
 
 import pytest
-from archive_vault.provenance import (MAX_PROVENANCE_HISTORY, ProvenanceEntry,
-                                      merge_provenance, read_provenance,
-                                      write_provenance)
+
+from archive_vault.provenance import (
+    MAX_PROVENANCE_HISTORY,
+    ProvenanceEntry,
+    merge_provenance,
+    read_provenance,
+    write_provenance,
+)
 
 
 def _entry(**kw) -> ProvenanceEntry:
@@ -74,9 +78,7 @@ def test_clean_phase3_dry_run_default(tmp_path: Path) -> None:
     (vault / "Transactions" / "Rides").mkdir(parents=True)
     (vault / "Transactions" / "Rides" / "x.md").write_text("hi", encoding="utf-8")
     script = Path(__file__).resolve().parents[1] / "archive_scripts" / "clean-phase3-derived-dirs.sh"
-    res = subprocess.run(
-        ["bash", str(script), str(vault)], capture_output=True, text=True, check=True
-    )
+    res = subprocess.run(["bash", str(script), str(vault)], capture_output=True, text=True, check=True)
     assert "DRY-RUN" in res.stdout
     assert (vault / "Transactions" / "Rides" / "x.md").exists()
 
@@ -86,9 +88,7 @@ def test_clean_phase3_apply_on_non_prod(tmp_path: Path) -> None:
     (vault / "Transactions" / "Rides").mkdir(parents=True)
     (vault / "Transactions" / "Rides" / "x.md").write_text("hi", encoding="utf-8")
     script = Path(__file__).resolve().parents[1] / "archive_scripts" / "clean-phase3-derived-dirs.sh"
-    res = subprocess.run(
-        ["bash", str(script), "--apply", str(vault)], capture_output=True, text=True, check=True
-    )
+    res = subprocess.run(["bash", str(script), "--apply", str(vault)], capture_output=True, text=True, check=True)
     assert "deleted." in res.stdout
     assert not (vault / "Transactions" / "Rides").exists()
 
@@ -156,9 +156,7 @@ class TestBootstrapSafeguard:
             index.bootstrap()
         index.bootstrap(force=True)  # explicit override succeeds
 
-    def test_replace_note_manifest_upsert_preserves_existing_keys(
-        self, pgvector_dsn: str, tmp_path: Path
-    ) -> None:
+    def test_replace_note_manifest_upsert_preserves_existing_keys(self, pgvector_dsn: str, tmp_path: Path) -> None:
         from archive_cli.index_store import PostgresArchiveIndex
         from archive_cli.loader import NoteManifestRow
         from archive_cli.migrate import MigrationRunner
@@ -194,9 +192,7 @@ class TestBootstrapSafeguard:
         with index._connect() as conn:
             index._replace_note_manifest(conn, [_row("a.md", "u1"), _row("b.md", "u2")])
             conn.commit()
-            cnt_row = conn.execute(
-                f"SELECT COUNT(*) AS c FROM {index.schema}.note_manifest"
-            ).fetchone()
+            cnt_row = conn.execute(f"SELECT COUNT(*) AS c FROM {index.schema}.note_manifest").fetchone()
             assert int(cnt_row["c"]) == 2
         # Now write a new manifest set: keep a.md, drop b.md, add c.md, mutate a.md content_hash.
         with index._connect() as conn:

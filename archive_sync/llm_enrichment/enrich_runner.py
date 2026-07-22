@@ -70,16 +70,35 @@ def derive_llm_card_uid(thread_id: str, card_type: str, data: dict[str, Any]) ->
     return f"hfa-{slug}-{h}"
 
 
-_VALID_CARD_TYPES = frozenset({
-    "meal_order", "grocery_order", "purchase", "ride", "flight",
-    "accommodation", "car_rental", "shipment", "subscription",
-    "event_ticket", "payroll",
-})
+_VALID_CARD_TYPES = frozenset(
+    {
+        "meal_order",
+        "grocery_order",
+        "purchase",
+        "ride",
+        "flight",
+        "accommodation",
+        "car_rental",
+        "shipment",
+        "subscription",
+        "event_ticket",
+        "payroll",
+    }
+)
 
-_MINIMUM_FIELDS = frozenset({
-    "uid", "type", "source", "source_id", "created", "updated",
-    "extraction_confidence", "source_email", "summary",
-})
+_MINIMUM_FIELDS = frozenset(
+    {
+        "uid",
+        "type",
+        "source",
+        "source_id",
+        "created",
+        "updated",
+        "extraction_confidence",
+        "source_email",
+        "summary",
+    }
+)
 
 
 def _coerce_items(raw: dict[str, Any]) -> None:
@@ -236,6 +255,7 @@ def _llm_provenance(
 # Thread gating: extractor matches() + TRANSACTIONAL_DOMAINS (no LLM triage)
 # ---------------------------------------------------------------------------
 
+
 def _gate_thread(
     group: list[ThreadStub],
     registry: ExtractorRegistry,
@@ -277,9 +297,7 @@ def _gate_thread(
     # No known transactional match — check if it's known noise or needs classify
     from_emails = [s.from_email for s in group if s.from_email]
     subjects = [s.subject for s in group if s.subject]
-    pf_decision, _ = classify_thread_prefilter(
-        from_emails, subjects, user_domains=frozenset(INTERNAL_DOMAINS)
-    )
+    pf_decision, _ = classify_thread_prefilter(from_emails, subjects, user_domains=frozenset(INTERNAL_DOMAINS))
     if pf_decision == "skip":
         return "skip", []
     return "classify", []
@@ -288,6 +306,7 @@ def _gate_thread(
 # ---------------------------------------------------------------------------
 # Metrics
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class EnrichmentMetrics:
@@ -344,6 +363,7 @@ class EnrichmentMetrics:
 # Runner
 # ---------------------------------------------------------------------------
 
+
 class LlmEnrichmentRunner:
     """Known-sender gate → LLM extraction → write derived cards to staging."""
 
@@ -395,9 +415,7 @@ class LlmEnrichmentRunner:
         if self.provider_kind == "gemini":
             provider: OllamaProvider | GeminiProvider = GeminiProvider(model=self.extract_model)
             if not provider.health_check():
-                raise RuntimeError(
-                    "Gemini health_check failed — is GEMINI_API_KEY set?"
-                )
+                raise RuntimeError("Gemini health_check failed — is GEMINI_API_KEY set?")
         else:
             provider = OllamaProvider(model=self.extract_model, base_url=self.base_url)
             if not provider.health_check():
@@ -407,7 +425,11 @@ class LlmEnrichmentRunner:
                 )
         log.info(
             "enrich-emails provider=%s extract_model=%s classify_model=%s extract_workers=%d classify_workers=%d",
-            self.provider_kind, self.extract_model, self.classify_model, self.workers, self.classify_workers,
+            self.provider_kind,
+            self.extract_model,
+            self.classify_model,
+            self.workers,
+            self.classify_workers,
         )
 
         registry = build_default_registry()
@@ -430,7 +452,8 @@ class LlmEnrichmentRunner:
 
         if self.vault_percent is not None:
             thread_items = [
-                (tid, g) for tid, g in thread_items
+                (tid, g)
+                for tid, g in thread_items
                 if uid_in_vault_percent_sample(tid or "none", float(self.vault_percent))
             ]
         if self.limit_threads is not None:
@@ -445,6 +468,7 @@ class LlmEnrichmentRunner:
             sc = getattr(_tls, "scan_cache", None)
             if sc is None:
                 import sqlite3 as _sqlite3
+
                 conn = _sqlite3.connect(str(_scan_cache_path), timeout=60.0, check_same_thread=False)
                 conn.row_factory = _sqlite3.Row
                 sc = VaultScanCache(conn, tier=2, vault_fingerprint="preloaded", cache_hit=True)
@@ -473,6 +497,7 @@ class LlmEnrichmentRunner:
             return ic
 
         from archive_sync.llm_enrichment.schema_gen import all_extractable_card_types
+
         _all_types = [t for t in all_extractable_card_types() if t in _VALID_CARD_TYPES]
 
         metrics.total_threads = len(thread_items)
@@ -542,12 +567,33 @@ class LlmEnrichmentRunner:
                 )
                 tl_cache = _get_thread_inference_cache()
                 cr = classify_thread(
-                    provider, ci,
-                    model=self.classify_model, cache=tl_cache, run_id=self.run_id,
+                    provider,
+                    ci,
+                    model=self.classify_model,
+                    cache=tl_cache,
+                    run_id=self.run_id,
                 )
-                return tid, group, cr.is_transactional, cr.cache_hit, cr.card_types, cr.category, cr.confidence, suggested_types
+                return (
+                    tid,
+                    group,
+                    cr.is_transactional,
+                    cr.cache_hit,
+                    cr.card_types,
+                    cr.category,
+                    cr.confidence,
+                    suggested_types,
+                )
 
-            def _handle_classify_result(tid: str, group: list[ThreadStub], is_tx: bool, ch: bool, card_types: list[str], category: str = "", confidence: float = 0.0, suggested_types: list[str] | None = None) -> None:
+            def _handle_classify_result(
+                tid: str,
+                group: list[ThreadStub],
+                is_tx: bool,
+                ch: bool,
+                card_types: list[str],
+                category: str = "",
+                confidence: float = 0.0,
+                suggested_types: list[str] | None = None,
+            ) -> None:
                 if ch:
                     metrics.stage1_cache_hits += 1
                 if is_tx:
@@ -577,8 +623,12 @@ class LlmEnrichmentRunner:
                     rate = n / (elapsed / 60.0) if elapsed > 0 else 0
                     log.info(
                         "stage1 classify %d/%d (%.0f/min) tx=%d skip=%d — %.0fs",
-                        n, _classify_total, rate,
-                        metrics.stage1_transactional, metrics.stage1_skip, elapsed,
+                        n,
+                        _classify_total,
+                        rate,
+                        metrics.stage1_transactional,
+                        metrics.stage1_skip,
+                        elapsed,
                     )
 
             log.info(
@@ -639,8 +689,12 @@ class LlmEnrichmentRunner:
                 tl_cache = _get_thread_inference_cache()
                 doc = hydrate_thread(group, self.vault_path, scan_cache=tl_scan)
                 ex = extract_cards_for_thread(
-                    provider, doc, card_types,
-                    model=self.extract_model, cache=tl_cache, run_id=self.run_id,
+                    provider,
+                    doc,
+                    card_types,
+                    model=self.extract_model,
+                    cache=tl_cache,
+                    run_id=self.run_id,
                 )
                 t_dur = time.perf_counter() - t_start
                 if ex.cache_hit:
@@ -652,7 +706,10 @@ class LlmEnrichmentRunner:
                 result["cards_extracted"] = len(ex.cards)
                 log.info(
                     "← thread=%s cards=%d cache=%s %.1fs",
-                    tid, len(ex.cards), ex.cache_hit, t_dur,
+                    tid,
+                    len(ex.cards),
+                    ex.cache_hit,
+                    t_dur,
                 )
                 for c in ex.cards:
                     result["rt_warnings"] += len(c.round_trip_warnings)
@@ -661,8 +718,11 @@ class LlmEnrichmentRunner:
                     ct = ec.card_type
                     result["per_type"][ct] = result["per_type"].get(ct, 0) + 1
                     card = _merge_to_card(
-                        ec, thread_id=tid, doc=doc,
-                        run_id=self.run_id, confidence=1.0,
+                        ec,
+                        thread_id=tid,
+                        doc=doc,
+                        run_id=self.run_id,
+                        confidence=1.0,
                     )
                     if card is None:
                         result["schema_failures"] += 1
@@ -747,8 +807,7 @@ class LlmEnrichmentRunner:
             elapsed = time.perf_counter() - t0
             rate = processed / (elapsed / 60.0) if elapsed > 0 else 0.0
             log.info(
-                "enrich-emails %d/%d extracted (%.1f thr/min) — "
-                "cards=%d written=%d errors=%d elapsed=%.0fs",
+                "enrich-emails %d/%d extracted (%.1f thr/min) — cards=%d written=%d errors=%d elapsed=%.0fs",
                 processed,
                 metrics.total_extract_candidates,
                 rate,

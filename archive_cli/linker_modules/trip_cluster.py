@@ -34,10 +34,16 @@ from typing import Any
 
 from archive_cli import linker_framework as lf
 from archive_cli.iata import iata_to_city
-from archive_cli.seed_links import (LINK_TYPE_PART_OF_TRIP, LinkEvidence,
-                                    SeedCardSketch, SeedLinkCandidate,
-                                    SeedLinkCatalog, _append_candidate,
-                                    _clean_text, _day_key)
+from archive_cli.seed_links import (
+    LINK_TYPE_PART_OF_TRIP,
+    LinkEvidence,
+    SeedCardSketch,
+    SeedLinkCandidate,
+    SeedLinkCatalog,
+    _append_candidate,
+    _clean_text,
+    _day_key,
+)
 
 MODULE_TRIP_CLUSTER = "tripClusterLinker"
 
@@ -154,7 +160,8 @@ def _daterange(start: datetime, end: datetime) -> list[str]:
 
 
 def _generate_trip_cluster_candidates(
-    catalog: SeedLinkCatalog, source: SeedCardSketch,
+    catalog: SeedLinkCatalog,
+    source: SeedCardSketch,
 ) -> list[SeedLinkCandidate]:
     if source.card_type != "accommodation":
         return []
@@ -201,7 +208,9 @@ def _generate_trip_cluster_candidates(
                 det = 0.74
                 risk = 0.04
             _append_trip_cluster(
-                results, source, flight,
+                results,
+                source,
+                flight,
                 tier=tier,
                 deterministic_score=det,
                 risk_penalty=risk,
@@ -210,9 +219,7 @@ def _generate_trip_cluster_candidates(
                     "city_match_strength": strength,
                     "airport": airport,
                     "flight_city": flight_city,
-                    "arrival_offset_h": round(
-                        (arrival - check_in).total_seconds() / 3600, 1
-                    ),
+                    "arrival_offset_h": round((arrival - check_in).total_seconds() / 3600, 1),
                 },
             )
 
@@ -238,7 +245,9 @@ def _generate_trip_cluster_candidates(
                 det = 0.74
                 risk = 0.04
             _append_trip_cluster(
-                results, source, cr,
+                results,
+                source,
+                cr,
                 tier=tier,
                 deterministic_score=det,
                 risk_penalty=risk,
@@ -246,9 +255,7 @@ def _generate_trip_cluster_candidates(
                     "matched_city": city,
                     "city_match_strength": strength,
                     "carrental_city": cr_city,
-                    "pickup_offset_h": round(
-                        (pickup - check_in).total_seconds() / 3600, 1
-                    ),
+                    "pickup_offset_h": round((pickup - check_in).total_seconds() / 3600, 1),
                 },
             )
 
@@ -301,21 +308,22 @@ def _score_trip_cluster_features(
     return det, 0.0, 0.0, 0.0, risk
 
 
-lf.register_linker(lf.LinkerSpec(
-    module_name=MODULE_TRIP_CLUSTER,
-    source_card_types=("accommodation",),
-    emits_link_types=(LINK_TYPE_PART_OF_TRIP,),
-    generator=_generate_trip_cluster_candidates,
-    scoring_fn=_score_trip_cluster_features,
-    scoring_mode="deterministic",
-    policies=(),  # LINK_TYPE_PART_OF_TRIP policy already registered in seed_links
-    requires_llm_judge=False,
-    lifecycle_state="active",
-    phase_owner="phase_6.5",
-    post_promotion_action="edges_only",
-    description=(
-        "Clusters accommodation/flight/car_rental cards into a trip via "
-        "IATA-city + date-overlap predicates."
-    ),
-    post_build_hook=_build_trip_date_buckets,
-))
+lf.register_linker(
+    lf.LinkerSpec(
+        module_name=MODULE_TRIP_CLUSTER,
+        source_card_types=("accommodation",),
+        emits_link_types=(LINK_TYPE_PART_OF_TRIP,),
+        generator=_generate_trip_cluster_candidates,
+        scoring_fn=_score_trip_cluster_features,
+        scoring_mode="deterministic",
+        policies=(),  # LINK_TYPE_PART_OF_TRIP policy already registered in seed_links
+        requires_llm_judge=False,
+        lifecycle_state="active",
+        phase_owner="phase_6.5",
+        post_promotion_action="edges_only",
+        description=(
+            "Clusters accommodation/flight/car_rental cards into a trip via IATA-city + date-overlap predicates."
+        ),
+        post_build_hook=_build_trip_date_buckets,
+    )
+)

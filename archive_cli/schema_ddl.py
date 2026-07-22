@@ -85,7 +85,9 @@ class SchemaDDLMixin:
         stmts.append(f"CREATE INDEX IF NOT EXISTS idx_card_orgs_card_uid ON {s}.card_orgs(card_uid)")
         stmts.append(f"CREATE INDEX IF NOT EXISTS idx_external_ids_lookup ON {s}.external_ids(external_id, provider)")
         stmts.append(f"CREATE INDEX IF NOT EXISTS idx_duplicate_uid_rows_uid ON {s}.duplicate_uid_rows(uid)")
-        stmts.append(f"CREATE INDEX IF NOT EXISTS idx_duplicate_uid_rows_preferred_path ON {s}.duplicate_uid_rows(preferred_rel_path)")
+        stmts.append(
+            f"CREATE INDEX IF NOT EXISTS idx_duplicate_uid_rows_preferred_path ON {s}.duplicate_uid_rows(preferred_rel_path)"
+        )
         stmts.append(f"CREATE INDEX IF NOT EXISTS idx_edges_source_path ON {s}.edges(source_path)")
         stmts.append(f"CREATE INDEX IF NOT EXISTS idx_edges_source_uid ON {s}.edges(source_uid)")
         stmts.append(f"CREATE INDEX IF NOT EXISTS idx_edges_target_path ON {s}.edges(target_path)")
@@ -169,6 +171,7 @@ class SchemaDDLMixin:
                     c.close()
                 except Exception:
                     pass
+
     vector_dimension: int
 
     def _projection_default_sql(self, value: Any, sql_type: str) -> str:
@@ -582,21 +585,31 @@ class SchemaDDLMixin:
 
     def _ensure_note_manifest_columns(self, conn) -> None:
         """Repair note_manifest drift from earlier manifest schemas."""
-        conn.execute(f"ALTER TABLE {self.schema}.note_manifest ADD COLUMN IF NOT EXISTS card_uid TEXT NOT NULL DEFAULT ''")
+        conn.execute(
+            f"ALTER TABLE {self.schema}.note_manifest ADD COLUMN IF NOT EXISTS card_uid TEXT NOT NULL DEFAULT ''"
+        )
         conn.execute(f"ALTER TABLE {self.schema}.note_manifest ADD COLUMN IF NOT EXISTS slug TEXT NOT NULL DEFAULT ''")
         conn.execute(
             f"ALTER TABLE {self.schema}.note_manifest ADD COLUMN IF NOT EXISTS frontmatter_hash TEXT NOT NULL DEFAULT ''"
         )
-        conn.execute(f"ALTER TABLE {self.schema}.note_manifest ADD COLUMN IF NOT EXISTS file_size BIGINT NOT NULL DEFAULT 0")
-        conn.execute(f"ALTER TABLE {self.schema}.note_manifest ADD COLUMN IF NOT EXISTS mtime_ns BIGINT NOT NULL DEFAULT 0")
-        conn.execute(f"ALTER TABLE {self.schema}.note_manifest ADD COLUMN IF NOT EXISTS card_type TEXT NOT NULL DEFAULT ''")
+        conn.execute(
+            f"ALTER TABLE {self.schema}.note_manifest ADD COLUMN IF NOT EXISTS file_size BIGINT NOT NULL DEFAULT 0"
+        )
+        conn.execute(
+            f"ALTER TABLE {self.schema}.note_manifest ADD COLUMN IF NOT EXISTS mtime_ns BIGINT NOT NULL DEFAULT 0"
+        )
+        conn.execute(
+            f"ALTER TABLE {self.schema}.note_manifest ADD COLUMN IF NOT EXISTS card_type TEXT NOT NULL DEFAULT ''"
+        )
         conn.execute(
             f"ALTER TABLE {self.schema}.note_manifest ADD COLUMN IF NOT EXISTS typed_projection TEXT NOT NULL DEFAULT ''"
         )
         conn.execute(
             f"ALTER TABLE {self.schema}.note_manifest ADD COLUMN IF NOT EXISTS people_json TEXT NOT NULL DEFAULT '[]'"
         )
-        conn.execute(f"ALTER TABLE {self.schema}.note_manifest ADD COLUMN IF NOT EXISTS orgs_json TEXT NOT NULL DEFAULT '[]'")
+        conn.execute(
+            f"ALTER TABLE {self.schema}.note_manifest ADD COLUMN IF NOT EXISTS orgs_json TEXT NOT NULL DEFAULT '[]'"
+        )
         conn.execute(
             f"ALTER TABLE {self.schema}.note_manifest ADD COLUMN IF NOT EXISTS scan_version INTEGER NOT NULL DEFAULT 0"
         )
@@ -844,9 +857,7 @@ class SchemaDDLMixin:
             """
         )
         if ensure_indexes:
-            conn.execute(
-                f"CREATE INDEX IF NOT EXISTS idx_embed_batches_status ON {self.schema}.embed_batches(status)"
-            )
+            conn.execute(f"CREATE INDEX IF NOT EXISTS idx_embed_batches_status ON {self.schema}.embed_batches(status)")
             conn.execute(
                 f"CREATE INDEX IF NOT EXISTS idx_embed_batch_requests_chunk_key ON {self.schema}.embed_batch_requests(chunk_key)"
             )

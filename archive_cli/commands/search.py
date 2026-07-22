@@ -25,9 +25,7 @@ def search(
     rows = result.get("rows") or []
     logger.info("search_done elapsed_ms=%s result_count=%s", elapsed_ms, len(rows))
     any_exact = any(bool(r.get("exact_match")) for r in rows)
-    result["confidence"] = compute_confidence(
-        result_count=len(rows), exact_match=any_exact, query_text=query
-    ).value
+    result["confidence"] = compute_confidence(result_count=len(rows), exact_match=any_exact, query_text=query).value
     gaps = detect_gaps(query_text=query, result_count=len(rows))
     if gaps:
         try:
@@ -52,9 +50,7 @@ def vector_search(
     rows = result.get("rows") or []
     logger.info("vector_search_done elapsed_ms=%s result_count=%s", elapsed_ms, len(rows))
     any_exact = any(bool(r.get("exact_match")) for r in rows)
-    result["confidence"] = compute_confidence(
-        result_count=len(rows), exact_match=any_exact, query_text=query
-    ).value
+    result["confidence"] = compute_confidence(result_count=len(rows), exact_match=any_exact, query_text=query).value
     gaps = detect_gaps(query_text=query, result_count=len(rows))
     if gaps:
         try:
@@ -79,9 +75,7 @@ def hybrid_search(
     rows = result.get("rows") or []
     logger.info("hybrid_search_done elapsed_ms=%s result_count=%s", elapsed_ms, len(rows))
     any_exact = any(bool(r.get("exact_match")) for r in rows)
-    result["confidence"] = compute_confidence(
-        result_count=len(rows), exact_match=any_exact, query_text=query
-    ).value
+    result["confidence"] = compute_confidence(result_count=len(rows), exact_match=any_exact, query_text=query).value
     gaps = detect_gaps(query_text=query, result_count=len(rows))
     if gaps:
         try:

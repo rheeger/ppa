@@ -122,6 +122,7 @@ def test_build_vault_cache_incremental_detects_delete(tmp_path):
 def test_build_vault_cache_incremental_detects_add(tmp_path):
     """Rust incremental build picks up newly added notes."""
     import shutil
+
     vault = load_fixture_vault(tmp_path / "vault", include_graphs=True)
     vault_s = str(vault)
     rel_paths = [p.as_posix() for p in iter_note_paths(vault)]

@@ -6,27 +6,48 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 import archive_cli.__main__ as archive_main
 import archive_cli.commands._resolve as resolve_mod
 import archive_cli.commands.seed_links as seed_links_cmd
 import archive_cli.server as archive_server
-import pytest
 from archive_cli.commands._resolve import get_index
-from archive_cli.embedding_provider import (HashEmbeddingProvider,
-                                            OpenAIEmbeddingProvider,
-                                            _resolve_openai_api_key,
-                                            _resolve_service_account_token,
-                                            get_embedding_provider)
+from archive_cli.embedding_provider import (
+    HashEmbeddingProvider,
+    OpenAIEmbeddingProvider,
+    _resolve_openai_api_key,
+    _resolve_service_account_token,
+    get_embedding_provider,
+)
 from archive_cli.index_store import PostgresArchiveIndex
 from archive_cli.server import (  # type: ignore[import-not-found]
-    archive_bootstrap_postgres, archive_duplicate_uids, archive_duplicates,
-    archive_embed_pending, archive_embedding_backlog, archive_embedding_status,
-    archive_fetch_attachment, archive_graph, archive_hybrid_search,
-    archive_index_status, archive_link_candidate, archive_link_candidates,
-    archive_link_quality_gate, archive_person, archive_query, archive_read,
-    archive_rebuild_indexes, archive_review_link_candidate, archive_search,
-    archive_seed_link_backfill, archive_seed_link_surface, archive_stats,
-    archive_timeline, archive_validate, archive_vector_search)
+    archive_bootstrap_postgres,
+    archive_duplicate_uids,
+    archive_duplicates,
+    archive_embed_pending,
+    archive_embedding_backlog,
+    archive_embedding_status,
+    archive_fetch_attachment,
+    archive_graph,
+    archive_hybrid_search,
+    archive_index_status,
+    archive_link_candidate,
+    archive_link_candidates,
+    archive_link_quality_gate,
+    archive_person,
+    archive_query,
+    archive_read,
+    archive_rebuild_indexes,
+    archive_review_link_candidate,
+    archive_search,
+    archive_seed_link_backfill,
+    archive_seed_link_surface,
+    archive_stats,
+    archive_timeline,
+    archive_validate,
+    archive_vector_search,
+)
 from archive_vault.provenance import ProvenanceEntry
 from archive_vault.schema import FinanceCard, PersonCard
 from archive_vault.vault import write_card

@@ -24,7 +24,9 @@ def test_derived_meal_order_graph_edges():
         slug_map[Path(rel).stem] = rel
         path_to_uid[rel] = uid
         rows.append(
-            CanonicalRow(rel_path=rel, frontmatter=dict(note.frontmatter), card=validate_card_permissive(note.frontmatter))
+            CanonicalRow(
+                rel_path=rel, frontmatter=dict(note.frontmatter), card=validate_card_permissive(note.frontmatter)
+            )
         )
     person_lookup = _build_person_lookup(rows)
     meal_path = next(p for p in paths if "graph-meal-order" in p.name)

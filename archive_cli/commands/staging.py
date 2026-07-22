@@ -140,11 +140,7 @@ def format_staging_report_markdown(
         "|------|------:|----------|--------|",
     ]
     for t in report.types:
-        exp = (
-            f"{t.volume_estimate[0]}-{t.volume_estimate[1]}"
-            if t.volume_estimate
-            else "—"
-        )
+        exp = f"{t.volume_estimate[0]}-{t.volume_estimate[1]}" if t.volume_estimate else "—"
         lines.append(f"| {t.card_type} | {t.count:,} | {exp} | {t.volume_status} |")
     if field_population:
         lines.append("")

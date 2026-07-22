@@ -1132,14 +1132,10 @@ class QueryMixin:
             except ImportError:  # pragma: no cover
                 pg_errors = None  # type: ignore[assignment]
             if pg_errors is not None and isinstance(exc, pg_errors.UndefinedTable):
-                logging.getLogger("ppa.index_query").warning(
-                    "retrieval_gaps table not found; gap logging skipped"
-                )
+                logging.getLogger("ppa.index_query").warning("retrieval_gaps table not found; gap logging skipped")
                 return
             err_str = str(exc).lower()
             if "undefined_table" in err_str or "does not exist" in err_str:
-                logging.getLogger("ppa.index_query").warning(
-                    "retrieval_gaps table not found; gap logging skipped"
-                )
+                logging.getLogger("ppa.index_query").warning("retrieval_gaps table not found; gap logging skipped")
             else:
                 raise

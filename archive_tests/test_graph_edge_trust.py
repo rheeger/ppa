@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+
 from archive_cli.commands.formatters import format_graph
 from archive_cli.index_store import PostgresArchiveIndex
 

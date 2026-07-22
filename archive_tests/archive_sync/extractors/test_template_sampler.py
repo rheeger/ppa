@@ -109,7 +109,7 @@ def test_sampler_respects_per_year_limit(extractor_vault, sample_email_card, tmp
             "a@doordash.com",
             "receipt",
             "x",
-            sent_at=f"2019-{i+1:02d}-01T12:00:00-08:00",
+            sent_at=f"2019-{i + 1:02d}-01T12:00:00-08:00",
         )
         write_email_to_vault(extractor_vault, f"Email/py{i}.md", fm, body)
     out = tmp_path / "samples"

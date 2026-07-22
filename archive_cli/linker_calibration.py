@@ -169,9 +169,7 @@ def _write_report(
         lines.append("")
     lines.append("## Decision")
     lines.append("")
-    lines.append(
-        "_Human adds PROCEED / TIGHTEN / NARROW-TO-TIERS / SKIP-MODULE verdict below._"
-    )
+    lines.append("_Human adds PROCEED / TIGHTEN / NARROW-TO-TIERS / SKIP-MODULE verdict below._")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -185,13 +183,10 @@ def _write_phase_summary(path: Path, overall: dict[str, Any], vault_path: Path) 
         "|---|---:|---:|---|",
     ]
     for module, summary in overall.items():
-        tiers = ", ".join(
-            f"{tier}:{count}" for tier, count in sorted(summary.get("tier_histogram", {}).items())
-        ) or "none"
-        lines.append(
-            f"| `{module}` | {summary['sources_scanned']} | "
-            f"{summary['total_candidates']} | {tiers} |"
+        tiers = (
+            ", ".join(f"{tier}:{count}" for tier, count in sorted(summary.get("tier_histogram", {}).items())) or "none"
         )
+        lines.append(f"| `{module}` | {summary['sources_scanned']} | {summary['total_candidates']} | {tiers} |")
     lines.append("")
     lines.append("Per-module calibration caches:")
     lines.append("")
@@ -200,7 +195,5 @@ def _write_phase_summary(path: Path, overall: dict[str, Any], vault_path: Path) 
     lines.append("")
     lines.append("## Decision gate")
     lines.append("")
-    lines.append(
-        "Step 13 (full-seed promotion) only for modules with PROCEED in their per-module report."
-    )
+    lines.append("Step 13 (full-seed promotion) only for modules with PROCEED in their per-module report.")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")

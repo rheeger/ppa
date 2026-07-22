@@ -36,7 +36,8 @@ from archive_cli.seed_links import (
 
 
 def _generate_media_candidates(
-    catalog: SeedLinkCatalog, source: SeedCardSketch,
+    catalog: SeedLinkCatalog,
+    source: SeedCardSketch,
 ) -> list[SeedLinkCandidate]:
     if source.card_type != "media_asset":
         return []
@@ -146,19 +147,19 @@ def _source_types() -> tuple[str, ...]:
     return tuple(ct for ct, mods in CARD_TYPE_MODULES.items() if MODULE_MEDIA in mods)
 
 
-lf.register_linker(lf.LinkerSpec(
-    module_name=MODULE_MEDIA,
-    source_card_types=_source_types(),
-    emits_link_types=(LINK_TYPE_MEDIA_HAS_PERSON, LINK_TYPE_MEDIA_HAS_EVENT),
-    generator=_generate_media_candidates,
-    scoring_fn=_score_media_features,
-    scoring_mode="weighted",
-    policies=_policies(),
-    requires_llm_judge=True,
-    lifecycle_state="active",
-    phase_owner="phase_2.875",
-    post_promotion_action="edges_only",
-    description=(
-        "Media asset ↔ person / event linkage from EXIF labels + same-day + location overlap."
-    ),
-))
+lf.register_linker(
+    lf.LinkerSpec(
+        module_name=MODULE_MEDIA,
+        source_card_types=_source_types(),
+        emits_link_types=(LINK_TYPE_MEDIA_HAS_PERSON, LINK_TYPE_MEDIA_HAS_EVENT),
+        generator=_generate_media_candidates,
+        scoring_fn=_score_media_features,
+        scoring_mode="weighted",
+        policies=_policies(),
+        requires_llm_judge=True,
+        lifecycle_state="active",
+        phase_owner="phase_2.875",
+        post_promotion_action="edges_only",
+        description=("Media asset ↔ person / event linkage from EXIF labels + same-day + location overlap."),
+    )
+)

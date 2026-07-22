@@ -79,11 +79,13 @@ def _parse_items_block(body: str) -> list[dict[str, Any]]:
         if m3:
             name = m3.group(2).strip()
             if name and len(name) > 1 and name.lower() not in ("subtotal", "total", "tax", "tip"):
-                items.append({
-                    "name": name,
-                    "quantity": int(m3.group(1)),
-                    "price": m3.group(3) or "",
-                })
+                items.append(
+                    {
+                        "name": name,
+                        "quantity": int(m3.group(1)),
+                        "price": m3.group(3) or "",
+                    }
+                )
     return items
 
 
@@ -221,9 +223,7 @@ class DoordashExtractor(EmailExtractor):
         def era_plain(fm: dict[str, Any], body: str) -> list[dict[str, Any]]:
             subject = str(fm.get("subject") or "")
             restaurant = (
-                _restaurant_from_subject(subject)
-                or _restaurant_from_body(body)
-                or _restaurant_from_credits_line(body)
+                _restaurant_from_subject(subject) or _restaurant_from_body(body) or _restaurant_from_credits_line(body)
             )
             rk = _normalize_restaurant_key(restaurant)
             if rk in _BAD_RESTAURANTS:

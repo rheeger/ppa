@@ -573,9 +573,7 @@ class TestManifestSemanticQueries:
             self.manifest = json.load(f)
         if "semantic_queries" not in self.manifest:
             pytest.skip("slice_manifest.json has no semantic_queries key (Phase 5 Step 7)")
-        active = [
-            q for q in self.manifest["semantic_queries"] if not q.get("query", "").startswith("PLACEHOLDER")
-        ]
+        active = [q for q in self.manifest["semantic_queries"] if not q.get("query", "").startswith("PLACEHOLDER")]
         if not active:
             pytest.skip("All semantic_queries are still placeholders")
         self.active_queries = active
@@ -599,9 +597,7 @@ class TestManifestSemanticQueries:
             if "No vector matches" in result:
                 assert False, f"Semantic query '{query}': no vector matches"
             hits = _vector_result_lines(result)
-            assert hits >= min_hits, (
-                f"Semantic query '{query}': expected >= {min_hits} hits, got {hits}"
-            )
+            assert hits >= min_hits, f"Semantic query '{query}': expected >= {min_hits} hits, got {hits}"
             for t in expected_types:
                 assert _type_line_present(result, t), (
                     f"Semantic query '{query}': expected type {t} in formatted results"

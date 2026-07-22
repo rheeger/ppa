@@ -40,11 +40,16 @@ ITER_DIR = REPO_ROOT / "_artifacts" / "_phase6-iterations"
 
 def _sketch_from_row(r: dict[str, Any]) -> SeedCardSketch:
     return SeedCardSketch(
-        uid=r["uid"], rel_path=r["rel_path"],
+        uid=r["uid"],
+        rel_path=r["rel_path"],
         slug=r.get("slug") or r["rel_path"].split("/")[-1].removesuffix(".md"),
-        card_type=r["type"], summary=r.get("summary") or "",
-        frontmatter={}, body="", content_hash=r.get("content_hash") or "",
-        activity_at="", wikilinks=[],
+        card_type=r["type"],
+        summary=r.get("summary") or "",
+        frontmatter={},
+        body="",
+        content_hash=r.get("content_hash") or "",
+        activity_at="",
+        wikilinks=[],
     )
 
 
@@ -58,14 +63,26 @@ def _build_min_catalog(conn, schema: str, source_uids: list[str]) -> SeedLinkCat
     for sk in by_uid.values():
         by_type.setdefault(sk.card_type, []).append(sk)
     return SeedLinkCatalog(
-        cards_by_uid=by_uid, cards_by_exact_slug={}, cards_by_slug={},
+        cards_by_uid=by_uid,
+        cards_by_exact_slug={},
+        cards_by_slug={},
         cards_by_type=by_type,
-        person_by_email={}, person_by_phone={}, person_by_handle={}, person_by_alias={},
-        email_threads_by_thread_id={}, email_messages_by_thread_id={},
-        email_messages_by_message_id={}, email_attachments_by_message_id={},
-        email_attachments_by_thread_id={}, imessage_threads_by_chat_id={},
-        imessage_messages_by_chat_id={}, calendar_events_by_event_id={},
-        calendar_events_by_ical_uid={}, media_by_day={}, events_by_day={}, path_buckets={},
+        person_by_email={},
+        person_by_phone={},
+        person_by_handle={},
+        person_by_alias={},
+        email_threads_by_thread_id={},
+        email_messages_by_thread_id={},
+        email_messages_by_message_id={},
+        email_attachments_by_message_id={},
+        email_attachments_by_thread_id={},
+        imessage_threads_by_chat_id={},
+        imessage_messages_by_chat_id={},
+        calendar_events_by_event_id={},
+        calendar_events_by_ical_uid={},
+        media_by_day={},
+        events_by_day={},
+        path_buckets={},
     )
 
 
@@ -140,20 +157,27 @@ def main() -> None:
                 if decision.llm_model:
                     llm_calls += 1
                 tgt = catalog.cards_by_uid[cand.target_card_uid]
-                decisions.append({
-                    "source_uid": cand.source_card_uid,
-                    "source_rel_path": cand.source_rel_path, "source_type": src.card_type,
-                    "target_uid": cand.target_card_uid,
-                    "target_rel_path": cand.target_rel_path, "target_type": tgt.card_type,
-                    "embedding_similarity": cand.features["embedding_similarity"],
-                    "llm_score": decision.llm_score, "llm_model": decision.llm_model,
-                    "embedding_score": decision.embedding_score,
-                    "final_confidence": decision.final_confidence,
-                    "decision": decision.decision,
-                })
+                decisions.append(
+                    {
+                        "source_uid": cand.source_card_uid,
+                        "source_rel_path": cand.source_rel_path,
+                        "source_type": src.card_type,
+                        "target_uid": cand.target_card_uid,
+                        "target_rel_path": cand.target_rel_path,
+                        "target_type": tgt.card_type,
+                        "embedding_similarity": cand.features["embedding_similarity"],
+                        "llm_score": decision.llm_score,
+                        "llm_model": decision.llm_model,
+                        "embedding_score": decision.embedding_score,
+                        "final_confidence": decision.final_confidence,
+                        "decision": decision.decision,
+                    }
+                )
             if (i + 1) % 25 == 0:
-                print(f"[turn-{label}] {i+1}/{len(uids)} | {len(decisions)} decisions | "
-                      f"{llm_calls} LLM calls | {int(time.time()-t0)}s")
+                print(
+                    f"[turn-{label}] {i + 1}/{len(uids)} | {len(decisions)} decisions | "
+                    f"{llm_calls} LLM calls | {int(time.time() - t0)}s"
+                )
 
     decisions_path = ITER_DIR / f"turn-{label}-decisions.json"
     decisions_path.write_text(json.dumps(decisions, indent=2))
@@ -162,8 +186,12 @@ def main() -> None:
     for d in decisions:
         bands.setdefault(_band(d["final_confidence"]), []).append(d)
     band_order = [
-        "band_4_0.95+", "band_3_0.85_0.95", "band_2_0.70_0.85",
-        "band_1_0.50_0.70", "band_a_0.30_0.50", "band_0_below_0.30",
+        "band_4_0.95+",
+        "band_3_0.85_0.95",
+        "band_2_0.70_0.85",
+        "band_1_0.50_0.70",
+        "band_a_0.30_0.50",
+        "band_0_below_0.30",
     ]
     surfaceable = sum(len(bands.get(b, [])) for b in band_order if b.startswith("band_3") or b.startswith("band_4"))
     auto_promotable = len(bands.get("band_4_0.95+", []))
@@ -205,8 +233,10 @@ def main() -> None:
         )
     (ITER_DIR / f"turn-{label}-summary.md").write_text("\n".join(summary) + "\n")
     print(f"[turn-{label}] wrote: {decisions_path.name}, turn-{label}-summary.md")
-    print(f"[turn-{label}] surfaceable={surfaceable}  auto_promotable={auto_promotable}  "
-          f"total={len(decisions)}  llm_calls={llm_calls}  elapsed={elapsed}s")
+    print(
+        f"[turn-{label}] surfaceable={surfaceable}  auto_promotable={auto_promotable}  "
+        f"total={len(decisions)}  llm_calls={llm_calls}  elapsed={elapsed}s"
+    )
 
 
 if __name__ == "__main__":

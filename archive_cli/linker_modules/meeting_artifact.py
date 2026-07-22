@@ -27,9 +27,17 @@ from archive_cli.seed_links import (
 
 MODULE_MEETING_ARTIFACT = "meetingArtifactLinker"
 
-_GENERIC_TITLE_TOKENS = frozenset({
-    "meeting", "1:1", "one on one", "sync", "call", "catch up", "standup",
-})
+_GENERIC_TITLE_TOKENS = frozenset(
+    {
+        "meeting",
+        "1:1",
+        "one on one",
+        "sync",
+        "call",
+        "catch up",
+        "standup",
+    }
+)
 
 
 def _parse_ts(value: Any) -> datetime | None:
@@ -72,7 +80,8 @@ def _build_title_bucket_index(catalog: SeedLinkCatalog) -> None:
 
 
 def _generate_meeting_artifact_candidates(
-    catalog: SeedLinkCatalog, source: SeedCardSketch,
+    catalog: SeedLinkCatalog,
+    source: SeedCardSketch,
 ) -> list[SeedLinkCandidate]:
     if source.card_type != "meeting_transcript":
         return []
@@ -93,9 +102,12 @@ def _generate_meeting_artifact_candidates(
                 continue
             seen.add(event.uid)
             _append_meeting_artifact(
-                results, source, event,
+                results,
+                source,
+                event,
                 tier="MEETING_TIER_ICAL_UID",
-                deterministic_score=1.00, risk_penalty=0.0,
+                deterministic_score=1.00,
+                risk_penalty=0.0,
                 extra_features={"matched_ical_uid": ical_uid},
             )
 
@@ -105,9 +117,7 @@ def _generate_meeting_artifact_candidates(
         for event in title_buckets.get(title_norm, []):
             if event.uid == source.uid or event.uid in seen:
                 continue
-            event_start = _parse_ts(
-                event.frontmatter.get("start_at") or event.activity_at
-            )
+            event_start = _parse_ts(event.frontmatter.get("start_at") or event.activity_at)
             if event_start is None:
                 continue
             delta = abs((event_start - start_at).total_seconds())
@@ -115,9 +125,12 @@ def _generate_meeting_artifact_candidates(
                 continue
             seen.add(event.uid)
             _append_meeting_artifact(
-                results, source, event,
+                results,
+                source,
+                event,
                 tier="MEETING_TIER_TITLE_TIME",
-                deterministic_score=0.88, risk_penalty=0.0,
+                deterministic_score=0.88,
+                risk_penalty=0.0,
                 extra_features={"title_norm": title_norm, "time_delta_s": int(delta)},
             )
 
@@ -129,9 +142,7 @@ def _generate_meeting_artifact_candidates(
                 continue
             if event.card_type != "calendar_event":
                 continue
-            event_start = _parse_ts(
-                event.frontmatter.get("start_at") or event.activity_at
-            )
+            event_start = _parse_ts(event.frontmatter.get("start_at") or event.activity_at)
             if event_start is None:
                 continue
             delta = abs((event_start - start_at).total_seconds())
@@ -143,9 +154,12 @@ def _generate_meeting_artifact_candidates(
                 continue
             seen.add(event.uid)
             _append_meeting_artifact(
-                results, source, event,
+                results,
+                source,
+                event,
                 tier="MEETING_TIER_PARTICIPANT_TIME",
-                deterministic_score=0.70, risk_penalty=0.05,
+                deterministic_score=0.70,
+                risk_penalty=0.05,
                 extra_features={
                     "participant_overlap": overlap,
                     "time_delta_s": int(delta),
@@ -201,25 +215,27 @@ def _score_meeting_artifact_features(
     return det, 0.0, 0.0, 0.0, risk
 
 
-lf.register_linker(lf.LinkerSpec(
-    module_name=MODULE_MEETING_ARTIFACT,
-    source_card_types=("meeting_transcript",),
-    emits_link_types=(LINK_TYPE_TRANSCRIPT_HAS_CALENDAR_EVENT,),
-    generator=_generate_meeting_artifact_candidates,
-    scoring_fn=_score_meeting_artifact_features,
-    scoring_mode="deterministic",
-    # Framework-core calendar_events_by_ical_uid and events_by_day are already
-    # on SeedLinkCatalog; no CatalogIndexSpec declarations needed for them.
-    # calendar_events_by_title_bucket is a linker-owned index built via the
-    # post_build_hook below.
-    policies=(),  # reuses existing LINK_TYPE_TRANSCRIPT_HAS_CALENDAR_EVENT policy
-    requires_llm_judge=False,
-    lifecycle_state="active",
-    phase_owner="phase_6.5",
-    post_promotion_action="edges_only",
-    description=(
-        "Links meeting transcripts to their originating calendar events via "
-        "ical_uid, normalized title + start_at window, or participant overlap."
-    ),
-    post_build_hook=_build_title_bucket_index,
-))
+lf.register_linker(
+    lf.LinkerSpec(
+        module_name=MODULE_MEETING_ARTIFACT,
+        source_card_types=("meeting_transcript",),
+        emits_link_types=(LINK_TYPE_TRANSCRIPT_HAS_CALENDAR_EVENT,),
+        generator=_generate_meeting_artifact_candidates,
+        scoring_fn=_score_meeting_artifact_features,
+        scoring_mode="deterministic",
+        # Framework-core calendar_events_by_ical_uid and events_by_day are already
+        # on SeedLinkCatalog; no CatalogIndexSpec declarations needed for them.
+        # calendar_events_by_title_bucket is a linker-owned index built via the
+        # post_build_hook below.
+        policies=(),  # reuses existing LINK_TYPE_TRANSCRIPT_HAS_CALENDAR_EVENT policy
+        requires_llm_judge=False,
+        lifecycle_state="active",
+        phase_owner="phase_6.5",
+        post_promotion_action="edges_only",
+        description=(
+            "Links meeting transcripts to their originating calendar events via "
+            "ical_uid, normalized title + start_at window, or participant overlap."
+        ),
+        post_build_hook=_build_title_bucket_index,
+    )
+)

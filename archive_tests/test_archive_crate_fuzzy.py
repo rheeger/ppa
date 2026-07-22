@@ -34,9 +34,7 @@ def test_resolve_person_batch_rust_matches_python(tmp_path):
     assert len(py_out) == len(rs_out)
     for a, b in zip(py_out, rs_out):
         assert a.action == b.action
-        assert abs(a.confidence - b.confidence) <= 1, (
-            f"confidence divergence: py={a.confidence} rs={b.confidence}"
-        )
+        assert abs(a.confidence - b.confidence) <= 1, f"confidence divergence: py={a.confidence} rs={b.confidence}"
         if a.action == "create":
             assert a.wikilink == b.wikilink
         assert sorted(a.reasons) == sorted(b.reasons)
@@ -65,7 +63,8 @@ def _collect_identifiers_from_slice(slice_path: str) -> list[dict]:
         pytest.skip(f"No tier-2 cache at {cache_path}")
 
     derived = archive_crate.frontmatter_dicts_from_cache(
-        cache_path, types=list(DERIVED_ENTITY_CARD_TYPES),
+        cache_path,
+        types=list(DERIVED_ENTITY_CARD_TYPES),
     )
     batch_ids: list[dict] = []
     for row in derived:
@@ -104,9 +103,7 @@ def test_resolve_person_batch_rust_matches_python_on_slice():
     py_results = py_resolve_batch(slice_path, batch_ids)
     rs_results = archive_crate.resolve_person_batch(slice_path, batch_ids)
 
-    assert len(py_results) == len(rs_results), (
-        f"Length mismatch: Python={len(py_results)}, Rust={len(rs_results)}"
-    )
+    assert len(py_results) == len(rs_results), f"Length mismatch: Python={len(py_results)}, Rust={len(rs_results)}"
 
     hard_mismatches = []
     for i, (py, rs) in enumerate(zip(py_results, rs_results)):
@@ -118,10 +115,9 @@ def test_resolve_person_batch_rust_matches_python_on_slice():
             )
         else:
             assert abs(py.confidence - rs.confidence) <= 1, (
-                f"[{i}] confidence divergence >1: py={py.confidence} rs={rs.confidence} "
-                f"ids={batch_ids[i]}"
+                f"[{i}] confidence divergence >1: py={py.confidence} rs={rs.confidence} ids={batch_ids[i]}"
             )
 
-    assert not hard_mismatches, (
-        f"{len(hard_mismatches)} action/wikilink mismatches:\n" + "\n".join(hard_mismatches[:20])
+    assert not hard_mismatches, f"{len(hard_mismatches)} action/wikilink mismatches:\n" + "\n".join(
+        hard_mismatches[:20]
     )

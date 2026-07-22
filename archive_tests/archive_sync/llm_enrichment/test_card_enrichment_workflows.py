@@ -38,9 +38,7 @@ def test_gate_email_thread_card() -> None:
 
 def test_strip_thread_summary_boilerplate() -> None:
     assert (
-        wf.strip_thread_summary_boilerplate(
-            "This thread consists of automated notifications from Anthem."
-        )
+        wf.strip_thread_summary_boilerplate("This thread consists of automated notifications from Anthem.")
         == "Automated notifications from Anthem."
     )
     assert (
@@ -145,10 +143,7 @@ def test_prefilter_passive_important() -> None:
 
 
 def test_prefilter_passive_substantial_triage() -> None:
-    stubs = [
-        _stub(uid=f"u{i}", direction="inbound", from_email=f"p{i}@biz.io", subject="Re: deal")
-        for i in range(5)
-    ]
+    stubs = [_stub(uid=f"u{i}", direction="inbound", from_email=f"p{i}@biz.io", subject="Re: deal") for i in range(5)]
     ok, reason = wf.prefilter_email_thread(stubs, None)
     assert ok is True
     assert reason == "passive_substantial"
@@ -196,10 +191,7 @@ def test_prefilter_imessage_requires_from_me() -> None:
 
 def test_thread_display_label_imessage_and_beeper() -> None:
     assert wf_ims.thread_display_label({"display_name": "Mom"}, card_type="imessage_thread") == "Mom"
-    assert (
-        wf_ims.thread_display_label({"thread_title": "Signal: Jane"}, card_type="beeper_thread")
-        == "Signal: Jane"
-    )
+    assert wf_ims.thread_display_label({"thread_title": "Signal: Jane"}, card_type="beeper_thread") == "Signal: Jane"
 
 
 def test_compose_and_dedupe_imessage_conversations() -> None:
@@ -425,9 +417,7 @@ def test_parse_document_response() -> None:
         "document_date": "2024-01-31",
         "entity_mentions": [],
     }
-    fu, ents = wf_doc.parse_document_response(
-        data, fm=fm, body=body, source_uid="doc-u1", run_id="r1"
-    )
+    fu, ents = wf_doc.parse_document_response(data, fm=fm, body=body, source_uid="doc-u1", run_id="r1")
     assert fu["description"].startswith("Bank statement")
     assert fu["title"] == "Jan 2024 bank statement"
     assert fu["document_date"] == "2024-01-31"
@@ -503,9 +493,7 @@ def test_parse_document_response_entity_mentions() -> None:
             {"type": "org", "name": "Should map to organization", "context": {}},
         ],
     }
-    fu, ents = wf_doc.parse_document_response(
-        data, fm=fm, body=body, source_uid="hfa-document-x", run_id="run-doc"
-    )
+    fu, ents = wf_doc.parse_document_response(data, fm=fm, body=body, source_uid="hfa-document-x", run_id="run-doc")
     assert "summary" in fu
     assert len(ents) == 3
     types = {e.entity_type for e in ents}
@@ -518,7 +506,13 @@ def test_parse_document_response_entity_mentions() -> None:
 
 
 def test_document_content_hash_stable() -> None:
-    fm = {"filename": "a.pdf", "document_type": "pdf", "extension": "pdf", "title": "t", "file_modified_at": "2024-01-01"}
+    fm = {
+        "filename": "a.pdf",
+        "document_type": "pdf",
+        "extension": "pdf",
+        "title": "t",
+        "file_modified_at": "2024-01-01",
+    }
     h1 = wf_doc.document_content_hash(fm, "hello world")
     h2 = wf_doc.document_content_hash(fm, "hello world")
     assert h1 == h2

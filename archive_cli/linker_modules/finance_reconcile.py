@@ -41,11 +41,15 @@ from datetime import datetime, timezone
 from typing import Any
 
 from archive_cli import linker_framework as lf
-from archive_cli.merchant_normalizer import (_merchants_match,
-                                             _normalize_merchant)
-from archive_cli.seed_links import (LINK_TYPE_FINANCE_RECONCILES, LinkEvidence,
-                                    SeedCardSketch, SeedLinkCandidate,
-                                    SeedLinkCatalog, _append_candidate)
+from archive_cli.merchant_normalizer import _merchants_match, _normalize_merchant
+from archive_cli.seed_links import (
+    LINK_TYPE_FINANCE_RECONCILES,
+    LinkEvidence,
+    SeedCardSketch,
+    SeedLinkCandidate,
+    SeedLinkCatalog,
+    _append_candidate,
+)
 
 log = logging.getLogger("ppa.linkers.finance_reconcile")
 
@@ -53,8 +57,16 @@ MODULE_FINANCE_RECONCILE = "financeReconcileLinker"
 
 # Derived card types that can reconcile against a finance charge.
 RECONCILE_TARGET_TYPES: tuple[str, ...] = (
-    "purchase", "meal_order", "ride", "subscription", "payroll",
-    "flight", "accommodation", "car_rental", "grocery_order", "event_ticket",
+    "purchase",
+    "meal_order",
+    "ride",
+    "subscription",
+    "payroll",
+    "flight",
+    "accommodation",
+    "car_rental",
+    "grocery_order",
+    "event_ticket",
 )
 
 _REFUND_TRANSACTION_TYPES = frozenset({"refund", "credit", "return", "chargeback"})
@@ -62,9 +74,9 @@ _REFUND_TRANSACTION_TYPES = frozenset({"refund", "credit", "return", "chargeback
 # Standard / refund date windows per tier (in days).
 # Refund windows are wider because credit-card refunds settle 3-60 days after.
 _WINDOW_DAYS = {
-    "RECONCILE_TIER_HIGH":   {"standard": 2, "refund": 60},
+    "RECONCILE_TIER_HIGH": {"standard": 2, "refund": 60},
     "RECONCILE_TIER_MEDIUM": {"standard": 5, "refund": 60},
-    "RECONCILE_TIER_LOW":    {"standard": 3, "refund": 14},
+    "RECONCILE_TIER_LOW": {"standard": 3, "refund": 14},
 }
 
 # LOW tier can be retired at calibration sub-step 8.8 if spot-check < 80%.
@@ -246,10 +258,7 @@ def _source_email_corroboration(
     See archive_docs/runbooks/linker-quality-gates.md for the bounds.
     """
     other_amount = _amount_for(other)
-    amount_match = bool(
-        fin_amount > 0 and other_amount > 0
-        and abs(fin_amount - other_amount) <= 0.01
-    )
+    amount_match = bool(fin_amount > 0 and other_amount > 0 and abs(fin_amount - other_amount) <= 0.01)
     date_match = False
     date_delta_days: float | None = None
     if fin_at is not None:
@@ -259,8 +268,7 @@ def _source_email_corroboration(
             date_match = date_delta_days <= 2.0
     other_merchant_norm = _normalize_merchant(_merchant_for(other))
     merchant_match = bool(
-        fin_merchant_norm and other_merchant_norm
-        and _merchants_match(fin_merchant_norm, other_merchant_norm)
+        fin_merchant_norm and other_merchant_norm and _merchants_match(fin_merchant_norm, other_merchant_norm)
     )
     count = int(amount_match) + int(date_match) + int(merchant_match)
     return {
@@ -268,9 +276,7 @@ def _source_email_corroboration(
         "date_match": date_match,
         "merchant_match": merchant_match,
         "corroborating_signal_count": count,
-        "date_delta_days": (
-            round(date_delta_days, 2) if date_delta_days is not None else None
-        ),
+        "date_delta_days": (round(date_delta_days, 2) if date_delta_days is not None else None),
         "merchant_norm_finance": fin_merchant_norm,
         "merchant_norm_other": other_merchant_norm,
     }
@@ -299,7 +305,8 @@ def _tier1_source_email(
         if not _same_currency(source.frontmatter, other.frontmatter):
             continue
         corr = _source_email_corroboration(
-            source, other,
+            source,
+            other,
             fin_amount=fin_amount,
             fin_at=fin_at,
             fin_merchant_norm=fin_merchant_norm,
@@ -361,20 +368,26 @@ def _tier3_high(
             other_merchant_norm = _normalize_merchant(_merchant_for(other))
             if not _merchants_match(fin_merchant_norm, other_merchant_norm):
                 continue
-            out.append((other, {
-                "tier": "RECONCILE_TIER_HIGH",
-                "deterministic_score": 0.90,
-                "risk_penalty": 0.0,
-                "date_delta_days": round(delta_days, 2),
-                "merchant_norm_finance": fin_merchant_norm,
-                "merchant_norm_other": other_merchant_norm,
-                "refund": is_refund,
-            }))
+            out.append(
+                (
+                    other,
+                    {
+                        "tier": "RECONCILE_TIER_HIGH",
+                        "deterministic_score": 0.90,
+                        "risk_penalty": 0.0,
+                        "date_delta_days": round(delta_days, 2),
+                        "merchant_norm_finance": fin_merchant_norm,
+                        "merchant_norm_other": other_merchant_norm,
+                        "refund": is_refund,
+                    },
+                )
+            )
     return out
 
 
 def _thread_id_from_source_email(
-    catalog: SeedLinkCatalog, card: SeedCardSketch,
+    catalog: SeedLinkCatalog,
+    card: SeedCardSketch,
 ) -> str | None:
     """Resolve a card's source_email wikilink to its gmail_thread_id."""
     se = _wikilink_key(card.frontmatter.get("source_email", ""))
@@ -425,13 +438,18 @@ def _tier4_medium(
             other_thread = _thread_id_from_source_email(catalog, other)
             if not other_thread or other_thread != fin_thread:
                 continue
-            out.append((other, {
-                "tier": "RECONCILE_TIER_MEDIUM",
-                "deterministic_score": 0.78,
-                "risk_penalty": 0.05,
-                "shared_thread_id": fin_thread,
-                "refund": is_refund,
-            }))
+            out.append(
+                (
+                    other,
+                    {
+                        "tier": "RECONCILE_TIER_MEDIUM",
+                        "deterministic_score": 0.78,
+                        "risk_penalty": 0.05,
+                        "shared_thread_id": fin_thread,
+                        "refund": is_refund,
+                    },
+                )
+            )
     return out
 
 
@@ -462,13 +480,18 @@ def _tier5_low(
             delta_days = abs((fin_at - other_at).total_seconds()) / 86400.0
             if delta_days > window_days:
                 continue
-            out.append((other, {
-                "tier": "RECONCILE_TIER_LOW",
-                "deterministic_score": 0.55,
-                "risk_penalty": 0.15,
-                "date_delta_days": round(delta_days, 2),
-                "refund": is_refund,
-            }))
+            out.append(
+                (
+                    other,
+                    {
+                        "tier": "RECONCILE_TIER_LOW",
+                        "deterministic_score": 0.55,
+                        "risk_penalty": 0.15,
+                        "date_delta_days": round(delta_days, 2),
+                        "refund": is_refund,
+                    },
+                )
+            )
     return out
 
 
@@ -476,7 +499,8 @@ def _tier5_low(
 
 
 def _generate_finance_reconcile_candidates(
-    catalog: SeedLinkCatalog, source: SeedCardSketch,
+    catalog: SeedLinkCatalog,
+    source: SeedCardSketch,
 ) -> list[SeedLinkCandidate]:
     if source.card_type != "finance":
         return []
@@ -489,9 +513,7 @@ def _generate_finance_reconcile_candidates(
     if fin_at is None:
         return []
 
-    fin_merchant_norm = _normalize_merchant(
-        source.frontmatter.get("counterparty", "")
-    )
+    fin_merchant_norm = _normalize_merchant(source.frontmatter.get("counterparty", ""))
     is_refund = _is_refund(source.frontmatter)
 
     results: list[SeedLinkCandidate] = []
@@ -499,20 +521,37 @@ def _generate_finance_reconcile_candidates(
 
     for matcher in (
         lambda: _tier1_source_email(
-            catalog, source, seen=seen, is_refund=is_refund,
-            fin_amount=fin_amount, fin_at=fin_at,
+            catalog,
+            source,
+            seen=seen,
+            is_refund=is_refund,
+            fin_amount=fin_amount,
+            fin_at=fin_at,
             fin_merchant_norm=fin_merchant_norm,
         ),
         lambda: _tier3_high(
-            catalog, source, seen=seen, fin_amount=fin_amount, fin_at=fin_at,
-            fin_merchant_norm=fin_merchant_norm, is_refund=is_refund,
+            catalog,
+            source,
+            seen=seen,
+            fin_amount=fin_amount,
+            fin_at=fin_at,
+            fin_merchant_norm=fin_merchant_norm,
+            is_refund=is_refund,
         ),
         lambda: _tier4_medium(
-            catalog, source, seen=seen, fin_amount=fin_amount, fin_at=fin_at,
+            catalog,
+            source,
+            seen=seen,
+            fin_amount=fin_amount,
+            fin_at=fin_at,
             is_refund=is_refund,
         ),
         lambda: _tier5_low(
-            catalog, source, seen=seen, fin_amount=fin_amount, fin_at=fin_at,
+            catalog,
+            source,
+            seen=seen,
+            fin_amount=fin_amount,
+            fin_at=fin_at,
             is_refund=is_refund,
         ),
     ):
@@ -562,22 +601,24 @@ def _score_finance_reconcile_features(
     return det, 0.0, 0.0, 0.0, risk
 
 
-lf.register_linker(lf.LinkerSpec(
-    module_name=MODULE_FINANCE_RECONCILE,
-    source_card_types=("finance",),
-    emits_link_types=(LINK_TYPE_FINANCE_RECONCILES,),
-    generator=_generate_finance_reconcile_candidates,
-    scoring_fn=_score_finance_reconcile_features,
-    scoring_mode="deterministic",
-    policies=(),  # LINK_TYPE_FINANCE_RECONCILES policy already registered in seed_links
-    requires_llm_judge=False,
-    lifecycle_state="active",
-    phase_owner="phase_6.5",
-    post_promotion_action="edges_only",
-    description=(
-        "Matches bank/credit-card finance cards to merchant-side derived cards "
-        "(purchase, meal_order, ride, subscription, payroll, flight, accommodation, "
-        "car_rental, grocery_order, event_ticket) via a deterministic tier ladder."
-    ),
-    post_build_hook=_build_finance_indexes,
-))
+lf.register_linker(
+    lf.LinkerSpec(
+        module_name=MODULE_FINANCE_RECONCILE,
+        source_card_types=("finance",),
+        emits_link_types=(LINK_TYPE_FINANCE_RECONCILES,),
+        generator=_generate_finance_reconcile_candidates,
+        scoring_fn=_score_finance_reconcile_features,
+        scoring_mode="deterministic",
+        policies=(),  # LINK_TYPE_FINANCE_RECONCILES policy already registered in seed_links
+        requires_llm_judge=False,
+        lifecycle_state="active",
+        phase_owner="phase_6.5",
+        post_promotion_action="edges_only",
+        description=(
+            "Matches bank/credit-card finance cards to merchant-side derived cards "
+            "(purchase, meal_order, ride, subscription, payroll, flight, accommodation, "
+            "car_rental, grocery_order, event_ticket) via a deterministic tier ladder."
+        ),
+        post_build_hook=_build_finance_indexes,
+    )
+)

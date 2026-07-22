@@ -89,9 +89,7 @@ def _content_hash(frontmatter: dict[str, Any], body: str) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _compute_vault_fingerprint(
-    vault: Path, rel_paths: list[str]
-) -> tuple[dict[str, tuple[int, int]], str]:
+def _compute_vault_fingerprint(vault: Path, rel_paths: list[str]) -> tuple[dict[str, tuple[int, int]], str]:
     """Walk-only fingerprint: stat each file, hash sorted path+mtime+size (matches scanner._vault_paths_and_fingerprint)."""
     lines: list[str] = []
     stats: dict[str, tuple[int, int]] = {}
@@ -188,9 +186,7 @@ def _meta_set(conn: sqlite3.Connection, key: str, value: str) -> None:
 def _infer_tier_from_notes(conn: sqlite3.Connection) -> int:
     """Return 2 if tier-2 rows exist (body indexed), else 1."""
 
-    row = conn.execute(
-        "SELECT COUNT(*) FROM notes WHERE body_compressed IS NOT NULL"
-    ).fetchone()
+    row = conn.execute("SELECT COUNT(*) FROM notes WHERE body_compressed IS NOT NULL").fetchone()
     if row and int(row[0]) > 0:
         return 2
     return 1
@@ -216,11 +212,7 @@ def _repair_cache_meta_if_needed(
     n_notes = conn.execute("SELECT COUNT(*) FROM notes").fetchone()[0]
     if int(n_notes) == 0:
         return stored_ver, stored_tier
-    needs = (
-        stored_ver is None
-        or stored_tier is None
-        or stored_ver != str(CACHE_VERSION)
-    )
+    needs = stored_ver is None or stored_tier is None or stored_ver != str(CACHE_VERSION)
     if not needs:
         return stored_ver, stored_tier
     inferred = _infer_tier_from_notes(conn)
@@ -294,19 +286,19 @@ def _try_build_vault_cache_disk_with_rust(
             unchanged = int(out.get("unchanged", 0))
             n = int(out.get("note_count", 0))
             if out.get("fingerprint") != expected_fp:
-                logger.warning(
-                    "vault-cache rust incremental fingerprint mismatch; falling back to full build"
-                )
+                logger.warning("vault-cache rust incremental fingerprint mismatch; falling back to full build")
                 # Fall through to full build below
                 use_incremental = False
             else:
                 if skipped > 0:
-                    logger.info(
-                        "vault-cache rust incremental skipped %d notes with parse errors", skipped
-                    )
+                    logger.info("vault-cache rust incremental skipped %d notes with parse errors", skipped)
                 logger.info(
                     "vault-cache incremental build via rust tier=%d rebuilt=%d deleted=%d unchanged=%d total=%d",
-                    tier, rebuilt, deleted, unchanged, n,
+                    tier,
+                    rebuilt,
+                    deleted,
+                    unchanged,
+                    n,
                 )
                 return True
 
@@ -338,9 +330,7 @@ def _try_build_vault_cache_disk_with_rust(
                     pass
                 return False
             if skipped > 0:
-                logger.info(
-                    "vault-cache rust skipped %d notes with parse errors (inserted=%d)", skipped, n
-                )
+                logger.info("vault-cache rust skipped %d notes with parse errors (inserted=%d)", skipped, n)
             logger.info("vault-cache disk build used rust engine tier=%d notes=%d", tier, n)
             return True
     except Exception as exc:
@@ -456,11 +446,7 @@ class VaultScanCache:
         else:
             miss_reason = "file_not_found"
 
-        if (
-            prior_stored_fp
-            and prior_stored_fp != fp
-            and miss_reason == "fingerprint_changed"
-        ):
+        if prior_stored_fp and prior_stored_fp != fp and miss_reason == "fingerprint_changed":
             logger.info(
                 "vault-cache fingerprint differ: stored=%s… computed=%s… "
                 "(note mtimes/sizes changed since cache was built — e.g. vault writes)",
@@ -480,7 +466,11 @@ class VaultScanCache:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             note_count_expected = len(rel_paths)
             if _try_build_vault_cache_disk_with_rust(
-                vault, cache_path, tier, fp, note_count_expected,
+                vault,
+                cache_path,
+                tier,
+                fp,
+                note_count_expected,
                 incremental=use_incremental,
             ):
                 conn = sqlite3.connect(str(cache_path), timeout=120.0, check_same_thread=False)
@@ -601,7 +591,7 @@ class VaultScanCache:
 
                 if deleted_paths:
                     for chunk_start in range(0, len(deleted_paths), 500):
-                        chunk = list(deleted_paths)[chunk_start:chunk_start + 500]
+                        chunk = list(deleted_paths)[chunk_start : chunk_start + 500]
                         placeholders = ",".join("?" for _ in chunk)
                         conn.execute(
                             f"DELETE FROM notes WHERE rel_path IN ({placeholders})",
@@ -713,12 +703,18 @@ class VaultScanCache:
         if incremental and unchanged_count > 0:
             logger.info(
                 "vault-cache incremental_build_complete tier=%d rebuilt=%d unchanged=%d total=%d elapsed=%s",
-                tier, inserted, unchanged_count, total_notes, _format_mins_secs(build_elapsed),
+                tier,
+                inserted,
+                unchanged_count,
+                total_notes,
+                _format_mins_secs(build_elapsed),
             )
         else:
             logger.info(
                 "vault-cache build_complete tier=%d notes=%d elapsed=%s",
-                tier, total_notes, _format_mins_secs(build_elapsed),
+                tier,
+                total_notes,
+                _format_mins_secs(build_elapsed),
             )
         return cls(conn, tier, fp, cache_hit=cache_hit)
 
@@ -735,9 +731,7 @@ class VaultScanCache:
 
     def uid_to_rel_path(self) -> dict[str, str]:
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT uid, rel_path FROM notes WHERE uid != ''"
-            ).fetchall()
+            rows = self._conn.execute("SELECT uid, rel_path FROM notes WHERE uid != ''").fetchall()
         out: dict[str, str] = {}
         for uid, rp in rows:
             out[str(uid)] = str(rp)
@@ -745,9 +739,7 @@ class VaultScanCache:
 
     def rel_path_to_uid(self) -> dict[str, str]:
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT rel_path, uid FROM notes WHERE uid != ''"
-            ).fetchall()
+            rows = self._conn.execute("SELECT rel_path, uid FROM notes WHERE uid != ''").fetchall()
         out: dict[str, str] = {}
         for rp, uid in rows:
             out[str(rp)] = str(uid)
@@ -787,18 +779,14 @@ class VaultScanCache:
 
     def frontmatter_for_rel_path(self, rel_path: str) -> dict[str, Any]:
         with self._lock:
-            row = self._conn.execute(
-                "SELECT frontmatter_json FROM notes WHERE rel_path = ?", (rel_path,)
-            ).fetchone()
+            row = self._conn.execute("SELECT frontmatter_json FROM notes WHERE rel_path = ?", (rel_path,)).fetchone()
         if not row:
             raise KeyError(rel_path)
         return json.loads(row[0])
 
     def all_frontmatters(self) -> Iterator[tuple[str, dict[str, Any]]]:
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT rel_path, frontmatter_json FROM notes ORDER BY rel_path"
-            ).fetchall()
+            rows = self._conn.execute("SELECT rel_path, frontmatter_json FROM notes ORDER BY rel_path").fetchall()
         for rp, fj in rows:
             yield str(rp), json.loads(fj)
 
@@ -812,10 +800,10 @@ class VaultScanCache:
         *,
         progress_every: int = 100_000,
     ) -> tuple[
-        dict[str, list[str]],   # by_type: card_type → [rel_path, ...]
-        dict[str, str],         # rel_by_uid: uid → rel_path
-        dict[str, str],         # uid_by_path: rel_path → uid
-        dict[str, str],         # uid_by_stem: stem/summary/alias → uid
+        dict[str, list[str]],  # by_type: card_type → [rel_path, ...]
+        dict[str, str],  # rel_by_uid: uid → rel_path
+        dict[str, str],  # uid_by_path: rel_path → uid
+        dict[str, str],  # uid_by_stem: stem/summary/alias → uid
         dict[str, dict[str, Any]],  # frontmatter_by_uid: uid → parsed frontmatter dict
     ]:
         """Build all lookup tables for slice-seed in a single cursor pass.
@@ -878,39 +866,38 @@ class VaultScanCache:
                 elapsed = time.monotonic() - t0
                 logger.info(
                     "vault-cache slice_lookup rows=%d elapsed=%.1fs rate=%.0f/s",
-                    count, elapsed, count / elapsed if elapsed > 0 else 0,
+                    count,
+                    elapsed,
+                    count / elapsed if elapsed > 0 else 0,
                 )
 
         elapsed = time.monotonic() - t0
         logger.info(
             "vault-cache slice_lookup_complete rows=%d uid_by_stem=%d frontmatters=%d elapsed=%.1fs",
-            count, len(uid_by_stem), len(frontmatter_by_uid), elapsed,
+            count,
+            len(uid_by_stem),
+            len(frontmatter_by_uid),
+            elapsed,
         )
         return by_type, rel_by_uid, uid_by_path, uid_by_stem, frontmatter_by_uid
 
     def body_for_rel_path(self, rel_path: str) -> str:
         with self._lock:
-            row = self._conn.execute(
-                "SELECT body_compressed FROM notes WHERE rel_path = ?", (rel_path,)
-            ).fetchone()
+            row = self._conn.execute("SELECT body_compressed FROM notes WHERE rel_path = ?", (rel_path,)).fetchone()
         if not row or row[0] is None:
             raise ValueError("tier 2 required for body access")
         return zlib.decompress(row[0]).decode("utf-8")
 
     def wikilinks_for_rel_path(self, rel_path: str) -> list[str]:
         with self._lock:
-            row = self._conn.execute(
-                "SELECT wikilinks_json FROM notes WHERE rel_path = ?", (rel_path,)
-            ).fetchone()
+            row = self._conn.execute("SELECT wikilinks_json FROM notes WHERE rel_path = ?", (rel_path,)).fetchone()
         if not row or row[0] is None:
             raise ValueError("tier 2 required for wikilinks access")
         return json.loads(row[0])
 
     def content_hash_for_rel_path(self, rel_path: str) -> str:
         with self._lock:
-            row = self._conn.execute(
-                "SELECT content_hash FROM notes WHERE rel_path = ?", (rel_path,)
-            ).fetchone()
+            row = self._conn.execute("SELECT content_hash FROM notes WHERE rel_path = ?", (rel_path,)).fetchone()
         if not row or row[0] is None:
             raise ValueError("tier 2 required for content_hash access")
         return str(row[0])
@@ -918,9 +905,7 @@ class VaultScanCache:
     def raw_content_sha256_for_rel_path(self, rel_path: str) -> str:
         """SHA-256 hex of full UTF-8 file bytes (matches seed_links catalog sketch hash)."""
         with self._lock:
-            row = self._conn.execute(
-                "SELECT raw_content_sha256 FROM notes WHERE rel_path = ?", (rel_path,)
-            ).fetchone()
+            row = self._conn.execute("SELECT raw_content_sha256 FROM notes WHERE rel_path = ?", (rel_path,)).fetchone()
         if not row or row[0] is None:
             raise ValueError("tier 2 required for raw_content_sha256 access")
         return str(row[0])

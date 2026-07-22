@@ -257,8 +257,8 @@ def slice_seed_vault(
     n_total = cache.note_count()
     use_fast_path = cache.is_cache_hit or n_total > 10_000
     if use_fast_path:
-        by_type_str, rel_by_uid_str, uid_by_path_str, uid_by_stem, frontmatter_by_uid = (
-            cache.slice_lookup_tables(progress_every=100_000)
+        by_type_str, rel_by_uid_str, uid_by_path_str, uid_by_stem, frontmatter_by_uid = cache.slice_lookup_tables(
+            progress_every=100_000
         )
         by_type = {t: [Path(p) for p in paths] for t, paths in by_type_str.items()}
         rel_by_uid: dict[str, Path] = {uid: Path(p) for uid, p in rel_by_uid_str.items()}
@@ -415,7 +415,10 @@ def slice_seed_vault(
     t_precache = time.monotonic()
     logger.info("slice-seed pre-building tier-2 vault cache for output dir")
     VaultScanCache.build_or_load(
-        output_dir, tier=2, progress_every=progress_every, no_cache=False,
+        output_dir,
+        tier=2,
+        progress_every=progress_every,
+        no_cache=False,
     )
     logger.info(
         "slice-seed tier-2 cache ready elapsed=%s",
@@ -452,7 +455,9 @@ def slice_seed_vault(
     else:
         om = _orphan_metrics(output_dir)
     orphaned = int(om.get("orphaned_wikilinks", 0))
-    logger.info("slice-seed orphan_metrics orphaned=%d elapsed=%s", orphaned, _format_mins_secs(time.monotonic() - t_orphan))
+    logger.info(
+        "slice-seed orphan_metrics orphaned=%d elapsed=%s", orphaned, _format_mins_secs(time.monotonic() - t_orphan)
+    )
     log_fn = logger.warning if orphaned > 0 else logger.info
     log_fn(
         "slice-seed done selected_card_count=%d orphaned_wikilinks=%d total_wall=%s",

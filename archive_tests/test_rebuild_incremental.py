@@ -60,9 +60,7 @@ def _mutate_vault(vault: Path, rng: random.Random) -> None:
     del_candidates = [
         p
         for p in paths
-        if p not in change_set
-        and p.stem not in target_slugs
-        and p.stem.replace(" ", "-").lower() not in norm_targets
+        if p not in change_set and p.stem not in target_slugs and p.stem.replace(" ", "-").lower() not in norm_targets
     ]
     if len(del_candidates) < n_del:
         pytest.skip("fixture has no safe leaf notes to delete for Step 9 parity test")

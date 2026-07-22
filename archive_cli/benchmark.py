@@ -354,7 +354,9 @@ def _cleaning_snapshot(vault: Path, *, cache: VaultScanCache | None = None) -> d
         "imessage_threads_with_messages": _count_cards_with_nonempty_field(
             vault, "IMessageThreads", "messages", cache=cache
         ),
-        "imessage_threads_with_people": _count_cards_with_nonempty_field(vault, "IMessageThreads", "people", cache=cache),
+        "imessage_threads_with_people": _count_cards_with_nonempty_field(
+            vault, "IMessageThreads", "people", cache=cache
+        ),
         "calendar_events_with_source_messages": _count_cards_with_nonempty_field(
             vault, "Calendar", "source_messages", cache=cache
         ),

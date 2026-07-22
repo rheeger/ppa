@@ -187,6 +187,7 @@ def test_incremental_rebuild_on_add(tmp_path: Path) -> None:
     src = next(vault.rglob("People/*.md"))
     dest = vault / "Documents" / "incremental-add-test.md"
     import shutil
+
     shutil.copy2(src, dest)
 
     c2 = VaultScanCache.build_or_load(vault, tier=1, progress_every=0)
@@ -221,6 +222,7 @@ def test_incremental_unchanged_preserves_data(tmp_path: Path) -> None:
     ch1 = c1.content_hash_for_rel_path(some)
 
     import sqlite3 as _sqlite3
+
     cache_path = VaultScanCache.cache_path_for_vault(vault)
     conn = _sqlite3.connect(str(cache_path), timeout=10.0)
     conn.execute(

@@ -10,17 +10,25 @@ from __future__ import annotations
 from typing import Any
 
 from archive_cli import linker_framework as lf
-from archive_cli.seed_links import (CARD_TYPE_MODULES,
-                                    LINK_TYPE_EVENT_HAS_MESSAGE,
-                                    LINK_TYPE_EVENT_HAS_THREAD,
-                                    LINK_TYPE_EVENT_HAS_TRANSCRIPT,
-                                    LINK_TYPE_THREAD_HAS_ATTACHMENT,
-                                    LINK_TYPE_THREAD_HAS_MESSAGE, MODULE_GRAPH,
-                                    SeedCardSketch, SeedLinkCandidate,
-                                    SeedLinkCatalog, _append_candidate,
-                                    _clean_text, _iter_string_values,
-                                    _make_evidence, _normalize_slug,
-                                    _slug_from_ref, get_link_surface_policies)
+from archive_cli.seed_links import (
+    CARD_TYPE_MODULES,
+    LINK_TYPE_EVENT_HAS_MESSAGE,
+    LINK_TYPE_EVENT_HAS_THREAD,
+    LINK_TYPE_EVENT_HAS_TRANSCRIPT,
+    LINK_TYPE_THREAD_HAS_ATTACHMENT,
+    LINK_TYPE_THREAD_HAS_MESSAGE,
+    MODULE_GRAPH,
+    SeedCardSketch,
+    SeedLinkCandidate,
+    SeedLinkCatalog,
+    _append_candidate,
+    _clean_text,
+    _iter_string_values,
+    _make_evidence,
+    _normalize_slug,
+    _slug_from_ref,
+    get_link_surface_policies,
+)
 
 
 def _generate_graph_consistency_candidates(catalog: SeedLinkCatalog, source: SeedCardSketch) -> list[SeedLinkCandidate]:
@@ -149,7 +157,6 @@ def _generate_graph_consistency_candidates(catalog: SeedLinkCatalog, source: See
     return results
 
 
-
 def _score_graph_features(
     features: dict[str, Any],
 ) -> tuple[float, float, float, float, float]:
@@ -176,7 +183,6 @@ def _score_graph_features(
     )
 
 
-
 def _policies() -> tuple:
     return tuple(p for p in get_link_surface_policies() if p.module_name == MODULE_GRAPH)
 
@@ -185,23 +191,25 @@ def _source_types() -> tuple[str, ...]:
     return tuple(ct for ct, mods in CARD_TYPE_MODULES.items() if MODULE_GRAPH in mods)
 
 
-lf.register_linker(lf.LinkerSpec(
-    module_name=MODULE_GRAPH,
-    source_card_types=_source_types(),
-    emits_link_types=(
-        LINK_TYPE_THREAD_HAS_MESSAGE,
-        LINK_TYPE_THREAD_HAS_ATTACHMENT,
-        LINK_TYPE_EVENT_HAS_MESSAGE,
-        LINK_TYPE_EVENT_HAS_THREAD,
-        LINK_TYPE_EVENT_HAS_TRANSCRIPT,
-    ),
-    generator=_generate_graph_consistency_candidates,
-    scoring_fn=_score_graph_features,
-    scoring_mode="weighted",
-    policies=_policies(),
-    requires_llm_judge=False,
-    lifecycle_state="active",
-    phase_owner="phase_2.875",
-    post_promotion_action="edges_only",
-    description="Graph-consistency repair: missing reverse edges on thread/event hubs from exact IDs.",
-))
+lf.register_linker(
+    lf.LinkerSpec(
+        module_name=MODULE_GRAPH,
+        source_card_types=_source_types(),
+        emits_link_types=(
+            LINK_TYPE_THREAD_HAS_MESSAGE,
+            LINK_TYPE_THREAD_HAS_ATTACHMENT,
+            LINK_TYPE_EVENT_HAS_MESSAGE,
+            LINK_TYPE_EVENT_HAS_THREAD,
+            LINK_TYPE_EVENT_HAS_TRANSCRIPT,
+        ),
+        generator=_generate_graph_consistency_candidates,
+        scoring_fn=_score_graph_features,
+        scoring_mode="weighted",
+        policies=_policies(),
+        requires_llm_judge=False,
+        lifecycle_state="active",
+        phase_owner="phase_2.875",
+        post_promotion_action="edges_only",
+        description="Graph-consistency repair: missing reverse edges on thread/event hubs from exact IDs.",
+    )
+)

@@ -159,9 +159,7 @@ def embed_cache_rotate(
             new_run.mkdir(parents=True, exist_ok=True)
             manifest = new_run / "MANIFEST.txt"
             manifest.write_text(
-                f"# embedding recovery cache run {ts}\n"
-                f"# rotated_from: {art.resolve()}\n"
-                f"# files: {len(out_files)}\n",
+                f"# embedding recovery cache run {ts}\n# rotated_from: {art.resolve()}\n# files: {len(out_files)}\n",
                 encoding="utf-8",
             )
             for f in out_files:

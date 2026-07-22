@@ -7,6 +7,7 @@ common failure modes. Run from repo `ppa/` with the project venv active:
   .venv/bin/python scripts/generate_extraction_quality_report.py \\
     --staging-dir _artifacts/_staging-5pct --label 5pct --out logs/extraction-quality-5pct.md
 """
+
 from __future__ import annotations
 
 import argparse
@@ -211,9 +212,7 @@ def main() -> None:
                 flag_counter[f] += 1
 
         if rows:
-            lines.append(
-                f"- **Share with ≥1 flag:** {any_flag}/{len(rows)} ({100.0 * any_flag / len(rows):.1f}%)"
-            )
+            lines.append(f"- **Share with ≥1 flag:** {any_flag}/{len(rows)} ({100.0 * any_flag / len(rows):.1f}%)")
         if flag_counter:
             lines.append("- **Flag counts (cards can have multiple):**")
             for fname, cnt in flag_counter.most_common(25):
