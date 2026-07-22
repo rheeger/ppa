@@ -654,6 +654,9 @@ def test_postgres_bootstrap_prepares_pgvector_ready_schema(tmp_vault, monkeypatc
     executed: list[str] = []
 
     class FakeConnection:
+        def __init__(self) -> None:
+            self._last_sql = ""
+
         def __enter__(self):
             return self
 
@@ -661,16 +664,29 @@ def test_postgres_bootstrap_prepares_pgvector_ready_schema(tmp_vault, monkeypatc
             return False
 
         def execute(self, sql, params=None):
-            executed.append(" ".join(str(sql).split()))
+            self._last_sql = " ".join(str(sql).split())
+            executed.append(self._last_sql)
             return self
 
         def fetchone(self):
+            sql = self._last_sql.lower()
+            # Match schema-repair introspection shape consumed by
+            # SchemaDDLMixin._ensure_cards_activity_columns.
+            if "information_schema.columns" in sql:
+                return {"data_type": "timestamp with time zone", "is_nullable": "YES"}
+            if "to_regclass" in sql:
+                return {"exists": False}
+            if "count(*)" in sql:
+                return {"c": 0}
             return {"value": "3"}
 
         def fetchall(self):
             return []
 
         def commit(self):
+            return None
+
+        def rollback(self):
             return None
 
     index._connect = lambda: FakeConnection()  # type: ignore[method-assign]

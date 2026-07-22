@@ -94,37 +94,39 @@ def test_clean_phase3_apply_on_non_prod(tmp_path: Path) -> None:
 
 
 def test_clean_phase3_refuses_prod_vault_without_override(tmp_path: Path) -> None:
-    vault = Path("/Users/rheeger/Archive/seed/hf-archives-seed-FAKE-FOR-TEST")
-    # We don't actually create the directory; the safeguard checks the path
-    # pattern, but it also checks ``[[ -d ]]``. Use a real dir at the right
-    # prefix for the negative test. To avoid touching the real Archive/seed
-    # tree, simulate by feeding a synthetic prefix path; the script should
-    # short-circuit on the ``not a directory`` check first, BUT we want to
-    # confirm the prefix-match logic fires before delete. So we build a temp
-    # path with the same prefix shape:
-    fake_root = tmp_path / "fake-prefix"
-    fake_root.mkdir()
-    pseudo_prod = fake_root / "Users" / "rheeger" / "Archive" / "seed" / "hf-archives-seed-2099"
-    pseudo_prod.mkdir(parents=True)
-    (pseudo_prod / "Transactions" / "Rides").mkdir(parents=True)
-    # Symlink it so the absolute path matches the prefix; this is the only way
-    # to test the regex without polluting the real Archive/seed tree.
-    real_target = Path("/Users/rheeger/Archive/seed/hf-archives-seed-PYTEST")
-    if real_target.exists() or real_target.is_symlink():
-        real_target.unlink()
-    try:
-        real_target.symlink_to(pseudo_prod)
-        script = Path(__file__).resolve().parents[1] / "archive_scripts" / "clean-phase3-derived-dirs.sh"
-        res = subprocess.run(
-            ["bash", str(script), "--apply", str(real_target)],
-            capture_output=True,
-            text=True,
-        )
-        assert res.returncode == 3
-        assert "REFUSING" in res.stderr
-    finally:
-        if real_target.is_symlink() or real_target.exists():
-            real_target.unlink()
+    """Prod-vault prefix refuse path works without homeowner filesystem paths.
+
+    The shipped script hard-codes PROD_VAULT_PATTERNS. For CI portability we
+    run a temp copy whose first pattern is remapped onto ``tmp_path`` while
+    leaving the refuse/--apply/guard behavior intact.
+    """
+    prod_root = tmp_path / "Archive" / "seed"
+    vault = prod_root / "hf-archives-seed-2099"
+    (vault / "Transactions" / "Rides").mkdir(parents=True)
+    marker = vault / "Transactions" / "Rides" / "x.md"
+    marker.write_text("hi", encoding="utf-8")
+
+    original = Path(__file__).resolve().parents[1] / "archive_scripts" / "clean-phase3-derived-dirs.sh"
+    script = tmp_path / "clean-phase3-derived-dirs.sh"
+    # Keep path as POSIX-style string even if tmp_path is absolute.
+    patched_pattern = f'"{prod_root.as_posix()}/hf-archives-seed-"'
+    content = original.read_text(encoding="utf-8").replace(
+        '"/Users/rheeger/Archive/seed/hf-archives-seed-"',
+        patched_pattern,
+        1,
+    )
+    assert patched_pattern in content, "failed to remap prod vault pattern for isolated test"
+    script.write_text(content, encoding="utf-8")
+    script.chmod(0o755)
+
+    res = subprocess.run(
+        ["bash", str(script), "--apply", str(vault)],
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode == 3
+    assert "REFUSING" in res.stderr
+    assert marker.exists(), "safeguard must refuse before deleting prod-like vault contents"
 
 
 @pytest.mark.integration
