@@ -218,7 +218,7 @@ jobs:
       - run: pip install -e ".[dev]"
       - name: Prepare slice from fixtures
         run: |
-          python -m archive_cli slice-seed --config archive_archive_tests/slice_config.json --output /tmp/ppa-test-slice --source-vault archive_archive_tests/fixtures
+          python -m archive_cli slice-seed --config archive_tests/slice_config.json --output /tmp/ppa-test-slice --source-vault archive_tests/fixtures
       - name: Bootstrap, rebuild, and verify
         env:
           PPA_INDEX_DSN: postgresql://archive:archive@localhost:5432/archive
@@ -230,7 +230,7 @@ jobs:
         run: |
           python -m archive_cli bootstrap-postgres
           python -m archive_cli rebuild-indexes
-          python -m archive_cli health-check --manifest tests/slice_manifest_fixture.json --report-format both --report-dir /tmp/
+          python -m archive_cli health-check --manifest archive_tests/slice_manifest_fixture.json --report-format both --report-dir /tmp/
 
   benchmark-nightly:
     runs-on: ubuntu-latest
