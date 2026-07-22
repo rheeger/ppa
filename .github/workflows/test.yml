@@ -191,7 +191,7 @@ jobs:
           PPA_EMBEDDING_PROVIDER: hash
           PPA_EMBEDDING_MODEL: archive-hash-dev
           PPA_EMBEDDING_VERSION: "1"
-        run: chmod +x scripts/ppa-smoke-test.sh && ./scripts/ppa-smoke-test.sh
+        run: chmod +x archive_scripts/ppa-smoke-test.sh && ./archive_scripts/ppa-smoke-test.sh
 
   slice-verify:
     runs-on: ubuntu-latest
