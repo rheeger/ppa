@@ -216,9 +216,19 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e ".[dev]"
-      - name: Prepare slice from fixtures
+      - name: Prepare fixture vault
         run: |
-          python -m archive_cli slice-seed --config archive_tests/slice_config.json --output /tmp/ppa-test-slice --source-vault archive_tests/fixtures
+          python - <<'PY'
+          from pathlib import Path
+          import shutil
+          from archive_tests.fixtures import load_fixture_vault
+
+          dest = Path("/tmp/ppa-test-slice")
+          if dest.exists():
+              shutil.rmtree(dest)
+          vault = load_fixture_vault(dest, include_graphs=True)
+          print(f"prepared fixture vault at {vault}")
+          PY
       - name: Bootstrap, rebuild, and verify
         env:
           PPA_INDEX_DSN: postgresql://archive:archive@localhost:5432/archive
