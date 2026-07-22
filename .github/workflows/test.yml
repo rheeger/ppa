@@ -91,12 +91,24 @@ jobs:
         ports:
           - 5432:5432
         options: >-
+          --shm-size=512m
           --health-cmd="pg_isready -U archive"
           --health-interval=5s
           --health-timeout=5s
           --health-retries=10
     steps:
       - uses: actions/checkout@v4
+      - name: Apply PostgreSQL test contract
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          docker cp archive_tests/docker/postgres-test.conf "$POSTGRES_CONTAINER:/tmp/postgres-test.conf"
+          docker exec "$POSTGRES_CONTAINER" sh -ceu \
+            'printf "\ninclude = '\''/tmp/postgres-test.conf'\''\n" >> "$PGDATA/postgresql.conf"'
+          docker restart "$POSTGRES_CONTAINER"
+          until docker exec "$POSTGRES_CONTAINER" pg_isready -U archive -d archive; do
+            sleep 1
+          done
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

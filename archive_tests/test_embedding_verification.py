@@ -64,7 +64,7 @@ def _common_provenance(source: str, *fields: str) -> dict[str, ProvenanceEntry]:
 
 
 def _seed_phase5_vault(vault: Path) -> None:
-    """Seed vault with person cards + 3 new derived type cards for verification."""
+    """Seed vault with person cards + linked transaction cards for verification."""
     from archive_vault.schema import CARD_TYPES
 
     jane = PersonCard(
@@ -138,6 +138,43 @@ def _seed_phase5_vault(vault: Path) -> None:
             "tax",
             "mode",
             "delivery_address",
+            "source_email",
+        ),
+    )
+
+    FinanceCard = CARD_TYPES["finance"]
+    finance = FinanceCard(
+        uid="hfa-finance-test0000001",
+        type="finance",
+        source=["plaid"],
+        source_id="plaid-doordash-order-123",
+        created="2025-12-15",
+        updated="2025-12-15",
+        summary="DoorDash charge for Brooklyn Hero Shop order",
+        amount=21.50,
+        currency="USD",
+        counterparty="DoorDash",
+        category="Food and Drink",
+        transaction_status="posted",
+        transaction_type="card purchase",
+        source_email="[[hfa-email-message-doordash]]",
+    )
+    finance_dir = vault / "Finance"
+    finance_dir.mkdir(parents=True, exist_ok=True)
+    write_card(
+        vault,
+        "Finance/doordash-hero-shop-charge.md",
+        finance,
+        body="DoorDash charge reconciled to [[doordash-hero-shop]] from the matching receipt and total.",
+        provenance=_common_provenance(
+            "plaid",
+            "summary",
+            "amount",
+            "currency",
+            "counterparty",
+            "category",
+            "transaction_status",
+            "transaction_type",
             "source_email",
         ),
     )
