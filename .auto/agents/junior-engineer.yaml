@@ -1,0 +1,5 @@
+imports:
+  - "@auto/engineering-tier@latest/agents/junior-engineer.yaml"
+variables:
+  repoFullName: rheeger/ppa
+  githubConnection: github-rheeger

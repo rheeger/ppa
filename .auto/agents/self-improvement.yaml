@@ -1,0 +1,4 @@
+imports:
+  - "@auto/self-improvement@latest/agents/self-improvement.yaml"
+variables:
+  repoFullName: rheeger/ppa

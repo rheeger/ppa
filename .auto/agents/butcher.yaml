@@ -1,0 +1,5 @@
+imports:
+  - "@auto/butcher@latest/agents/butcher.yaml"
+variables:
+  repoFullName: rheeger/ppa
+  githubConnection: github-rheeger
