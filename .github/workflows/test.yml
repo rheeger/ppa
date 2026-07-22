@@ -45,10 +45,11 @@ jobs:
       - name: Verify archive_crate extension
         run: |
           python - <<'PY'
+          from importlib.machinery import EXTENSION_SUFFIXES
           from pathlib import Path
+          import sys
 
           import archive_crate
-          import archive_crate.archive_crate as native
 
           required = (
               "walk_vault",
@@ -57,11 +58,12 @@ jobs:
               "stable_json_from_yaml_frontmatter",
           )
           missing = [name for name in required if not hasattr(archive_crate, name)]
+          assert not missing, f"archive_crate missing expected symbols: {missing}"
+          native = sys.modules[archive_crate.walk_vault.__module__]
           native_path = Path(native.__file__)
           print(f"archive_crate extension: {native_path}")
           print(f"verified symbols: {', '.join(required)}")
-          assert native_path.suffix == ".so", native_path
-          assert not missing, f"archive_crate missing expected symbols: {missing}"
+          assert any(str(native_path).endswith(suffix) for suffix in EXTENSION_SUFFIXES), native_path
           PY
       - name: Run focused archive_crate tests
         run: |
@@ -116,10 +118,11 @@ jobs:
       - name: Verify archive_crate extension
         run: |
           python - <<'PY'
+          from importlib.machinery import EXTENSION_SUFFIXES
           from pathlib import Path
+          import sys
 
           import archive_crate
-          import archive_crate.archive_crate as native
 
           required = (
               "walk_vault",
@@ -128,11 +131,12 @@ jobs:
               "stable_json_from_yaml_frontmatter",
           )
           missing = [name for name in required if not hasattr(archive_crate, name)]
+          assert not missing, f"archive_crate missing expected symbols: {missing}"
+          native = sys.modules[archive_crate.walk_vault.__module__]
           native_path = Path(native.__file__)
           print(f"archive_crate extension: {native_path}")
           print(f"verified symbols: {', '.join(required)}")
-          assert native_path.suffix == ".so", native_path
-          assert not missing, f"archive_crate missing expected symbols: {missing}"
+          assert any(str(native_path).endswith(suffix) for suffix in EXTENSION_SUFFIXES), native_path
           PY
       - name: Prepare CI vault
         run: |
