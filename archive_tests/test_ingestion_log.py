@@ -39,7 +39,9 @@ def test_materialize_row_produces_ingestion_log_row(tmp_path: Path) -> None:
 
 
 @pytest.mark.integration
-def test_ingestion_log_populated_during_rebuild(pgvector_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ingestion_log_populated_during_rebuild(
+    pgvector_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """After rebuild, ingestion_log row count matches cards row count."""
     from archive_cli.index_store import PostgresArchiveIndex
     from archive_tests.fixtures import load_fixture_vault

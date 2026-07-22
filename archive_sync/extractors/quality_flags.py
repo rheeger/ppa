@@ -104,7 +104,9 @@ def email_uid_index(vault: Path, only_uids: set[str]) -> dict[str, Path]:
                 import archive_crate
 
                 rows = archive_crate.frontmatter_dicts_from_cache(
-                    str(cache_path), types=["email_message"], prefix="Email/",
+                    str(cache_path),
+                    types=["email_message"],
+                    prefix="Email/",
                 )
                 for row in rows:
                     fm = row["frontmatter"]
@@ -140,9 +142,7 @@ def email_uid_index(vault: Path, only_uids: set[str]) -> dict[str, Path]:
     return idx
 
 
-def round_trip_flags(
-    ct: str, fm: dict[str, Any], vault: Path, uid_to_path: dict[str, Path]
-) -> list[str]:
+def round_trip_flags(ct: str, fm: dict[str, Any], vault: Path, uid_to_path: dict[str, Path]) -> list[str]:
     uid = wikilink_uid(str(fm.get("source_email") or ""))
     if not uid:
         return []
@@ -156,11 +156,7 @@ def round_trip_flags(
         return []
     clean = clean_email_body(body)
     warnings = validate_provenance_round_trip(dict(fm), clean, ct)
-    return [
-        f"heuristic:round_trip_fail:{w.split('.', 1)[1].split(':', 1)[0]}"
-        for w in warnings
-        if "." in w
-    ]
+    return [f"heuristic:round_trip_fail:{w.split('.', 1)[1].split(':', 1)[0]}" for w in warnings if "." in w]
 
 
 def dedup_key(ct: str, fm: dict[str, Any]) -> tuple[Any, ...]:

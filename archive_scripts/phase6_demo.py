@@ -50,48 +50,93 @@ DATE = _dt.date.today().strftime("%Y%m%d")
 # ---------------------------------------------------------------------------
 DATASET: list[dict[str, Any]] = [
     # Cluster A: travel itinerary discussion + booking + transcript
-    {"uid": "u-doc-italy", "rel": "Documents/italy-trip-notes.md", "type": "document",
-     "summary": "Italy trip planning notes",
-     "text": "italy rome florence venice hotel booking flight itinerary september"},
-    {"uid": "u-flight-jfk-fco", "rel": "Travel/flight-jfk-fco.md", "type": "flight",
-     "summary": "JFK to FCO flight booking",
-     "text": "italy rome florence venice hotel booking flight itinerary september"},
-    {"uid": "u-acc-rome", "rel": "Travel/accommodation-rome-hotel.md", "type": "accommodation",
-     "summary": "Rome hotel reservation",
-     "text": "italy rome florence venice hotel booking flight itinerary september"},
-    {"uid": "u-meeting-italy", "rel": "Meetings/2026-08-italy-trip-call.md", "type": "meeting_transcript",
-     "summary": "Family call: Italy trip planning",
-     "text": "italy rome florence venice hotel booking flight itinerary september"},
-
+    {
+        "uid": "u-doc-italy",
+        "rel": "Documents/italy-trip-notes.md",
+        "type": "document",
+        "summary": "Italy trip planning notes",
+        "text": "italy rome florence venice hotel booking flight itinerary september",
+    },
+    {
+        "uid": "u-flight-jfk-fco",
+        "rel": "Travel/flight-jfk-fco.md",
+        "type": "flight",
+        "summary": "JFK to FCO flight booking",
+        "text": "italy rome florence venice hotel booking flight itinerary september",
+    },
+    {
+        "uid": "u-acc-rome",
+        "rel": "Travel/accommodation-rome-hotel.md",
+        "type": "accommodation",
+        "summary": "Rome hotel reservation",
+        "text": "italy rome florence venice hotel booking flight itinerary september",
+    },
+    {
+        "uid": "u-meeting-italy",
+        "rel": "Meetings/2026-08-italy-trip-call.md",
+        "type": "meeting_transcript",
+        "summary": "Family call: Italy trip planning",
+        "text": "italy rome florence venice hotel booking flight itinerary september",
+    },
     # Cluster B: back pain conversation + medical record + amazon order
-    {"uid": "u-msg-backpain", "rel": "IMessage/2026-03-back-pain-thread.md", "type": "imessage_message",
-     "summary": "Conversation about back pain",
-     "text": "back pain heating pad recommendation orthopedic guidance lumbar support"},
-    {"uid": "u-med-back", "rel": "Medical/2026-03-back-strain.md", "type": "medical_record",
-     "summary": "Back strain diagnosis",
-     "text": "back pain heating pad recommendation orthopedic guidance lumbar support"},
-    {"uid": "u-purchase-pad", "rel": "Purchases/2026-03-amazon-heating-pad.md", "type": "purchase",
-     "summary": "Amazon order: heating pad",
-     "text": "back pain heating pad recommendation orthopedic guidance lumbar support"},
-
+    {
+        "uid": "u-msg-backpain",
+        "rel": "IMessage/2026-03-back-pain-thread.md",
+        "type": "imessage_message",
+        "summary": "Conversation about back pain",
+        "text": "back pain heating pad recommendation orthopedic guidance lumbar support",
+    },
+    {
+        "uid": "u-med-back",
+        "rel": "Medical/2026-03-back-strain.md",
+        "type": "medical_record",
+        "summary": "Back strain diagnosis",
+        "text": "back pain heating pad recommendation orthopedic guidance lumbar support",
+    },
+    {
+        "uid": "u-purchase-pad",
+        "rel": "Purchases/2026-03-amazon-heating-pad.md",
+        "type": "purchase",
+        "summary": "Amazon order: heating pad",
+        "text": "back pain heating pad recommendation orthopedic guidance lumbar support",
+    },
     # Cluster C: Q3 strategy meeting + finance consultant payment
-    {"uid": "u-transcript-q3", "rel": "Meetings/2026-09-q3-strategy.md", "type": "meeting_transcript",
-     "summary": "Q3 strategy offsite transcript",
-     "text": "quarterly strategy planning offsite agenda consultant deliverable"},
-    {"uid": "u-finance-consult", "rel": "Finance/2026-09-consultant-payment.md", "type": "finance",
-     "summary": "Consultant payment Q3",
-     "text": "quarterly strategy planning offsite agenda consultant deliverable"},
-
+    {
+        "uid": "u-transcript-q3",
+        "rel": "Meetings/2026-09-q3-strategy.md",
+        "type": "meeting_transcript",
+        "summary": "Q3 strategy offsite transcript",
+        "text": "quarterly strategy planning offsite agenda consultant deliverable",
+    },
+    {
+        "uid": "u-finance-consult",
+        "rel": "Finance/2026-09-consultant-payment.md",
+        "type": "finance",
+        "summary": "Consultant payment Q3",
+        "text": "quarterly strategy planning offsite agenda consultant deliverable",
+    },
     # Outliers: should NOT be matched to any cluster
-    {"uid": "u-doc-recipes", "rel": "Documents/family-recipes.md", "type": "document",
-     "summary": "Family recipe collection",
-     "text": "grandma pasta recipe tomato basil oregano traditional kitchen"},
-    {"uid": "u-msg-weather", "rel": "IMessage/2026-04-weather-chat.md", "type": "imessage_message",
-     "summary": "Casual weather chat",
-     "text": "rainy weekend forecast umbrella weather chilly april spring"},
-    {"uid": "u-payroll", "rel": "Finance/2026-09-payroll-direct-deposit.md", "type": "payroll",
-     "summary": "Payroll direct deposit",
-     "text": "monthly payroll direct deposit gross net withholding tax"},
+    {
+        "uid": "u-doc-recipes",
+        "rel": "Documents/family-recipes.md",
+        "type": "document",
+        "summary": "Family recipe collection",
+        "text": "grandma pasta recipe tomato basil oregano traditional kitchen",
+    },
+    {
+        "uid": "u-msg-weather",
+        "rel": "IMessage/2026-04-weather-chat.md",
+        "type": "imessage_message",
+        "summary": "Casual weather chat",
+        "text": "rainy weekend forecast umbrella weather chilly april spring",
+    },
+    {
+        "uid": "u-payroll",
+        "rel": "Finance/2026-09-payroll-direct-deposit.md",
+        "type": "payroll",
+        "summary": "Payroll direct deposit",
+        "text": "monthly payroll direct deposit gross net withholding tax",
+    },
 ]
 
 
@@ -121,8 +166,14 @@ def _seed_cards_with_embeddings(idx: PostgresArchiveIndex, provider: HashEmbeddi
                 INSERT INTO {idx.schema}.cards (uid, rel_path, slug, type, summary, content_hash)
                 VALUES (%s, %s, %s, %s, %s, %s)
                 """,
-                (card["uid"], card["rel"], card["rel"].split("/")[-1].removesuffix(".md"),
-                 card["type"], card["summary"], f"sha256:{card['uid']}"),
+                (
+                    card["uid"],
+                    card["rel"],
+                    card["rel"].split("/")[-1].removesuffix(".md"),
+                    card["type"],
+                    card["summary"],
+                    f"sha256:{card['uid']}",
+                ),
             )
             chunk_key = f"{card['uid']}:body:0"
             conn.execute(
@@ -132,8 +183,14 @@ def _seed_cards_with_embeddings(idx: PostgresArchiveIndex, provider: HashEmbeddi
                    content, content_hash, token_count)
                 VALUES (%s, %s, %s, 'body', 0, '[]'::jsonb, %s, %s, %s)
                 """,
-                (chunk_key, card["uid"], card["rel"], card["text"],
-                 f"sha256:{card['uid']}:body", len(card["text"].split())),
+                (
+                    chunk_key,
+                    card["uid"],
+                    card["rel"],
+                    card["text"],
+                    f"sha256:{card['uid']}:body",
+                    len(card["text"].split()),
+                ),
             )
             vec = provider.embed_texts([card["text"]])[0]
             conn.execute(
@@ -152,23 +209,40 @@ def _build_catalog() -> SeedLinkCatalog:
     cards_by_type: dict[str, list[SeedCardSketch]] = {}
     for card in DATASET:
         sketch = SeedCardSketch(
-            uid=card["uid"], rel_path=card["rel"],
+            uid=card["uid"],
+            rel_path=card["rel"],
             slug=card["rel"].split("/")[-1].removesuffix(".md"),
-            card_type=card["type"], summary=card["summary"],
-            frontmatter={}, body="", content_hash=f"sha256:{card['uid']}",
-            activity_at="2026-01-01", wikilinks=[],
+            card_type=card["type"],
+            summary=card["summary"],
+            frontmatter={},
+            body="",
+            content_hash=f"sha256:{card['uid']}",
+            activity_at="2026-01-01",
+            wikilinks=[],
         )
         cards_by_uid[card["uid"]] = sketch
         cards_by_type.setdefault(card["type"], []).append(sketch)
     return SeedLinkCatalog(
-        cards_by_uid=cards_by_uid, cards_by_exact_slug={}, cards_by_slug={},
+        cards_by_uid=cards_by_uid,
+        cards_by_exact_slug={},
+        cards_by_slug={},
         cards_by_type=cards_by_type,
-        person_by_email={}, person_by_phone={}, person_by_handle={}, person_by_alias={},
-        email_threads_by_thread_id={}, email_messages_by_thread_id={},
-        email_messages_by_message_id={}, email_attachments_by_message_id={},
-        email_attachments_by_thread_id={}, imessage_threads_by_chat_id={},
-        imessage_messages_by_chat_id={}, calendar_events_by_event_id={},
-        calendar_events_by_ical_uid={}, media_by_day={}, events_by_day={}, path_buckets={},
+        person_by_email={},
+        person_by_phone={},
+        person_by_handle={},
+        person_by_alias={},
+        email_threads_by_thread_id={},
+        email_messages_by_thread_id={},
+        email_messages_by_message_id={},
+        email_attachments_by_message_id={},
+        email_attachments_by_thread_id={},
+        imessage_threads_by_chat_id={},
+        imessage_messages_by_chat_id={},
+        calendar_events_by_event_id={},
+        calendar_events_by_ical_uid={},
+        media_by_day={},
+        events_by_day={},
+        path_buckets={},
     )
 
 
@@ -177,12 +251,14 @@ def _capture_baseline(idx: PostgresArchiveIndex, out: Path) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     for card in DATASET:
         graph = idx.graph(card["rel"], hops=1)
-        rows.append({
-            "anchor": card["rel"],
-            "type": card["type"],
-            "neighbor_count": len(graph[card["rel"]]) if graph else 0,
-            "neighbors": (graph[card["rel"]] if graph else []),
-        })
+        rows.append(
+            {
+                "anchor": card["rel"],
+                "type": card["type"],
+                "neighbor_count": len(graph[card["rel"]]) if graph else 0,
+                "neighbors": (graph[card["rel"]] if graph else []),
+            }
+        )
     payload = {
         "tier": "tier2-baseline-demo",
         "snapshot_date": _dt.datetime.utcnow().isoformat() + "Z",
@@ -205,24 +281,31 @@ def _run_semantic_linker(
     with idx._connect() as conn:
         for card in DATASET:
             cands = _generate_semantic_candidates(
-                conn, idx.schema, catalog, card["uid"], k=8, threshold=0.7,
+                conn,
+                idx.schema,
+                catalog,
+                card["uid"],
+                k=8,
+                threshold=0.7,
             )
             for cand in cands:
                 decision = evaluate_seed_link_candidate(idx.vault, catalog, cand)
                 _persist_candidate(conn, idx, job_id=None, candidate=cand, decision=decision, commit=True)
-                decisions.append({
-                    "source_uid": cand.source_card_uid,
-                    "source_rel_path": cand.source_rel_path,
-                    "target_uid": cand.target_card_uid,
-                    "target_rel_path": cand.target_rel_path,
-                    "embedding_similarity": cand.features["embedding_similarity"],
-                    "llm_score": decision.llm_score,
-                    "llm_model": decision.llm_model,
-                    "embedding_score": decision.embedding_score,
-                    "final_confidence": decision.final_confidence,
-                    "decision": decision.decision,
-                    "decision_reason": decision.decision_reason,
-                })
+                decisions.append(
+                    {
+                        "source_uid": cand.source_card_uid,
+                        "source_rel_path": cand.source_rel_path,
+                        "target_uid": cand.target_card_uid,
+                        "target_rel_path": cand.target_rel_path,
+                        "embedding_similarity": cand.features["embedding_similarity"],
+                        "llm_score": decision.llm_score,
+                        "llm_model": decision.llm_model,
+                        "embedding_score": decision.embedding_score,
+                        "final_confidence": decision.final_confidence,
+                        "decision": decision.decision,
+                        "decision_reason": decision.decision_reason,
+                    }
+                )
     print(f"[demo] judged {len(decisions)} candidates")
     return decisions
 
@@ -248,8 +331,7 @@ def _write_calibration_report(decisions: list[dict[str, Any]], out: Path) -> Non
         "",
         "## Run parameters",
         "",
-        f"- Synthetic dataset: {len(DATASET)} cards across "
-        f"{len({c['type'] for c in DATASET})} types",
+        f"- Synthetic dataset: {len(DATASET)} cards across {len({c['type'] for c in DATASET})} types",
         "- Embedding provider: hash (deterministic, demo-only)",
         "- LLM judge: OpenAI (real, via existing `llm_judge_candidate` chain)",
         "- k = 8, threshold = 0.7",
@@ -260,18 +342,22 @@ def _write_calibration_report(decisions: list[dict[str, Any]], out: Path) -> Non
         "|---|---|",
     ]
     for band in [
-        "band_4_0.95+", "band_3_0.85_0.95", "band_2_0.70_0.85",
-        "band_1_0.50_0.70", "band_0_below_0.50",
+        "band_4_0.95+",
+        "band_3_0.85_0.95",
+        "band_2_0.70_0.85",
+        "band_1_0.50_0.70",
+        "band_0_below_0.50",
     ]:
         lines.append(f"| {band} | {len(bands.get(band, []))} |")
     lines.extend(["", "## Sample classifications (review TP/FP/Unclear)", ""])
-    lines.append(
-        "| band | source -> target | embedding | llm | final | decision | TP/FP/Unclear |"
-    )
+    lines.append("| band | source -> target | embedding | llm | final | decision | TP/FP/Unclear |")
     lines.append("|---|---|---|---|---|---|---|")
     for band in [
-        "band_4_0.95+", "band_3_0.85_0.95", "band_2_0.70_0.85",
-        "band_1_0.50_0.70", "band_0_below_0.50",
+        "band_4_0.95+",
+        "band_3_0.85_0.95",
+        "band_2_0.70_0.85",
+        "band_1_0.50_0.70",
+        "band_0_below_0.50",
     ]:
         for d in bands.get(band, [])[:25]:
             arrow = f"`{d['source_rel_path']}` -> `{d['target_rel_path']}`"
@@ -279,27 +365,29 @@ def _write_calibration_report(decisions: list[dict[str, Any]], out: Path) -> Non
                 f"| {band} | {arrow} | {d['embedding_similarity']:.3f} | "
                 f"{d['llm_score']:.2f} | {d['final_confidence']:.3f} | {d['decision']} |   |"
             )
-    lines.extend([
-        "",
-        "## How to use this report",
-        "",
-        "1. For each row above, look up the source + target cards (paths shown).",
-        "2. Mark TP (true positive — genuinely related), FP (false positive — coincidental "
-        "similarity), or Unclear in the rightmost column.",
-        "3. Compute precision per band: `precision = TP / (TP + FP)` (excluding Unclear).",
-        "4. Apply the floor decision rule from `phase_6` plan Step 12d:",
-        "   - Band 4 precision >= 0.95 → set `auto_promote_floor = 0.95`",
-        "   - Band 4 precision 0.80-0.95 → keep `auto_promote_floor = 0.99`",
-        "   - All bands < 0.80 → bump floors to 1.0 (effectively disable)",
-        "5. Edit `LinkSurfacePolicy(LINK_TYPE_SEMANTICALLY_RELATED)` in "
-        "`archive_cli/seed_links.py` and bump `SEED_LINK_POLICY_VERSION` (2 → 3).",
-        "",
-        "## Why so few rows?",
-        "",
-        "This is a 12-card demo dataset. A real calibration sweep against the slice will "
-        "produce thousands of candidates per band; the runbook at "
-        "`_artifacts/_semantic-linker-calibration/README.md` documents that flow.",
-    ])
+    lines.extend(
+        [
+            "",
+            "## How to use this report",
+            "",
+            "1. For each row above, look up the source + target cards (paths shown).",
+            "2. Mark TP (true positive — genuinely related), FP (false positive — coincidental "
+            "similarity), or Unclear in the rightmost column.",
+            "3. Compute precision per band: `precision = TP / (TP + FP)` (excluding Unclear).",
+            "4. Apply the floor decision rule from `phase_6` plan Step 12d:",
+            "   - Band 4 precision >= 0.95 → set `auto_promote_floor = 0.95`",
+            "   - Band 4 precision 0.80-0.95 → keep `auto_promote_floor = 0.99`",
+            "   - All bands < 0.80 → bump floors to 1.0 (effectively disable)",
+            "5. Edit `LinkSurfacePolicy(LINK_TYPE_SEMANTICALLY_RELATED)` in "
+            "`archive_cli/seed_links.py` and bump `SEED_LINK_POLICY_VERSION` (2 → 3).",
+            "",
+            "## Why so few rows?",
+            "",
+            "This is a 12-card demo dataset. A real calibration sweep against the slice will "
+            "produce thousands of candidates per band; the runbook at "
+            "`_artifacts/_semantic-linker-calibration/README.md` documents that flow.",
+        ]
+    )
     out.write_text("\n".join(lines) + "\n")
     print(f"[demo] wrote calibration report -> {out}")
 
@@ -337,24 +425,23 @@ def _write_impact_report(
     ]
     for row in baseline["anchors"]:
         lines.append(
-            f"| `{row['anchor']}` | {row['type']} | {row['neighbor_count']} | "
-            f"{by_source_after.get(row['anchor'], 0)} |"
+            f"| `{row['anchor']}` | {row['type']} | {row['neighbor_count']} | {by_source_after.get(row['anchor'], 0)} |"
         )
-    lines.extend([
-        "",
-        "## Designed cluster expectations",
-        "",
-        "- **Cluster A (Italy travel):** `u-doc-italy`, `u-flight-jfk-fco`, "
-        "`u-acc-rome`, `u-meeting-italy` — should mutually link.",
-        "- **Cluster B (back pain):** `u-msg-backpain`, `u-med-back`, "
-        "`u-purchase-pad` — should mutually link.",
-        "- **Cluster C (Q3 strategy):** `u-transcript-q3`, `u-finance-consult` — should link.",
-        "- **Outliers** (`u-doc-recipes`, `u-msg-weather`, `u-payroll`) should NOT link "
-        "into clusters A/B/C.",
-        "",
-        "If the linker is working as intended, the 'New semantic surfaceable' column "
-        "should be ≥ 1 for all in-cluster anchors and 0 for outliers.",
-    ])
+    lines.extend(
+        [
+            "",
+            "## Designed cluster expectations",
+            "",
+            "- **Cluster A (Italy travel):** `u-doc-italy`, `u-flight-jfk-fco`, "
+            "`u-acc-rome`, `u-meeting-italy` — should mutually link.",
+            "- **Cluster B (back pain):** `u-msg-backpain`, `u-med-back`, `u-purchase-pad` — should mutually link.",
+            "- **Cluster C (Q3 strategy):** `u-transcript-q3`, `u-finance-consult` — should link.",
+            "- **Outliers** (`u-doc-recipes`, `u-msg-weather`, `u-payroll`) should NOT link into clusters A/B/C.",
+            "",
+            "If the linker is working as intended, the 'New semantic surfaceable' column "
+            "should be ≥ 1 for all in-cluster anchors and 0 for outliers.",
+        ]
+    )
     out.write_text("\n".join(lines) + "\n")
     print(f"[demo] wrote impact report -> {out}")
 

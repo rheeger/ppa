@@ -87,9 +87,7 @@ class TestMigration004:
             MigrationRunner(conn, index.schema).run()
             MigrationRunner(conn, index.schema).run()  # second pass = no-op
 
-    def test_drop_chunks_table_does_not_cascade_to_embeddings(
-        self, pgvector_dsn: str, tmp_path: Path
-    ) -> None:
+    def test_drop_chunks_table_does_not_cascade_to_embeddings(self, pgvector_dsn: str, tmp_path: Path) -> None:
         """The whole point of migration 004."""
         index = _bootstrap(pgvector_dsn, "ppa_mig_004_no_cascade", tmp_path)
         with index._connect() as conn:
@@ -99,20 +97,14 @@ class TestMigration004:
             _insert_embedding(conn, index.schema, chunk_key="ckA", dim=index.vector_dimension)
             _insert_embedding(conn, index.schema, chunk_key="ckB", dim=index.vector_dimension)
             conn.commit()
-            pre_row = conn.execute(
-                f"SELECT COUNT(*) AS c FROM {index.schema}.embeddings"
-            ).fetchone()
+            pre_row = conn.execute(f"SELECT COUNT(*) AS c FROM {index.schema}.embeddings").fetchone()
             assert int(pre_row["c"]) == 2
             conn.execute(f"DROP TABLE {index.schema}.chunks CASCADE")
             conn.commit()
-            post_row = conn.execute(
-                f"SELECT COUNT(*) AS c FROM {index.schema}.embeddings"
-            ).fetchone()
+            post_row = conn.execute(f"SELECT COUNT(*) AS c FROM {index.schema}.embeddings").fetchone()
             assert int(post_row["c"]) == 2, "embeddings must survive DROP TABLE chunks CASCADE"
 
-    def test_clear_does_not_truncate_embeddings(
-        self, pgvector_dsn: str, tmp_path: Path
-    ) -> None:
+    def test_clear_does_not_truncate_embeddings(self, pgvector_dsn: str, tmp_path: Path) -> None:
         index = _bootstrap(pgvector_dsn, "ppa_mig_004_clear", tmp_path)
         with index._connect() as conn:
             MigrationRunner(conn, index.schema).run()
@@ -121,17 +113,13 @@ class TestMigration004:
             conn.commit()
             index._clear(conn)
             conn.commit()
-            post_row = conn.execute(
-                f"SELECT COUNT(*) AS c FROM {index.schema}.embeddings"
-            ).fetchone()
+            post_row = conn.execute(f"SELECT COUNT(*) AS c FROM {index.schema}.embeddings").fetchone()
             assert int(post_row["c"]) == 1, "_clear() must not touch embeddings"
 
 
 @pytest.mark.integration
 class TestEmbedGc:
-    def test_dry_run_reports_orphans_without_deleting(
-        self, pgvector_dsn: str, tmp_path: Path
-    ) -> None:
+    def test_dry_run_reports_orphans_without_deleting(self, pgvector_dsn: str, tmp_path: Path) -> None:
         index = _bootstrap(pgvector_dsn, "ppa_embed_gc_dry", tmp_path)
         with index._connect() as conn:
             MigrationRunner(conn, index.schema).run()
@@ -143,20 +131,14 @@ class TestEmbedGc:
         store = DefaultArchiveStore(vault=tmp_path, index=index)
         import logging
 
-        result = embed_gc_cmd(
-            store=store, logger=logging.getLogger("test"), dry_run=True
-        )
+        result = embed_gc_cmd(store=store, logger=logging.getLogger("test"), dry_run=True)
         assert result["orphan_embeddings"] == 2
         assert result["deleted"] == 0
         with index._connect() as conn:
-            row = conn.execute(
-                f"SELECT COUNT(*) AS c FROM {index.schema}.embeddings"
-            ).fetchone()
+            row = conn.execute(f"SELECT COUNT(*) AS c FROM {index.schema}.embeddings").fetchone()
         assert int(row["c"]) == 3
 
-    def test_apply_drops_only_orphans(
-        self, pgvector_dsn: str, tmp_path: Path
-    ) -> None:
+    def test_apply_drops_only_orphans(self, pgvector_dsn: str, tmp_path: Path) -> None:
         index = _bootstrap(pgvector_dsn, "ppa_embed_gc_apply", tmp_path)
         with index._connect() as conn:
             MigrationRunner(conn, index.schema).run()
@@ -169,15 +151,10 @@ class TestEmbedGc:
         store = DefaultArchiveStore(vault=tmp_path, index=index)
         import logging
 
-        result = embed_gc_cmd(
-            store=store, logger=logging.getLogger("test"), dry_run=False
-        )
+        result = embed_gc_cmd(store=store, logger=logging.getLogger("test"), dry_run=False)
         assert result["deleted"] == 1
         with index._connect() as conn:
             remaining = sorted(
-                str(r["chunk_key"])
-                for r in conn.execute(
-                    f"SELECT chunk_key FROM {index.schema}.embeddings"
-                ).fetchall()
+                str(r["chunk_key"]) for r in conn.execute(f"SELECT chunk_key FROM {index.schema}.embeddings").fetchall()
             )
         assert remaining == ["keep1", "keep2"]

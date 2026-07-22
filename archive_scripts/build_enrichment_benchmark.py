@@ -277,9 +277,7 @@ def main() -> None:
         )
 
     # Negatives: threads not used as positive sources; stratify toward newsletter-like subjects.
-    negative_candidates = [
-        tid for tid in thread_index if tid not in positive_thread_ids and thread_index.get(tid)
-    ]
+    negative_candidates = [tid for tid in thread_index if tid not in positive_thread_ids and thread_index.get(tid)]
     scored = [
         (
             _marketing_score(
@@ -340,8 +338,7 @@ def main() -> None:
         )
     if m["negative_threads"] < args.negative_samples:
         print(
-            f"warning: only {m['negative_threads']} negative threads "
-            f"(requested {args.negative_samples})",
+            f"warning: only {m['negative_threads']} negative threads (requested {args.negative_samples})",
             flush=True,
         )
 

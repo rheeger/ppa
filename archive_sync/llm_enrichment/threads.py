@@ -136,7 +136,9 @@ def stubs_from_filesystem_walk(vault: Path) -> list[ThreadStub]:
                 import archive_crate
 
                 rows = archive_crate.frontmatter_dicts_from_cache(
-                    str(cache_path), types=["email_message"], prefix="Email/",
+                    str(cache_path),
+                    types=["email_message"],
+                    prefix="Email/",
                 )
                 out: list[ThreadStub] = []
                 for row in rows:
@@ -738,9 +740,5 @@ def render_thread_for_extraction(thread: ThreadDocument) -> str:
             thread.thread_id,
         )
         half = cap_chars // 2
-        return (
-            combined[:half]
-            + "\n\n[... middle omitted for length ...]\n\n"
-            + combined[-half:]
-        )
+        return combined[:half] + "\n\n[... middle omitted for length ...]\n\n" + combined[-half:]
     return combined

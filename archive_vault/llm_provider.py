@@ -57,6 +57,7 @@ def _post_json(
 ) -> dict[str, Any] | None:
     data = json.dumps(payload).encode("utf-8")
     import random as _random
+
     for attempt in range(_MAX_RETRIES + 1):
         req = request.Request(url, data=data, headers=headers, method="POST")
         try:
@@ -64,7 +65,7 @@ def _post_json(
                 return json.loads(response.read().decode("utf-8"))
         except error.HTTPError as exc:
             if exc.code in (429, 500, 502, 503) and attempt < _MAX_RETRIES:
-                wait = _RETRY_BASE_WAIT * (2 ** attempt) + _random.uniform(0.5, 2.0)
+                wait = _RETRY_BASE_WAIT * (2**attempt) + _random.uniform(0.5, 2.0)
                 _llm_log.info("%d retry %d/%d in %.1fs", exc.code, attempt + 1, _MAX_RETRIES, wait)
                 time.sleep(wait)
                 continue
@@ -75,7 +76,7 @@ def _post_json(
             return None
         except (OSError, error.URLError) as exc:
             if attempt < _MAX_RETRIES:
-                wait = _RETRY_BASE_WAIT * (2 ** attempt) + _random.uniform(0.5, 2.0)
+                wait = _RETRY_BASE_WAIT * (2**attempt) + _random.uniform(0.5, 2.0)
                 _llm_log.info("network retry %d/%d in %.1fs: %s", attempt + 1, _MAX_RETRIES, wait, exc)
                 time.sleep(wait)
                 continue
@@ -129,8 +130,9 @@ class GeminiProvider:
         use_model = model or self.model
         api_key = self._api_key()
         if not api_key:
-            return LLMResponse(content="", parsed_json=None, model=use_model,
-                               prompt_tokens=0, completion_tokens=0, latency_ms=0.0)
+            return LLMResponse(
+                content="", parsed_json=None, model=use_model, prompt_tokens=0, completion_tokens=0, latency_ms=0.0
+            )
 
         contents: list[dict[str, Any]] = []
         system_text = ""
@@ -167,8 +169,14 @@ class GeminiProvider:
         ct = int(usage.get("candidatesTokenCount") or 0)
         parsed = _parse_json_from_model_text(content)
 
-        r = LLMResponse(content=content, parsed_json=parsed, model=use_model,
-                        prompt_tokens=pt, completion_tokens=ct, latency_ms=latency_ms)
+        r = LLMResponse(
+            content=content,
+            parsed_json=parsed,
+            model=use_model,
+            prompt_tokens=pt,
+            completion_tokens=ct,
+            latency_ms=latency_ms,
+        )
         if r.parsed_json is not None:
             return r
 
@@ -177,7 +185,10 @@ class GeminiProvider:
 
         retry_contents = contents + [
             {"role": "model", "parts": [{"text": content}]},
-            {"role": "user", "parts": [{"text": "Your previous reply was not valid JSON. Reply with a single JSON object only."}]},
+            {
+                "role": "user",
+                "parts": [{"text": "Your previous reply was not valid JSON. Reply with a single JSON object only."}],
+            },
         ]
         payload["contents"] = retry_contents
         t0 = time.perf_counter()
@@ -186,10 +197,14 @@ class GeminiProvider:
         content = self._extract_text(response) or ""
         usage = (response or {}).get("usageMetadata") or {}
         parsed = _parse_json_from_model_text(content)
-        return LLMResponse(content=content, parsed_json=parsed, model=use_model,
-                           prompt_tokens=int(usage.get("promptTokenCount") or 0),
-                           completion_tokens=int(usage.get("candidatesTokenCount") or 0),
-                           latency_ms=latency_ms)
+        return LLMResponse(
+            content=content,
+            parsed_json=parsed,
+            model=use_model,
+            prompt_tokens=int(usage.get("promptTokenCount") or 0),
+            completion_tokens=int(usage.get("candidatesTokenCount") or 0),
+            latency_ms=latency_ms,
+        )
 
     def health_check(self) -> bool:
         """True if Gemini API responds with a valid key."""
@@ -382,7 +397,10 @@ class OllamaProvider:
         retry_msgs = [
             *messages,
             {"role": "assistant", "content": r.content},
-            {"role": "user", "content": "Your previous reply was not valid JSON. Reply with a single JSON object only."},
+            {
+                "role": "user",
+                "content": "Your previous reply was not valid JSON. Reply with a single JSON object only.",
+            },
         ]
         return _call(retry_msgs)
 

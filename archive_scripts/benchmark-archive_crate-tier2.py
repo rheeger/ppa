@@ -39,6 +39,7 @@ def main() -> None:
     # --- Python: vault cache tier-2 build ---
     t0 = time.perf_counter()
     from archive_cli.vault_cache import VaultScanCache
+
     cache = VaultScanCache.build_or_load(vault, tier=2, no_cache=True, progress_every=0)
     py_cache_s = time.perf_counter() - t0
     out["python"]["vault_cache_tier2_seconds"] = round(py_cache_s, 3)
@@ -84,6 +85,7 @@ def main() -> None:
         # Python iter
         os.environ["PPA_ENGINE"] = "python"
         from archive_vault.vault import _iter_parsed_notes_python_walk
+
         t0 = time.perf_counter()
         py_count = sum(1 for _ in _iter_parsed_notes_python_walk(vault))
         py_iter_s = time.perf_counter() - t0
@@ -117,7 +119,8 @@ def main() -> None:
         from archive_vault.identity_resolver import resolve_person_batch as py_resolve
 
         derived = archive_crate.frontmatter_dicts_from_cache(
-            str(cache_path), types=list(PERSON_RESOLVABLE_CARD_TYPES),
+            str(cache_path),
+            types=list(PERSON_RESOLVABLE_CARD_TYPES),
         )
         batch_ids = []
         for row in derived:

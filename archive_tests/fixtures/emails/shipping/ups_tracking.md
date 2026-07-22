@@ -1,9 +1,9 @@
 ---
-uid: fx-sh-1
+uid: hfa-email-fx-sh-1
 type: email_message
 from_email: notify@ups.com
 subject: "UPS Update: Your package was delivered"
-sent_at: 2025-12-20T12:00:00-05:00
+sent_at: "2025-12-20T12:00:00-05:00"
 summary: Delivered
 source: [gmail]
 source_id: gmail.sh1

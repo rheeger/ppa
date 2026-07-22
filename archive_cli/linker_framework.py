@@ -26,9 +26,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Literal
 
 if TYPE_CHECKING:  # pragma: no cover - import cycles avoided at runtime
-    from archive_cli.seed_links import (LinkSurfacePolicy, SeedCardSketch,
-                                        SeedLinkCandidate, SeedLinkCatalog,
-                                        SeedLinkDecision)
+    from archive_cli.seed_links import (
+        LinkSurfacePolicy,
+        SeedCardSketch,
+        SeedLinkCandidate,
+        SeedLinkCatalog,
+        SeedLinkDecision,
+    )
 
 
 log = logging.getLogger("ppa.linkers.framework")
@@ -180,10 +184,7 @@ def _load_lifecycle_overrides() -> dict[str, Lifecycle]:
     overrides = raw.get("overrides") if isinstance(raw, dict) else None
     if not isinstance(overrides, dict):
         return {}
-    return {
-        str(k): v for k, v in overrides.items()
-        if v in ("active", "deprecated", "retired")
-    }
+    return {str(k): v for k, v in overrides.items() if v in ("active", "deprecated", "retired")}
 
 
 # --- register_linker / unregister_linker -----------------------------------
@@ -212,7 +213,9 @@ def register_linker(spec: LinkerSpec) -> None:
         spec = replace(spec, lifecycle_state=effective_state)
         log.info(
             "linker %s lifecycle_state overridden to %r via %s",
-            spec.module_name, effective_state, _LIFECYCLE_OVERRIDES_PATH,
+            spec.module_name,
+            effective_state,
+            _LIFECYCLE_OVERRIDES_PATH,
         )
 
     ALL_LINKERS[spec.module_name] = spec
@@ -233,11 +236,7 @@ def register_linker(spec: LinkerSpec) -> None:
             current = _CARD_TYPE_MODULES_REF.get(card_type, ())
             if spec.module_name not in current:
                 _CARD_TYPE_MODULES_REF[card_type] = (*current, spec.module_name)
-    if (
-        spec.lifecycle_state != "retired"
-        and spec.requires_llm_judge
-        and _LLM_REVIEW_MODULES_REF is not None
-    ):
+    if spec.lifecycle_state != "retired" and spec.requires_llm_judge and _LLM_REVIEW_MODULES_REF is not None:
         _LLM_REVIEW_MODULES_REF.add(spec.module_name)
 
 
@@ -256,9 +255,7 @@ def unregister_linker(module_name: str) -> None:
         # emit the same type).
     if _CARD_TYPE_MODULES_REF is not None:
         for card_type, modules in list(_CARD_TYPE_MODULES_REF.items()):
-            _CARD_TYPE_MODULES_REF[card_type] = tuple(
-                m for m in modules if m != module_name
-            )
+            _CARD_TYPE_MODULES_REF[card_type] = tuple(m for m in modules if m != module_name)
     if _LLM_REVIEW_MODULES_REF is not None:
         _LLM_REVIEW_MODULES_REF.discard(module_name)
 
@@ -308,7 +305,8 @@ def run_post_build_hooks(catalog: "SeedLinkCatalog") -> None:
         except Exception as exc:  # pragma: no cover - defensive
             log.warning(
                 "post_build_hook for %s raised %s; continuing.",
-                spec.module_name, exc,
+                spec.module_name,
+                exc,
             )
 
 
@@ -323,7 +321,8 @@ def get_spec_catalog_indexes() -> tuple[CatalogIndexSpec, ...]:
             if idx.name in seen and seen[idx.name].key_fn is not idx.key_fn:
                 log.warning(
                     "CatalogIndexSpec name collision: %s (from %s vs earlier)",
-                    idx.name, spec.module_name,
+                    idx.name,
+                    spec.module_name,
                 )
             seen.setdefault(idx.name, idx)
     return tuple(seen.values())

@@ -1,9 +1,9 @@
 ---
-uid: fx-ab-1
+uid: hfa-email-fx-ab-1
 type: email_message
 from_email: automated@airbnb.com
 subject: "RE: Reservation at Charming Stockbridge Cabin for July 26, 2020 - August 7, 2020"
-sent_at: 2020-07-20T11:00:00-04:00
+sent_at: "2020-07-20T11:00:00-04:00"
 summary: Reservation confirmed
 source: [gmail]
 source_id: gmail.ab1

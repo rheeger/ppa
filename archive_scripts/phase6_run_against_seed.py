@@ -44,11 +44,16 @@ DATE = _dt.date.today().strftime("%Y%m%d")
 
 def _sketch_from_row(row: dict[str, Any]) -> SeedCardSketch:
     return SeedCardSketch(
-        uid=row["uid"], rel_path=row["rel_path"],
+        uid=row["uid"],
+        rel_path=row["rel_path"],
         slug=row.get("slug") or row["rel_path"].split("/")[-1].removesuffix(".md"),
-        card_type=row["type"], summary=row.get("summary") or "",
-        frontmatter={}, body="", content_hash=row.get("content_hash") or "",
-        activity_at="", wikilinks=[],
+        card_type=row["type"],
+        summary=row.get("summary") or "",
+        frontmatter={},
+        body="",
+        content_hash=row.get("content_hash") or "",
+        activity_at="",
+        wikilinks=[],
     )
 
 
@@ -63,14 +68,26 @@ def _build_min_catalog(conn, schema: str, source_uids: list[str]) -> SeedLinkCat
     for sk in cards_by_uid.values():
         cards_by_type.setdefault(sk.card_type, []).append(sk)
     return SeedLinkCatalog(
-        cards_by_uid=cards_by_uid, cards_by_exact_slug={}, cards_by_slug={},
+        cards_by_uid=cards_by_uid,
+        cards_by_exact_slug={},
+        cards_by_slug={},
         cards_by_type=cards_by_type,
-        person_by_email={}, person_by_phone={}, person_by_handle={}, person_by_alias={},
-        email_threads_by_thread_id={}, email_messages_by_thread_id={},
-        email_messages_by_message_id={}, email_attachments_by_message_id={},
-        email_attachments_by_thread_id={}, imessage_threads_by_chat_id={},
-        imessage_messages_by_chat_id={}, calendar_events_by_event_id={},
-        calendar_events_by_ical_uid={}, media_by_day={}, events_by_day={}, path_buckets={},
+        person_by_email={},
+        person_by_phone={},
+        person_by_handle={},
+        person_by_alias={},
+        email_threads_by_thread_id={},
+        email_messages_by_thread_id={},
+        email_messages_by_message_id={},
+        email_attachments_by_message_id={},
+        email_attachments_by_thread_id={},
+        imessage_threads_by_chat_id={},
+        imessage_messages_by_chat_id={},
+        calendar_events_by_event_id={},
+        calendar_events_by_ical_uid={},
+        media_by_day={},
+        events_by_day={},
+        path_buckets={},
     )
 
 
@@ -131,11 +148,15 @@ def main() -> None:
                 continue
             graph = idx.graph(src.rel_path, hops=1)
             base_neighbors = (graph or {}).get(src.rel_path, [])
-            baseline_rows.append({
-                "source_uid": uid, "source_rel_path": src.rel_path, "type": src.card_type,
-                "neighbor_count": len(base_neighbors),
-                "neighbor_edge_types": sorted({n["edge_type"] for n in base_neighbors}),
-            })
+            baseline_rows.append(
+                {
+                    "source_uid": uid,
+                    "source_rel_path": src.rel_path,
+                    "type": src.card_type,
+                    "neighbor_count": len(base_neighbors),
+                    "neighbor_edge_types": sorted({n["edge_type"] for n in base_neighbors}),
+                }
+            )
 
             cands = _generate_semantic_candidates(conn, schema, catalog, uid, k=10, threshold=0.7)
             target_uids_seen = [c.target_card_uid for c in cands]
@@ -149,33 +170,43 @@ def main() -> None:
                 if decision.llm_model:
                     llm_calls += 1
                 target_sketch = catalog.cards_by_uid[cand.target_card_uid]
-                decisions.append({
-                    "source_uid": cand.source_card_uid,
-                    "source_rel_path": cand.source_rel_path,
-                    "source_type": src.card_type,
-                    "target_uid": cand.target_card_uid,
-                    "target_rel_path": cand.target_rel_path,
-                    "target_type": target_sketch.card_type,
-                    "embedding_similarity": cand.features["embedding_similarity"],
-                    "llm_score": decision.llm_score,
-                    "llm_model": decision.llm_model,
-                    "embedding_score": decision.embedding_score,
-                    "final_confidence": decision.final_confidence,
-                    "decision": decision.decision,
-                    "decision_reason": decision.decision_reason,
-                })
+                decisions.append(
+                    {
+                        "source_uid": cand.source_card_uid,
+                        "source_rel_path": cand.source_rel_path,
+                        "source_type": src.card_type,
+                        "target_uid": cand.target_card_uid,
+                        "target_rel_path": cand.target_rel_path,
+                        "target_type": target_sketch.card_type,
+                        "embedding_similarity": cand.features["embedding_similarity"],
+                        "llm_score": decision.llm_score,
+                        "llm_model": decision.llm_model,
+                        "embedding_score": decision.embedding_score,
+                        "final_confidence": decision.final_confidence,
+                        "decision": decision.decision,
+                        "decision_reason": decision.decision_reason,
+                    }
+                )
             if (i + 1) % 10 == 0:
                 elapsed = time.time() - t0
-                print(f"[seed-run] {i+1}/{len(uids)} sources processed | "
-                      f"{len(decisions)} decisions | {llm_calls} LLM calls | {elapsed:.0f}s")
+                print(
+                    f"[seed-run] {i + 1}/{len(uids)} sources processed | "
+                    f"{len(decisions)} decisions | {llm_calls} LLM calls | {elapsed:.0f}s"
+                )
 
     # ---- artifacts ----
-    Path(baseline_dir / f"seed-baseline-{DATE}.json").write_text(json.dumps({
-        "tier": "tier2-baseline-seed",
-        "snapshot_date": _dt.datetime.now(_dt.UTC).isoformat(),
-        "schema": schema, "source_uid_count": len(uids),
-        "anchors": baseline_rows,
-    }, indent=2))
+    Path(baseline_dir / f"seed-baseline-{DATE}.json").write_text(
+        json.dumps(
+            {
+                "tier": "tier2-baseline-seed",
+                "snapshot_date": _dt.datetime.now(_dt.UTC).isoformat(),
+                "schema": schema,
+                "source_uid_count": len(uids),
+                "anchors": baseline_rows,
+            },
+            indent=2,
+        )
+    )
     print(f"[seed-run] wrote baseline -> {baseline_dir / f'seed-baseline-{DATE}.json'}")
 
     Path(calibration_dir / f"seed-samples-{DATE}.json").write_text(json.dumps(decisions, indent=2))
@@ -190,8 +221,7 @@ def main() -> None:
         "",
         "## Run parameters",
         "",
-        f"- Schema: `{schema}` (production seed, {1872706} cards, {6770930} chunks, "
-        f"`text-embedding-3-small` v1)",
+        f"- Schema: `{schema}` (production seed, {1872706} cards, {6770930} chunks, `text-embedding-3-small` v1)",
         f"- Source cards swept: {len(uids)} (3 per card type, 34 types)",
         f"- Total semantic candidates judged: **{len(decisions)}**",
         f"- LLM calls (real OpenAI gpt-4o-mini): **{llm_calls}**",
@@ -207,7 +237,9 @@ def main() -> None:
     for b in band_order:
         summary_lines.append(f"| {b} | {len(bands.get(b, []))} |")
     summary_lines.extend(["", "## Sample classifications (review TP/FP/Unclear)", ""])
-    summary_lines.append("| band | source -> target | src_type | tgt_type | embedding | llm | final | decision | TP/FP/Unclear |")
+    summary_lines.append(
+        "| band | source -> target | src_type | tgt_type | embedding | llm | final | decision | TP/FP/Unclear |"
+    )
     summary_lines.append("|---|---|---|---|---|---|---|---|---|")
     for b in band_order:
         for d in sorted(bands.get(b, []), key=lambda x: -x["final_confidence"])[:25]:
@@ -217,21 +249,23 @@ def main() -> None:
                 f"{d['embedding_similarity']:.3f} | {d['llm_score']:.2f} | "
                 f"{d['final_confidence']:.3f} | {d['decision']} |   |"
             )
-    summary_lines.extend([
-        "",
-        "## Review procedure",
-        "",
-        "1. For each row above, open both source and target cards "
-        "(`ppa read --uid <uid>` or grep the `.md` paths in the production vault).",
-        "2. Mark TP / FP / Unclear in the rightmost column.",
-        "3. Compute precision per band: `precision = TP / (TP + FP)`.",
-        "4. Apply the floor table from `phase_6` plan Step 12d:",
-        "   - Band 4 (0.95+) precision >= 0.95 -> `auto_promote_floor = 0.95`",
-        "   - Band 4 precision 0.80-0.95 -> keep `auto_promote_floor = 0.99`",
-        "   - All bands < 0.80 precision -> bump floors to `1.0` (effectively disable)",
-        "5. Edit `LinkSurfacePolicy(LINK_TYPE_SEMANTICALLY_RELATED)` in "
-        "`archive_cli/seed_links.py`; bump `SEED_LINK_POLICY_VERSION` (2 -> 3).",
-    ])
+    summary_lines.extend(
+        [
+            "",
+            "## Review procedure",
+            "",
+            "1. For each row above, open both source and target cards "
+            "(`ppa read --uid <uid>` or grep the `.md` paths in the production vault).",
+            "2. Mark TP / FP / Unclear in the rightmost column.",
+            "3. Compute precision per band: `precision = TP / (TP + FP)`.",
+            "4. Apply the floor table from `phase_6` plan Step 12d:",
+            "   - Band 4 (0.95+) precision >= 0.95 -> `auto_promote_floor = 0.95`",
+            "   - Band 4 precision 0.80-0.95 -> keep `auto_promote_floor = 0.99`",
+            "   - All bands < 0.80 precision -> bump floors to `1.0` (effectively disable)",
+            "5. Edit `LinkSurfacePolicy(LINK_TYPE_SEMANTICALLY_RELATED)` in "
+            "`archive_cli/seed_links.py`; bump `SEED_LINK_POLICY_VERSION` (2 -> 3).",
+        ]
+    )
     Path(calibration_dir / f"seed-summary-{DATE}.md").write_text("\n".join(summary_lines) + "\n")
     print(f"[seed-run] wrote calibration summary -> {calibration_dir / f'seed-summary-{DATE}.md'}")
 
@@ -262,20 +296,22 @@ def main() -> None:
             f"| `{row['source_rel_path']}` | {row['type']} | {row['neighbor_count']} | "
             f"{new_by_src.get(row['source_uid'], 0)} |"
         )
-    impact_lines.extend([
-        "",
-        "## Cost",
-        "",
-        f"- LLM judge calls: {llm_calls} x gpt-4o-mini ~ ${llm_calls * 0.0001:.2f}",
-        f"- Wall time: {int(time.time() - t0)}s",
-        "",
-        "## Next steps",
-        "",
-        "1. Review samples in `_artifacts/_semantic-linker-calibration/seed-summary-{DATE}.md`.",
-        "2. Set calibrated floors per the procedure in that report.",
-        "3. To run against the full vault, drop the `--limit` style filter from this script "
-        "and either bound by source card count or run overnight.",
-    ])
+    impact_lines.extend(
+        [
+            "",
+            "## Cost",
+            "",
+            f"- LLM judge calls: {llm_calls} x gpt-4o-mini ~ ${llm_calls * 0.0001:.2f}",
+            f"- Wall time: {int(time.time() - t0)}s",
+            "",
+            "## Next steps",
+            "",
+            "1. Review samples in `_artifacts/_semantic-linker-calibration/seed-summary-{DATE}.md`.",
+            "2. Set calibrated floors per the procedure in that report.",
+            "3. To run against the full vault, drop the `--limit` style filter from this script "
+            "and either bound by source card count or run overnight.",
+        ]
+    )
     Path(impact_dir / f"seed-impact-{DATE}.md").write_text("\n".join(impact_lines) + "\n")
     print(f"[seed-run] wrote impact report -> {impact_dir / f'seed-impact-{DATE}.md'}")
 

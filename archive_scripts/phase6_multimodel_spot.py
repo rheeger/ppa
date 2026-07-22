@@ -63,26 +63,46 @@ def _build_prompt(src: dict[str, Any], tgt: dict[str, Any], emb: float) -> str:
     """Same prompt shape as archive_cli.seed_links._llm_prompt."""
     cand = SeedLinkCandidate(
         module_name=MODULE_SEMANTIC,
-        source_card_uid=src["card_uid"], source_rel_path=src["rel_path"],
-        target_card_uid=tgt["card_uid"], target_rel_path=tgt["rel_path"],
-        target_kind="card", proposed_link_type=LINK_TYPE_SEMANTICALLY_RELATED,
+        source_card_uid=src["card_uid"],
+        source_rel_path=src["rel_path"],
+        target_card_uid=tgt["card_uid"],
+        target_rel_path=tgt["rel_path"],
+        target_kind="card",
+        proposed_link_type=LINK_TYPE_SEMANTICALLY_RELATED,
         candidate_group="",
         input_hash=compute_input_hash({"s": src["card_uid"], "t": tgt["card_uid"]}),
         evidence_hash="spot",
         features={"embedding_similarity": round(emb, 6), "deterministic_hits": [], "ambiguous_target_count": 0},
-        evidences=[LinkEvidence("embedding_similarity", "pgvector_knn", "cosine_similarity",
-                                 f"{emb:.6f}", emb, {})],
-        surface="derived_only", promotion_target="derived_edge",
+        evidences=[LinkEvidence("embedding_similarity", "pgvector_knn", "cosine_similarity", f"{emb:.6f}", emb, {})],
+        surface="derived_only",
+        promotion_target="derived_edge",
     )
-    src_sk = SeedCardSketch(uid=src["card_uid"], rel_path=src["rel_path"], slug="",
-                            card_type=src["type"], summary=src.get("summary", ""),
-                            frontmatter={}, body="", content_hash="",
-                            activity_at="", wikilinks=[])
-    tgt_sk = SeedCardSketch(uid=tgt["card_uid"], rel_path=tgt["rel_path"], slug="",
-                            card_type=tgt["type"], summary=tgt.get("summary", ""),
-                            frontmatter={}, body="", content_hash="",
-                            activity_at="", wikilinks=[])
+    src_sk = SeedCardSketch(
+        uid=src["card_uid"],
+        rel_path=src["rel_path"],
+        slug="",
+        card_type=src["type"],
+        summary=src.get("summary", ""),
+        frontmatter={},
+        body="",
+        content_hash="",
+        activity_at="",
+        wikilinks=[],
+    )
+    tgt_sk = SeedCardSketch(
+        uid=tgt["card_uid"],
+        rel_path=tgt["rel_path"],
+        slug="",
+        card_type=tgt["type"],
+        summary=tgt.get("summary", ""),
+        frontmatter={},
+        body="",
+        content_hash="",
+        activity_at="",
+        wikilinks=[],
+    )
     from archive_cli.seed_links import _llm_prompt
+
     return _llm_prompt(cand, src_sk, tgt_sk)
 
 
@@ -103,15 +123,17 @@ def _judge_with(provider, prompt: str) -> tuple[str, float]:
 def _hydrate_card_meta(dsn: str, schema: str, uids: list[str]) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
     with psycopg.connect(dsn, row_factory=dict_row) as conn:
-        for chunk in [uids[i:i+500] for i in range(0, len(uids), 500)]:
+        for chunk in [uids[i : i + 500] for i in range(0, len(uids), 500)]:
             rows = conn.execute(
                 f"SELECT uid, rel_path, type, summary FROM {schema}.cards WHERE uid = ANY(%s)",
                 (chunk,),
             ).fetchall()
             for r in rows:
                 out[str(r["uid"])] = {
-                    "card_uid": str(r["uid"]), "rel_path": str(r["rel_path"]),
-                    "type": str(r["type"]), "summary": str(r.get("summary") or ""),
+                    "card_uid": str(r["uid"]),
+                    "rel_path": str(r["rel_path"]),
+                    "type": str(r["type"]),
+                    "summary": str(r.get("summary") or ""),
                 }
     return out
 
@@ -170,9 +192,11 @@ def main() -> None:
             per_model[name] = {"verdict": verdict, "score": score}
         return {
             "key": key,
-            "source_uid": e["source_uid"], "source_type": e["source_type"],
+            "source_uid": e["source_uid"],
+            "source_type": e["source_type"],
             "source_rel_path": e["source_rel_path"],
-            "target_uid": e["target_uid"], "target_type": e["target_type"],
+            "target_uid": e["target_uid"],
+            "target_type": e["target_type"],
             "target_rel_path": e["target_rel_path"],
             "embedding_similarity": e["embedding_similarity"],
             "cached_verdict": e.get("llm_verdict", ""),
@@ -190,7 +214,7 @@ def main() -> None:
             except Exception as exc:
                 rows.append({"key": futures[fut], "error": str(exc)})
             if (j + 1) % 50 == 0:
-                print(f"[spot] {j+1}/{len(sample_keys)} done", flush=True)
+                print(f"[spot] {j + 1}/{len(sample_keys)} done", flush=True)
 
     valid = [r for r in rows if "judged" in r]
     print(f"[spot] {len(valid)} valid / {len(rows)} total")
@@ -213,26 +237,46 @@ def main() -> None:
 
     date = _dt.date.today().strftime("%Y%m%d")
     out_json = ITER_DIR / f"multimodel-spot-{date}.json"
-    out_json.write_text(json.dumps({"sample_size": len(valid), "rows": rows,
-                                     "agreement": {f"{a}|{b}": {"agree": agree.get((a, b), 0),
-                                                                  "total": totals.get((a, b), 0)}
-                                                    for (a, b) in totals.keys()}}, indent=2))
+    out_json.write_text(
+        json.dumps(
+            {
+                "sample_size": len(valid),
+                "rows": rows,
+                "agreement": {
+                    f"{a}|{b}": {"agree": agree.get((a, b), 0), "total": totals.get((a, b), 0)}
+                    for (a, b) in totals.keys()
+                },
+            },
+            indent=2,
+        )
+    )
     print(f"[spot] wrote {out_json}")
 
     # Markdown summary
-    md = [f"# Multi-model judge spot-check — {date}", "",
-          f"- cache: `{args.cache}`",
-          f"- sample size: **{len(valid)}**",
-          f"- models judged: {', '.join(model_names)}",
-          "", "## Per-model verdict distribution", "",
-          "| model | YES | UNSURE | NO | empty |",
-          "|---|---|---|---|---|"]
+    md = [
+        f"# Multi-model judge spot-check — {date}",
+        "",
+        f"- cache: `{args.cache}`",
+        f"- sample size: **{len(valid)}**",
+        f"- models judged: {', '.join(model_names)}",
+        "",
+        "## Per-model verdict distribution",
+        "",
+        "| model | YES | UNSURE | NO | empty |",
+        "|---|---|---|---|---|",
+    ]
     for m in model_names:
         c = Counter(r["judged"][m]["verdict"] for r in valid)
         md.append(f"| {m} | {c.get('YES', 0)} | {c.get('UNSURE', 0)} | {c.get('NO', 0)} | {c.get('', 0)} |")
-    md.extend(["", "## Pairwise agreement (% verdicts that match)", "",
-               "| model_a | model_b | agreement | sample |",
-               "|---|---|---|---|"])
+    md.extend(
+        [
+            "",
+            "## Pairwise agreement (% verdicts that match)",
+            "",
+            "| model_a | model_b | agreement | sample |",
+            "|---|---|---|---|",
+        ]
+    )
     for (a, b), tot in sorted(totals.items()):
         ag = agree.get((a, b), 0)
         pct = (ag / tot * 100.0) if tot else 0.0

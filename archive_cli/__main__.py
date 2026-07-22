@@ -11,12 +11,16 @@ import sys
 import time
 from pathlib import Path
 
-from archive_sync.llm_enrichment.defaults import (
-    DEFAULT_ENRICH_CARD_GEMINI_MODEL, DEFAULT_ENRICH_EXTRACT_MODEL)
+from archive_sync.llm_enrichment.defaults import DEFAULT_ENRICH_CARD_GEMINI_MODEL, DEFAULT_ENRICH_EXTRACT_MODEL
 
-from .benchmark import (BENCHMARK_PROFILES, DEFAULT_BENCHMARK_SOURCE_VAULT,
-                        benchmark_multi_size, benchmark_rebuild,
-                        benchmark_seed_links, build_benchmark_sample)
+from .benchmark import (
+    BENCHMARK_PROFILES,
+    DEFAULT_BENCHMARK_SOURCE_VAULT,
+    benchmark_multi_size,
+    benchmark_rebuild,
+    benchmark_seed_links,
+    build_benchmark_sample,
+)
 from .commands import admin as admin_cmd
 from .commands import attachments as attachments_cmd
 from .commands import batch_embed as batch_embed_cmd
@@ -1058,8 +1062,7 @@ def main() -> None:
     promote_parser.add_argument("--dry-run", action="store_true")
 
     # Phase 6.5 `ppa linker` subcommand family.
-    from archive_cli import \
-        linker_cli as _linker_cli  # lazy to avoid import cycles
+    from archive_cli import linker_cli as _linker_cli  # lazy to avoid import cycles
 
     _linker_cli.add_parser(subparsers)
 
@@ -1318,8 +1321,7 @@ def main() -> None:
     if args.command == "template-sampler":
         try:
             from .commands._resolve import resolve_vault
-            from .commands.template_sampler import (
-                run_template_sampler, run_template_sampler_from_batch_file)
+            from .commands.template_sampler import run_template_sampler, run_template_sampler_from_batch_file
 
             vp = str(getattr(args, "vault", "") or "").strip() or str(resolve_vault())
             batch = str(getattr(args, "batch", "") or "").strip()
@@ -1384,8 +1386,7 @@ def main() -> None:
         return
     if args.command == "enrich-emails":
         try:
-            from archive_sync.llm_enrichment.enrich_runner import \
-                LlmEnrichmentRunner
+            from archive_sync.llm_enrichment.enrich_runner import LlmEnrichmentRunner
 
             from .commands._resolve import resolve_vault
 
@@ -1432,8 +1433,7 @@ def main() -> None:
         return
     if args.command == "enrich-cards":
         try:
-            from archive_sync.llm_enrichment.card_enrichment_runner import \
-                CardEnrichmentRunner
+            from archive_sync.llm_enrichment.card_enrichment_runner import CardEnrichmentRunner
 
             from .commands._resolve import resolve_vault
 
@@ -1484,8 +1484,7 @@ def main() -> None:
         return
     if args.command == "extract-document-text":
         try:
-            from archive_sync.llm_enrichment.document_text_extractor import \
-                run_document_text_extraction
+            from archive_sync.llm_enrichment.document_text_extractor import run_document_text_extraction
 
             from .commands._resolve import resolve_vault
 
@@ -1503,8 +1502,7 @@ def main() -> None:
         return
     if args.command == "enrich":
         try:
-            from archive_sync.llm_enrichment.enrichment_orchestrator import (
-                EnrichmentOrchestrator, default_run_id)
+            from archive_sync.llm_enrichment.enrichment_orchestrator import EnrichmentOrchestrator, default_run_id
 
             vault = Path(str(getattr(args, "vault", "") or "").strip())
             run_id = str(getattr(args, "run_id", "") or "").strip() or default_run_id()
@@ -1568,8 +1566,7 @@ def main() -> None:
         return
     if args.command == "resolve-entities":
         try:
-            from archive_sync.extractors.entity_resolution import \
-                run_entity_resolution
+            from archive_sync.extractors.entity_resolution import run_entity_resolution
 
             from .commands._resolve import resolve_vault
 
@@ -1599,8 +1596,7 @@ def main() -> None:
         return
     if args.command == "link-persons":
         try:
-            from archive_sync.extractors.entity_resolution import \
-                run_person_linking
+            from archive_sync.extractors.entity_resolution import run_person_linking
 
             from .commands._resolve import resolve_vault
 
@@ -1629,8 +1625,7 @@ def main() -> None:
         return
     if args.command == "resolve-matches":
         try:
-            from archive_sync.llm_enrichment.match_resolver import \
-                run_match_resolution
+            from archive_sync.llm_enrichment.match_resolver import run_match_resolution
 
             from .commands._resolve import resolve_vault
 
@@ -1663,16 +1658,13 @@ def main() -> None:
         return
     if args.command == "staging-report":
         try:
-            from .commands.staging import (format_staging_report_markdown,
-                                           staging_report,
-                                           staging_report_to_jsonable)
+            from .commands.staging import format_staging_report_markdown, staging_report, staging_report_to_jsonable
 
             report = staging_report(str(args.staging_dir))
             if bool(getattr(args, "json", False)):
                 _print_json(staging_report_to_jsonable(report))
             else:
-                from archive_sync.extractors.field_metrics import \
-                    compute_field_population
+                from archive_sync.extractors.field_metrics import compute_field_population
 
                 fp = compute_field_population(Path(str(args.staging_dir)))
                 print(format_staging_report_markdown(report, field_population=fp), file=sys.stderr)
@@ -1989,8 +1981,7 @@ def main() -> None:
             if copy_src:
                 # 3. copy embeddings (free, fast).
                 _cli_log.info("slice-bootstrap step=3/5 copy-embeddings from=%s", copy_src)
-                from .index_config import (get_default_embedding_model,
-                                           get_default_embedding_version)
+                from .index_config import get_default_embedding_model, get_default_embedding_version
 
                 model = get_default_embedding_model()
                 version = get_default_embedding_version()
@@ -2258,8 +2249,7 @@ def main() -> None:
         )
         return
     if args.command == "slice-seed":
-        from .test_slice import (build_slice_docker_image, load_slice_config,
-                                 slice_seed_vault)
+        from .test_slice import build_slice_docker_image, load_slice_config, slice_seed_vault
 
         cfg = load_slice_config(Path(args.config))
         if args.target_percent is not None:

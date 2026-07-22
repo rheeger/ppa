@@ -82,7 +82,7 @@ def _compact_summary_line(text: str, max_len: int = 200) -> str:
     if len(t) <= max_len:
         return t
     cut = t[: max_len - 1].rsplit(" ", 1)[0]
-    return (cut or t[: max_len]).rstrip(",;:") + "…"
+    return (cut or t[:max_len]).rstrip(",;:") + "…"
 
 
 def _title_needs_cleanup(fm: dict[str, Any]) -> bool:

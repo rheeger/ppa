@@ -55,9 +55,7 @@ def _field_match(expected: Any, actual: Any) -> bool:
         for exp in expected:
             if isinstance(exp, dict) and "name" in exp:
                 en = _norm_text(exp.get("name"))
-                if not any(
-                    isinstance(g, dict) and _norm_text(g.get("name")) == en for g in actual
-                ):
+                if not any(isinstance(g, dict) and _norm_text(g.get("name")) == en for g in actual):
                     return False
             elif exp not in actual:
                 return False

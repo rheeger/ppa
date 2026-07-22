@@ -503,6 +503,7 @@ def _email_domain(from_email: str) -> str:
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def classify_thread_prefilter(
     from_emails: list[str],
     subjects: list[str],
@@ -522,9 +523,7 @@ def classify_thread_prefilter(
     ``INTERNAL_DOMAINS`` from ``archive_auth`` when omitted.
     """
 
-    work_domains: frozenset[str] = (
-        user_domains if user_domains is not None else frozenset(INTERNAL_DOMAINS)
-    )
+    work_domains: frozenset[str] = user_domains if user_domains is not None else frozenset(INTERNAL_DOMAINS)
 
     merged_types: list[str] = []
     has_transactional = False

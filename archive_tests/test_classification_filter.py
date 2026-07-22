@@ -92,6 +92,7 @@ class TestClassificationFilter:
     def test_table_absent_returns_false(self, pgvector_dsn: str, tmp_path: Path) -> None:
         """If card_classifications doesn't exist (older schema), never skip."""
         import psycopg
+
         with psycopg.connect(pgvector_dsn) as conn:
             schema = "ppa_t4_no_table"
             conn.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")

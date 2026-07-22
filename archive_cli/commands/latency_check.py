@@ -70,9 +70,7 @@ def _query_temporal(index: Any) -> str:
 
 def _query_hybrid(index: Any) -> str:
     query = "test"
-    from ..index_config import (get_default_embedding_model,
-                                get_default_embedding_version,
-                                get_vector_dimension)
+    from ..index_config import get_default_embedding_model, get_default_embedding_version, get_vector_dimension
 
     index.hybrid_search(
         query=query,

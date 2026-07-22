@@ -11,7 +11,7 @@ def test_plaintext_passthrough():
 
 
 def test_zero_width_chars_stripped():
-    body = "Hi\u200bthere\uFEFF"
+    body = "Hi\u200bthere\ufeff"
     assert clean_email_body(body) == "Hithere"
 
 

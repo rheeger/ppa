@@ -7,11 +7,9 @@ import json
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 from archive_cli.vault_cache import VaultScanCache
-from archive_sync.adapters.datetime_canon import (AUDITED_TIMESTAMP_FIELDS,
-                                                  classify_timestamp)
+from archive_sync.adapters.datetime_canon import AUDITED_TIMESTAMP_FIELDS, classify_timestamp
 
 AUDITED_FIELDS = AUDITED_TIMESTAMP_FIELDS
 

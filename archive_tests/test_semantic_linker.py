@@ -205,16 +205,34 @@ class TestSemanticLinkerEndToEnd:
             # `email_message` is intentionally excluded (already linked deterministically
             # via thread membership). Use `document` as the source type for this test.
             _insert_card_with_embedding(
-                conn, idx.schema, uid="u1", rel_path="a.md", card_type="document",
-                summary="back pain doc", text=same_text, provider=hash_provider,
+                conn,
+                idx.schema,
+                uid="u1",
+                rel_path="a.md",
+                card_type="document",
+                summary="back pain doc",
+                text=same_text,
+                provider=hash_provider,
             )
             _insert_card_with_embedding(
-                conn, idx.schema, uid="u2", rel_path="b.md", card_type="purchase",
-                summary="amazon order heating pad", text=same_text, provider=hash_provider,
+                conn,
+                idx.schema,
+                uid="u2",
+                rel_path="b.md",
+                card_type="purchase",
+                summary="amazon order heating pad",
+                text=same_text,
+                provider=hash_provider,
             )
             _insert_card_with_embedding(
-                conn, idx.schema, uid="u3", rel_path="c.md", card_type="ride",
-                summary="taxi to downtown", text="airport ride uber sedan", provider=hash_provider,
+                conn,
+                idx.schema,
+                uid="u3",
+                rel_path="c.md",
+                card_type="ride",
+                summary="taxi to downtown",
+                text="airport ride uber sedan",
+                provider=hash_provider,
             )
             conn.commit()
         catalog = _build_minimal_catalog(
@@ -246,12 +264,24 @@ class TestSemanticLinkerEndToEnd:
         text = "quarterly strategy planning offsite agenda"
         with idx._connect() as conn:
             _insert_card_with_embedding(
-                conn, idx.schema, uid="s1", rel_path="src.md", card_type="meeting_transcript",
-                summary="Q3 strategy meeting", text=text, provider=hash_provider,
+                conn,
+                idx.schema,
+                uid="s1",
+                rel_path="src.md",
+                card_type="meeting_transcript",
+                summary="Q3 strategy meeting",
+                text=text,
+                provider=hash_provider,
             )
             _insert_card_with_embedding(
-                conn, idx.schema, uid="t1", rel_path="tgt.md", card_type="finance",
-                summary="consultant payment", text=text, provider=hash_provider,
+                conn,
+                idx.schema,
+                uid="t1",
+                rel_path="tgt.md",
+                card_type="finance",
+                summary="consultant payment",
+                text=text,
+                provider=hash_provider,
             )
             conn.commit()
 
@@ -418,9 +448,7 @@ class TestPolicyVersionReevaluation:
         llm = 0.8
         risk = 0.0
         old = 0.50 * det + 0.15 * lex + 0.15 * graph + 0.20 * llm - risk
-        new_with_zero_embedding = (
-            0.45 * det + 0.12 * lex + 0.13 * graph + 0.18 * llm + 0.12 * 0.0 - risk
-        )
+        new_with_zero_embedding = 0.45 * det + 0.12 * lex + 0.13 * graph + 0.18 * llm + 0.12 * 0.0 - risk
         # Lowering deterministic from 0.50 to 0.45 (and small reductions elsewhere) must reduce
         # the score for a non-semantic (embedding=0) decision under the new formula.
         assert new_with_zero_embedding < old

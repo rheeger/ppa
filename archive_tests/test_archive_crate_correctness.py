@@ -35,7 +35,14 @@ BATCH_SIZE = 2_000
 
 
 def _materialize_in_batches(
-    rows, *, vault_root, slug_map, path_to_uid, person_lookup, batch_id, label,
+    rows,
+    *,
+    vault_root,
+    slug_map,
+    path_to_uid,
+    person_lookup,
+    batch_id,
+    label,
 ):
     """Run ``_materialize_row_batch`` in chunks with progress logging."""
     total = len(rows)
@@ -57,7 +64,12 @@ def _materialize_in_batches(
         rate = done / elapsed if elapsed > 0 else 0
         eta = (total - done) / rate if rate > 0 else 0
         log.info(
-            "%s: %d/%d (%.0f/s, ETA %.0fs)", label, done, total, rate, eta,
+            "%s: %d/%d (%.0f/s, ETA %.0fs)",
+            label,
+            done,
+            total,
+            rate,
+            eta,
         )
     elapsed = time.monotonic() - t0
     log.info("%s: done — %d rows in %.1fs (%.0f rows/s)", label, total, elapsed, total / elapsed if elapsed > 0 else 0)
@@ -103,7 +115,10 @@ def test_correctness_slice_materializer_matches_python(monkeypatch, caplog):
             pytest.fail(f"No notes found under {vault}")
         log.info(
             "collected %d rows, %d slugs, %d uids in %.1fs",
-            len(rows), len(slug_map), len(path_to_uid), time.monotonic() - t0,
+            len(rows),
+            len(slug_map),
+            len(path_to_uid),
+            time.monotonic() - t0,
         )
 
         person_lookup = _build_person_lookup(rows)
@@ -167,9 +182,7 @@ def _collect_rows_via_rust_cache(vault: Path):
         log.info("cache built in %.1fs", time.monotonic() - t0)
 
     conn = sqlite3.connect(cache_path)
-    cursor = conn.execute(
-        "SELECT rel_path, uid, frontmatter_json FROM notes ORDER BY rel_path"
-    )
+    cursor = conn.execute("SELECT rel_path, uid, frontmatter_json FROM notes ORDER BY rel_path")
     rows = []
     slug_map = {}
     path_to_uid = {}
@@ -220,7 +233,8 @@ def test_correctness_rust_vs_baseline(monkeypatch, caplog):
             pytest.fail(f"No notes found under {vault}")
         log.info(
             "collected %d rows via Rust cache in %.1fs",
-            len(rows), time.monotonic() - t0,
+            len(rows),
+            time.monotonic() - t0,
         )
 
         person_lookup = _build_person_lookup(rows)
@@ -258,7 +272,5 @@ def test_correctness_rust_vs_baseline(monkeypatch, caplog):
 
         if diffs:
             detail = "\n".join(diffs)
-            raise AssertionError(
-                f"Rust vs Python baseline row-count mismatch:\n{detail}"
-            )
+            raise AssertionError(f"Rust vs Python baseline row-count mismatch:\n{detail}")
         log.info("PASS — Rust row counts match Python baseline")

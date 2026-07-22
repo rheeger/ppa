@@ -44,7 +44,16 @@ class Phase5SemanticProvider:
             ("uber", "lyft", "ride", "pickup", "dropoff", "airport", "downtown"),
             ("united", "flight", "jfk", "sfo", "airline", "departure", "boarding"),
             ("amazon", "purchase", "order", "philips", "hue", "shipping"),
-            ("hotel", "airbnb", "accommodation", "check-in", "checkout"),
+            (
+                "hotel",
+                "airbnb",
+                "accommodation",
+                "check-in",
+                "checkout",
+                "handlery",
+                "union square",
+                "san francisco",
+            ),
             ("subscription", "netflix", "spotify", "renewed", "cancelled"),
             ("payroll", "salary", "gross", "net", "deductions"),
         ]
@@ -64,7 +73,7 @@ def _common_provenance(source: str, *fields: str) -> dict[str, ProvenanceEntry]:
 
 
 def _seed_phase5_vault(vault: Path) -> None:
-    """Seed vault with person cards + 3 new derived type cards for verification."""
+    """Seed vault with person cards + linked transaction cards for verification."""
     from archive_vault.schema import CARD_TYPES
 
     jane = PersonCard(
@@ -94,6 +103,88 @@ def _seed_phase5_vault(vault: Path) -> None:
             "emails",
             "company",
             "title",
+        ),
+    )
+
+    CalendarEventCard = CARD_TYPES["calendar_event"]
+    calendar_event = CalendarEventCard(
+        uid="hfa-calendar-event-test0001",
+        type="calendar_event",
+        source=["google.calendar"],
+        source_id="endaoment-gitcoin-impact-pool",
+        created="2025-12-10",
+        updated="2025-12-10",
+        summary="Endaoment Gitcoin Universal Impact Pool",
+        account_email="robbie@example.com",
+        calendar_id="primary",
+        event_id="endaoment-gitcoin-impact-pool",
+        ical_uid="endaoment-gitcoin-impact-pool@google.com",
+        status="confirmed",
+        title="Endaoment Gitcoin Universal Impact Pool",
+        description="Meeting about the Endaoment Gitcoin Universal Impact Pool.",
+        start_at="2025-12-10T17:00:00Z",
+        end_at="2025-12-10T18:00:00Z",
+        timezone="UTC",
+        meeting_transcripts=["[[endaoment-gitcoin-impact-pool-transcript]]"],
+    )
+    write_card(
+        vault,
+        "Calendar/endaoment-gitcoin-impact-pool.md",
+        calendar_event,
+        body="Calendar event linked to [[endaoment-gitcoin-impact-pool-transcript]].",
+        provenance=_common_provenance(
+            "google.calendar",
+            "summary",
+            "account_email",
+            "calendar_id",
+            "event_id",
+            "ical_uid",
+            "status",
+            "title",
+            "description",
+            "start_at",
+            "end_at",
+            "timezone",
+            "meeting_transcripts",
+        ),
+    )
+
+    MeetingTranscriptCard = CARD_TYPES["meeting_transcript"]
+    meeting_transcript = MeetingTranscriptCard(
+        uid="hfa-meeting-transcript-test001",
+        type="meeting_transcript",
+        source=["otter.meeting"],
+        source_id="otter-endaoment-gitcoin-impact-pool",
+        created="2025-12-10",
+        updated="2025-12-10",
+        summary="Endaoment Gitcoin Universal Impact Pool transcript",
+        otter_meeting_id="otter-endaoment-gitcoin-impact-pool",
+        title="Endaoment Gitcoin Universal Impact Pool",
+        status="processed",
+        start_at="2025-12-10T17:00:00Z",
+        end_at="2025-12-10T18:00:00Z",
+        duration_seconds=3600,
+        calendar_events=["[[endaoment-gitcoin-impact-pool]]"],
+        event_id_hint="endaoment-gitcoin-impact-pool",
+        ical_uid="endaoment-gitcoin-impact-pool@google.com",
+    )
+    write_card(
+        vault,
+        "MeetingTranscripts/endaoment-gitcoin-impact-pool-transcript.md",
+        meeting_transcript,
+        body="Endaoment and Gitcoin discussed the Universal Impact Pool in [[endaoment-gitcoin-impact-pool]].",
+        provenance=_common_provenance(
+            "otter.meeting",
+            "summary",
+            "otter_meeting_id",
+            "title",
+            "status",
+            "start_at",
+            "end_at",
+            "duration_seconds",
+            "calendar_events",
+            "event_id_hint",
+            "ical_uid",
         ),
     )
 
@@ -138,6 +229,43 @@ def _seed_phase5_vault(vault: Path) -> None:
             "tax",
             "mode",
             "delivery_address",
+            "source_email",
+        ),
+    )
+
+    FinanceCard = CARD_TYPES["finance"]
+    finance = FinanceCard(
+        uid="hfa-finance-test0000001",
+        type="finance",
+        source=["plaid"],
+        source_id="plaid-doordash-order-123",
+        created="2025-12-15",
+        updated="2025-12-15",
+        summary="DoorDash charge for Brooklyn Hero Shop order",
+        amount=21.50,
+        currency="USD",
+        counterparty="DoorDash",
+        category="Food and Drink",
+        transaction_status="posted",
+        transaction_type="card purchase",
+        source_email="[[hfa-email-message-doordash]]",
+    )
+    finance_dir = vault / "Finance"
+    finance_dir.mkdir(parents=True, exist_ok=True)
+    write_card(
+        vault,
+        "Finance/doordash-hero-shop-charge.md",
+        finance,
+        body="DoorDash charge reconciled to [[doordash-hero-shop]] from the matching receipt and total.",
+        provenance=_common_provenance(
+            "plaid",
+            "summary",
+            "amount",
+            "currency",
+            "counterparty",
+            "category",
+            "transaction_status",
+            "transaction_type",
             "source_email",
         ),
     )
@@ -219,7 +347,10 @@ def _seed_phase5_vault(vault: Path) -> None:
         vault,
         "Transactions/Flights/united-sfo-jfk.md",
         flight,
-        body="United UA 1234 — SFO to JFK — Dec 15 8:00am to 4:30pm — Economy Plus 12C",
+        body=(
+            "United UA 1234 — SFO to JFK — Dec 15 8:00am to 4:30pm — Economy Plus 12C. "
+            "Part of the San Francisco trip with [[handlery-union-square]]."
+        ),
         provenance=_common_provenance(
             "extract-emails",
             "summary",
@@ -234,6 +365,51 @@ def _seed_phase5_vault(vault: Path) -> None:
             "fare_amount",
             "booking_source",
             "passengers",
+            "source_email",
+        ),
+    )
+
+    AccommodationCard = CARD_TYPES["accommodation"]
+    accommodation = AccommodationCard(
+        uid="hfa-accommodation-test0001",
+        type="accommodation",
+        source=["extract-emails"],
+        source_id="handlery-union-square-reservation",
+        created="2025-12-10",
+        updated="2025-12-10",
+        summary="Handlery Union Square hotel stay",
+        property_name="Handlery Union Square",
+        property_type="hotel",
+        address="351 Geary St, San Francisco, CA",
+        check_in="2025-12-14T15:00:00-08:00",
+        check_out="2025-12-16T11:00:00-08:00",
+        confirmation_code="HANDLERY123",
+        nightly_rate=199.00,
+        total_cost=458.00,
+        guests=["Robbie Heeger"],
+        booking_source="handlery.com",
+        source_email="[[hfa-email-message-handlery]]",
+    )
+    accommodation_dir = vault / "Transactions" / "Accommodations"
+    accommodation_dir.mkdir(parents=True, exist_ok=True)
+    write_card(
+        vault,
+        "Transactions/Accommodations/handlery-union-square.md",
+        accommodation,
+        body="Handlery Union Square hotel stay linked to [[united-sfo-jfk]] for the San Francisco trip.",
+        provenance=_common_provenance(
+            "extract-emails",
+            "summary",
+            "property_name",
+            "property_type",
+            "address",
+            "check_in",
+            "check_out",
+            "confirmation_code",
+            "nightly_rate",
+            "total_cost",
+            "guests",
+            "booking_source",
             "source_email",
         ),
     )
@@ -397,9 +573,7 @@ class TestManifestSemanticQueries:
             self.manifest = json.load(f)
         if "semantic_queries" not in self.manifest:
             pytest.skip("slice_manifest.json has no semantic_queries key (Phase 5 Step 7)")
-        active = [
-            q for q in self.manifest["semantic_queries"] if not q.get("query", "").startswith("PLACEHOLDER")
-        ]
+        active = [q for q in self.manifest["semantic_queries"] if not q.get("query", "").startswith("PLACEHOLDER")]
         if not active:
             pytest.skip("All semantic_queries are still placeholders")
         self.active_queries = active
@@ -423,9 +597,7 @@ class TestManifestSemanticQueries:
             if "No vector matches" in result:
                 assert False, f"Semantic query '{query}': no vector matches"
             hits = _vector_result_lines(result)
-            assert hits >= min_hits, (
-                f"Semantic query '{query}': expected >= {min_hits} hits, got {hits}"
-            )
+            assert hits >= min_hits, f"Semantic query '{query}': expected >= {min_hits} hits, got {hits}"
             for t in expected_types:
                 assert _type_line_present(result, t), (
                     f"Semantic query '{query}': expected type {t} in formatted results"

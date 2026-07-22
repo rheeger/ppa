@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 from archive_sync.adapters.base import deterministic_provenance
-from archive_sync.adapters.calendar_events import (CalendarEventsAdapter,
-                                                   _event_uid)
-from archive_vault.schema import (CalendarEventCard, EmailMessageCard,
-                                  EmailThreadCard)
+from archive_sync.adapters.calendar_events import CalendarEventsAdapter, _event_uid
+from archive_vault.schema import CalendarEventCard, EmailMessageCard, EmailThreadCard
 from archive_vault.vault import read_note, write_card
 
 

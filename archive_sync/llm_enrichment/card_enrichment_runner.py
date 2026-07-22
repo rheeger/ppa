@@ -16,22 +16,27 @@ from typing import Any
 from archive_auth import INTERNAL_DOMAINS
 from archive_cli.vault_cache import VaultScanCache
 from archive_sync.extractors.runner import uid_in_vault_percent_sample
-from archive_sync.llm_enrichment.cache import (InferenceCache,
-                                               build_inference_cache_key)
+from archive_sync.llm_enrichment.cache import InferenceCache, build_inference_cache_key
 from archive_sync.llm_enrichment.classify_index import ClassifyIndex
 from archive_sync.llm_enrichment.threads import (
-    MessageStubIndex, ParticipantNameResolver, build_message_stub_index,
-    build_participant_name_resolver, build_thread_index, chunk_thread_messages,
-    hydrate_imessage_thread, hydrate_thread, imessage_thread_content_hash,
-    load_email_stubs_for_vault, render_imessage_chunk_for_llm)
+    MessageStubIndex,
+    ParticipantNameResolver,
+    build_message_stub_index,
+    build_participant_name_resolver,
+    build_thread_index,
+    chunk_thread_messages,
+    hydrate_imessage_thread,
+    hydrate_thread,
+    imessage_thread_content_hash,
+    load_email_stubs_for_vault,
+    render_imessage_chunk_for_llm,
+)
 from archive_sync.llm_enrichment.workflows import calendar_event as wf_calendar
 from archive_sync.llm_enrichment.workflows import document as wf_document
 from archive_sync.llm_enrichment.workflows import email_thread as wf_email
 from archive_sync.llm_enrichment.workflows import finance as wf_finance
-from archive_sync.llm_enrichment.workflows import \
-    imessage_thread as wf_imessage
-from archive_vault.llm_provider import (GeminiProvider, LLMResponse,
-                                        OllamaProvider)
+from archive_sync.llm_enrichment.workflows import imessage_thread as wf_imessage
+from archive_vault.llm_provider import GeminiProvider, LLMResponse, OllamaProvider
 from archive_vault.provenance import ProvenanceEntry, merge_provenance
 from archive_vault.schema import validate_card_strict
 from archive_vault.vault import read_note, write_card
@@ -439,9 +444,7 @@ class CardEnrichmentRunner:
             _bump("errors")
             return "error"
 
-        display_label = wf_imessage.thread_display_label(
-            fm, card_type=card_type, handle_names=handle_names
-        )
+        display_label = wf_imessage.thread_display_label(fm, card_type=card_type, handle_names=handle_names)
         ctx = wf_imessage.thread_context_header(fm, card_type=card_type)
         chunks = chunk_thread_messages(
             messages,
@@ -1227,9 +1230,7 @@ class CardEnrichmentRunner:
                 continue
 
             raw_labels = fm.get("label_ids")
-            thread_label_ids = (
-                [str(x) for x in raw_labels] if isinstance(raw_labels, list) else None
-            )
+            thread_label_ids = [str(x) for x in raw_labels] if isinstance(raw_labels, list) else None
             ok, reason = wf_email.prefilter_email_thread(
                 group,
                 classify_idx,
@@ -1238,9 +1239,7 @@ class CardEnrichmentRunner:
             )
             if not ok:
                 self.metrics.skipped_prefilter += 1
-                self.metrics.prefilter_breakdown[reason] = (
-                    self.metrics.prefilter_breakdown.get(reason, 0) + 1
-                )
+                self.metrics.prefilter_breakdown[reason] = self.metrics.prefilter_breakdown.get(reason, 0) + 1
                 continue
 
             eligible.append(rel_path)
@@ -1403,9 +1402,7 @@ class CardEnrichmentRunner:
             ok, reason = wf_finance.prefilter_finance(fm)
             if not ok:
                 self.metrics.skipped_prefilter += 1
-                self.metrics.prefilter_breakdown[reason] = (
-                    self.metrics.prefilter_breakdown.get(reason, 0) + 1
-                )
+                self.metrics.prefilter_breakdown[reason] = self.metrics.prefilter_breakdown.get(reason, 0) + 1
                 continue
 
             eligible.append(rel_path)
@@ -1554,9 +1551,7 @@ class CardEnrichmentRunner:
             ok, reason = wf_calendar.prefilter_calendar_event(fm)
             if not ok:
                 self.metrics.skipped_prefilter += 1
-                self.metrics.prefilter_breakdown[reason] = (
-                    self.metrics.prefilter_breakdown.get(reason, 0) + 1
-                )
+                self.metrics.prefilter_breakdown[reason] = self.metrics.prefilter_breakdown.get(reason, 0) + 1
                 continue
 
             eligible.append(rel_path)
@@ -1706,9 +1701,7 @@ class CardEnrichmentRunner:
             ok, reason = wf_document.prefilter_document(fm)
             if not ok:
                 self.metrics.skipped_prefilter += 1
-                self.metrics.prefilter_breakdown[reason] = (
-                    self.metrics.prefilter_breakdown.get(reason, 0) + 1
-                )
+                self.metrics.prefilter_breakdown[reason] = self.metrics.prefilter_breakdown.get(reason, 0) + 1
                 continue
 
             eligible.append(rel_path)
@@ -1808,11 +1801,7 @@ class CardEnrichmentRunner:
         thread_rows: list[tuple[str, dict[str, Any], str]] = []
         for rp in raw_paths:
             fm0 = scan_cache.frontmatter_for_rel_path(rp)
-            sk = str(
-                fm0.get("last_message_at")
-                or fm0.get("first_message_at")
-                or ""
-            )
+            sk = str(fm0.get("last_message_at") or fm0.get("first_message_at") or "")
             thread_rows.append((sk, fm0, rp))
         thread_rows.sort(key=lambda t: t[0], reverse=True)
 
@@ -1871,9 +1860,7 @@ class CardEnrichmentRunner:
                     self.metrics.skipped_populated += 1
                     continue
 
-            stubs = wf_imessage.load_message_stub_frontmatters_for_thread(
-                fm, msg_index=msg_index
-            )
+            stubs = wf_imessage.load_message_stub_frontmatters_for_thread(fm, msg_index=msg_index)
             if not stubs:
                 self.metrics.skipped_no_thread += 1
                 log.warning("no resolvable message cards for thread uid=%s rel=%s", uid, rel_path)
@@ -1882,9 +1869,7 @@ class CardEnrichmentRunner:
             ok, reason = wf_imessage.prefilter_imessage_thread(stubs)
             if not ok:
                 self.metrics.skipped_prefilter += 1
-                self.metrics.prefilter_breakdown[reason] = (
-                    self.metrics.prefilter_breakdown.get(reason, 0) + 1
-                )
+                self.metrics.prefilter_breakdown[reason] = self.metrics.prefilter_breakdown.get(reason, 0) + 1
                 continue
 
             eligible.append(rel_path)

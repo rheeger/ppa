@@ -127,7 +127,9 @@ def main() -> None:
     }
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    print(f"Wrote {out_path} ({len(holdout)} holdouts: {min(len(pos), args.positives)} pos, {min(len(neg), args.negatives)} neg)")
+    print(
+        f"Wrote {out_path} ({len(holdout)} holdouts: {min(len(pos), args.positives)} pos, {min(len(neg), args.negatives)} neg)"
+    )
 
 
 if __name__ == "__main__":

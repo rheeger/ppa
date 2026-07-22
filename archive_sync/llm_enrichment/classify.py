@@ -22,12 +22,14 @@ _PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 
 TRANSACTIONAL_CATEGORIES: frozenset[str] = frozenset({"transactional"})
 
-SKIP_CATEGORIES: frozenset[str] = frozenset({
-    "personal",
-    "marketing",
-    "automated",
-    "noise",
-})
+SKIP_CATEGORIES: frozenset[str] = frozenset(
+    {
+        "personal",
+        "marketing",
+        "automated",
+        "noise",
+    }
+)
 
 
 @dataclass
@@ -137,11 +139,21 @@ def classify_thread(
     return _result_from_raw(parsed, cache_hit=False)
 
 
-_VALID_CARD_TYPES = frozenset({
-    "meal_order", "grocery_order", "purchase", "ride", "flight",
-    "accommodation", "car_rental", "shipment", "subscription",
-    "event_ticket", "payroll",
-})
+_VALID_CARD_TYPES = frozenset(
+    {
+        "meal_order",
+        "grocery_order",
+        "purchase",
+        "ride",
+        "flight",
+        "accommodation",
+        "car_rental",
+        "shipment",
+        "subscription",
+        "event_ticket",
+        "payroll",
+    }
+)
 
 
 def _normalize_card_types(raw_types: list[Any] | None) -> list[str]:

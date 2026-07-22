@@ -115,9 +115,7 @@ def _best_match_expected(
                     "matched": False,
                     "field_match_rate": 0.0,
                     "matched_fields": 0,
-                    "expected_fields": len(
-                        [k for k in exp if exp[k] not in (None, "", [], {}) and k != "type"]
-                    ),
+                    "expected_fields": len([k for k in exp if exp[k] not in (None, "", [], {}) and k != "type"]),
                 }
             )
     return out
@@ -311,7 +309,9 @@ def run_benchmark_for_model(
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--ground-truth", type=Path, default=Path("_artifacts/_benchmark/enrichment_ground_truth_10pct.json"))
+    ap.add_argument(
+        "--ground-truth", type=Path, default=Path("_artifacts/_benchmark/enrichment_ground_truth_10pct.json")
+    )
     ap.add_argument("--vault", type=Path, default=None, help="Override meta.vault in JSON")
     ap.add_argument("--output", type=Path, default=Path("_artifacts/_benchmark/results"))
     ap.add_argument(

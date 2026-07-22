@@ -100,9 +100,7 @@ def _parse_items(body: str) -> list[dict[str, Any]]:
             continue
         m = re.match(r"^[-*]\s+(.+?)\s+x\s*(\d+)\s+\$?\s*([\d,]+\.?\d*)\s*$", line, re.I)
         if m:
-            items.append(
-                {"name": m.group(1).strip(), "quantity": int(m.group(2)), "price": m.group(3).strip()}
-            )
+            items.append({"name": m.group(1).strip(), "quantity": int(m.group(2)), "price": m.group(3).strip()})
             continue
         m2 = re.match(r"^[-*]\s+(.+?)\s+\$(\d+\.?\d*)$", line)
         if m2:

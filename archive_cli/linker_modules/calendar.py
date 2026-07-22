@@ -10,23 +10,32 @@ from __future__ import annotations
 from typing import Any
 
 from archive_cli import linker_framework as lf
-from archive_cli.seed_links import (CARD_TYPE_MODULES,
-                                    LINK_TYPE_EVENT_HAS_MESSAGE,
-                                    LINK_TYPE_EVENT_HAS_PERSON,
-                                    LINK_TYPE_EVENT_HAS_THREAD,
-                                    LINK_TYPE_EVENT_HAS_TRANSCRIPT,
-                                    LINK_TYPE_MESSAGE_HAS_CALENDAR_EVENT,
-                                    LINK_TYPE_THREAD_HAS_CALENDAR_EVENT,
-                                    LINK_TYPE_TRANSCRIPT_HAS_CALENDAR_EVENT,
-                                    MODULE_CALENDAR, MODULE_GRAPH,
-                                    SeedCardSketch, SeedLinkCandidate,
-                                    SeedLinkCatalog, _append_candidate,
-                                    _clean_text, _event_matches_for_source,
-                                    _generate_person_link_candidates,
-                                    _iter_string_values, _make_evidence,
-                                    _name_similarity, _normalize_email,
-                                    _normalize_slug, _slug_from_ref,
-                                    get_link_surface_policies)
+from archive_cli.seed_links import (
+    CARD_TYPE_MODULES,
+    LINK_TYPE_EVENT_HAS_MESSAGE,
+    LINK_TYPE_EVENT_HAS_PERSON,
+    LINK_TYPE_EVENT_HAS_THREAD,
+    LINK_TYPE_EVENT_HAS_TRANSCRIPT,
+    LINK_TYPE_MESSAGE_HAS_CALENDAR_EVENT,
+    LINK_TYPE_THREAD_HAS_CALENDAR_EVENT,
+    LINK_TYPE_TRANSCRIPT_HAS_CALENDAR_EVENT,
+    MODULE_CALENDAR,
+    MODULE_GRAPH,
+    SeedCardSketch,
+    SeedLinkCandidate,
+    SeedLinkCatalog,
+    _append_candidate,
+    _clean_text,
+    _event_matches_for_source,
+    _generate_person_link_candidates,
+    _iter_string_values,
+    _make_evidence,
+    _name_similarity,
+    _normalize_email,
+    _normalize_slug,
+    _slug_from_ref,
+    get_link_surface_policies,
+)
 
 
 def _generate_calendar_candidates(catalog: SeedLinkCatalog, source: SeedCardSketch) -> list[SeedLinkCandidate]:
@@ -255,7 +264,6 @@ def _generate_calendar_candidates(catalog: SeedLinkCatalog, source: SeedCardSket
     return results
 
 
-
 def _score_calendar_features(
     features: dict[str, Any],
 ) -> tuple[float, float, float, float, float]:
@@ -272,8 +280,7 @@ def _score_calendar_features(
     )
     lexical_score = min(
         1.0,
-        float(features.get("title_similarity", 0.0)) * 0.7
-        + min(int(features.get("participant_overlap", 0)), 3) * 0.08,
+        float(features.get("title_similarity", 0.0)) * 0.7 + min(int(features.get("participant_overlap", 0)), 3) * 0.08,
     )
     graph_score = (
         0.85
@@ -291,7 +298,6 @@ def _score_calendar_features(
     )
 
 
-
 def _policies() -> tuple:
     return tuple(p for p in get_link_surface_policies() if p.module_name == MODULE_CALENDAR)
 
@@ -300,22 +306,24 @@ def _source_types() -> tuple[str, ...]:
     return tuple(ct for ct, mods in CARD_TYPE_MODULES.items() if MODULE_CALENDAR in mods)
 
 
-lf.register_linker(lf.LinkerSpec(
-    module_name=MODULE_CALENDAR,
-    source_card_types=_source_types(),
-    emits_link_types=(
-        LINK_TYPE_MESSAGE_HAS_CALENDAR_EVENT,
-        LINK_TYPE_THREAD_HAS_CALENDAR_EVENT,
-        LINK_TYPE_TRANSCRIPT_HAS_CALENDAR_EVENT,
-        LINK_TYPE_EVENT_HAS_PERSON,
-    ),
-    generator=_generate_calendar_candidates,
-    scoring_fn=_score_calendar_features,
-    scoring_mode="weighted",
-    policies=_policies(),
-    requires_llm_judge=True,
-    lifecycle_state="active",
-    phase_owner="phase_2.875",
-    post_promotion_action="edges_only",
-    description="Thread/message/transcript ↔ calendar_event linkage from invite IDs + ical_uids + title/time heuristics.",
-))
+lf.register_linker(
+    lf.LinkerSpec(
+        module_name=MODULE_CALENDAR,
+        source_card_types=_source_types(),
+        emits_link_types=(
+            LINK_TYPE_MESSAGE_HAS_CALENDAR_EVENT,
+            LINK_TYPE_THREAD_HAS_CALENDAR_EVENT,
+            LINK_TYPE_TRANSCRIPT_HAS_CALENDAR_EVENT,
+            LINK_TYPE_EVENT_HAS_PERSON,
+        ),
+        generator=_generate_calendar_candidates,
+        scoring_fn=_score_calendar_features,
+        scoring_mode="weighted",
+        policies=_policies(),
+        requires_llm_judge=True,
+        lifecycle_state="active",
+        phase_owner="phase_2.875",
+        post_promotion_action="edges_only",
+        description="Thread/message/transcript ↔ calendar_event linkage from invite IDs + ical_uids + title/time heuristics.",
+    )
+)

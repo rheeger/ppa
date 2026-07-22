@@ -1,9 +1,9 @@
 ---
-uid: fx-dd-promo-1
+uid: hfa-email-fx-dd-promo-1
 type: email_message
 from_email: noreply@doordash.com
 subject: "$7 Off from your favorite restaurants this summer"
-sent_at: 2023-07-01T09:00:00-07:00
+sent_at: "2023-07-01T09:00:00-07:00"
 summary: Promo
 source: [gmail]
 source_id: gmail.ddp1

@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from archive_cli.materializer import (_build_edges, _build_person_lookup,
-                                      build_target_field_index)
+from archive_cli.materializer import _build_edges, _build_person_lookup, build_target_field_index
 from archive_cli.scanner import CanonicalRow
 from archive_vault.provenance import ProvenanceEntry
 from archive_vault.schema import FinanceCard, PurchaseCard, ShipmentCard
@@ -83,9 +82,13 @@ def test_shipment_linked_purchase_via_order_number_resolves(tmp_path: Path) -> N
         from archive_vault.schema import validate_card_permissive
 
         rows.append(
-            CanonicalRow(rel_path=rel, frontmatter=dict(note.frontmatter), card=validate_card_permissive(note.frontmatter))
+            CanonicalRow(
+                rel_path=rel, frontmatter=dict(note.frontmatter), card=validate_card_permissive(note.frontmatter)
+            )
         )
-    slug_map = {Path(rel).stem: rel for rel in ("Purchases/hfa-purchase-testord1.md", "Shipments/hfa-shipment-test1.md")}
+    slug_map = {
+        Path(rel).stem: rel for rel in ("Purchases/hfa-purchase-testord1.md", "Shipments/hfa-shipment-test1.md")
+    }
     path_to_uid = {r.rel_path: str(r.card.uid) for r in rows}
     person_lookup = _build_person_lookup(rows)
     tfi = build_target_field_index(rows)
@@ -222,7 +225,9 @@ def test_finance_source_email_wikilink_still_materializes(tmp_path: Path) -> Non
     rows = []
     for rel in ("Email/hfa-email-msg-xyz.md", "Finance/hfa-finance-abc.md"):
         n = read_note_file(vault / rel, vault_root=str(vault))
-        rows.append(CanonicalRow(rel_path=rel, frontmatter=dict(n.frontmatter), card=validate_card_permissive(n.frontmatter)))
+        rows.append(
+            CanonicalRow(rel_path=rel, frontmatter=dict(n.frontmatter), card=validate_card_permissive(n.frontmatter))
+        )
     slug_map = {"hfa-email-msg-xyz": "Email/hfa-email-msg-xyz.md", "hfa-finance-abc": "Finance/hfa-finance-abc.md"}
     path_to_uid = {r.rel_path: str(r.card.uid) for r in rows}
     person_lookup = _build_person_lookup(rows)
@@ -239,6 +244,4 @@ def test_finance_source_email_wikilink_still_materializes(tmp_path: Path) -> Non
         person_lookup=person_lookup,
         target_field_index=tfi,
     )
-    assert any(
-        e["edge_type"] == "finance_from_email" and e["target_uid"] == "hfa-email-msg-xyz" for e in edges
-    )
+    assert any(e["edge_type"] == "finance_from_email" and e["target_uid"] == "hfa-email-msg-xyz" for e in edges)

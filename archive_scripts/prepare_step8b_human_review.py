@@ -118,9 +118,7 @@ def main() -> None:
     lines.append("")
     lines.append("## Positive samples (check field values vs email)")
     lines.append("")
-    lines.append(
-        "Confirm each row: subject plausibly matches card type and key fields look right for that email."
-    )
+    lines.append("Confirm each row: subject plausibly matches card type and key fields look right for that email.")
     lines.append("")
 
     # Stratified sample: round-robin by type

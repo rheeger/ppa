@@ -146,8 +146,7 @@ class TestCrossProvider:
                 body = clean_email_body(email["body"])
                 results = ext.extract(fm, body, email["uid"], "test/cross.md")
                 assert len(results) == 0, (
-                    f"{email['uid']}: expected 0 cards but got {len(results)} "
-                    f"from {ext.extractor_id}"
+                    f"{email['uid']}: expected 0 cards but got {len(results)} from {ext.extractor_id}"
                 )
             else:
                 assert ext is not None, f"{email['uid']}: expected match but got None"
@@ -177,9 +176,7 @@ class TestCrossProvider:
             body = clean_email_body(email["body"])
             results = ext.extract(fm, body, email["uid"], "test/cross.md")
             for r in results:
-                assert r.card.type != "ride", (
-                    f"{email['uid']}: Uber Eats email produced ride card"
-                )
+                assert r.card.type != "ride", f"{email['uid']}: Uber Eats email produced ride card"
 
     def test_no_uber_ride_produces_meal_order(self):
         """Uber ride emails must never produce meal_order cards."""
@@ -196,9 +193,7 @@ class TestCrossProvider:
             body = clean_email_body(email["body"])
             results = ext.extract(fm, body, email["uid"], "test/cross.md")
             for r in results:
-                assert r.card.type != "meal_order", (
-                    f"{email['uid']}: Uber ride email produced meal_order card"
-                )
+                assert r.card.type != "meal_order", f"{email['uid']}: Uber ride email produced meal_order card"
 
     def test_registry_order_uber_eats_before_rides(self):
         """Uber Eats must match before Uber Rides for Uber Eats subjects."""
@@ -226,6 +221,4 @@ class TestCrossProvider:
             try:
                 ext.extract(fm, body, email["uid"], "test/cross.md")
             except Exception as exc:
-                raise AssertionError(
-                    f"{email['uid']}: {ext.extractor_id} raised {exc}"
-                ) from exc
+                raise AssertionError(f"{email['uid']}: {ext.extractor_id} raised {exc}") from exc

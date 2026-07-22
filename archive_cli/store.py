@@ -13,28 +13,38 @@ from .embedding_provider import get_embedding_provider
 from .explain import retrieval_explain_payload, retrieval_explain_payload_v2
 from .features import archive_context, build_context_json, build_context_text
 from .index_config import get_seed_links_enabled
-from .index_store import (PostgresArchiveIndex, get_default_embedding_model,
-                          get_default_embedding_version)
+from .index_store import PostgresArchiveIndex, get_default_embedding_model, get_default_embedding_version
 from .projections.registry import projection_for_card_type
 from .query_planner import build_query_plan, effective_filters_from_plan
 from .reranker import blend_rerank_scores, reranker_for_config
-from .retrieval_pipeline import (PIPELINE_VERSION, HybridFetchInputs,
-                                 anchor_uids_from_lexical,
-                                 fuse_and_rank_hybrid, merge_lexical_rows,
-                                 merge_vector_rows, score_breakdown_for_row)
+from .retrieval_pipeline import (
+    PIPELINE_VERSION,
+    HybridFetchInputs,
+    anchor_uids_from_lexical,
+    fuse_and_rank_hybrid,
+    merge_lexical_rows,
+    merge_vector_rows,
+    score_breakdown_for_row,
+)
 
 _SEED_LINKS_DISABLED = {"error": "Seed links are not enabled. Set PPA_SEED_LINKS_ENABLED=1 to enable."}
 
 
 def _import_seed_links():
-    from .seed_links import (compute_link_quality_gate,
-                             get_link_candidate_details, get_seed_scope_rows,
-                             get_surface_policy_rows, list_link_candidates,
-                             review_link_candidate,
-                             run_incremental_link_refresh,
-                             run_seed_link_backfill, run_seed_link_enqueue,
-                             run_seed_link_promotion_workers,
-                             run_seed_link_report, run_seed_link_workers)
+    from .seed_links import (
+        compute_link_quality_gate,
+        get_link_candidate_details,
+        get_seed_scope_rows,
+        get_surface_policy_rows,
+        list_link_candidates,
+        review_link_candidate,
+        run_incremental_link_refresh,
+        run_seed_link_backfill,
+        run_seed_link_enqueue,
+        run_seed_link_promotion_workers,
+        run_seed_link_report,
+        run_seed_link_workers,
+    )
 
     return {
         "compute_link_quality_gate": compute_link_quality_gate,
@@ -347,21 +357,25 @@ class DefaultArchiveStore(ArchiveStore):
         version = embedding_version or get_default_embedding_version()
         copy_result: dict[str, Any] | None = None
         if copy_from_schema:
-            copy_result = dict(self.index.copy_embeddings_from_schema(
-                source_schema=copy_from_schema,
-                embedding_model=model,
-                embedding_version=version,
-            ))
+            copy_result = dict(
+                self.index.copy_embeddings_from_schema(
+                    source_schema=copy_from_schema,
+                    embedding_model=model,
+                    embedding_version=version,
+                )
+            )
         provider = self.provider_factory(model=model)
         ctx = self.config.retrieval.get("context", {})
         include_ctx = bool(ctx.get("include_in_embeddings", True))
-        embed_result = dict(self.index.embed_pending(
-            provider=provider,
-            embedding_model=model,
-            embedding_version=version,
-            limit=limit,
-            include_context_prefix=include_ctx,
-        ))
+        embed_result = dict(
+            self.index.embed_pending(
+                provider=provider,
+                embedding_model=model,
+                embedding_version=version,
+                limit=limit,
+                include_context_prefix=include_ctx,
+            )
+        )
         if copy_result is not None:
             embed_result["copy_from_schema"] = copy_result
         return embed_result

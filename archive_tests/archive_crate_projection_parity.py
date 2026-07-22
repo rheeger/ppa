@@ -83,9 +83,7 @@ def format_projection_buffer_diff(
             if row_a == row_b:
                 continue
             if len(row_a) != len(row_b):
-                lines.append(
-                    f"{table}[{i}]: tuple len {len(row_a)} (python) != {len(row_b)} (rust)"
-                )
+                lines.append(f"{table}[{i}]: tuple len {len(row_a)} (python) != {len(row_b)} (rust)")
             else:
                 for j, (ca, cb) in enumerate(zip(row_a, row_b, strict=True)):
                     if ca != cb:

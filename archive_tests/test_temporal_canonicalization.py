@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from archive_sync.adapters.datetime_canon import (AUDITED_TIMESTAMP_FIELDS,
-                                                  classify_timestamp,
-                                                  to_utc_z_iso)
+from archive_sync.adapters.datetime_canon import AUDITED_TIMESTAMP_FIELDS, classify_timestamp, to_utc_z_iso
 
 
 def test_to_utc_z_iso_preserves_z_suffix() -> None:

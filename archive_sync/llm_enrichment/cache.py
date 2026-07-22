@@ -89,9 +89,7 @@ class InferenceCache:
 
     def get(self, key: str) -> dict[str, Any] | None:
         with self._lock:
-            row = self._conn.execute(
-                "SELECT response_json FROM inference_cache WHERE cache_key = ?", (key,)
-            ).fetchone()
+            row = self._conn.execute("SELECT response_json FROM inference_cache WHERE cache_key = ?", (key,)).fetchone()
         if not row:
             return None
         try:
@@ -152,9 +150,7 @@ class InferenceCache:
     def stats(self) -> dict[str, Any]:
         with self._lock:
             total = int(self._conn.execute("SELECT COUNT(*) FROM inference_cache").fetchone()[0])
-            stage_rows = self._conn.execute(
-                "SELECT stage, model_id, run_id FROM inference_cache"
-            ).fetchall()
+            stage_rows = self._conn.execute("SELECT stage, model_id, run_id FROM inference_cache").fetchall()
         by_stage: Counter[str] = Counter()
         by_model: Counter[str] = Counter()
         by_run: Counter[str] = Counter()

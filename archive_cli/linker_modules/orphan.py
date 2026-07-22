@@ -28,7 +28,8 @@ from archive_cli.seed_links import (
 
 
 def _generate_orphan_candidates(
-    catalog: SeedLinkCatalog, source: SeedCardSketch,
+    catalog: SeedLinkCatalog,
+    source: SeedCardSketch,
 ) -> list[SeedLinkCandidate]:
     results: list[SeedLinkCandidate] = []
     candidate_pairs: list[tuple[str, SeedCardSketch]] = []
@@ -102,17 +103,19 @@ def _source_types() -> tuple[str, ...]:
     return tuple(ct for ct, mods in CARD_TYPE_MODULES.items() if MODULE_ORPHAN in mods)
 
 
-lf.register_linker(lf.LinkerSpec(
-    module_name=MODULE_ORPHAN,
-    source_card_types=_source_types(),
-    emits_link_types=(LINK_TYPE_ORPHAN_REPAIR_EXACT, LINK_TYPE_ORPHAN_REPAIR_FUZZY),
-    generator=_generate_orphan_candidates,
-    scoring_fn=_score_orphan_features,
-    scoring_mode="weighted",
-    policies=_policies(),
-    requires_llm_judge=True,
-    lifecycle_state="active",
-    phase_owner="phase_2.875",
-    post_promotion_action="frontmatter_delta",
-    description="Orphan-wikilink repair via normalized-slug or fuzzy match against existing cards.",
-))
+lf.register_linker(
+    lf.LinkerSpec(
+        module_name=MODULE_ORPHAN,
+        source_card_types=_source_types(),
+        emits_link_types=(LINK_TYPE_ORPHAN_REPAIR_EXACT, LINK_TYPE_ORPHAN_REPAIR_FUZZY),
+        generator=_generate_orphan_candidates,
+        scoring_fn=_score_orphan_features,
+        scoring_mode="weighted",
+        policies=_policies(),
+        requires_llm_judge=True,
+        lifecycle_state="active",
+        phase_owner="phase_2.875",
+        post_promotion_action="frontmatter_delta",
+        description="Orphan-wikilink repair via normalized-slug or fuzzy match against existing cards.",
+    )
+)
