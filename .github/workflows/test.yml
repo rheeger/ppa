@@ -240,7 +240,14 @@ jobs:
         run: |
           python -m archive_cli bootstrap-postgres
           python -m archive_cli rebuild-indexes
-          python -m archive_cli health-check --manifest archive_tests/slice_manifest_fixture.json --report-format both --report-dir /tmp/
+          # health-check structural gate requires embeddings for all chunks
+          python -m archive_cli embed-pending --limit 0 --embedding-model archive-hash-dev --embedding-version 1
+          python -m archive_cli health-check --manifest archive_tests/slice_manifest_fixture.json --report-format both --report-dir /tmp/ || {
+            echo "health-check failed; dumping reports" >&2
+            cat /tmp/health-report.md 2>/dev/null || true
+            cat /tmp/health-report.json 2>/dev/null || true
+            exit 1
+          }
 
   benchmark-nightly:
     runs-on: ubuntu-latest
