@@ -1,4 +1,4 @@
-//! Python delegation for Phase 2.9 steps 13–14, 18 (`archive_cli.crate_bridge`).
+//! Python delegation for Phase 2.9 step 18 (`archive_cli.crate_bridge`).
 
 use pyo3::prelude::*;
 
