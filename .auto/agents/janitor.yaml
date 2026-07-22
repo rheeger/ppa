@@ -1,0 +1,5 @@
+imports:
+  - "@auto/janitor@latest/agents/janitor.yaml"
+variables:
+  repoFullName: rheeger/ppa
+  githubConnection: github-rheeger

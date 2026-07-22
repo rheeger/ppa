@@ -1,0 +1,4 @@
+imports:
+  - "@auto/inspector@latest/agents/inspector.yaml"
+variables:
+  repoFullName: rheeger/ppa

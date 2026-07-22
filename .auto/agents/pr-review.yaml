@@ -1,0 +1,5 @@
+imports:
+  - "@auto/code-review@latest/agents/pr-review.yaml"
+variables:
+  repoFullName: rheeger/ppa
+  githubConnection: github-rheeger
