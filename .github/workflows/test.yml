@@ -27,7 +27,50 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -e ".[dev]"
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-workspaces: archive_crate -> target
+          rustflags: ""
+      - name: Create Python virtualenv
+        run: |
+          python -m venv .venv
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
+      - name: Install Python test dependencies
+        run: python -m pip install -e ".[dev]" maturin
+      - name: Build and install archive_crate wheel
+        run: |
+          maturin build --release --locked --manifest-path archive_crate/Cargo.toml --interpreter "$VIRTUAL_ENV/bin/python" --out dist
+          python -m pip install --force-reinstall --no-deps dist/archive_crate-*.whl
+      - name: Verify archive_crate extension
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          import archive_crate
+          import archive_crate.archive_crate as native
+
+          required = (
+              "walk_vault",
+              "BodyCache",
+              "chunk_hash",
+              "stable_json_from_yaml_frontmatter",
+          )
+          missing = [name for name in required if not hasattr(archive_crate, name)]
+          native_path = Path(native.__file__)
+          print(f"archive_crate extension: {native_path}")
+          print(f"verified symbols: {', '.join(required)}")
+          assert native_path.suffix == ".so", native_path
+          assert not missing, f"archive_crate missing expected symbols: {missing}"
+          PY
+      - name: Run focused archive_crate tests
+        run: |
+          python -m pytest \
+            archive_tests/test_archive_crate_smoke.py \
+            archive_tests/test_archive_crate_cache.py \
+            archive_tests/test_chunk_hash_parity.py \
+            archive_tests/test_json_parity_frontmatter.py \
+            -v --tb=short
       - run: python -m pytest archive_tests/ -v --tb=short -m "not integration and not slow"
         env:
           PPA_INDEX_DSN: "postgresql://unused:unused@localhost/unused"
@@ -55,7 +98,42 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -e ".[dev]"
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-workspaces: archive_crate -> target
+          rustflags: ""
+      - name: Create Python virtualenv
+        run: |
+          python -m venv .venv
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
+      - name: Install Python test dependencies
+        run: python -m pip install -e ".[dev]" maturin
+      - name: Build and install archive_crate wheel
+        run: |
+          maturin build --release --locked --manifest-path archive_crate/Cargo.toml --interpreter "$VIRTUAL_ENV/bin/python" --out dist
+          python -m pip install --force-reinstall --no-deps dist/archive_crate-*.whl
+      - name: Verify archive_crate extension
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          import archive_crate
+          import archive_crate.archive_crate as native
+
+          required = (
+              "walk_vault",
+              "BodyCache",
+              "chunk_hash",
+              "stable_json_from_yaml_frontmatter",
+          )
+          missing = [name for name in required if not hasattr(archive_crate, name)]
+          native_path = Path(native.__file__)
+          print(f"archive_crate extension: {native_path}")
+          print(f"verified symbols: {', '.join(required)}")
+          assert native_path.suffix == ".so", native_path
+          assert not missing, f"archive_crate missing expected symbols: {missing}"
+          PY
       - name: Prepare CI vault
         run: |
           VAULT="${RUNNER_TEMP}/ppa-ci-vault"
