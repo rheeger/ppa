@@ -152,6 +152,9 @@ class ClassificationReuseLoader:
     ) -> None:
         self._card_classifications = card_classifications or {}
         self._classify_index = classify_index
+        self._classify_by_thread_id: dict[str, dict[str, Any]] = (
+            classify_index.dump_all() if classify_index is not None else {}
+        )
         self._allow_new_llm = allow_new_llm
         self._llm_classify_fn = llm_classify_fn
         self._user_domains = user_domains
@@ -170,8 +173,8 @@ class ClassificationReuseLoader:
             return self._card_classifications[thread.thread_uid]
 
         tid = thread.gmail_thread_id.strip()
-        if self._classify_index is not None and tid:
-            cached = self._classify_index.get(tid)
+        if tid:
+            cached = self._classify_by_thread_id.get(tid)
             if cached:
                 return _hit(
                     str(cached.get("category") or ""),

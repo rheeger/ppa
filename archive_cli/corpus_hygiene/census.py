@@ -260,37 +260,74 @@ def write_census_artifacts(repo_root: Path, result: CensusResult) -> dict[str, s
     return paths
 
 
+def _frontmatter_rows_from_cache(vault: Path) -> list[dict[str, Any]]:
+    """One Rust (or single-cursor) dump of email_thread + email_message frontmatter."""
+
+    from archive_cli.vault_cache import VaultScanCache
+
+    scan_cache = VaultScanCache.build_or_load(vault, tier=1, progress_every=0)
+    cache_path = VaultScanCache.cache_path_for_vault(vault)
+    if cache_path.is_file():
+        try:
+            import archive_crate
+
+            return list(
+                archive_crate.frontmatter_dicts_from_cache(
+                    str(cache_path),
+                    types=["email_thread", "email_message"],
+                )
+            )
+        except Exception:
+            pass
+    by_type, _rel_by_uid, uid_by_path, _uid_by_stem, frontmatter_by_uid = scan_cache.slice_lookup_tables()
+    rows: list[dict[str, Any]] = []
+    for card_type in ("email_thread", "email_message"):
+        for rel in by_type.get(card_type) or []:
+            uid = uid_by_path.get(rel, "")
+            fm = dict(frontmatter_by_uid.get(uid) or {})
+            if not fm:
+                continue
+            rows.append({"rel_path": rel, "frontmatter": fm})
+    return rows
+
+
 def load_threads_from_vault_cache(vault_path: Path) -> list[EmailThreadRecord]:
-    """Load email_thread records via vault scan cache (Rust-preferred path).
+    """Load email_thread records via one cache dump (Rust cache_iter preferred).
 
     Resolves outbound signals from linked email_message cards (From=owner or
     direction=outbound). Owner ∈ thread.participants alone is never enough.
     """
 
-    from archive_cli.vault_cache import VaultScanCache
+    vault = Path(vault_path)
+    rows = _frontmatter_rows_from_cache(vault)
+    fm_by_uid: dict[str, dict[str, Any]] = {}
+    fm_by_stem: dict[str, dict[str, Any]] = {}
+    thread_rows: list[tuple[str, dict[str, Any]]] = []
+    for row in rows:
+        rel = str(row.get("rel_path") or "")
+        fm = dict(row.get("frontmatter") or {})
+        uid = str(fm.get("uid") or Path(rel).stem)
+        if uid:
+            fm_by_uid[uid] = fm
+        stem = Path(rel).stem
+        if stem:
+            fm_by_stem[stem] = fm
+        card_type = str(fm.get("type") or "")
+        if card_type == "email_thread" or (not card_type and "EmailThread" in rel.replace("\\", "/")):
+            thread_rows.append((rel, fm))
 
-    scan_cache = VaultScanCache.build_or_load(vault_path, tier=1, progress_every=0)
-    paths = list(scan_cache.rel_paths_by_type().get("email_thread") or [])
-    uid_to_rel = scan_cache.uid_to_rel_path()
     threads: list[EmailThreadRecord] = []
-    for rel in sorted(paths):
-        fm = scan_cache.frontmatter_for_rel_path(rel)
+    for rel, fm in sorted(thread_rows, key=lambda item: item[0]):
         message_from: list[str] = []
         message_dirs: list[str] = []
         for raw_ref in fm.get("messages") or []:
             ref = str(raw_ref).strip()
             if ref.startswith("[[") and ref.endswith("]]"):
-                # Strip both opening [[ and closing ]] ([-2], not [-1]).
                 ref = ref[2:-2].strip()
-            # Wikilink may be "uid|alias" — keep uid stem
             uid = ref.split("|", 1)[0].strip()
-            msg_rel = uid_to_rel.get(uid)
-            if not msg_rel:
-                # Also try slug / path stem lookup
-                msg_rel = scan_cache.rel_path_for_slug(uid)
-            if not msg_rel:
+            msg_fm = fm_by_uid.get(uid) or fm_by_stem.get(uid)
+            if not msg_fm:
                 continue
-            msg_fm = scan_cache.frontmatter_for_rel_path(msg_rel)
             from_email = str(msg_fm.get("from_email") or msg_fm.get("from") or "").strip().lower()
             if from_email:
                 message_from.append(from_email)

@@ -107,6 +107,21 @@ class ClassifyIndex:
             )
             self._conn.commit()
 
+    def dump_all(self) -> dict[str, dict[str, Any]]:
+        """One SELECT of the classify index into an in-memory dict (no per-thread get)."""
+
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM thread_classifications").fetchall()
+            cols = [d[0] for d in self._conn.execute("SELECT * FROM thread_classifications LIMIT 0").description]
+        out: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            d = dict(zip(cols, row))
+            d["card_types"] = json.loads(d.get("card_types") or "[]")
+            tid = str(d.get("thread_id") or "").strip()
+            if tid:
+                out[tid] = d
+        return out
+
     def get(self, thread_id: str) -> dict[str, Any] | None:
         with self._lock:
             row = self._conn.execute(
