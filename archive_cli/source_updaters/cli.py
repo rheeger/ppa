@@ -201,6 +201,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         )
         return EXIT_VALIDATION_FAILED
 
+    catch_up = bool(getattr(args, "catch_up", False) or getattr(args, "reset_cursor", False))
+    max_items = getattr(args, "max_items", None)
+
     if len(sources) == 1:
         one = run_source_updater(
             source_key=sources[0],
@@ -212,7 +215,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             run_id=getattr(args, "run_id", "") or "",
             repo_root=_repo_root(),
             state_store=state_store,
-            max_items=getattr(args, "max_items", None),
+            max_items=max_items,
+            catch_up=catch_up,
         )
         payload = {
             "completion_state": SECTION_D_EXECUTION_STATE,
@@ -239,6 +243,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         ladder_gate=getattr(args, "ladder_gate", None) or GATE_SYNTHETIC_FIXTURES,
         repo_root=_repo_root(),
         state_store=state_store,
+        max_items=max_items,
+        catch_up=catch_up,
     )
     payload = multi.to_dict()
     payload["apply"] = apply
@@ -361,6 +367,19 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
     p_run.add_argument("--ladder-gate", default=GATE_SYNTHETIC_FIXTURES)
     p_run.add_argument("--run-id", default="")
     p_run.add_argument("--max-items", type=int, default=None, help="Cap threads/events fetched")
+    p_run.add_argument(
+        "--catch-up",
+        action="store_true",
+        dest="catch_up",
+        help="Reset Gmail page cursor so the walk starts at newest threads "
+        "(keeps history_id quick-update skip; promotion gate stays on)",
+    )
+    p_run.add_argument(
+        "--reset-cursor",
+        action="store_true",
+        dest="reset_cursor",
+        help="Alias for --catch-up",
+    )
     p_run.add_argument(
         "--dry-run",
         action="store_true",

@@ -18,6 +18,7 @@ from archive_sync.source_updaters.constants import (
     SECTION_D_EXECUTION_STATE,
 )
 from archive_sync.source_updaters.runner import (
+    adapter_ingest_kwargs,
     batch_summary_from_ingest,
     classify_run_exception,
     parse_source_key,
@@ -332,6 +333,8 @@ def test_cli_run_missing_vault_exit_4(monkeypatch: pytest.MonkeyPatch, capsys: p
         ladder_gate="synthetic_fixtures",
         run_id="",
         max_items=None,
+        catch_up=False,
+        reset_cursor=False,
         confirm_production=False,
     )
     rc = cmd_run(args)
@@ -343,3 +346,76 @@ def test_cli_run_missing_vault_exit_4(monkeypatch: pytest.MonkeyPatch, capsys: p
 
 def test_execution_state_constant() -> None:
     assert SECTION_D_EXECUTION_STATE == "source_updater_execution_complete"
+
+
+class _RecordingGmailAdapter(_FixtureGmailAdapter):
+    def __init__(self) -> None:
+        super().__init__(items=[])
+        self.ingest_kwargs: dict[str, Any] = {}
+
+    def ingest(self, vault_path: str, dry_run: bool = False, **kwargs: Any) -> IngestResult:
+        self.ingest_kwargs = dict(kwargs)
+        return IngestResult()
+
+
+def test_gmail_catch_up_resets_cursor_and_keeps_promotion_gate(tmp_path: Path) -> None:
+    vault = _minimal_vault(tmp_path)
+    adapter = _RecordingGmailAdapter()
+    result = run_source_updater(
+        source_key="gmail-messages:me@example.com",
+        vault_path=vault,
+        apply=False,
+        adapter=adapter,
+        repo_root=tmp_path,
+        catch_up=True,
+    )
+    assert adapter.ingest_kwargs.get("gmail_promotion_gate") is True
+    assert adapter.ingest_kwargs.get("catch_up") is True
+    assert adapter.ingest_kwargs.get("quick_update") is True
+    assert "max_threads" not in adapter.ingest_kwargs
+    assert "catch_up: gmail page cursor reset" in " ".join(result.report.warnings)
+    assert "gmail_promotion_gate=true" in result.report.warnings
+
+
+def test_gmail_uncapped_catch_up_does_not_disable_promotion_gate() -> None:
+    decl = resolve_declaration("gmail-messages:me@example.com")
+    kwargs = adapter_ingest_kwargs(decl, apply=True, catch_up=True)
+    assert kwargs["gmail_promotion_gate"] is True
+    assert kwargs["catch_up"] is True
+    assert kwargs["quick_update"] is True
+
+
+def test_gmail_catch_up_with_max_items_still_bounds_and_keeps_gate(tmp_path: Path) -> None:
+    vault = _minimal_vault(tmp_path)
+    adapter = _RecordingGmailAdapter()
+    result = run_source_updater(
+        source_key="gmail-messages:me@example.com",
+        vault_path=vault,
+        apply=False,
+        adapter=adapter,
+        repo_root=tmp_path,
+        catch_up=True,
+        max_items=25,
+    )
+    assert adapter.ingest_kwargs.get("gmail_promotion_gate") is True
+    assert adapter.ingest_kwargs.get("catch_up") is True
+    assert adapter.ingest_kwargs.get("max_threads") == 25
+    warnings = result.report.warnings
+    assert "gmail_promotion_gate=true" in warnings
+    assert any("max_threads=25" in w for w in warnings)
+
+
+def test_gmail_max_items_without_catch_up_still_keeps_promotion_gate(tmp_path: Path) -> None:
+    vault = _minimal_vault(tmp_path)
+    adapter = _RecordingGmailAdapter()
+    run_source_updater(
+        source_key="gmail-messages:me@example.com",
+        vault_path=vault,
+        apply=False,
+        adapter=adapter,
+        repo_root=tmp_path,
+        max_items=10,
+    )
+    assert adapter.ingest_kwargs.get("gmail_promotion_gate") is True
+    assert adapter.ingest_kwargs.get("max_threads") == 10
+    assert adapter.ingest_kwargs.get("catch_up") is not True

@@ -1123,6 +1123,13 @@ def main() -> None:
         "(keeps gmail promotion gate on; bounds volume only)",
     )
     sub_maintain.add_argument(
+        "--catch-up",
+        action="store_true",
+        dest="source_updater_catch_up",
+        help="With --run-source-updaters, reset Gmail page cursor so the walk "
+        "starts at newest threads (keeps history_id skip; promotion gate stays on)",
+    )
+    sub_maintain.add_argument(
         "--record-processor-status",
         action="store_true",
         help="Snapshot processor declaration state into durable store (no processor execution)",
@@ -1232,6 +1239,7 @@ def main() -> None:
                 source_updater_keys=list(getattr(args, "source_updater_keys", None) or []),
                 apply_source_updaters=getattr(args, "apply_source_updaters", False),
                 source_updater_max_items=getattr(args, "source_updater_max_items", None),
+                source_updater_catch_up=getattr(args, "source_updater_catch_up", False),
                 run_processors=getattr(args, "run_processors", False),
                 apply_processors=getattr(args, "apply_processors", False),
                 dirty_uids_path=str(getattr(args, "dirty_uids", "") or ""),

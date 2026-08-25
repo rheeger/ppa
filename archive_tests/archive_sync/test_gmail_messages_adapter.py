@@ -8,7 +8,14 @@ import time
 from pathlib import Path
 
 from archive_sync.adapters.base import deterministic_provenance
-from archive_sync.adapters.gmail_messages import GmailMessagesAdapter, _attachment_uid, _message_uid, _thread_uid
+from archive_sync.adapters.gmail_messages import (
+    GmailMessagesAdapter,
+    _attachment_uid,
+    _message_uid,
+    _thread_uid,
+    catch_up_requested,
+    reset_gmail_page_cursor,
+)
 from archive_vault.schema import EmailAttachmentCard, EmailMessageCard, EmailThreadCard, PersonCard
 from archive_vault.vault import read_note, write_card
 
@@ -984,3 +991,232 @@ def test_extracts_google_calendar_html_without_ics():
     assert record["invite_method"] == "REMINDER"
     assert record["invite_start_at"] == "2024-11-26T18:00:00Z"
     assert record["invite_end_at"] == "2024-11-26T18:30:00Z"
+
+
+def test_reset_gmail_page_cursor_clears_page_fields_keeps_history_id():
+    cursor = {
+        "page_token": "march-page-50",
+        "page_index": 12,
+        "page_thread_ids": ["old-t1", "old-t2"],
+        "page_next_token": "march-page-51",
+        "gmail_history_id": "h-march",
+        "scanned_threads": 400,
+    }
+    reset = reset_gmail_page_cursor(cursor)
+    assert reset is cursor
+    assert cursor["page_token"] is None
+    assert cursor["page_index"] == 0
+    assert cursor["page_thread_ids"] == []
+    assert cursor["page_next_token"] is None
+    assert cursor["gmail_history_id"] == "h-march"
+    assert cursor["scanned_threads"] == 400
+
+
+def test_catch_up_requested_accepts_aliases():
+    assert catch_up_requested(catch_up=True) is True
+    assert catch_up_requested(reset_page_cursor=True) is True
+    assert catch_up_requested(reset_cursor=True) is True
+    assert catch_up_requested() is False
+    assert catch_up_requested(catch_up=False, reset_cursor=False) is False
+
+
+def test_catch_up_starts_from_newest_threads_not_old_page_index(tmp_vault):
+    """Catch-up ignores a March mid-walk page cursor and lists newest first."""
+
+    adapter = GmailMessagesAdapter()
+    list_calls: list[dict] = []
+
+    def gws_response(args):
+        if args[:4] == ["gmail", "users", "threads", "list"]:
+            params = json.loads(args[-1])
+            list_calls.append(params)
+            assert "pageToken" not in params
+            return {
+                "threads": [
+                    {"id": "aug-new", "historyId": "h-new"},
+                    {"id": "aug-old", "historyId": "h-same"},
+                ],
+                "nextPageToken": "page-2",
+            }
+        if args[:4] == ["gmail", "users", "threads", "get"]:
+            params = json.loads(args[-1])
+            tid = params["id"]
+            assert tid not in {"old-t1", "old-t2"}, "catch-up must not resume old page_thread_ids"
+            return _thread(
+                tid,
+                _message(
+                    message_id=f"m-{tid}",
+                    thread_id=tid,
+                    internal_date="1750000000000",
+                    subject=f"Thread {tid}",
+                    body="hello",
+                    from_value="Alice Example <alice@example.com>",
+                    to_value="me@example.com",
+                    snippet="hello",
+                ),
+                history_id="h-new" if tid == "aug-new" else "h-same",
+            )
+        raise AssertionError(f"Unexpected gws args: {args}")
+
+    adapter._gws = gws_response  # type: ignore[method-assign]
+    cursor = {
+        "page_token": "march-page-50",
+        "page_index": 1,
+        "page_thread_ids": ["old-t1", "old-t2"],
+        "page_next_token": "march-page-51",
+        "gmail_history_id": "h-march",
+    }
+    items = adapter.fetch(
+        str(tmp_vault),
+        cursor,
+        account_email="me@example.com",
+        max_threads=2,
+        max_messages=2,
+        max_attachments=None,
+        page_size=2,
+        catch_up=True,
+    )
+    assert list_calls and "pageToken" not in list_calls[0]
+    thread_ids = [item["thread_id"] for item in items if item["kind"] == "thread"]
+    assert thread_ids == ["aug-new", "aug-old"]
+    assert "old-t1" not in (cursor.get("page_thread_ids") or [])
+    assert cursor.get("page_index") != 1
+
+
+def test_catch_up_keeps_history_id_quick_update_skip(tmp_vault):
+    adapter = GmailMessagesAdapter()
+    initial = iter(
+        [
+            {"threads": [{"id": "t1", "historyId": "h1"}], "nextPageToken": None},
+            _thread(
+                "t1",
+                _message(
+                    message_id="m1",
+                    thread_id="t1",
+                    internal_date="1710000000000",
+                    subject="First thread",
+                    body="hello one",
+                    from_value="Alice Example <alice@example.com>",
+                    to_value="me@example.com",
+                    snippet="hello one",
+                ),
+                history_id="h1",
+            ),
+        ]
+    )
+    adapter._gws = lambda args: next(initial)  # type: ignore[method-assign]
+    result = adapter.ingest(str(tmp_vault), account_email="me@example.com", max_threads=10, max_messages=10)
+    assert result.created == 2
+
+    fetched_thread_ids: list[str] = []
+    list_calls: list[dict] = []
+
+    def gws_response(args):
+        if args[:4] == ["gmail", "users", "threads", "list"]:
+            params = json.loads(args[-1])
+            list_calls.append(params)
+            return {
+                "threads": [
+                    {"id": "t-new", "historyId": "h-new"},
+                    {"id": "t1", "historyId": "h1"},
+                ],
+                "nextPageToken": None,
+            }
+        if args[:4] == ["gmail", "users", "threads", "get"]:
+            params = json.loads(args[-1])
+            fetched_thread_ids.append(params["id"])
+            if params["id"] == "t1":
+                raise AssertionError("catch-up quick-update should not fetch unchanged thread t1")
+            return _thread(
+                "t-new",
+                _message(
+                    message_id="m-new",
+                    thread_id="t-new",
+                    internal_date="1750000000000",
+                    subject="New mail",
+                    body="hello new",
+                    from_value="Bob Example <bob@example.com>",
+                    to_value="me@example.com",
+                    snippet="hello new",
+                ),
+                history_id="h-new",
+            )
+        raise AssertionError(f"Unexpected gws args: {args}")
+
+    adapter = GmailMessagesAdapter()
+    adapter._gws = gws_response  # type: ignore[method-assign]
+    stale_cursor = {
+        "page_token": "march-page-50",
+        "page_index": 12,
+        "page_thread_ids": ["old-t1"],
+        "page_next_token": "march-page-51",
+    }
+    items = adapter.fetch(
+        str(tmp_vault),
+        stale_cursor,
+        account_email="me@example.com",
+        max_threads=10,
+        max_messages=10,
+        max_attachments=10,
+        page_size=25,
+        catch_up=True,
+    )
+    assert list_calls and "pageToken" not in list_calls[0]
+    assert fetched_thread_ids == ["t-new"]
+    assert [item["kind"] for item in items] == ["thread", "message"]
+    assert items[0]["thread_id"] == "t-new"
+
+
+def test_catch_up_respects_max_threads(tmp_vault):
+    adapter = GmailMessagesAdapter()
+    fetched_thread_ids: list[str] = []
+
+    def gws_response(args):
+        if args[:4] == ["gmail", "users", "threads", "list"]:
+            return {
+                "threads": [
+                    {"id": "t1", "historyId": "h1"},
+                    {"id": "t2", "historyId": "h2"},
+                    {"id": "t3", "historyId": "h3"},
+                ],
+                "nextPageToken": "page-2",
+            }
+        if args[:4] == ["gmail", "users", "threads", "get"]:
+            params = json.loads(args[-1])
+            fetched_thread_ids.append(params["id"])
+            tid = params["id"]
+            return _thread(
+                tid,
+                _message(
+                    message_id=f"m-{tid}",
+                    thread_id=tid,
+                    internal_date="1750000000000",
+                    subject=f"Thread {tid}",
+                    body="hello",
+                    from_value="Alice Example <alice@example.com>",
+                    to_value="me@example.com",
+                    snippet="hello",
+                ),
+                history_id=f"h-{tid}",
+            )
+        raise AssertionError(f"Unexpected gws args: {args}")
+
+    adapter._gws = gws_response  # type: ignore[method-assign]
+    items = adapter.fetch(
+        str(tmp_vault),
+        {
+            "page_token": "old-page",
+            "page_index": 8,
+            "page_thread_ids": ["stale-a", "stale-b"],
+            "page_next_token": "old-next",
+        },
+        account_email="me@example.com",
+        max_threads=1,
+        max_messages=1,
+        max_attachments=None,
+        page_size=3,
+        catch_up=True,
+    )
+    thread_ids = [item["thread_id"] for item in items if item["kind"] == "thread"]
+    assert thread_ids == ["t1"]
+    assert fetched_thread_ids == ["t1"]

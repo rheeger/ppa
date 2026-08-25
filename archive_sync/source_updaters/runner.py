@@ -87,13 +87,23 @@ def build_adapter(adapter_source_id: str) -> BaseAdapter:
     raise ValueError(f"No executable adapter for {adapter_source_id!r}")
 
 
-def adapter_ingest_kwargs(decl: SourceUpdaterDeclaration, *, apply: bool) -> dict[str, Any]:
+def adapter_ingest_kwargs(
+    decl: SourceUpdaterDeclaration,
+    *,
+    apply: bool,
+    catch_up: bool = False,
+) -> dict[str, Any]:
     """Build kwargs passed to ``adapter.ingest`` for a declaration."""
 
     _, scope = parse_source_key(decl.source_key)
     kwargs: dict[str, Any] = {"account_email": scope}
     if decl.adapter_source_id == "gmail-messages":
         kwargs["gmail_promotion_gate"] = True
+        if catch_up:
+            # Reset page cursor so threads.list starts at newest mail.
+            # Keep the promotion gate on; history_id quick-update stays cheap.
+            kwargs["catch_up"] = True
+            kwargs["quick_update"] = True
     if decl.adapter_source_id == "calendar-events":
         kwargs.setdefault("calendar_id", "primary")
     return kwargs
@@ -221,6 +231,7 @@ def run_source_updater(
     adapter: BaseAdapter | None = None,
     decision_run_id: str = "",
     max_items: int | None = None,
+    catch_up: bool = False,
 ) -> SourceUpdaterRunResult:
     """Run one source updater. Dry-run by default; ``apply`` persists and advances cursor."""
 
@@ -246,13 +257,14 @@ def run_source_updater(
         return SourceUpdaterRunResult(report=report, exit_hint=2)
 
     adapter_obj = adapter or build_adapter(decl.adapter_source_id)
-    ingest_kwargs = adapter_ingest_kwargs(decl, apply=apply)
+    ingest_kwargs = adapter_ingest_kwargs(decl, apply=apply, catch_up=catch_up)
     if max_items is not None:
         if decl.adapter_source_id == "gmail-messages":
             ingest_kwargs["max_threads"] = max_items
             # Keep gmail_promotion_gate=True (from adapter_ingest_kwargs). Volume
             # is bounded by max_threads; vault presence for the gate uses the
-            # vault-scan cache, not a full markdown walk.
+            # vault-scan cache, not a full markdown walk. Catch-up must not
+            # disable the gate either — including uncapped catch-up runs.
         elif decl.adapter_source_id == "calendar-events":
             ingest_kwargs["max_events"] = max_items
 
@@ -272,6 +284,8 @@ def run_source_updater(
         warnings.append("gmail_promotion_gate=true")
         if max_items is not None:
             warnings.append(f"max_threads={max_items} (bounded fetch; promotion gate remains on)")
+    if catch_up and decl.adapter_source_id == "gmail-messages":
+        warnings.append("catch_up: gmail page cursor reset (newest-first; history_id skip kept)")
 
     try:
         result = adapter_obj.ingest(str(vault), dry_run=dry_run, **ingest_kwargs)
@@ -374,6 +388,7 @@ def run_source_updaters(
     state_store: SourceUpdaterStateStore | None = None,
     adapter_factory: Callable[[str], BaseAdapter] | None = None,
     max_items: int | None = None,
+    catch_up: bool = False,
 ) -> SourceUpdaterMultiRunResult:
     """Run multiple sources with failure isolation."""
 
@@ -397,6 +412,7 @@ def run_source_updaters(
             state_store=state_store,
             adapter=adapter,
             max_items=max_items,
+            catch_up=catch_up,
         )
         multi.reports.append(one.report)
         if one.exit_hint > worst:
