@@ -27,8 +27,6 @@ from archive_vault.thread_hash import (
     compute_email_message_body_sha_from_payload,
     compute_email_thread_body_sha_from_payload)
 from archive_vault.uid import generate_uid
-from archive_vault.vault import iter_notes, read_note
-
 from .base import BaseAdapter, FetchedBatch, deterministic_provenance
 from .gmail_correspondents import load_own_aliases
 
@@ -548,71 +546,43 @@ class GmailMessagesAdapter(BaseAdapter):
                 links.append(resolved)
         return links
 
-    def _load_gmail_thread_presence_from_cache(
-        self,
-        vault_path: str,
-        *,
-        account_email: str,
-    ) -> dict[str, dict[str, str]] | None:
-        """Load gmail_thread_id → stub state from vault-scan cache (promotion gate).
+    def _gmail_frontmatter_rows_from_cache(self, vault_path: str) -> list[dict[str, Any]]:
+        """One Rust (or single-cursor) dump of Gmail card frontmatter. Builds cache on miss."""
 
-        Returns None when the cache file is missing so callers can fall back.
-        Presence-only stubs are enough for ``vault_has_active_card``; full
-        history/sha maps remain the job of ``_load_existing_quick_update_state``.
-        """
-        import json
-        import logging
-        import sqlite3
         from pathlib import Path
 
-        cache_path = Path(vault_path) / "_meta" / "vault-scan-cache.sqlite3"
-        if not cache_path.is_file():
-            return None
-        normalized_account = account_email.strip().lower()
-        thread_state: dict[str, dict[str, str]] = {}
-        log = logging.getLogger("ppa.gmail")
-        try:
-            conn = sqlite3.connect(f"file:{cache_path}?mode=ro", uri=True)
-            try:
-                rows = conn.execute(
-                    "SELECT frontmatter_json FROM notes WHERE card_type = ?",
-                    ("email_thread",),
-                )
-                for (frontmatter_json,) in rows:
-                    try:
-                        frontmatter = json.loads(frontmatter_json or "{}")
-                    except json.JSONDecodeError:
-                        continue
-                    if not isinstance(frontmatter, dict):
-                        continue
-                    if (
-                        normalized_account
-                        and str(frontmatter.get("account_email", "")).strip().lower()
-                        != normalized_account
-                    ):
-                        continue
-                    thread_id = str(frontmatter.get("gmail_thread_id", "")).strip()
-                    if not thread_id:
-                        continue
-                    thread_state[thread_id] = {
-                        "gmail_history_id": str(frontmatter.get("gmail_history_id", "")).strip(),
-                        "thread_body_sha": str(frontmatter.get("thread_body_sha", "")).strip(),
-                    }
-            finally:
-                conn.close()
-        except OSError as exc:
-            log.warning("gmail_thread_presence_cache_unavailable path=%s err=%s", cache_path, exc)
-            return None
-        log.info(
-            "gmail_thread_presence_from_cache account=%s threads=%d",
-            normalized_account or "*",
-            len(thread_state),
-        )
-        return thread_state
+        from archive_cli.vault_cache import VaultScanCache
 
-    def _load_existing_quick_update_state(
+        vault = Path(vault_path)
+        scan_cache = VaultScanCache.build_or_load(vault, tier=1, progress_every=0)
+        cache_path = VaultScanCache.cache_path_for_vault(vault)
+        types = ["email_thread", "email_message", "email_attachment"]
+        if cache_path.is_file():
+            try:
+                import archive_crate
+
+                return list(
+                    archive_crate.frontmatter_dicts_from_cache(
+                        str(cache_path),
+                        types=types,
+                    )
+                )
+            except Exception:
+                pass
+        by_type, _rel_by_uid, uid_by_path, _uid_by_stem, frontmatter_by_uid = scan_cache.slice_lookup_tables()
+        rows: list[dict[str, Any]] = []
+        for card_type in types:
+            for rel in by_type.get(card_type) or []:
+                uid = uid_by_path.get(rel, "")
+                fm = dict(frontmatter_by_uid.get(uid) or {})
+                if not fm:
+                    continue
+                rows.append({"rel_path": rel, "frontmatter": fm})
+        return rows
+
+    def _gmail_state_from_frontmatter_rows(
         self,
-        vault_path: str,
+        rows: list[dict[str, Any]],
         *,
         account_email: str,
     ) -> tuple[dict[str, dict[str, str]], dict[str, str], dict[str, str]]:
@@ -620,14 +590,12 @@ class GmailMessagesAdapter(BaseAdapter):
         message_hashes: dict[str, str] = {}
         attachment_hashes: dict[str, str] = {}
         normalized_account = account_email.strip().lower()
-        for rel_path, _ in iter_notes(vault_path):
-            if not rel_path.parts:
-                continue
-            top_level = rel_path.parts[0]
-            if top_level not in {"EmailThreads", "Email", "EmailAttachments"}:
-                continue
-            frontmatter, _, _ = read_note(vault_path, str(rel_path))
-            if normalized_account and str(frontmatter.get("account_email", "")).strip().lower() != normalized_account:
+        for row in rows:
+            frontmatter = dict(row.get("frontmatter") or {})
+            if (
+                normalized_account
+                and str(frontmatter.get("account_email", "")).strip().lower() != normalized_account
+            ):
                 continue
             card_type = str(frontmatter.get("type", "")).strip()
             if card_type == "email_thread":
@@ -649,6 +617,41 @@ class GmailMessagesAdapter(BaseAdapter):
                         frontmatter.get("attachment_metadata_sha", "")
                     ).strip()
         return thread_state, message_hashes, attachment_hashes
+
+    def _load_gmail_thread_presence_from_cache(
+        self,
+        vault_path: str,
+        *,
+        account_email: str,
+    ) -> dict[str, dict[str, str]]:
+        """Load gmail_thread_id → stub state from vault-scan cache (promotion gate).
+
+        Cache miss builds the Rust/Python vault-scan cache. Never walks markdown.
+        Presence-only stubs are enough for ``vault_has_active_card``.
+        """
+        import logging
+
+        log = logging.getLogger("ppa.gmail")
+        rows = self._gmail_frontmatter_rows_from_cache(vault_path)
+        thread_state, _message_hashes, _attachment_hashes = self._gmail_state_from_frontmatter_rows(
+            rows,
+            account_email=account_email,
+        )
+        log.info(
+            "gmail_thread_presence_from_cache account=%s threads=%d",
+            account_email.strip().lower() or "*",
+            len(thread_state),
+        )
+        return thread_state
+
+    def _load_existing_quick_update_state(
+        self,
+        vault_path: str,
+        *,
+        account_email: str,
+    ) -> tuple[dict[str, dict[str, str]], dict[str, str], dict[str, str]]:
+        rows = self._gmail_frontmatter_rows_from_cache(vault_path)
+        return self._gmail_state_from_frontmatter_rows(rows, account_email=account_email)
 
     def _filter_quick_update_records(
         self,
@@ -1256,20 +1259,10 @@ class GmailMessagesAdapter(BaseAdapter):
                 fail_on_missing_classification=bool(kwargs.get("promotion_fail_on_missing_classification")),
             )
             if not existing_thread_state:
-                # Prefer vault-scan cache (~1s) over full markdown walk (seed-scale hang).
-                cached = self._load_gmail_thread_presence_from_cache(
+                existing_thread_state = self._load_gmail_thread_presence_from_cache(
                     vault_path,
                     account_email=account,
                 )
-                if cached is not None:
-                    existing_thread_state = cached
-                else:
-                    existing_thread_state, existing_message_hashes, existing_attachment_hashes = (
-                        self._load_existing_quick_update_state(
-                            vault_path,
-                            account_email=account,
-                        )
-                    )
 
         while True:
             if self._limits_reached(
