@@ -129,6 +129,39 @@ class ApplyCounts:
     by_corpus_state: dict[str, int] | None = None
 
 
+def _bulk_corpus_states(conn: Any, schema: str, card_uids: list[str]) -> dict[str, str]:
+    """One SELECT for existing corpus states (no per-UID round trip)."""
+
+    if not card_uids:
+        return {}
+    rows = conn.execute(
+        f"""
+        SELECT card_uid, corpus_state
+        FROM {schema}.card_corpus_state
+        WHERE card_uid = ANY(%s)
+        """,
+        (card_uids,),
+    ).fetchall()
+    out: dict[str, str] = {}
+    for row in rows:
+        uid = str(row["card_uid"] if isinstance(row, dict) else row[0])
+        state = str(row["corpus_state"] if isinstance(row, dict) else row[1])
+        out[uid] = state
+    return out
+
+
+def _copy_rows(conn: Any, table_name: str, columns: tuple[str, ...], rows: list[tuple[Any, ...]]) -> None:
+    """COPY FROM STDIN into an already-created (temp) table."""
+
+    if not rows:
+        return
+    col_sql = ", ".join(columns)
+    with conn.cursor() as cur:
+        with cur.copy(f"COPY {table_name} ({col_sql}) FROM STDIN") as copy:
+            for row in rows:
+                copy.write_row(row)
+
+
 def apply_decision_records(
     conn: Any,
     schema: str,
@@ -140,72 +173,159 @@ def apply_decision_records(
     counts = ApplyCounts(by_corpus_state={})
     now = _utc_now()
 
-    for record in records:
-        if record.decision_run_id != decision_run_id:
-            continue
-        target_state = record.corpus_decision
-        for card_uid in card_uids_for_decision(record):
-            previous = get_card_corpus_state(conn, schema, card_uid)
-            conn.execute(
-                f"""
-                INSERT INTO {schema}.card_corpus_state (
-                    card_uid, corpus_state, decision_run_id, previous_corpus_state,
-                    policy_version, applied_at, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (card_uid) DO UPDATE SET
-                    previous_corpus_state = EXCLUDED.previous_corpus_state,
-                    corpus_state = EXCLUDED.corpus_state,
-                    decision_run_id = EXCLUDED.decision_run_id,
-                    policy_version = EXCLUDED.policy_version,
-                    applied_at = EXCLUDED.applied_at,
-                    updated_at = EXCLUDED.updated_at
-                """,
-                (
-                    card_uid,
-                    target_state,
-                    decision_run_id,
-                    previous,
-                    record.policy_version or EMAIL_PROMOTION_POLICY_VERSION,
-                    now,
-                    now,
-                ),
-            )
-            counts.cards_updated += 1
-            assert counts.by_corpus_state is not None
-            counts.by_corpus_state[target_state] = counts.by_corpus_state.get(target_state, 0) + 1
+    matching = [record for record in records if record.decision_run_id == decision_run_id]
+    if not matching:
+        conn.commit()
+        return counts
 
-        conn.execute(
-            f"""
-            INSERT INTO {schema}.email_corpus_decisions (
-                decision_run_id, thread_uid, gmail_thread_id, corpus_decision,
-                processor_decision, classification_source, policy_version,
-                previous_corpus_state, decision_reason, decision_payload, applied_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
-            ON CONFLICT (decision_run_id, thread_uid) DO UPDATE SET
-                corpus_decision = EXCLUDED.corpus_decision,
-                processor_decision = EXCLUDED.processor_decision,
-                classification_source = EXCLUDED.classification_source,
-                policy_version = EXCLUDED.policy_version,
-                previous_corpus_state = EXCLUDED.previous_corpus_state,
-                decision_reason = EXCLUDED.decision_reason,
-                decision_payload = EXCLUDED.decision_payload,
-                applied_at = EXCLUDED.applied_at
-            """,
-            (
-                decision_run_id,
-                record.thread_uid,
-                record.gmail_thread_id,
-                record.corpus_decision,
-                record.processor_decision,
-                record.classification_source,
-                record.policy_version,
-                record.previous_corpus_state,
-                record.decision_reason,
-                json.dumps(record.to_dict(), sort_keys=True),
-                now,
-            ),
+    # Last write wins for a card_uid that appears on multiple threads.
+    card_by_uid: dict[str, tuple[str, str]] = {}
+    for record in matching:
+        target_state = record.corpus_decision
+        policy = record.policy_version or EMAIL_PROMOTION_POLICY_VERSION
+        for card_uid in card_uids_for_decision(record):
+            card_by_uid[card_uid] = (target_state, policy)
+
+    previous_by_uid = _bulk_corpus_states(conn, schema, list(card_by_uid))
+    conn.execute(
+        """
+        CREATE TEMP TABLE _ccs_stage (
+            card_uid TEXT PRIMARY KEY,
+            corpus_state TEXT NOT NULL,
+            decision_run_id TEXT NOT NULL,
+            previous_corpus_state TEXT NOT NULL,
+            policy_version TEXT NOT NULL,
+            applied_at TIMESTAMPTZ,
+            updated_at TIMESTAMPTZ
+        ) ON COMMIT DROP
+        """
+    )
+    ccs_rows = [
+        (
+            card_uid,
+            target_state,
+            decision_run_id,
+            previous_by_uid.get(card_uid, CORPUS_STATE_ACTIVE),
+            policy,
+            now,
+            now,
         )
-        counts.threads_applied += 1
+        for card_uid, (target_state, policy) in card_by_uid.items()
+    ]
+    _copy_rows(
+        conn,
+        "_ccs_stage",
+        (
+            "card_uid",
+            "corpus_state",
+            "decision_run_id",
+            "previous_corpus_state",
+            "policy_version",
+            "applied_at",
+            "updated_at",
+        ),
+        ccs_rows,
+    )
+    conn.execute(
+        f"""
+        INSERT INTO {schema}.card_corpus_state (
+            card_uid, corpus_state, decision_run_id, previous_corpus_state,
+            policy_version, applied_at, updated_at
+        )
+        SELECT
+            card_uid, corpus_state, decision_run_id, previous_corpus_state,
+            policy_version, applied_at, updated_at
+        FROM _ccs_stage
+        ON CONFLICT (card_uid) DO UPDATE SET
+            previous_corpus_state = EXCLUDED.previous_corpus_state,
+            corpus_state = EXCLUDED.corpus_state,
+            decision_run_id = EXCLUDED.decision_run_id,
+            policy_version = EXCLUDED.policy_version,
+            applied_at = EXCLUDED.applied_at,
+            updated_at = EXCLUDED.updated_at
+        """
+    )
+    counts.cards_updated = len(ccs_rows)
+    assert counts.by_corpus_state is not None
+    for _uid, (target_state, _policy) in card_by_uid.items():
+        counts.by_corpus_state[target_state] = counts.by_corpus_state.get(target_state, 0) + 1
+
+    conn.execute(
+        """
+        CREATE TEMP TABLE _ecd_stage (
+            decision_run_id TEXT NOT NULL,
+            thread_uid TEXT NOT NULL,
+            gmail_thread_id TEXT NOT NULL,
+            corpus_decision TEXT NOT NULL,
+            processor_decision TEXT NOT NULL,
+            classification_source TEXT NOT NULL,
+            policy_version TEXT NOT NULL,
+            previous_corpus_state TEXT NOT NULL,
+            decision_reason TEXT NOT NULL,
+            decision_payload TEXT NOT NULL,
+            applied_at TIMESTAMPTZ,
+            PRIMARY KEY (decision_run_id, thread_uid)
+        ) ON COMMIT DROP
+        """
+    )
+    ecd_rows = [
+        (
+            decision_run_id,
+            record.thread_uid,
+            record.gmail_thread_id,
+            record.corpus_decision,
+            record.processor_decision,
+            record.classification_source,
+            record.policy_version,
+            record.previous_corpus_state,
+            record.decision_reason,
+            json.dumps(record.to_dict(), sort_keys=True),
+            now,
+        )
+        for record in matching
+    ]
+    _copy_rows(
+        conn,
+        "_ecd_stage",
+        (
+            "decision_run_id",
+            "thread_uid",
+            "gmail_thread_id",
+            "corpus_decision",
+            "processor_decision",
+            "classification_source",
+            "policy_version",
+            "previous_corpus_state",
+            "decision_reason",
+            "decision_payload",
+            "applied_at",
+        ),
+        ecd_rows,
+    )
+    conn.execute(
+        f"""
+        INSERT INTO {schema}.email_corpus_decisions (
+            decision_run_id, thread_uid, gmail_thread_id, corpus_decision,
+            processor_decision, classification_source, policy_version,
+            previous_corpus_state, decision_reason, decision_payload, applied_at
+        )
+        SELECT
+            decision_run_id, thread_uid, gmail_thread_id, corpus_decision,
+            processor_decision, classification_source, policy_version,
+            previous_corpus_state, decision_reason, decision_payload::jsonb, applied_at
+        FROM _ecd_stage
+        ON CONFLICT (decision_run_id, thread_uid) DO UPDATE SET
+            corpus_decision = EXCLUDED.corpus_decision,
+            processor_decision = EXCLUDED.processor_decision,
+            classification_source = EXCLUDED.classification_source,
+            policy_version = EXCLUDED.policy_version,
+            previous_corpus_state = EXCLUDED.previous_corpus_state,
+            decision_reason = EXCLUDED.decision_reason,
+            decision_payload = EXCLUDED.decision_payload,
+            applied_at = EXCLUDED.applied_at
+        """
+    )
+    counts.threads_applied = len(ecd_rows)
 
     conn.commit()
     return counts
@@ -222,35 +342,34 @@ def rollback_decision_run(conn: Any, schema: str, decision_run_id: str) -> Rollb
     counts = RollbackCounts()
     now = _utc_now()
 
-    rows = conn.execute(
+    count_row = conn.execute(
         f"""
-        SELECT card_uid, previous_corpus_state
-        FROM {schema}.card_corpus_state
+        SELECT COUNT(*) AS n FROM {schema}.card_corpus_state
         WHERE decision_run_id = %s
         """,
         (decision_run_id,),
-    ).fetchall()
+    ).fetchone()
+    counts.cards_restored = int(count_row["n"] if isinstance(count_row, dict) else count_row[0])
 
-    for row in rows:
-        card_uid = str(row["card_uid"] if isinstance(row, dict) else row[0])
-        previous = str(row["previous_corpus_state"] if isinstance(row, dict) else row[1])
-        if previous == CORPUS_STATE_ACTIVE:
-            conn.execute(
-                f"DELETE FROM {schema}.card_corpus_state WHERE card_uid = %s",
-                (card_uid,),
-            )
-        else:
-            conn.execute(
-                f"""
-                UPDATE {schema}.card_corpus_state
-                SET corpus_state = %s,
-                    decision_run_id = %s,
-                    updated_at = %s
-                WHERE card_uid = %s
-                """,
-                (previous, f"{decision_run_id}:rollback", now, card_uid),
-            )
-        counts.cards_restored += 1
+    conn.execute(
+        f"""
+        UPDATE {schema}.card_corpus_state
+        SET corpus_state = previous_corpus_state,
+            decision_run_id = %s,
+            updated_at = %s
+        WHERE decision_run_id = %s
+          AND previous_corpus_state <> %s
+        """,
+        (f"{decision_run_id}:rollback", now, decision_run_id, CORPUS_STATE_ACTIVE),
+    )
+    conn.execute(
+        f"""
+        DELETE FROM {schema}.card_corpus_state
+        WHERE decision_run_id = %s
+          AND previous_corpus_state = %s
+        """,
+        (decision_run_id, CORPUS_STATE_ACTIVE),
+    )
 
     thread_rows = conn.execute(
         f"""
