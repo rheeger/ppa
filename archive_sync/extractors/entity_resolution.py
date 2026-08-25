@@ -80,15 +80,19 @@ def iter_derived_card_dicts(
     vault_path: str,
     *,
     card_types: frozenset[str] | None = None,
+    uid_allowlist: set[str] | frozenset[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Load frontmatter dicts for card types that feed entity resolution.
 
     *card_types* defaults to ``PERSON_RESOLVABLE_CARD_TYPES`` (derived entity types + finance).
+    *uid_allowlist* restricts the scan to those card UIDs (same pattern as
+    ``ExtractionRunner.uid_allowlist``).
 
     When ``PPA_ENGINE=rust`` and a tier-2 cache exists, reads frontmatter directly from SQLite
     via ``archive_crate.frontmatter_dicts_from_cache`` — no per-note file I/O.
     """
     types_set = card_types or PERSON_RESOLVABLE_CARD_TYPES
+    allowed = set(uid_allowlist) if uid_allowlist is not None else None
     vault = Path(vault_path)
     if ppa_engine() == "rust":
         from archive_vault.vault import _tier2_cache_path
@@ -104,6 +108,9 @@ def iter_derived_card_dicts(
                 out: list[dict[str, Any]] = []
                 for row in rows:
                     fm = dict(row["frontmatter"])
+                    uid = str(fm.get("uid") or "")
+                    if allowed is not None and uid not in allowed:
+                        continue
                     fm["_rel_path"] = row["rel_path"]
                     out.append(fm)
                 return out
@@ -114,6 +121,9 @@ def iter_derived_card_dicts(
     for note in iter_parsed_notes(vault_path):
         t = note.frontmatter.get("type")
         if t in types_set:
+            uid = str(note.frontmatter.get("uid") or "")
+            if allowed is not None and uid not in allowed:
+                continue
             fm = dict(note.frontmatter)
             fm["_rel_path"] = note.rel_path.as_posix()
             out.append(fm)
@@ -345,12 +355,15 @@ def run_entity_resolution(
     report_dir: str = "",
     entity_mentions_staging_root: Path | None = None,
     person_mentions_out: Path | None = None,
+    uid_allowlist: set[str] | frozenset[str] | None = None,
 ) -> dict[str, Any]:
     """Run place/org/person resolution passes.
 
     When *entity_mentions_staging_root* is set (typically ``{run_dir}/staging``), load
     ``*/entity_mentions.jsonl`` from Phase 2.875 enrichment: merge place/org seeds into
     resolvers and optionally write all person rows to *person_mentions_out*.
+
+    *uid_allowlist* scopes derived-card iteration to those UIDs (dirty-set runs).
     """
     jsonl_paths: list[Path] = []
     if entity_mentions_staging_root is not None:
@@ -364,10 +377,12 @@ def run_entity_resolution(
         out: dict[str, Any] = {"dry_run": True}
         # Full vault scan for derived-card estimates is very slow on multi-million-file vaults;
         # skip when the caller only needs JSONL staging stats (Phase 3 --staging-root dry-run).
-        if entity_mentions_staging_root is None:
+        if entity_mentions_staging_root is None and uid_allowlist is None:
             out.update(estimate_entity_resolution_candidates(vault_path))
         else:
             out["derived_card_estimate_skipped"] = True
+            if uid_allowlist is not None:
+                out["uid_allowlist_count"] = len(uid_allowlist)
         if mentions:
             counts = {"person": 0, "place": 0, "organization": 0}
             for m in mentions:
@@ -381,7 +396,7 @@ def run_entity_resolution(
             }
         return out
 
-    cards = iter_derived_card_dicts(vault_path)
+    cards = iter_derived_card_dicts(vault_path, uid_allowlist=uid_allowlist)
 
     extra_place_seeds: list[tuple[str, str]] | None = None
     extra_domains: set[str] | None = None
@@ -462,7 +477,10 @@ def run_entity_resolution(
         "person_no_match": merged.person_no_match,
         "errors": merged.errors,
         "validation_errors": validation_errors,
+        "cards_considered": len(cards),
     }
+    if uid_allowlist is not None:
+        result["uid_allowlist_count"] = len(uid_allowlist)
     if mentions:
         result["entity_mentions_jsonl_files"] = len(jsonl_paths)
         result["entity_mention_rows"] = len(mentions)
