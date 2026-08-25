@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 import pytest
 
 from archive_cli.commands.maintain import MaintenanceReport, run_maintenance
+from archive_sync.adapters.base import BaseAdapter, FetchedBatch, deterministic_provenance
+from archive_sync.processors.constants import PROCESSOR_MATERIALIZATION
 
 
 def _connect_ctx(conn):
@@ -377,3 +381,150 @@ def test_maintenance_provider_invalid_name_error_reported(monkeypatch: pytest.Mo
 
     providers_mod.resolve_provider(refresh=True)
     assert any(e.get("step") == "resolve_provider" for e in rep.errors)
+
+
+def _join_vault(tmp_path: Path) -> Path:
+    vault = tmp_path / "hf-archives"
+    for name in (
+        "People",
+        "Finance",
+        "Calendar",
+        "EmailThreads",
+        "Documents",
+        "Attachments",
+        "_templates",
+        ".obsidian",
+        "_meta",
+    ):
+        (vault / name).mkdir(parents=True, exist_ok=True)
+    (vault / "_meta" / "identity-map.json").write_text("{}", encoding="utf-8")
+    (vault / "_meta" / "sync-state.json").write_text("{}", encoding="utf-8")
+    (vault / "_meta" / "nicknames.json").write_text("{}", encoding="utf-8")
+    return vault
+
+
+class _JoinProofGmailAdapter(BaseAdapter):
+    """Fixture Gmail adapter that records ingest kwargs and emits one dirty UID."""
+
+    source_id = "gmail-messages"
+    enable_person_resolution = False
+    preload_existing_uid_index = False
+
+    def __init__(self) -> None:
+        self.ingest_kwargs: dict[str, Any] = {}
+
+    def get_cursor_key(self, **kwargs) -> str:
+        account = str(kwargs.get("account_email", "")).strip().lower()
+        return f"{self.source_id}:{account}" if account else self.source_id
+
+    def fetch(self, vault_path: str, cursor: dict[str, Any], config=None, **kwargs) -> list[dict[str, Any]]:
+        return [{"uid": "hfa-join-mail-1", "subject": "Join Proof", "sha": "join1"}]
+
+    def fetch_batches(self, vault_path: str, cursor: dict[str, Any], config=None, **kwargs) -> Iterable[FetchedBatch]:
+        yield FetchedBatch(
+            items=[{"uid": "hfa-join-mail-1", "subject": "Join Proof", "sha": "join1"}],
+            cursor_patch={"gmail_history_id": "join-hist-1"},
+            sequence=0,
+        )
+
+    def to_card(self, item: dict[str, Any]):
+        from archive_vault.schema import EmailThreadCard
+
+        card = EmailThreadCard(
+            uid=str(item["uid"]),
+            type="email_thread",
+            source=["gmail-messages"],
+            source_id=str(item.get("source_id", item["uid"])),
+            created="2026-05-01",
+            updated="2026-05-01",
+            summary=str(item.get("subject", "Thread")),
+            gmail_thread_id=str(item.get("source_id", item["uid"])),
+            account_email="me@example.com",
+            subject=str(item.get("subject", "Thread")),
+            thread_body_sha=str(item.get("sha", "sha1")),
+        )
+        return card, deterministic_provenance(card, "gmail-messages"), ""
+
+    def ingest(self, vault_path: str, dry_run: bool = False, **kwargs: Any):
+        self.ingest_kwargs = dict(kwargs)
+        return super().ingest(vault_path, dry_run=dry_run, **kwargs)
+
+
+def test_maintain_catch_up_handoff_dirty_uids_to_real_executor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Section H join proof: catch-up + source updaters + processors → real wrappers."""
+
+    vault = _join_vault(tmp_path)
+    monkeypatch.setenv("PPA_PATH", str(vault))
+    monkeypatch.delenv("PPA_INDEX_DSN", raising=False)
+    monkeypatch.delenv("PPA_ENRICHMENT_MODEL", raising=False)
+
+    conn = mock.MagicMock()
+
+    def exec_side(sql, params=None):
+        m = mock.MagicMock()
+        s = str(sql)
+        if "last_maintenance_at" in s:
+            m.fetchone.return_value = None
+        elif "ingestion_log" in s:
+            m.fetchall.return_value = []
+            m.fetchone.return_value = None
+        else:
+            m.fetchone.return_value = None
+            m.fetchall.return_value = []
+        return m
+
+    conn.execute.side_effect = exec_side
+
+    adapter = _JoinProofGmailAdapter()
+
+    def _build_adapter(adapter_source_id: str) -> BaseAdapter:
+        assert adapter_source_id == "gmail-messages"
+        return adapter
+
+    monkeypatch.setattr("archive_sync.source_updaters.runner.build_adapter", _build_adapter)
+
+    store = mock.MagicMock()
+    store.vault = vault
+    store.index.schema = "ppa"
+    store.index._connect.return_value = _connect_ctx(conn)
+    store.rebuild.return_value = {"cards": 1}
+
+    rep = run_maintenance(
+        store=store,
+        logger=logging.getLogger("t"),
+        dry_run=False,
+        run_source_updaters=True,
+        source_updater_keys=["gmail-messages:me@example.com"],
+        apply_source_updaters=True,
+        source_updater_catch_up=True,
+        run_processors=True,
+        apply_processors=True,
+        processor_keys=[PROCESSOR_MATERIALIZATION],
+    )
+
+    assert not any(e.get("step") == "run_source_updaters" for e in rep.errors)
+    assert not any(e.get("step") == "run_processors" for e in rep.errors)
+    assert adapter.ingest_kwargs.get("catch_up") is True
+    assert adapter.ingest_kwargs.get("gmail_promotion_gate") is True
+    assert adapter.ingest_kwargs.get("quick_update") is True
+
+    assert rep.source_updater_runs == 1
+    su = rep.source_updater_reports[0]
+    dirty = list(su.get("dirty_card_uids") or [])
+    if not dirty and isinstance(su.get("batch"), dict):
+        dirty = list(su["batch"].get("dirty_card_uids") or [])
+    assert "hfa-join-mail-1" in dirty
+    assert any("catch_up: gmail page cursor reset" in w for w in su.get("warnings") or [])
+
+    assert rep.processor_runs == 1
+    proc = rep.processor_reports[0]
+    assert proc["executed"] is True
+    executed_uids = {r["input_uid"] for r in proc.get("item_results") or []}
+    assert "hfa-join-mail-1" in executed_uids
+    assert any(r.get("status") == "complete" for r in proc.get("item_results") or [])
+
+    rebuild_calls = [c.kwargs for c in store.rebuild.call_args_list]
+    assert any(c.get("force_full") is False for c in rebuild_calls)
