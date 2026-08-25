@@ -9,10 +9,10 @@ No full-seed copy. No canonical-seed apply. 5pct vault was missing; per operator
 
 ## Ladder
 
-| Slice | Cache | Census dry-run | Hygiene apply | Hygiene rollback |
-| ----- | ----- | -------------- | ------------- | ---------------- |
-| 1pct (existing) | rust hit, 138007 notes, **2.16s** | **2.49s**, 9011 threads | **~1.5s**, 9011 threads / 43804 cards | **~0.5s**, 43804 restored |
-| 5pct | skipped — vault missing | — | — | — |
+| Slice                      | Cache                             | Census dry-run            | Hygiene apply                           | Hygiene rollback           |
+| -------------------------- | --------------------------------- | ------------------------- | --------------------------------------- | -------------------------- |
+| 1pct (existing)            | rust hit, 138007 notes, **2.16s** | **2.49s**, 9011 threads   | **~1.5s**, 9011 threads / 43804 cards   | **~0.5s**, 43804 restored  |
+| 5pct                       | skipped — vault missing           | —                         | —                                       | —                          |
 | 10pct (generated this run) | rust hit, 539299 notes, **4.45s** | **15.96s**, 75288 threads | **8.47s**, 75288 threads / 243598 cards | **0.50s**, 243598 restored |
 
 ### 1pct (`archive_test_slice`)
@@ -40,10 +40,10 @@ No full-seed copy. No canonical-seed apply. 5pct vault was missing; per operator
 
 ## Offline Gmail + Calendar (no live API)
 
-| Vault | Presence threads | Message hashes | Attachment hashes | Calendar rows | Invite ical (msg/thread) | Events | Wall |
-| ----- | ---------------- | -------------- | ----------------- | ------------- | ------------------------ | ------ | ---- |
-| 1pct | 9011 | 34793 | 18197 | 44219 | 931 / 848 | 374 | ~16s |
-| 10pct | 75288 | 168310 | 59073 | 246568 | 5503 / 5272 | 2758 | **32.23s** (presence 13.2s, quick 9.3s, calendar dump 7.9s, index 0.66s) |
+| Vault | Presence threads | Message hashes | Attachment hashes | Calendar rows | Invite ical (msg/thread) | Events | Wall                                                                     |
+| ----- | ---------------- | -------------- | ----------------- | ------------- | ------------------------ | ------ | ------------------------------------------------------------------------ |
+| 1pct  | 9011             | 34793          | 18197             | 44219         | 931 / 848                | 374    | ~16s                                                                     |
+| 10pct | 75288            | 168310         | 59073             | 246568        | 5503 / 5272              | 2758   | **32.23s** (presence 13.2s, quick 9.3s, calendar dump 7.9s, index 0.66s) |
 
 ## Dirty extract (1pct, 8 UIDs)
 

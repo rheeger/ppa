@@ -1,5 +1,7 @@
 # Section E Execution Plan - Processor DAG
 
+**Status (Aug 2026, HEAD `3a90bc0`):** Phase 1 and Phase 2 are **landed**. Track A (`fa5f5a2`) closed the stub executors — dirty-UID paths now call incremental rebuild, embed-pending, incremental link refresh, `run_enrichment_for_uids`, and UID-scoped ER. Dirty extract is allowlist-scoped (`35901b0`; no full `email_message` scan). Remaining scale holes: rebuild has no UID allowlist; `embed_pending` is limit-N not `card_uid` filter. Join proof is fixture maintain, not live seed. Arnold is out of current scope.
+
 ## Objective
 
 Define how v2.5 turns extraction, enrichment, embeddings, and linkers into an incremental processor DAG, then **execute** that DAG on dirty inputs from Section D.
@@ -22,7 +24,7 @@ Delivered:
 
 Phase 1 is **not** incremental refresh. Do not treat it as Section E complete for v3 readiness.
 
-### Phase 2 — Execution (NEXT, AFTER D PHASE 2)
+### Phase 2 — Execution (LANDED; see status note above)
 
 Objective: consume dirty UIDs from source updater runs, plan processors, execute only stale/pending work via existing extract/enrich/embed/link entrypoints, wire into `ppa maintain`.
 

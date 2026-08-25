@@ -1,5 +1,7 @@
 # Section D Execution Plan - Source Updater Contract
 
+**Status (Aug 2026, HEAD `3a90bc0`):** Phase 1 and Phase 2 are **landed**, including Track B catch-up (`20401ea`), Track C calendar mint/capped apply (`66e1300`), and cache-backed Gmail presence / Calendar indexes (`0bdbd48` `9139c58`). The runner is real; maintain still needs explicit source keys; cursors still list/page-token. Remaining work is Gate 5b re-proof on a full seed staging copy — not a second Phase 2 implementation. Arnold is out of current scope.
+
 ## Objective
 
 Define the product-level source freshness contract for v2.5, then **execute** it so sources actually stay current.
@@ -31,7 +33,7 @@ Delivered:
 
 Phase 1 is **not** live updating. Do not treat it as Section D complete for v3 readiness.
 
-### Phase 2 — Execution (NEXT IMPLEMENTATION WORK)
+### Phase 2 — Execution (LANDED; see status note above)
 
 Objective: run existing adapters under the SourceUpdater contract and feed dirty UIDs to Section E.
 

@@ -6,16 +6,18 @@ v2.5 implementation is production-sensitive. Do not start on Arnold. Do not star
 
 ## Current Status (read this first)
 
-**Phase 1 (contracts / control plane) is landed on branch `v2.5`:** Sections A, B, C, D Phase 1, E Phase 1, F, G.
+HEAD `3a90bc0` on branch `v2.5`. Goal of the current wave: **local full seed → v2.5**. Arnold deploy/apply is deferred / out of current scope.
 
-**What remains before v3:**
+**Landed:** Sections A–C/G; D Phase 1 + Phase 2 (runner + Track B catch-up + Track C calendar mint/capped apply); E Phase 1 + Phase 2 (Track A wired dirty-UID executors); F surfaces; H local gates 0–5 / 5b (hygiene staging 786k CCS + rollback Jul 12; Gmail 5b capped Jul). Merge commits `685d07b` `5ed5b07` `0fb51b4` + join proof `5737db3`. **Scale hot paths** `0c53d7e` `f339580` `0bdbd48` `9139c58` `35901b0` + ladder `3a90bc0` (1pct + 10pct; 5pct skipped). Not live seed maintain.
 
-1. **Section D Phase 2** — execute source updaters (run adapters, commit batches/cursors, emit dirty UIDs).
-2. **Section E Phase 2** — execute processors on dirty UIDs; wire into `ppa maintain`.
-3. **Section F readiness hardening** (if needed) — fail closed unless real-run evidence exists.
-4. **Section H** — prove seed + Arnold freshness, then corpus apply, soak, readiness.
+**What remains for local seed:**
 
-Snapshots from `--record-source-status` / `--record-processor-status` are **not** live updating.
+1. **Gate 5b re-proof** on a **full seed staging copy** (never the canonical seed), then catch-up + processors maintain.
+2. **Local soak** + **F readiness** with real-run evidence (surfaces can go green on snapshots today).
+
+The five whole-corpus I/O engines are done. Do not re-implement hygiene COPY, census cache dump, Gmail/Calendar cache indexes, or dirty-only extract. Still-open (not those five): rebuild has no UID allowlist; `embed_pending` is limit-N.
+
+Snapshots from `--record-source-status` / `--record-processor-status` are **not** live updating. D/E Phase 2 are **not** missing.
 
 ## Required Implementation Sequence
 
@@ -30,13 +32,13 @@ Snapshots from `--record-source-status` / `--record-processor-status` are **not*
 7. **Section E Phase 1** — processor declarations, plans, status snapshots.
 8. **Section F Phase 1** — status/readiness surfaces.
 
-### Phase 2 + promotion (do this next)
+### Phase 2 + promotion (landed through A/B/C merge; local seed remaining)
 
-9. **Section D Phase 2** — `source updater execution` (Gmail + Calendar first).
-10. **Section E Phase 2** — `processor dag execution`; `maintain --run-source-updaters --run-processors`.
-11. **Section H** — runbook through seed updater proof → Arnold deploy → Arnold updater proof → corpus apply → soak → readiness.
+9. **Section D Phase 2** — landed (`source updater execution` + Track B `20401ea` + Track C `66e1300` + Gmail/Calendar cache indexes `0bdbd48` `9139c58`). Runner is real; maintain still needs explicit source keys; cursors still list/page-token.
+10. **Section E Phase 2** — landed (`processor dag execution` + Track A `fa5f5a2` + dirty-only extract `35901b0`). Executors are wired; rebuild/embed still lack a true UID filter.
+11. **Section H local 0–5b + scale** — 0–5b done on fixtures / staging / capped Gmail; scale ladder `3a90bc0` on 1pct + 10pct. **Next:** 5b re-proof on a full seed staging copy → catch-up + processors maintain → local soak + F real-run evidence.
 
-Do not start Section H against Phase-1-only code and claim freshness.
+Do not claim freshness from snapshots. Do not treat Arnold as the next step.
 
 ## Global Invariants
 
@@ -126,11 +128,11 @@ Every report must include enough paths to find related artifacts from `ppa statu
 | B apply   | staging apply, rollback, rebuild-safety                       | Done (Arnold apply in H)        |
 | C         | Gmail classify-before-promotion gate                          | Done (enable in H)              |
 | D Phase 1 | declarations, batch shapes, snapshots                         | Done                            |
-| D Phase 2 | **run adapters**, commit cursors, dirty UIDs, maintain flag   | **Next**                        |
+| D Phase 2 | **run adapters**, commit cursors, dirty UIDs, maintain flag   | **Landed** (B/C merge + cache indexes) |
 | E Phase 1 | declarations, plan/staleness, snapshots                       | Done                            |
-| E Phase 2 | **run processors** on dirty UIDs, maintain flag               | **Next after D2**               |
-| F         | JSON/human status, readiness fail-closed on real-run evidence | Surfaces done; harden if needed |
-| H         | Seed+Arnold updater proof, corpus apply, soak, readiness      | **After D2/E2**                 |
+| E Phase 2 | **run processors** on dirty UIDs, maintain flag               | **Landed** (Track A + dirty extract) |
+| F         | JSON/human status, readiness fail-closed on real-run evidence | Surfaces landed; **evidence hole remains** |
+| H         | Seed updater proof, corpus apply, soak, readiness             | Local 0–5b + scale landed; **next** is 5b re-proof on seed copy + soak. Arnold deferred |
 
 No section is complete with code alone. Each section must produce reports/tests proving the relevant gate behavior.
 

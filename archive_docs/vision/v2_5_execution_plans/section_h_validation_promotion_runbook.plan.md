@@ -1,5 +1,7 @@
 # Section H Execution Plan - v2.5 Validation and Promotion Runbook
 
+**Status (Aug 2026, HEAD `3a90bc0`):** Local gates **0–5b are done** (hygiene staging apply+rollback Jul 12; Gmail 5b capped Jul; calendar capped apply on a **minimal** vault via Track C; fixture join proof). D/E Phase 2 are landed. **Scale hot paths landed** on 1pct + 10pct (`3a90bc0`; 10pct apply 8.47s / 243,598 cards). **Remaining local seed work:** 5b re-proof on a **full seed staging copy**, catch-up + processors maintain, local soak. Arnold (6 / 6b / 7) is deferred / out of current scope.
+
 ## Objective
 
 Prove that v2.5 makes Arnold a **living, high-signal archive** — not only that Phase-1 contracts and corpus tooling exist.
