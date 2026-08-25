@@ -77,6 +77,39 @@ def _thread_uid(account_email: str, thread_id: str) -> str:
     return generate_uid("email-thread", THREAD_SOURCE, _thread_identity(account_email, thread_id))
 
 
+GMAIL_PAGE_CURSOR_FIELDS = ("page_token", "page_index", "page_thread_ids", "page_next_token")
+
+
+def reset_gmail_page_cursor(cursor: dict[str, Any] | None) -> dict[str, Any]:
+    """Clear page-walk fields so ``threads.list`` starts at newest mail.
+
+    Gmail lists threads newest-first. Resuming a stored ``page_token`` /
+    ``page_index`` continues that old walk and misses mail that arrived after
+    the walk started. Catch-up resets the page cursor in place while
+    preserving ``history_id`` / ``gmail_history_id`` so quick-update can still
+    skip unchanged threads.
+    """
+
+    target = cursor if cursor is not None else {}
+    target["page_token"] = None
+    target["page_index"] = 0
+    target["page_thread_ids"] = []
+    target["page_next_token"] = None
+    return target
+
+
+def catch_up_requested(*, catch_up: bool = False, reset_page_cursor: bool = False, **kwargs: Any) -> bool:
+    """True when caller asked for newest-first catch-up / page-cursor reset."""
+
+    if catch_up or reset_page_cursor:
+        return True
+    for key in ("reset_cursor", "reset_page_cursor", "catch_up"):
+        raw = kwargs.get(key)
+        if raw is True or (isinstance(raw, str) and raw.strip().lower() in {"1", "true", "yes", "on"}):
+            return True
+    return False
+
+
 def _message_uid(account_email: str, message_id: str) -> str:
     return generate_uid("email-message", MESSAGE_SOURCE, _message_identity(account_email, message_id))
 
@@ -1155,6 +1188,8 @@ class GmailMessagesAdapter(BaseAdapter):
         workers: int | None = None,
         attachment_workers: int | None = None,
         quick_update: bool = False,
+        catch_up: bool = False,
+        reset_page_cursor: bool = False,
         **kwargs,
     ):
         self._ensure_token_manager(account_email)
@@ -1163,6 +1198,10 @@ class GmailMessagesAdapter(BaseAdapter):
         own_emails.update(load_own_aliases(vault_path))
         identity_cache = IdentityCache(vault_path)
         hash_cache_enabled = bool(getattr(config, "gmail_thread_body_sha_cache_enabled", True))
+        if catch_up_requested(catch_up=catch_up, reset_page_cursor=reset_page_cursor, **kwargs):
+            reset_gmail_page_cursor(cursor)
+            # Newest-first walk is cheap only if unchanged threads skip via history_id.
+            quick_update = True
         quick_update_enabled = bool(quick_update and hash_cache_enabled)
         existing_thread_state: dict[str, dict[str, str]] = {}
         existing_message_hashes: dict[str, str] = {}
@@ -1490,6 +1529,8 @@ class GmailMessagesAdapter(BaseAdapter):
         workers: int | None = None,
         attachment_workers: int | None = None,
         quick_update: bool = False,
+        catch_up: bool = False,
+        reset_page_cursor: bool = False,
         **kwargs,
     ) -> list[dict[str, Any]]:
         self._ensure_token_manager(account_email)
@@ -1507,6 +1548,8 @@ class GmailMessagesAdapter(BaseAdapter):
             workers=workers,
             attachment_workers=attachment_workers,
             quick_update=quick_update,
+            catch_up=catch_up,
+            reset_page_cursor=reset_page_cursor,
             **kwargs,
         ):
             items.extend(batch.items)
