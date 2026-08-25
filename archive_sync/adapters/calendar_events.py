@@ -16,8 +16,6 @@ from archive_vault.schema import CalendarEventCard
 from archive_vault.thread_hash import \
     compute_calendar_event_body_sha_from_payload
 from archive_vault.uid import generate_uid
-from archive_vault.vault import iter_notes, read_note
-
 from .base import BaseAdapter, FetchedBatch, deterministic_provenance
 from .datetime_canon import to_utc_z_iso
 
@@ -186,178 +184,99 @@ class CalendarEventsAdapter(BaseAdapter):
                 return self._calendar_events_list_http(params)
             raise
 
+    def _calendar_frontmatter_rows_from_cache(self, vault_path: str) -> list[dict[str, Any]]:
+        """One Rust (or single-cursor) dump of calendar-related frontmatter. Builds cache on miss."""
+
+        from archive_cli.vault_cache import VaultScanCache
+
+        vault = Path(vault_path)
+        scan_cache = VaultScanCache.build_or_load(vault, tier=1, progress_every=0)
+        cache_path = VaultScanCache.cache_path_for_vault(vault)
+        types = ["email_thread", "email_message", "meeting_transcript", "calendar_event"]
+        if cache_path.is_file():
+            try:
+                import archive_crate
+
+                return list(
+                    archive_crate.frontmatter_dicts_from_cache(
+                        str(cache_path),
+                        types=types,
+                    )
+                )
+            except Exception:
+                pass
+        by_type, _rel_by_uid, uid_by_path, _uid_by_stem, frontmatter_by_uid = scan_cache.slice_lookup_tables()
+        rows: list[dict[str, Any]] = []
+        for card_type in types:
+            for rel in by_type.get(card_type) or []:
+                uid = uid_by_path.get(rel, "")
+                fm = dict(frontmatter_by_uid.get(uid) or {})
+                if not fm:
+                    continue
+                rows.append({"rel_path": rel, "frontmatter": fm})
+        return rows
+
+    @staticmethod
+    def _string_list(raw: Any) -> list[str]:
+        if isinstance(raw, (list, tuple)):
+            return [str(item).strip() for item in raw if str(item).strip()]
+        value = str(raw or "").strip()
+        return [value] if value else []
+
     def _invite_lookup(
         self,
         vault_path: str,
         *,
         account_email: str = "",
+        rows: list[dict[str, Any]] | None = None,
     ) -> tuple[dict[str, list[str]], dict[str, list[str]], dict[str, list[str]], dict[str, list[str]]]:
         message_by_ical_uid: dict[str, list[str]] = {}
         thread_by_ical_uid: dict[str, list[str]] = {}
         message_by_event_id: dict[str, list[str]] = {}
         thread_by_event_id: dict[str, list[str]] = {}
-        vault = Path(vault_path)
         normalized_account = account_email.strip().lower()
-        rg_patterns = {
-            "Email": r"invite_ical_uid|invite_event_id_hint",
-            "EmailThreads": r"invite_ical_uids|invite_event_id_hints",
-        }
-
-        def _strip_yaml_scalar(value: str) -> str:
-            value = value.strip()
-            if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-                return value[1:-1]
-            return value
-
-        def _parse_inline_list(value: str) -> list[str]:
-            raw = value.strip()
-            if not (raw.startswith("[") and raw.endswith("]")):
-                return []
-            inner = raw[1:-1].strip()
-            if not inner:
-                return []
-            return [_strip_yaml_scalar(part) for part in inner.split(",") if _strip_yaml_scalar(part)]
-
-        def _read_invite_frontmatter(
-            path: Path,
-            *,
-            card_type: str,
-        ) -> tuple[str, str | list[str], str | list[str], str]:
-            scalar_keys = ("invite_ical_uid", "invite_event_id_hint")
-            list_keys = ("invite_ical_uids", "invite_event_id_hints")
-            values: dict[str, str | list[str]] = {
-                scalar_keys[0]: "",
-                scalar_keys[1]: "",
-                list_keys[0]: [],
-                list_keys[1]: [],
-                "account_email": "",
-            }
-            current_list_key: str | None = None
-            try:
-                with path.open("r", encoding="utf-8", errors="ignore") as handle:
-                    if handle.readline().strip() != "---":
-                        return (
-                            str(values["invite_ical_uid"]),
-                            values["invite_ical_uids"],
-                            str(values["invite_event_id_hint"]),
-                            values["invite_event_id_hints"],
-                            str(values["account_email"]),
-                        )
-                    for raw_line in handle:
-                        line = raw_line.rstrip("\n")
-                        stripped = line.strip()
-                        if stripped == "---":
-                            break
-                        if current_list_key is not None:
-                            if stripped.startswith("- "):
-                                cast_list = values[current_list_key]
-                                if isinstance(cast_list, list):
-                                    item = _strip_yaml_scalar(stripped[2:])
-                                    if item:
-                                        cast_list.append(item)
-                                continue
-                            current_list_key = None
-                        if ":" not in line:
-                            continue
-                        key, raw_value = line.split(":", 1)
-                        key = key.strip()
-                        raw_value = raw_value.strip()
-                        if key in scalar_keys:
-                            values[key] = _strip_yaml_scalar(raw_value)
-                        elif key == "account_email":
-                            values[key] = _strip_yaml_scalar(raw_value).lower()
-                        elif key in list_keys:
-                            if raw_value.startswith("["):
-                                values[key] = _parse_inline_list(raw_value)
-                            elif not raw_value:
-                                values[key] = []
-                                current_list_key = key
-            except FileNotFoundError:
-                pass
-            if card_type == "email_message":
-                return (
-                    str(values["invite_ical_uid"]),
-                    [],
-                    str(values["invite_event_id_hint"]),
-                    [],
-                    str(values["account_email"]),
-                )
-            return (
-                "",
-                values["invite_ical_uids"],
-                "",
-                values["invite_event_id_hints"],
-                str(values["account_email"]),
-            )
-
-        def _candidate_paths(root: Path, *, pattern: str) -> list[Path]:
-            try:
-                proc = subprocess.run(
-                    ["rg", "-l", "--glob", "*.md", pattern, str(root)],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-            except Exception:
-                proc = None
-            if proc is None:
-                return sorted(root.rglob("*.md"))
-            if proc.returncode not in (0, 1):
-                return sorted(root.rglob("*.md"))
-            if proc.returncode == 1 or not proc.stdout.strip():
-                return []
-            return [Path(line) for line in proc.stdout.splitlines() if line.strip()]
-
-        for root_name, card_type in (("Email", "email_message"), ("EmailThreads", "email_thread")):
-            root = vault / root_name
-            if not root.exists():
+        dumped = rows if rows is not None else self._calendar_frontmatter_rows_from_cache(vault_path)
+        for row in dumped:
+            rel_path = str(row.get("rel_path") or "")
+            frontmatter = dict(row.get("frontmatter") or {})
+            card_type = str(frontmatter.get("type") or "").strip()
+            if card_type not in {"email_message", "email_thread"}:
                 continue
-            for abs_path in _candidate_paths(root, pattern=rg_patterns[root_name]):
-                rel_path = abs_path.relative_to(vault)
-                wikilink = f"[[{Path(rel_path).stem}]]"
-                if card_type == "email_message":
-                    invite_ical_uid, _, invite_event_id_hint, _, note_account_email = _read_invite_frontmatter(
-                        abs_path,
-                        card_type=card_type,
-                    )
-                    if normalized_account and note_account_email != normalized_account:
-                        continue
-                    if invite_ical_uid:
-                        message_by_ical_uid.setdefault(invite_ical_uid, []).append(wikilink)
-                    if invite_event_id_hint:
-                        message_by_event_id.setdefault(invite_event_id_hint, []).append(wikilink)
-                else:
-                    _, invite_ical_uids, _, invite_event_id_hints, note_account_email = _read_invite_frontmatter(
-                        abs_path,
-                        card_type=card_type,
-                    )
-                    if normalized_account and note_account_email != normalized_account:
-                        continue
-                    for invite_ical_uid in invite_ical_uids:
-                        value = str(invite_ical_uid).strip()
-                        if value:
-                            thread_by_ical_uid.setdefault(value, []).append(wikilink)
-                    for invite_event_id_hint in invite_event_id_hints:
-                        value = str(invite_event_id_hint).strip()
-                        if value:
-                            thread_by_event_id.setdefault(value, []).append(wikilink)
+            note_account = str(frontmatter.get("account_email") or "").strip().lower()
+            if normalized_account and note_account != normalized_account:
+                continue
+            wikilink = f"[[{Path(rel_path).stem}]]"
+            if card_type == "email_message":
+                invite_ical_uid = str(frontmatter.get("invite_ical_uid") or "").strip()
+                invite_event_id_hint = str(frontmatter.get("invite_event_id_hint") or "").strip()
+                if invite_ical_uid:
+                    message_by_ical_uid.setdefault(invite_ical_uid, []).append(wikilink)
+                if invite_event_id_hint:
+                    message_by_event_id.setdefault(invite_event_id_hint, []).append(wikilink)
+                continue
+            for invite_ical_uid in self._string_list(frontmatter.get("invite_ical_uids")):
+                thread_by_ical_uid.setdefault(invite_ical_uid, []).append(wikilink)
+            for invite_event_id_hint in self._string_list(frontmatter.get("invite_event_id_hints")):
+                thread_by_event_id.setdefault(invite_event_id_hint, []).append(wikilink)
         return message_by_ical_uid, thread_by_ical_uid, message_by_event_id, thread_by_event_id
 
-    def _meeting_transcript_lookup(self, vault_path: str) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    def _meeting_transcript_lookup(
+        self,
+        vault_path: str,
+        *,
+        rows: list[dict[str, Any]] | None = None,
+    ) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
         transcript_by_ical_uid: dict[str, list[str]] = {}
         transcript_by_event_id: dict[str, list[str]] = {}
-        vault = Path(vault_path)
-        root = vault / "MeetingTranscripts"
-        if not root.exists():
-            return transcript_by_ical_uid, transcript_by_event_id
-        for abs_path in sorted(root.rglob("*.md")):
-            rel_path = abs_path.relative_to(vault)
-            wikilink = f"[[{Path(rel_path).stem}]]"
-            frontmatter, _, _ = read_note(vault_path, str(rel_path))
-            if str(frontmatter.get("type", "")).strip() != "meeting_transcript":
+        dumped = rows if rows is not None else self._calendar_frontmatter_rows_from_cache(vault_path)
+        for row in dumped:
+            rel_path = str(row.get("rel_path") or "")
+            frontmatter = dict(row.get("frontmatter") or {})
+            if str(frontmatter.get("type") or "").strip() != "meeting_transcript":
                 continue
-            ical_uid = str(frontmatter.get("ical_uid", "")).strip()
-            event_id_hint = str(frontmatter.get("event_id_hint", "")).strip()
+            wikilink = f"[[{Path(rel_path).stem}]]"
+            ical_uid = str(frontmatter.get("ical_uid") or "").strip()
+            event_id_hint = str(frontmatter.get("event_id_hint") or "").strip()
             if ical_uid:
                 transcript_by_ical_uid.setdefault(ical_uid, []).append(wikilink)
             if event_id_hint:
@@ -370,29 +289,29 @@ class CalendarEventsAdapter(BaseAdapter):
         *,
         account_email: str,
         calendar_id: str,
+        rows: list[dict[str, Any]] | None = None,
     ) -> dict[str, dict[str, str]]:
         existing: dict[str, dict[str, str]] = {}
         normalized_account = account_email.strip().lower()
         normalized_calendar_id = calendar_id.strip().lower()
-        for rel_path, _ in iter_notes(vault_path):
-            if not rel_path.parts or rel_path.parts[0] != "Calendar":
+        dumped = rows if rows is not None else self._calendar_frontmatter_rows_from_cache(vault_path)
+        for row in dumped:
+            frontmatter = dict(row.get("frontmatter") or {})
+            if str(frontmatter.get("type") or "").strip() != "calendar_event":
                 continue
-            frontmatter, _, _ = read_note(vault_path, str(rel_path))
-            if str(frontmatter.get("type", "")).strip() != "calendar_event":
-                continue
-            if normalized_account and str(frontmatter.get("account_email", "")).strip().lower() != normalized_account:
+            if normalized_account and str(frontmatter.get("account_email") or "").strip().lower() != normalized_account:
                 continue
             if (
                 normalized_calendar_id
-                and str(frontmatter.get("calendar_id", "")).strip().lower() != normalized_calendar_id
+                and str(frontmatter.get("calendar_id") or "").strip().lower() != normalized_calendar_id
             ):
                 continue
-            event_id = str(frontmatter.get("event_id", "")).strip()
+            event_id = str(frontmatter.get("event_id") or "").strip()
             if not event_id:
                 continue
             existing[event_id] = {
-                "event_etag": str(frontmatter.get("event_etag", "")).strip(),
-                "event_body_sha": str(frontmatter.get("event_body_sha", "")).strip(),
+                "event_etag": str(frontmatter.get("event_etag") or "").strip(),
+                "event_body_sha": str(frontmatter.get("event_body_sha") or "").strip(),
             }
         return existing
 
@@ -437,11 +356,16 @@ class CalendarEventsAdapter(BaseAdapter):
     ) -> list[dict[str, Any]]:
         self._ensure_token_manager(account_email)
         identity_cache = IdentityCache(vault_path)
+        cache_rows = self._calendar_frontmatter_rows_from_cache(vault_path)
         message_by_ical_uid, thread_by_ical_uid, message_by_event_id, thread_by_event_id = self._invite_lookup(
             vault_path,
             account_email=account_email,
+            rows=cache_rows,
         )
-        transcript_by_ical_uid, transcript_by_event_id = self._meeting_transcript_lookup(vault_path)
+        transcript_by_ical_uid, transcript_by_event_id = self._meeting_transcript_lookup(
+            vault_path,
+            rows=cache_rows,
+        )
         quick_update_enabled = bool(
             quick_update and bool(getattr(config, "calendar_event_body_sha_cache_enabled", True))
         )
@@ -450,6 +374,7 @@ class CalendarEventsAdapter(BaseAdapter):
                 vault_path,
                 account_email=account_email,
                 calendar_id=calendar_id,
+                rows=cache_rows,
             )
             if quick_update_enabled
             else {}
