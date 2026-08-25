@@ -183,6 +183,54 @@ def test_calendar_dry_run_does_not_advance_cursor(tmp_path: Path) -> None:
     assert result.report.batch.dirty_card_uids_count >= 1
 
 
+def test_calendar_adapter_apply_without_live_oauth(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Real CalendarEventsAdapter apply path, Google calls stubbed."""
+
+    from archive_sync.adapters.calendar_events import CalendarEventsAdapter
+
+    vault = _minimal_vault(tmp_path)
+    adapter = CalendarEventsAdapter()
+
+    def fake_list(params, *, account_email=""):
+        return {
+            "items": [
+                {
+                    "id": "event-apply-1",
+                    "etag": '"etag-apply-1"',
+                    "iCalUID": "ical-apply-1",
+                    "summary": "Staging Proof Meeting",
+                    "start": {"dateTime": "2026-08-24T15:00:00Z"},
+                    "end": {"dateTime": "2026-08-24T16:00:00Z"},
+                    "organizer": {"email": "me@example.com", "displayName": "Me"},
+                    "attendees": [{"email": "me@example.com"}],
+                    "status": "confirmed",
+                }
+            ],
+            "nextPageToken": None,
+        }
+
+    monkeypatch.setattr(adapter, "_ensure_token_manager", lambda *a, **k: None)
+    monkeypatch.setattr(adapter, "_list_events", fake_list)
+
+    result = run_source_updater(
+        source_key="calendar-events:me@example.com",
+        vault_path=vault,
+        apply=True,
+        adapter=adapter,
+        repo_root=tmp_path,
+        max_items=1,
+        archive_instance="fixture:calendar-apply",
+    )
+    assert result.report.status == RUN_STATUS_SUCCESS
+    assert result.report.batch.promoted == 1
+    assert result.report.batch.dirty_card_uids_count >= 1
+    assert result.report.cursor_after.get("emitted_events") == 1
+    assert result.report.cursor_after.get("last_sync")
+    cards = list((vault / "Calendar").rglob("*.md"))
+    assert len(cards) == 1
+    assert "Staging Proof Meeting" in cards[0].read_text(encoding="utf-8")
+
+
 def test_calendar_apply_advances_cursor_after_persist(tmp_path: Path) -> None:
     vault = _minimal_vault(tmp_path)
     cursor_key = "calendar-events:cal@example.com:primary"
@@ -288,6 +336,8 @@ def test_one_source_failure_does_not_block_others(tmp_path: Path) -> None:
 
 def test_auth_failure_classified_blocked() -> None:
     assert classify_run_exception(PermissionError("oauth refresh failed")) == RUN_STATUS_BLOCKED
+    assert classify_run_exception(RuntimeError("Token refresh failed: invalid_scope")) == RUN_STATUS_BLOCKED
+    assert classify_run_exception(RuntimeError("HTTP Error 400: invalid_scope")) == RUN_STATUS_BLOCKED
     assert classify_run_exception(RuntimeError("network timeout")) == RUN_STATUS_FAILED
 
 
