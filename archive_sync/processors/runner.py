@@ -38,7 +38,7 @@ from .report import write_processor_report
 from .staleness import ProcessorInputSnapshot
 from .state_store import ProcessorInputStateRecord, ProcessorStateStore
 
-log = logging.getLogger("ppa.processors.runner")
+log = logging.getLogger("ppa.processors")
 
 # Injected for tests / thin adapters
 ProcessorBatchExecutor = Callable[["ExecuteContext", list[ProcessorPlanItem]], "BatchExecuteResult"]
@@ -130,31 +130,89 @@ def _is_already_current(
     )
 
 
-def _execute_materialization(ctx: ExecuteContext, items: list[ProcessorPlanItem]) -> BatchExecuteResult:
-    """Thin adapter: record output identities for dirty UIDs without a full vault rebuild.
-
-    Full rebuild remains maintain/admin responsibility; dirty-scoped Phase 2 runs
-    must not trigger a corpus-wide index rebuild.
-    """
-
-    out = BatchExecuteResult()
-    if ctx.apply and not ctx.dry_run and items:
-        out.warnings.append(
-            "materialization: skipped full vault rebuild for dirty-only batch; "
-            "outputs recorded without index rebuild"
+def _complete_items(items: list[ProcessorPlanItem]) -> list[ItemExecuteResult]:
+    return [
+        ItemExecuteResult(
+            processor_key=item.processor_key,
+            input_uid=item.input_uid,
+            status=INPUT_STATUS_COMPLETE,
+            output_identity=item.output_identity,
+            output_uids=[item.input_uid],
+            input_hash=item.current_input_hash,
         )
-        log.info("materialization_dirty_only_skip_full_rebuild count=%s", len(items))
+        for item in items
+    ]
+
+
+def _fail_items(items: list[ProcessorPlanItem], error: str) -> list[ItemExecuteResult]:
+    return [
+        ItemExecuteResult(
+            processor_key=item.processor_key,
+            input_uid=item.input_uid,
+            status=INPUT_STATUS_FAILED,
+            output_identity=item.output_identity,
+            input_hash=item.current_input_hash,
+            error=error,
+        )
+        for item in items
+    ]
+
+
+def _skip_provider_items(items: list[ProcessorPlanItem], label: str) -> BatchExecuteResult:
+    out = BatchExecuteResult()
+    out.warnings.append(f"{label}: skipped (provider unavailable)")
     for item in items:
         out.results.append(
             ItemExecuteResult(
                 processor_key=item.processor_key,
                 input_uid=item.input_uid,
-                status=INPUT_STATUS_COMPLETE,
+                status=INPUT_STATUS_SKIPPED,
                 output_identity=item.output_identity,
-                output_uids=[item.input_uid],
                 input_hash=item.current_input_hash,
+                skip_reason=SKIP_PROVIDER,
             )
         )
+    return out
+
+
+def _require_store_attr(ctx: ExecuteContext, attr: str, label: str) -> Any:
+    store = ctx.store
+    if store is None or not hasattr(store, attr):
+        raise RuntimeError(f"{label}: store.{attr} unavailable")
+    return store
+
+
+def _execute_materialization(ctx: ExecuteContext, items: list[ProcessorPlanItem]) -> BatchExecuteResult:
+    """Thin adapter: incremental ``store.rebuild(force_full=False)`` for dirty UIDs.
+
+    Never requests a full-vault rebuild. Incremental rematerialize uses the existing
+    manifest-delta path; dirty UIDs from source updaters are the changed notes.
+    """
+
+    out = BatchExecuteResult()
+    if not ctx.apply or ctx.dry_run or not items:
+        out.results.extend(_complete_items(items))
+        return out
+    try:
+        from archive_cli.index_config import get_rebuild_workers
+
+        store = _require_store_attr(ctx, "rebuild", "materialization")
+        workers = get_rebuild_workers()
+        uids = [item.input_uid for item in items]
+        log.info(
+            "materialization_incremental_rebuild uids=%s workers=%s force_full=False",
+            len(uids),
+            workers,
+        )
+        result = store.rebuild(force_full=False, workers=workers)
+        cards = result.get("cards", result) if isinstance(result, dict) else result
+        out.warnings.append(f"materialization incremental rebuild cards={cards} dirty_uids={len(uids)}")
+    except Exception as exc:
+        out.errors.append(f"materialization: {exc}")
+        log.exception("materialization_failed")
+        out.results.extend(_fail_items(items, str(exc)))
+        return out
+    out.results.extend(_complete_items(items))
     return out
 
 
@@ -164,26 +222,19 @@ def _execute_typed_extraction(ctx: ExecuteContext, items: list[ProcessorPlanItem
     out = BatchExecuteResult()
     uids = {item.input_uid for item in items}
     if not ctx.apply or ctx.dry_run:
-        for item in items:
-            out.results.append(
-                ItemExecuteResult(
-                    processor_key=item.processor_key,
-                    input_uid=item.input_uid,
-                    status=INPUT_STATUS_COMPLETE,
-                    output_identity=item.output_identity,
-                    output_uids=[],
-                    input_hash=item.current_input_hash,
-                )
-            )
+        out.results.extend(_complete_items(items))
         return out
     try:
+        from archive_cli.index_config import get_rebuild_workers
         from archive_sync.extractors.registry import build_default_registry
         from archive_sync.extractors.runner import ExtractionRunner
 
+        workers = get_rebuild_workers()
         runner = ExtractionRunner(
             ctx.vault_path,
             registry=build_default_registry(),
             dry_run=False,
+            workers=workers,
             limit=max(len(uids), 1),
             uid_allowlist=uids,
         )
@@ -193,65 +244,153 @@ def _execute_typed_extraction(ctx: ExecuteContext, items: list[ProcessorPlanItem
     except Exception as exc:
         out.errors.append(f"typed_extraction: {exc}")
         log.exception("typed_extraction_failed")
-        for item in items:
-            out.results.append(
-                ItemExecuteResult(
-                    processor_key=item.processor_key,
-                    input_uid=item.input_uid,
-                    status=INPUT_STATUS_FAILED,
-                    output_identity=item.output_identity,
-                    input_hash=item.current_input_hash,
-                    error=str(exc),
-                )
-            )
+        out.results.extend(_fail_items(items, str(exc)))
         return out
-    for item in items:
-        out.results.append(
-            ItemExecuteResult(
-                processor_key=item.processor_key,
-                input_uid=item.input_uid,
-                status=INPUT_STATUS_COMPLETE,
-                output_identity=item.output_identity,
-                output_uids=[item.input_uid],
-                input_hash=item.current_input_hash,
-            )
-        )
+    out.results.extend(_complete_items(items))
     return out
 
 
 def _execute_entity_resolution(ctx: ExecuteContext, items: list[ProcessorPlanItem]) -> BatchExecuteResult:
+    """Thin adapter into ``run_entity_resolution`` scoped to dirty UIDs."""
+
     out = BatchExecuteResult()
+    uids = {item.input_uid for item in items}
     if ctx.apply and not ctx.dry_run:
         try:
             from archive_sync.extractors import entity_resolution as er_mod
 
-            er_mod.run_entity_resolution(ctx.vault_path, dry_run=False)
+            log.info("entity_resolution_dirty_uids count=%s", len(uids))
+            er_mod.run_entity_resolution(ctx.vault_path, dry_run=False, uid_allowlist=uids)
         except Exception as exc:
             out.errors.append(f"entity_resolution: {exc}")
             log.exception("entity_resolution_failed")
-            for item in items:
-                out.results.append(
-                    ItemExecuteResult(
-                        processor_key=item.processor_key,
-                        input_uid=item.input_uid,
-                        status=INPUT_STATUS_FAILED,
-                        output_identity=item.output_identity,
-                        input_hash=item.current_input_hash,
-                        error=str(exc),
-                    )
-                )
+            out.results.extend(_fail_items(items, str(exc)))
             return out
-    for item in items:
-        out.results.append(
-            ItemExecuteResult(
-                processor_key=item.processor_key,
-                input_uid=item.input_uid,
-                status=INPUT_STATUS_COMPLETE,
-                output_identity=item.output_identity,
-                output_uids=[item.input_uid],
-                input_hash=item.current_input_hash,
+    out.results.extend(_complete_items(items))
+    return out
+
+
+def _execute_embedding(ctx: ExecuteContext, items: list[ProcessorPlanItem]) -> BatchExecuteResult:
+    """Thin adapter into existing ``store.embed_pending`` for dirty UIDs.
+
+    Full-corpus embed (``limit=0``) requires ``allow_full_embedding``.
+    """
+
+    out = BatchExecuteResult()
+    if not ctx.provider_available:
+        return _skip_provider_items(items, PROCESSOR_EMBEDDING)
+    if not ctx.apply or ctx.dry_run:
+        out.results.extend(_complete_items(items))
+        return out
+    try:
+        from archive_cli.index_config import get_embed_concurrency
+
+        store = _require_store_attr(ctx, "embed_pending", "embedding")
+        concurrency = get_embed_concurrency()
+        uids = [item.input_uid for item in items]
+        if ctx.allow_full_embedding:
+            limit = 0
+            log.info("embedding_full_backlog concurrency=%s opt_in=allow_full_embedding", concurrency)
+        else:
+            limit = max(len(uids), 1)
+            log.info(
+                "embedding_dirty_pending uids=%s limit=%s concurrency=%s",
+                len(uids),
+                limit,
+                concurrency,
             )
+        result = store.embed_pending(limit=limit)
+        embedded = result.get("embedded", result) if isinstance(result, dict) else result
+        out.warnings.append(f"embedding embedded={embedded} limit={limit} concurrency={concurrency}")
+    except Exception as exc:
+        out.errors.append(f"embedding: {exc}")
+        log.exception("embedding_failed")
+        out.results.extend(_fail_items(items, str(exc)))
+        return out
+    out.results.extend(_complete_items(items))
+    return out
+
+
+def _execute_linkers(ctx: ExecuteContext, items: list[ProcessorPlanItem]) -> BatchExecuteResult:
+    """Thin adapter into ``run_incremental_link_refresh`` for the dirty set.
+
+    ``run_seed_link_backfill`` (all-linkers) requires ``allow_all_linkers``.
+    """
+
+    out = BatchExecuteResult()
+    if not ctx.provider_available:
+        return _skip_provider_items(items, PROCESSOR_LINKERS)
+    if not ctx.apply or ctx.dry_run:
+        out.results.extend(_complete_items(items))
+        return out
+    try:
+        from archive_cli.index_config import get_rebuild_workers
+        from archive_cli.seed_links import run_incremental_link_refresh, run_seed_link_backfill
+
+        store = ctx.store
+        index = getattr(store, "index", None) if store is not None else None
+        if index is None:
+            raise RuntimeError("linkers: store.index unavailable")
+        workers = get_rebuild_workers()
+        uids = [item.input_uid for item in items]
+        if ctx.allow_all_linkers:
+            log.info("linkers_all_backfill workers=%s opt_in=allow_all_linkers", workers)
+            result = run_seed_link_backfill(
+                index,
+                max_workers=workers,
+                include_llm=ctx.allow_broad_llm,
+                apply_promotions=True,
+            )
+        else:
+            log.info("linkers_incremental_refresh uids=%s workers=%s", len(uids), workers)
+            result = run_incremental_link_refresh(
+                index,
+                source_uids=uids,
+                max_workers=workers,
+                include_llm=ctx.allow_broad_llm,
+                apply_promotions=True,
+            )
+        jobs = result.get("jobs_completed", result) if isinstance(result, dict) else result
+        out.warnings.append(f"linkers jobs_completed={jobs} dirty_uids={len(uids)}")
+    except Exception as exc:
+        out.errors.append(f"linkers: {exc}")
+        log.exception("linkers_failed")
+        out.results.extend(_fail_items(items, str(exc)))
+        return out
+    out.results.extend(_complete_items(items))
+    return out
+
+
+def _execute_enrichment(ctx: ExecuteContext, items: list[ProcessorPlanItem]) -> BatchExecuteResult:
+    """Thin adapter into ``run_enrichment_for_uids`` on the existing orchestrator."""
+
+    out = BatchExecuteResult()
+    if not ctx.provider_available:
+        return _skip_provider_items(items, PROCESSOR_EMAIL_THREAD_ENRICHMENT)
+    if not ctx.apply or ctx.dry_run:
+        out.results.extend(_complete_items(items))
+        return out
+    uids = [item.input_uid for item in items]
+    try:
+        from archive_cli.index_config import get_rebuild_workers
+        from archive_sync.llm_enrichment import enrichment_orchestrator as orch
+
+        workers = get_rebuild_workers()
+        log.info("email_thread_enrichment_for_uids count=%s workers=%s", len(uids), workers)
+        orch.run_enrichment_for_uids(
+            ctx.vault_path,
+            uids,
+            workflow="email_thread",
+            dry_run=False,
+            workers=workers,
+            run_id=ctx.run_id,
         )
+    except Exception as exc:
+        out.errors.append(f"email_thread_enrichment: {exc}")
+        log.exception("enrichment_failed")
+        out.results.extend(_fail_items(items, str(exc)))
+        return out
+    out.results.extend(_complete_items(items))
     return out
 
 
@@ -261,65 +400,11 @@ def _execute_llm_or_record(
     *,
     label: str,
 ) -> BatchExecuteResult:
-    """Enrichment / embedding / linkers: require provider + opt-in; otherwise skip."""
+    """Promotion-policy and unknown keys: record planned outputs only."""
 
     out = BatchExecuteResult()
-    if not ctx.provider_available and label in (
-        PROCESSOR_EMAIL_THREAD_ENRICHMENT,
-        PROCESSOR_EMBEDDING,
-        PROCESSOR_LINKERS,
-        PROCESSOR_ENTITY_RESOLUTION,
-    ):
-        # entity_resolution may be deterministic — handled separately
-        if label != PROCESSOR_ENTITY_RESOLUTION:
-            for item in items:
-                out.results.append(
-                    ItemExecuteResult(
-                        processor_key=item.processor_key,
-                        input_uid=item.input_uid,
-                        status=INPUT_STATUS_SKIPPED,
-                        output_identity=item.output_identity,
-                        input_hash=item.current_input_hash,
-                        skip_reason=SKIP_PROVIDER,
-                    )
-                )
-            out.warnings.append(f"{label}: skipped (provider unavailable)")
-            return out
-
-    if label == PROCESSOR_EMAIL_THREAD_ENRICHMENT and ctx.apply and not ctx.dry_run:
-        try:
-            # Best-effort hook — do not invent a new enrichment path.
-            from archive_sync.llm_enrichment import enrichment_orchestrator as orch
-
-            if hasattr(orch, "run_enrichment_for_uids"):
-                orch.run_enrichment_for_uids(ctx.vault_path, [i.input_uid for i in items])
-            else:
-                out.warnings.append("email_thread_enrichment: orchestrator UID entrypoint unavailable; recorded only")
-        except Exception as exc:
-            out.errors.append(f"email_thread_enrichment: {exc}")
-            log.exception("enrichment_failed")
-            for item in items:
-                out.results.append(
-                    ItemExecuteResult(
-                        processor_key=item.processor_key,
-                        input_uid=item.input_uid,
-                        status=INPUT_STATUS_FAILED,
-                        output_identity=item.output_identity,
-                        input_hash=item.current_input_hash,
-                        error=str(exc),
-                    )
-                )
-            return out
-
-    if label == PROCESSOR_EMBEDDING and ctx.apply and not ctx.dry_run:
-        out.warnings.append("embedding: dirty-UID embedding deferred to maintain/batch_embed; recorded planned outputs")
-
-    if label == PROCESSOR_LINKERS and ctx.apply and not ctx.dry_run:
-        out.warnings.append("linkers: dirty-UID linker pass deferred to seed_links; recorded planned outputs")
-
     if label == PROCESSOR_EMAIL_PROMOTION_POLICY:
         out.warnings.append("email_promotion_policy: decisions owned by corpus hygiene / Gmail gate; recorded only")
-
     for item in items:
         out.results.append(
             ItemExecuteResult(
@@ -344,6 +429,12 @@ def default_batch_executor(ctx: ExecuteContext, items: list[ProcessorPlanItem]) 
         return _execute_typed_extraction(ctx, items)
     if key == PROCESSOR_ENTITY_RESOLUTION:
         return _execute_entity_resolution(ctx, items)
+    if key == PROCESSOR_EMBEDDING:
+        return _execute_embedding(ctx, items)
+    if key == PROCESSOR_LINKERS:
+        return _execute_linkers(ctx, items)
+    if key == PROCESSOR_EMAIL_THREAD_ENRICHMENT:
+        return _execute_enrichment(ctx, items)
     return _execute_llm_or_record(ctx, items, label=key)
 
 

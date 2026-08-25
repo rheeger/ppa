@@ -9,7 +9,13 @@ from pathlib import Path
 import pytest
 
 from archive_sync.adapters.base import deterministic_provenance
-from archive_sync.extractors.entity_resolution import OrgResolver, PersonLinker, PlaceResolver, run_entity_resolution
+from archive_sync.extractors.entity_resolution import (
+    OrgResolver,
+    PersonLinker,
+    PlaceResolver,
+    iter_derived_card_dicts,
+    run_entity_resolution,
+)
 from archive_vault.schema import PersonCard
 from archive_vault.uid import generate_uid
 from archive_vault.vault import write_card
@@ -148,3 +154,11 @@ def test_run_entity_resolution_jsonl_dry_run(tmp_path, extractor_vault):
     assert out["entity_mentions_jsonl"]["rows"] == 2
     assert out["entity_mentions_jsonl"]["person"] == 1
     assert out["entity_mentions_jsonl"]["place"] == 1
+
+
+def test_run_entity_resolution_uid_allowlist_skips_full_estimate(extractor_vault):
+    out = run_entity_resolution(extractor_vault, dry_run=True, uid_allowlist={"only-this"})
+    assert out["dry_run"] is True
+    assert out["derived_card_estimate_skipped"] is True
+    assert out["uid_allowlist_count"] == 1
+    assert iter_derived_card_dicts(extractor_vault, uid_allowlist={"only-this"}) == []

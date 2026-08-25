@@ -383,3 +383,65 @@ class EnrichmentOrchestrator:
 
         log.info("enrichment run %s finished", manifest.run_id)
         return manifest
+
+
+def run_enrichment_for_uids(
+    vault_path: str | Path,
+    uids: list[str] | set[str] | frozenset[str],
+    *,
+    workflow: str = "email_thread",
+    dry_run: bool = False,
+    workers: int | None = None,
+    run_id: str = "",
+    provider: str = "gemini",
+    model: str = "",
+    base_url: str = "http://localhost:11434",
+    staging_dir: str | Path | None = None,
+    cache_db: str | Path | None = None,
+) -> Any:
+    """UID-scoped thin adapter over ``CardEnrichmentRunner`` (existing enrich-cards path).
+
+    Does not start a second enrichment pipeline. Writes a uid filter file and
+    runs the same runner ``ppa enrich-cards`` uses.
+    """
+
+    from archive_cli.index_config import get_rebuild_workers
+
+    scoped = sorted({str(u).strip() for u in uids if str(u).strip()})
+    vault = Path(vault_path)
+    rid = (run_id or default_run_id()).strip()
+    workers_n = max(1, int(workers) if workers is not None else get_rebuild_workers())
+    staging = Path(staging_dir) if staging_dir is not None else vault / "_meta" / "enrichment" / rid
+    staging.mkdir(parents=True, exist_ok=True)
+    uid_file = staging / "uid_allowlist.txt"
+    uid_file.write_text("\n".join(scoped) + "\n", encoding="utf-8")
+    cache_path = Path(cache_db) if cache_db is not None else (None if dry_run else staging / "inference-cache.sqlite")
+
+    log.info(
+        "enrichment_for_uids workflow=%s uids=%s workers=%s dry_run=%s run_id=%s",
+        workflow,
+        len(scoped),
+        workers_n,
+        dry_run,
+        rid,
+    )
+    runner = CardEnrichmentRunner(
+        vault_path=vault,
+        workflow=workflow,
+        provider_kind=(provider or "gemini").strip().lower(),
+        model=(model or DEFAULT_ENRICH_CARD_GEMINI_MODEL).strip(),
+        base_url=(base_url or "http://localhost:11434").rstrip("/"),
+        cache_db=cache_path,
+        run_id=rid,
+        staging_dir=staging,
+        dry_run=dry_run,
+        progress_every=1,
+        vault_percent=None,
+        limit=None,
+        skip_populated=True,
+        workers=workers_n,
+        uid_filter_file=uid_file,
+        classify_index_db=None,
+        checkpoint_every=0,
+    )
+    return runner.run()

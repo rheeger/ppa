@@ -16,6 +16,8 @@ from archive_sync.processors.constants import (
     CORPUS_SUPPRESSED,
     PROCESSOR_EMAIL_THREAD_ENRICHMENT,
     PROCESSOR_EMBEDDING,
+    PROCESSOR_ENTITY_RESOLUTION,
+    PROCESSOR_LINKERS,
     PROCESSOR_MATERIALIZATION,
     SECTION_E_EXECUTION_STATE,
     SKIP_SUPPRESSED,
@@ -343,6 +345,338 @@ def test_missing_vault_returns_blocked_exit_4(
     captured = capsys.readouterr()
     assert "Traceback" not in captured.err
     assert json.loads(captured.out)["blocked"] is True
+
+
+class _MockIndex:
+    vault = ""
+
+
+class _MockStore:
+    def __init__(self, vault: Path) -> None:
+        self.vault = vault
+        self.index = _MockIndex()
+        self.index.vault = str(vault)
+        self.rebuild_calls: list[dict] = []
+        self.embed_calls: list[dict] = []
+
+    def rebuild(self, **kwargs):
+        self.rebuild_calls.append(dict(kwargs))
+        return {"cards": 1}
+
+    def embed_pending(self, **kwargs):
+        self.embed_calls.append(dict(kwargs))
+        return {"embedded": 1, "failed": 0}
+
+
+def _active_snap(uid: str, *, processor_decision: str = "typed_extraction") -> ProcessorInputSnapshot:
+    return ProcessorInputSnapshot(
+        input_uid=uid,
+        card_type="email_thread",
+        corpus_state=CORPUS_ACTIVE,
+        processor_decision=processor_decision,
+        field_values={
+            "body_sha": uid,
+            "chunk_hash": uid,
+            "thread_uid": uid,
+            "corpus_state": CORPUS_ACTIVE,
+            "source_hash": uid,
+            "target_hash": uid,
+        },
+        source_dirty=True,
+    )
+
+
+def _apply_default(
+    tmp_path: Path,
+    *,
+    processor_key: str,
+    uid: str,
+    store: _MockStore,
+    processor_decision: str = "typed_extraction",
+    allow_full_embedding: bool = False,
+    allow_all_linkers: bool = False,
+    allow_broad_llm: bool = False,
+    provider_available: bool = True,
+):
+    vault = store.vault
+    meta = vault / "_meta" / "processors.json"
+    state = ProcessorStateStore(None, meta_path=meta)
+    return run_processors(
+        inputs=[_active_snap(uid, processor_decision=processor_decision)],
+        vault_path=str(vault),
+        store=store,
+        state_store=state,
+        processor_keys=[processor_key],
+        apply=True,
+        dry_run=False,
+        allow_full_embedding=allow_full_embedding,
+        allow_all_linkers=allow_all_linkers,
+        allow_broad_llm=allow_broad_llm,
+        provider_available=provider_available,
+        run_id=f"e2-adapter-{processor_key}",
+        repo_root=tmp_path,
+    )
+
+
+def test_apply_materialization_calls_incremental_rebuild(tmp_path: Path) -> None:
+    vault = _minimal_vault(tmp_path)
+    store = _MockStore(vault)
+    result = _apply_default(tmp_path, processor_key=PROCESSOR_MATERIALIZATION, uid="uid-mat-1", store=store)
+    assert result.executed is True
+    assert store.rebuild_calls
+    assert store.rebuild_calls[0]["force_full"] is False
+    assert "workers" in store.rebuild_calls[0]
+    assert all(r.status == "complete" for r in result.item_results)
+
+
+def test_apply_embedding_calls_embed_pending_dirty_limit(tmp_path: Path) -> None:
+    vault = _minimal_vault(tmp_path)
+    store = _MockStore(vault)
+    result = _apply_default(tmp_path, processor_key=PROCESSOR_EMBEDDING, uid="uid-emb-1", store=store)
+    assert result.executed is True
+    assert store.embed_calls
+    assert store.embed_calls[0]["limit"] == 1
+    assert store.embed_calls[0]["limit"] != 0
+
+
+def test_apply_embedding_full_backlog_requires_opt_in(tmp_path: Path) -> None:
+    vault = _minimal_vault(tmp_path)
+    store = _MockStore(vault)
+    result = _apply_default(
+        tmp_path,
+        processor_key=PROCESSOR_EMBEDDING,
+        uid="uid-emb-full",
+        store=store,
+        allow_full_embedding=True,
+    )
+    assert store.embed_calls
+    assert store.embed_calls[0]["limit"] == 0
+    assert result.executed is True
+
+
+def test_apply_linkers_calls_incremental_refresh(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vault = _minimal_vault(tmp_path)
+    store = _MockStore(vault)
+    calls: list[dict] = []
+
+    def _refresh(index, *, source_uids, **kwargs):
+        calls.append({"index": index, "source_uids": list(source_uids), **kwargs})
+        return {"jobs_completed": 1}
+
+    def _backfill(*_a, **_k):
+        raise AssertionError("all-linker backfill must not run without --allow-all-linkers")
+
+    monkeypatch.setattr("archive_cli.seed_links.run_incremental_link_refresh", _refresh)
+    monkeypatch.setattr("archive_cli.seed_links.run_seed_link_backfill", _backfill)
+    result = _apply_default(tmp_path, processor_key=PROCESSOR_LINKERS, uid="uid-link-1", store=store)
+    assert result.executed is True
+    assert calls
+    assert calls[0]["source_uids"] == ["uid-link-1"]
+    assert calls[0]["include_llm"] is False
+
+
+def test_apply_linkers_all_requires_opt_in(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vault = _minimal_vault(tmp_path)
+    store = _MockStore(vault)
+    backfill_calls: list[dict] = []
+
+    def _refresh(*_a, **_k):
+        raise AssertionError("incremental refresh should not run when allow_all_linkers is set")
+
+    def _backfill(index, **kwargs):
+        backfill_calls.append(dict(kwargs))
+        return {"jobs_completed": 2}
+
+    monkeypatch.setattr("archive_cli.seed_links.run_incremental_link_refresh", _refresh)
+    monkeypatch.setattr("archive_cli.seed_links.run_seed_link_backfill", _backfill)
+    result = _apply_default(
+        tmp_path,
+        processor_key=PROCESSOR_LINKERS,
+        uid="uid-link-all",
+        store=store,
+        allow_all_linkers=True,
+        allow_broad_llm=True,
+    )
+    assert result.executed is True
+    assert backfill_calls
+    assert backfill_calls[0].get("source_uids") in (None, set())
+
+
+def test_apply_enrichment_calls_run_enrichment_for_uids(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vault = _minimal_vault(tmp_path)
+    store = _MockStore(vault)
+    calls: list[tuple] = []
+
+    def _enrich(vault_path, uids, **kwargs):
+        calls.append((vault_path, list(uids), kwargs))
+        return {"ok": True}
+
+    monkeypatch.setattr(
+        "archive_sync.llm_enrichment.enrichment_orchestrator.run_enrichment_for_uids",
+        _enrich,
+    )
+    result = _apply_default(
+        tmp_path,
+        processor_key=PROCESSOR_EMAIL_THREAD_ENRICHMENT,
+        uid="uid-enr-1",
+        store=store,
+        processor_decision="thread_enrichment",
+        allow_broad_llm=True,
+    )
+    assert result.executed is True
+    assert calls
+    assert calls[0][1] == ["uid-enr-1"]
+    assert calls[0][2].get("workflow") == "email_thread"
+
+
+def test_apply_enrichment_without_broad_llm_skips(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vault = _minimal_vault(tmp_path)
+    store = _MockStore(vault)
+
+    def _enrich(*_a, **_k):
+        raise AssertionError("enrichment must not run without --allow-broad-llm")
+
+    monkeypatch.setattr(
+        "archive_sync.llm_enrichment.enrichment_orchestrator.run_enrichment_for_uids",
+        _enrich,
+    )
+    result = _apply_default(
+        tmp_path,
+        processor_key=PROCESSOR_EMAIL_THREAD_ENRICHMENT,
+        uid="uid-enr-skip",
+        store=store,
+        processor_decision="thread_enrichment",
+        allow_broad_llm=False,
+    )
+    assert result.executed is True
+    assert all(r.status == "skipped" for r in result.item_results)
+    assert any(r.skip_reason == "missing_broad_llm_opt_in" for r in result.item_results)
+
+
+def test_apply_entity_resolution_passes_uid_allowlist(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vault = _minimal_vault(tmp_path)
+    store = _MockStore(vault)
+    calls: list[dict] = []
+
+    def _er(vault_path, **kwargs):
+        calls.append({"vault_path": vault_path, **kwargs})
+        return {"places_created": 0}
+
+    monkeypatch.setattr("archive_sync.extractors.entity_resolution.run_entity_resolution", _er)
+    result = _apply_default(
+        tmp_path,
+        processor_key=PROCESSOR_ENTITY_RESOLUTION,
+        uid="uid-er-1",
+        store=store,
+        allow_broad_llm=True,
+    )
+    assert result.executed is True
+    assert calls
+    assert calls[0]["uid_allowlist"] == {"uid-er-1"}
+    assert calls[0]["dry_run"] is False
+
+
+def test_apply_entity_resolution_without_broad_llm_skips(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vault = _minimal_vault(tmp_path)
+    store = _MockStore(vault)
+
+    def _er(*_a, **_k):
+        raise AssertionError("entity resolution must not run without --allow-broad-llm")
+
+    monkeypatch.setattr("archive_sync.extractors.entity_resolution.run_entity_resolution", _er)
+    result = _apply_default(
+        tmp_path,
+        processor_key=PROCESSOR_ENTITY_RESOLUTION,
+        uid="uid-er-skip",
+        store=store,
+        allow_broad_llm=False,
+    )
+    assert all(r.status == "skipped" for r in result.item_results)
+    assert any(r.skip_reason == "missing_broad_llm_opt_in" for r in result.item_results)
+
+
+def test_suppressed_inputs_skip_without_calling_embed_pending(tmp_path: Path) -> None:
+    vault = _minimal_vault(tmp_path)
+    store = _MockStore(vault)
+    meta = vault / "_meta" / "processors.json"
+    state = ProcessorStateStore(None, meta_path=meta)
+    snap = ProcessorInputSnapshot(
+        input_uid="email-thread-suppressed-adapter",
+        card_type="email_thread",
+        corpus_state=CORPUS_SUPPRESSED,
+        processor_decision="typed_extraction",
+        field_values={"body_sha": "x", "chunk_hash": "x", "corpus_state": CORPUS_SUPPRESSED},
+        source_dirty=True,
+    )
+    result = run_processors(
+        inputs=[snap],
+        vault_path=str(vault),
+        store=store,
+        state_store=state,
+        processor_keys=[PROCESSOR_EMBEDDING],
+        apply=True,
+        dry_run=False,
+        provider_available=True,
+        run_id="e2-suppress-adapter",
+        repo_root=tmp_path,
+    )
+    assert result.executed is True
+    assert store.embed_calls == []
+    assert all(r.status == "skipped" for r in result.item_results)
+    assert any(r.skip_reason == SKIP_SUPPRESSED for r in result.item_results)
+
+
+def test_run_enrichment_for_uids_uses_card_runner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from archive_sync.llm_enrichment.enrichment_orchestrator import run_enrichment_for_uids
+
+    vault = _minimal_vault(tmp_path)
+    seen: list[object] = []
+
+    class _FakeMetrics:
+        def to_dict(self) -> dict:
+            return {"ok": True}
+
+    class _FakeRunner:
+        def __init__(self, **kwargs):
+            seen.append(kwargs)
+
+        def run(self):
+            return _FakeMetrics()
+
+    monkeypatch.setattr(
+        "archive_sync.llm_enrichment.enrichment_orchestrator.CardEnrichmentRunner",
+        _FakeRunner,
+    )
+    out = run_enrichment_for_uids(vault, ["uid-a", "uid-b"], dry_run=True, workers=2, run_id="enrich-test")
+    assert seen
+    kwargs = seen[0]
+    assert kwargs["workflow"] == "email_thread"
+    uid_file = Path(kwargs["uid_filter_file"])
+    assert uid_file.is_file()
+    lines = [ln for ln in uid_file.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    assert set(lines) == {"uid-a", "uid-b"}
+    assert out.to_dict()["ok"] is True
 
 
 def test_resolve_snapshots_defaults_active(tmp_path: Path) -> None:
