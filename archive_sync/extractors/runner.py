@@ -98,6 +98,12 @@ class _EmailWorkItem:
     extractor: EmailExtractor
 
 
+@dataclass
+class _SourceEmailNote:
+    rel_path: str
+    frontmatter: dict[str, Any]
+
+
 def _card_dump_for_idempotency(card: Any) -> dict[str, Any]:
     """Compare cards without extraction_confidence (optional metadata not always in older notes)."""
     d = card.model_dump(mode="python")
@@ -168,7 +174,7 @@ class ExtractionRunner:
         vault_path: str,
         registry: ExtractorRegistry,
         staging_dir: str | None = None,
-        workers: int = 4,
+        workers: int | None = None,
         batch_size: int = 500,
         dry_run: bool = False,
         sender_filter: str | None = None,
@@ -180,7 +186,11 @@ class ExtractionRunner:
         self.vault_path = str(vault_path)
         self.registry = registry
         self.staging_dir = staging_dir
-        self.workers = max(1, workers)
+        if workers is None:
+            from archive_cli.index_config import get_rebuild_workers
+
+            workers = get_rebuild_workers()
+        self.workers = max(1, int(workers))
         self.batch_size = max(1, batch_size)
         self.dry_run = dry_run
         self.sender_filter = (sender_filter or "").strip().lower() or None
@@ -270,6 +280,35 @@ class ExtractionRunner:
                 metrics.extracted_cards += 1
             self._bump(lock, metrics, eid, "extracted", 1)
 
+    def _iter_source_email_notes(self) -> list[_SourceEmailNote]:
+        """Yield email_message notes for this run.
+
+        With ``uid_allowlist``, resolve those UIDs from the vault-scan cache (one IN
+        query) — never ``iter_parsed_notes_for_card_types`` over all email_message.
+        """
+
+        if self.uid_allowlist is None:
+            return [
+                _SourceEmailNote(rel_path=str(note.rel_path), frontmatter=dict(note.frontmatter))
+                for note in iter_parsed_notes_for_card_types(self.vault_path, frozenset({"email_message"}))
+            ]
+
+        from archive_cli.vault_cache import VaultScanCache
+
+        vault = Path(self.vault_path)
+        scan_cache = VaultScanCache.build_or_load(vault, tier=1, progress_every=0)
+        rows = scan_cache.frontmatter_rows_for_uids(self.uid_allowlist)
+        notes: list[_SourceEmailNote] = []
+        for row in rows:
+            fm = dict(row.get("frontmatter") or {})
+            if str(fm.get("type") or "") and str(fm.get("type")) != "email_message":
+                continue
+            rel = str(row.get("rel_path") or "")
+            if not rel:
+                continue
+            notes.append(_SourceEmailNote(rel_path=rel, frontmatter=fm))
+        return notes
+
     def run(self) -> ExtractionMetrics:
         """Execute scan → match → extract (parallel) → write."""
         metrics = ExtractionMetrics()
@@ -279,7 +318,7 @@ class ExtractionRunner:
 
         work_queue: list[_EmailWorkItem] = []
         scanned = 0
-        for note in iter_parsed_notes_for_card_types(self.vault_path, frozenset({"email_message"})):
+        for note in self._iter_source_email_notes():
             fm = note.frontmatter
             scanned += 1
             uid = str(fm.get("uid") or "")

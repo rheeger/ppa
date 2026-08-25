@@ -212,6 +212,50 @@ def test_idempotency_skips_existing(extractor_vault, sample_email_card, tmp_path
     assert r2.extracted_cards == 0
 
 
+def test_uid_allowlist_skips_full_email_message_iter(
+    extractor_vault, sample_email_card, monkeypatch
+):
+    _write_email(
+        extractor_vault,
+        sample_email_card,
+        "hfa-email-message-e1",
+        "a@acme.com",
+        "s",
+        "b",
+        "Email/2024-03/e1.md",
+    )
+    _write_email(
+        extractor_vault,
+        sample_email_card,
+        "hfa-email-message-e2",
+        "b@beta.com",
+        "s",
+        "b",
+        "Email/2024-03/e2.md",
+    )
+    called = {"full_iter": 0}
+
+    def _boom(*_args, **_kwargs):
+        called["full_iter"] += 1
+        raise AssertionError("full-type iter must not run when uid_allowlist is set")
+
+    monkeypatch.setattr(
+        "archive_sync.extractors.runner.iter_parsed_notes_for_card_types",
+        _boom,
+    )
+    reg = ExtractorRegistry()
+    reg.register(AcmeExtractor())
+    m = ExtractionRunner(
+        extractor_vault,
+        reg,
+        dry_run=True,
+        uid_allowlist={"hfa-email-message-e1"},
+    ).run()
+    assert called["full_iter"] == 0
+    assert m.total_emails_scanned == 1
+    assert m.matched_emails == 1
+
+
 def test_metrics_are_accurate(extractor_vault, sample_email_card):
     _write_email(
         extractor_vault,
