@@ -10,8 +10,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from archive_auth import (CALENDAR_READONLY_SCOPES, account_name_from_email,
-                          build_google_cli_token_manager)
+from archive_auth import account_name_from_email, build_google_cli_token_manager
 from archive_vault.identity import IdentityCache
 from archive_vault.schema import CalendarEventCard
 from archive_vault.thread_hash import \
@@ -59,17 +58,12 @@ class CalendarEventsAdapter(BaseAdapter):
         if getattr(self, "_token_manager_key", None) == token_key:
             return
         try:
-            # Prefer service profile over hard-coded readonly scopes — local
-            # refresh tokens often reject CALENDAR_READONLY_SCOPES with invalid_scope.
+            # Service profile (`calendar`) matches local refresh grants. Hard-coded
+            # CALENDAR_READONLY_SCOPES mint HTTP 400 invalid_scope against those tokens.
             self._token_manager = build_google_cli_token_manager(
                 account_email=account,
                 services=["calendar"],
             )
-            if self._token_manager is None:
-                self._token_manager = build_google_cli_token_manager(
-                    account_email=account,
-                    scopes=CALENDAR_READONLY_SCOPES,
-                )
         except (RuntimeError, TypeError, ValueError, OSError):
             self._token_manager = None
         self._token_manager_key = token_key
@@ -84,7 +78,11 @@ class CalendarEventsAdapter(BaseAdapter):
         env = None
         token_manager = getattr(self, "_token_manager", None)
         if token_manager is not None:
-            env = token_manager.build_env()
+            try:
+                env = token_manager.build_env()
+            except Exception:
+                # Mint failure must not block gws' own credentials / HTTP fallback.
+                env = None
         proc = subprocess.run(["gws", *args], capture_output=True, text=True, check=False, env=env)
         if proc.returncode != 0:
             raise RuntimeError(proc.stderr.strip() or proc.stdout.strip() or "gws command failed")

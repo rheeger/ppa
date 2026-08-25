@@ -37,7 +37,7 @@ from .report import write_source_updater_report
 from .state_store import SourceUpdaterStateStore
 
 _AUTH_BLOCKED_RE = re.compile(
-    r"(auth|oauth|token|credential|permission|forbidden|unauthorized|access.?denied|not\s+authorized)",
+    r"(auth|oauth|token|credential|permission|forbidden|unauthorized|access.?denied|not\s+authorized|invalid_scope)",
     re.IGNORECASE,
 )
 
