@@ -67,7 +67,7 @@ from .loader import (  # noqa: F401 — re-exported for backward compat
     LoaderMixin, RebuildRunResult, _chunked, _estimate_projection_buffer_bytes,
     _load_buffer_should_flush, _load_buffer_total_row_count, _log_rebuild_step,
     _RebuildFlushCaps, _RebuildProgressReporter, _sanitize_copy_value,
-    get_rebuild_flush_caps)
+    get_rebuild_flush_caps, resolve_uid_allowlist_rebuild)
 from .materializer import (  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat
     EXTERNAL_ID_TARGET_PREFIX, _append_edge, _body_wikilinks, _build_edges,
     _build_person_lookup, _build_search_text, _chunk_key, _clean_text,

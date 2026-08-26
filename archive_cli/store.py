@@ -72,6 +72,7 @@ class DefaultArchiveStore(ArchiveStore):
             "force_full",
             "disable_manifest_cache",
             "no_cache",
+            "uid_allowlist",
         }
         filtered = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
         return self.index.rebuild_with_metrics(**filtered).counts

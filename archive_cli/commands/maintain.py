@@ -511,6 +511,16 @@ def run_maintenance(
 
     report.new_cards_ingested = len(new_rows)
     created_n = sum(1 for r in new_rows if r.get("action") == "created")
+    tailed_uids = {
+        str(row.get("card_uid") or "").strip()
+        for row in new_rows
+        if str(row.get("card_uid") or "").strip()
+    }
+    created_uids = {
+        str(row.get("card_uid") or "").strip()
+        for row in new_rows
+        if row.get("action") == "created" and str(row.get("card_uid") or "").strip()
+    }
 
     reg_mod = _try_import("archive_sync.extractors.registry")
     if reg_mod is None:
@@ -526,6 +536,7 @@ def run_maintenance(
                 registry=reg_mod.build_default_registry(),
                 dry_run=dry_run,
                 limit=min(created_n, 10_000),
+                uid_allowlist=created_uids,
             )
             metrics = runner.run()
             report.cards_extracted = int(getattr(metrics, "extracted_cards", 0) or 0)
@@ -538,7 +549,11 @@ def run_maintenance(
         report.skipped_steps.append("entity_resolution (module import failed)")
     else:
         try:
-            res = er_mod.run_entity_resolution(str(store.vault), dry_run=dry_run)
+            res = er_mod.run_entity_resolution(
+                str(store.vault),
+                dry_run=dry_run,
+                uid_allowlist=tailed_uids,
+            )
             report.entities_resolved = int(
                 (res.get("places_created") or 0)
                 + (res.get("places_merged") or 0)
@@ -555,7 +570,7 @@ def run_maintenance(
         report.skipped_steps.append("watermark_update (dry-run)")
     else:
         try:
-            counts = store.rebuild()
+            counts = store.rebuild(force_full=False, uid_allowlist=tailed_uids)
             report.cards_rebuilt = int(counts.get("cards", 0) or 0)
         except Exception as exc:
             logger.exception("maintain_rebuild_failed")

@@ -204,7 +204,7 @@ def _execute_materialization(ctx: ExecuteContext, items: list[ProcessorPlanItem]
             len(uids),
             workers,
         )
-        result = store.rebuild(force_full=False, workers=workers)
+        result = store.rebuild(force_full=False, workers=workers, uid_allowlist=set(uids))
         cards = result.get("cards", result) if isinstance(result, dict) else result
         out.warnings.append(f"materialization incremental rebuild cards={cards} dirty_uids={len(uids)}")
     except Exception as exc:

@@ -425,6 +425,7 @@ def test_apply_materialization_calls_incremental_rebuild(tmp_path: Path) -> None
     assert result.executed is True
     assert store.rebuild_calls
     assert store.rebuild_calls[0]["force_full"] is False
+    assert store.rebuild_calls[0]["uid_allowlist"] == {"uid-mat-1"}
     assert "workers" in store.rebuild_calls[0]
     assert all(r.status == "complete" for r in result.item_results)
 

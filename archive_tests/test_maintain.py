@@ -76,12 +76,24 @@ def test_maintenance_full_cycle(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     class M:
         extracted_cards = 2
 
+    runner_kwargs: dict[str, Any] = {}
+
+    class FakeRunner:
+        def __init__(self, *args, **kwargs):
+            runner_kwargs.update(kwargs)
+
+        def run(self):
+            return M()
+
     monkeypatch.setattr(
-        "archive_sync.extractors.runner.ExtractionRunner.run",
-        lambda self: M(),
+        "archive_sync.extractors.runner.ExtractionRunner",
+        FakeRunner,
     )
 
+    er_kwargs: dict[str, Any] = {}
+
     def fake_er(path, **kwargs):
+        er_kwargs.update(kwargs)
         return {
             "places_created": 1,
             "places_merged": 0,
@@ -99,6 +111,11 @@ def test_maintenance_full_cycle(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     assert rep.cards_extracted == 2
     assert rep.entities_resolved == 3
     assert rep.cards_rebuilt == 10
+    assert runner_kwargs.get("uid_allowlist") == {f"u{i}" for i in range(5)}
+    assert er_kwargs.get("uid_allowlist") == {f"u{i}" for i in range(5)}
+    store.rebuild.assert_called_once()
+    assert store.rebuild.call_args.kwargs.get("force_full") is False
+    assert store.rebuild.call_args.kwargs.get("uid_allowlist") == {f"u{i}" for i in range(5)}
 
 
 def test_maintenance_idempotent() -> None:

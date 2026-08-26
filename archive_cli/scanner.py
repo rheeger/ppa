@@ -286,9 +286,13 @@ def _build_manifest_rows_from_canonical(
 ) -> list[NoteManifestRow]:
     out: list[NoteManifestRow] = []
     for row in rows:
+        ch = None
         if cache is not None and cache.tier() >= 2:
-            ch = cache.content_hash_for_rel_path(row.rel_path)
-        else:
+            try:
+                ch = cache.content_hash_for_rel_path(row.rel_path)
+            except ValueError:
+                ch = None
+        if not ch:
             body = read_note_file(vault / row.rel_path, vault_root=vault).body
             ch = _content_hash(row.frontmatter, body)
         out.append(_note_manifest_row_from_materialized(row, stats=file_stats, content_hash=ch, versions=versions))
