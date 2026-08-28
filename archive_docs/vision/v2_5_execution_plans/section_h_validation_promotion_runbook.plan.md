@@ -1,6 +1,6 @@
 # Section H Execution Plan - v2.5 Validation and Promotion Runbook
 
-**Status (Aug 2026, HEAD `3a90bc0`):** Local gates **0–5b are done** (hygiene staging apply+rollback Jul 12; Gmail 5b capped Jul; calendar capped apply on a **minimal** vault via Track C; fixture join proof). D/E Phase 2 are landed. **Scale hot paths landed** on 1pct + 10pct (`3a90bc0`; 10pct apply 8.47s / 243,598 cards). **Remaining local seed work:** 5b re-proof on a **full seed staging copy**, catch-up + processors maintain, local soak. Arnold (6 / 6b / 7) is deferred / out of current scope.
+**Status (Aug 2026):** Local gates **0–5b are done** for Gmail/Calendar + CCS hygiene. Scale hot paths landed on 1pct + 10pct. **Remaining before seed-copy 5b:** (1) slice hygiene vault-remove (leave cleaned); (2) capped `--apply` for every **live** stream that is not a manual export. Then Gate 5b on a full seed staging copy, catch-up + processors maintain, local soak. Arnold (6 / 6b / 7) is deferred.
 
 ## Objective
 
@@ -42,7 +42,7 @@ Section H is not a new feature section. It is the runbook that turns implemented
 - Do not treat `--record-source-status` / `--record-processor-status` as updater/processor proof.
 - Do not apply corpus hygiene to Arnold before seed **and** Arnold updater proof.
 - Do not run full Phase 9 `ppa-deploy-v2` (rebuild + embedding restore) for routine code promotion unless schema/index requires it.
-- Do not physically prune markdown.
+- Do not physically prune the canonical seed or Arnold. Slice vault-remove of suppressed/quarantine mail is the remaining hygiene path.
 - Do not start v3 packaging from this runbook.
 
 ## Existing Code and Docs to Inspect Before Running
@@ -298,7 +298,7 @@ export PPA_ARCHIVE_INSTANCE_ROLE=seed
 
 ### Per-source updater proof
 
-For each required source (`gmail`, `calendar`, then `imessage`, `photos` as available):
+For each **live** source (not a manual export). Already proven on slices: `gmail`, `calendar`. Remaining: `imessage`, `otter-transcripts`, `file-libraries` / Documents, `photos`, `beeper`, `contacts:google`, `github-history`, `gmail-correspondents`. Do not run Finance/LinkedIn/Notion CSV/Health XML/medical dumps/Apple VCF as updaters.
 
 ```bash
 # Capture cursor before
@@ -354,7 +354,7 @@ DIRTY="$(jq -r '.dirty_uids_path // .artifact_paths.dirty_uids // empty' /tmp/su
 
 **Exit criteria:**
 
-- Gmail + Calendar updater proof recorded (iMessage/Photos if configured).
+- Every live stream above has updater proof recorded (or `blocked` / exit 4 if the source is intentionally unavailable — do not fake success). Export streams are out of this gate.
 - At least one processor apply on a non-empty dirty set **or** documented empty-dirty with fixture proof elsewhere.
 - Maintain cycle completes without requiring full rebuild/embed/all-linkers.
 - Gate recorded as `local_seed_source_updater_proof` (or equivalent).

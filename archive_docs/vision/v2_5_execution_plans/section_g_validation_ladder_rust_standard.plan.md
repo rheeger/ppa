@@ -16,7 +16,7 @@ It also defines the Rust execution standard. v2.5 should use the Rust engine for
 
 - Do not implement the validation harness in this planning pass.
 - Do not run Arnold cleanup from this plan.
-- Do not require physical vault pruning.
+- Do not require physical vault pruning of the canonical seed or Arnold. Slice vault-remove of suppressed/quarantine mail is required before seed-copy 5b.
 - Do not require a new Rust rewrite for v2.5.
 - Do not bypass Python code where Rust does not already own the path.
 - Do not treat wall-clock speed as a reason to skip correctness gates.

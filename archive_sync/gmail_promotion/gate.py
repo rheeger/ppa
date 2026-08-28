@@ -175,11 +175,14 @@ class GmailPromotionGate:
 
         if corpus == CorpusDecision.QUARANTINE.value:
             self.metrics.quarantined += 1
+            dirty = (record.thread_uid, *record.message_uids, *record.attachment_uids)
+            self.metrics.dirty_card_uids.extend(dirty)
             return GmailPromotionResult(
                 outcome=PromotionOutcome.QUARANTINE,
                 record=record,
-                emit_cards=False,
+                emit_cards=True,
                 commit_cursor=True,
+                dirty_card_uids=dirty,
                 classification_source=reused.classification_source,
             )
 

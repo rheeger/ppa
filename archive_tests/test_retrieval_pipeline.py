@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from archive_cli.corpus_hygiene.state_store import (
+    QUARANTINE_RETRIEVAL_WEIGHT,
+    active_corpus_sql_filter,
+    retrieval_weight_for_corpus_state,
+)
 from archive_cli.query_planner import DeterministicQueryPlanner, build_query_plan, effective_filters_from_plan
 from archive_cli.reranker import HeuristicReranker, RerankResult, blend_rerank_scores
 from archive_cli.retrieval_pipeline import (
@@ -179,6 +184,8 @@ def test_lexical_sql_contains_no_literal_brace_schema():
     mixin._filter_clauses = QueryMixin._filter_clauses.__get__(mixin)
     mixin._merge_lexical_uid_rows = QueryMixin._merge_lexical_uid_rows
     mixin._lexical_row_sort_key = QueryMixin._lexical_row_sort_key
+    mixin._active_corpus_clause = MagicMock(return_value="")
+    mixin._corpus_state_select_sql = MagicMock(return_value="'active' AS corpus_state")
 
     QueryMixin._lexical_candidates(mixin, query="hello", limit=10)
 
@@ -266,3 +273,61 @@ def test_card_type_priors_values_are_in_valid_range():
         assert 0.0 < prior < 1.0, (
             f"CARD_TYPE_PRIORS['{card_type}'] = {prior} is out of range (0, 1)"
         )
+
+
+def _lexical_hit(card_uid: str, *, score: float, corpus_state: str = "active") -> dict:
+    return {
+        "card_uid": card_uid,
+        "rel_path": f"{card_uid}.md",
+        "summary": card_uid,
+        "type": "email_thread",
+        "activity_at": "2026-01-01",
+        "slug_exact": 0,
+        "summary_exact": 0,
+        "external_id_exact": 0,
+        "person_exact": 0,
+        "lexical_score": score,
+        "corpus_state": corpus_state,
+    }
+
+
+def test_active_corpus_sql_filter_hides_suppressed_only():
+    sql = active_corpus_sql_filter(schema="s", card_alias="c")
+    assert "suppressed" in sql
+    assert "quarantine" not in sql
+
+
+def test_quarantine_is_discounted_and_labeled():
+    rows = fuse_and_rank_hybrid(
+        HybridFetchInputs(
+            lexical_rows=[
+                _lexical_hit("active", score=0.5, corpus_state="active"),
+                _lexical_hit("q", score=0.5, corpus_state="quarantine"),
+            ],
+            vector_rows=[],
+            neighbor_trust={},
+        ),
+        final_limit=5,
+    )
+    assert [r["card_uid"] for r in rows] == ["active", "q"]
+    assert rows[1]["corpus_state"] == "quarantine"
+    assert rows[1]["retrieval_weight"] == QUARANTINE_RETRIEVAL_WEIGHT
+    assert rows[1]["score"] < rows[0]["score"]
+    assert score_breakdown_for_row(rows[1])["corpus_weight"] == QUARANTINE_RETRIEVAL_WEIGHT
+
+
+def test_strong_quarantine_match_can_still_outrank_weak_active():
+    rows = fuse_and_rank_hybrid(
+        HybridFetchInputs(
+            lexical_rows=[
+                _lexical_hit("active", score=0.1, corpus_state="active"),
+                _lexical_hit("q", score=1.4, corpus_state="quarantine"),
+            ],
+            vector_rows=[],
+            neighbor_trust={},
+        ),
+        final_limit=5,
+    )
+    assert rows[0]["card_uid"] == "q"
+    assert rows[0]["corpus_state"] == "quarantine"
+    assert retrieval_weight_for_corpus_state("quarantine") == QUARANTINE_RETRIEVAL_WEIGHT

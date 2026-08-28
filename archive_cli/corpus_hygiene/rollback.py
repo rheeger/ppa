@@ -26,6 +26,7 @@ class RollbackResult:
     counts: RollbackCounts
     total_elapsed_ms: int = 0
     artifact_paths: dict[str, str] = field(default_factory=dict)
+    vault_markdown_deleted: bool = False
 
 
 def run_email_corpus_rollback(
@@ -40,6 +41,10 @@ def run_email_corpus_rollback(
 ) -> RollbackResult:
     t0 = time.perf_counter()
     counts = rollback_decision_run(conn, schema, decision_run_id)
+    if vault_path:
+        from .apply import restore_rollback_kit
+
+        counts.kit_files_restored = restore_rollback_kit(Path(vault_path), decision_run_id)
     elapsed = int((time.perf_counter() - t0) * 1000)
     result = RollbackResult(
         decision_run_id=decision_run_id,
@@ -49,6 +54,7 @@ def run_email_corpus_rollback(
         engine_mode=engine_mode or ppa_engine(),
         counts=counts,
         total_elapsed_ms=elapsed,
+        vault_markdown_deleted=counts.kit_files_restored > 0,
     )
     if repo_root is not None:
         result.artifact_paths = write_rollback_artifacts(repo_root, result)
@@ -75,9 +81,10 @@ def write_rollback_artifacts(repo_root: Path, result: RollbackResult) -> dict[st
     report.details = {
         "cards_restored": result.counts.cards_restored,
         "threads_restored": result.counts.threads_restored,
+        "kit_files_restored": result.counts.kit_files_restored,
         "safety": {
             "llm_calls": False,
-            "vault_markdown_deleted": False,
+            "vault_markdown_deleted": bool(result.vault_markdown_deleted),
         },
     }
     paths = write_gate_report(repo_root, report)

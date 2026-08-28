@@ -1,6 +1,6 @@
 # Section D Execution Plan - Source Updater Contract
 
-**Status (Aug 2026, HEAD `3a90bc0`):** Phase 1 and Phase 2 are **landed**, including Track B catch-up (`20401ea`), Track C calendar mint/capped apply (`66e1300`), and cache-backed Gmail presence / Calendar indexes (`0bdbd48` `9139c58`). The runner is real; maintain still needs explicit source keys; cursors still list/page-token. Remaining work is Gate 5b re-proof on a full seed staging copy — not a second Phase 2 implementation. Arnold is out of current scope.
+**Status (Aug 2026):** Phase 1 and Phase 2 **runner** are landed, including Track B catch-up, Track C calendar mint, and cache-backed Gmail/Calendar indexes. Gmail and Calendar are **slice-proven**. Remaining work is **not** a second Phase 2 framework: make every **live (non-export)** adapter executable, prove each on 1pct then 10pct, then Gate 5b on a seed copy. Manual exports stay import-only. Arnold is out of current scope.
 
 ## Objective
 
@@ -24,7 +24,7 @@ Commit: `v2.5 section D: source updater contract` (`ff62a04f` on branch `v2.5`).
 
 Delivered:
 
-- Source updater declarations for Gmail, Calendar, iMessage, Photos, Health/structured templates.
+- Source updater declarations for Gmail, Calendar, iMessage, Photos, plus a leftover Health template (Health XML is a **manual export** — do not make it executable).
 - Batch summary / run report shapes.
 - Cursor commit helpers and staleness helpers.
 - Status snapshot into `_meta/source-updaters.json` / DB state store.
@@ -51,7 +51,7 @@ Before implementation:
 - Confirm tree clean on `v2.5`; Phase 1 D commit present.
 - Read this plan, Section C, Section E Phase 2, Section H, and `archive_cli/commands/maintain.py`.
 - Prefer wrapping `fetch_batches` / existing sync handler over rewriting adapters.
-- Start with Gmail + Calendar; then iMessage + Photos.
+- Start with Gmail + Calendar (done). Remaining live streams: iMessage, Otter, Documents, Photos, Beeper, Google Contacts, GitHub, Gmail correspondents. Do not add Finance/Health/LinkedIn/Notion CSV as executable.
 
 Likely files:
 
@@ -88,11 +88,11 @@ Expected exit codes: `0` success, `1` runtime, `2` validation, `3` refused, `4` 
 
 #### Phase 2 Definition of Done
 
-- Gmail and Calendar: `--apply` advances cursor only after persisted side effects; reports dirty UIDs.
-- iMessage and Photos: same contract (may land in same commit or immediate follow-up commit `v2.5 section D: source updater execution sources`).
-- `ppa maintain --run-source-updaters` runs enabled sources and writes reports under `ppa/logs/v2_5/` or `ppa/logs/validation-gates/`.
-- Tests: fixture adapter runs, cursor safety, failure isolation, Gmail promotion-gated batch counts.
-- Commit subject: `v2.5 section D: source updater execution`
+- Gmail and Calendar: `--apply` advances cursor only after persisted side effects; reports dirty UIDs. **Landed and slice-proven.**
+- Remaining live streams: same contract, added to `EXECUTABLE_ADAPTER_SOURCE_IDS`, scoped kwargs + `--max-items` mapping, capped `--apply` on 1pct then 10pct.
+- Export adapters (`copilot-finance`, LinkedIn, Notion CSV, `apple-health`, medical file dumps, Apple VCF) stay refused as not executable.
+- `ppa maintain --run-source-updaters` runs enabled **live** sources and writes reports under `ppa/logs/v2_5/` or `ppa/logs/validation-gates/`.
+- Tests: fixture adapter runs, cursor safety, failure isolation, Gmail promotion-gated batch counts, plus factory tests that live keys resolve and export keys refuse.
 
 #### Phase 2 Completion Artifacts
 
@@ -153,7 +153,7 @@ Each source updater should declare:
 | Field                      | Meaning                                                                         |
 | -------------------------- | ------------------------------------------------------------------------------- |
 | `source_key`               | Stable source/account/scope identity, e.g. `gmail-messages:account@example.com` |
-| `source_type`              | `gmail`, `calendar`, `imessage`, `photos`, `health`, etc.                       |
+| `source_type`              | `gmail`, `calendar`, `imessage`, `otter`, `documents`, `photos`, `beeper`, `contacts`, `github`, etc. Live types only in the executable set. |
 | `adapter_name`             | Existing adapter implementation                                                 |
 | `adapter_version`          | Version string for fetch/transform logic                                        |
 | `promotion_policy_version` | Policy version if the source has a promotion gate                               |
@@ -297,20 +297,34 @@ Deletes:
 
 - Missing assets can become tombstoned if the source scan can distinguish deletion from permission/path errors.
 
-### Health and Structured Sources
+### Other live streams (must become executable)
 
-Default policy: `all_active`.
+Same contract as Gmail/Calendar. Add to `EXECUTABLE_ADAPTER_SOURCE_IDS` and map `--max-items` / scope kwargs. Prove capped `--apply` on 1pct then 10pct.
 
-Rationale:
+| Stream | Key shape | Cursor / cap | Notes |
+| --- | --- | --- | --- |
+| Otter | `otter-transcripts:{account}` | `page_token` / `max_meetings` | Live API |
+| Documents | `file-libraries:documents` | `max_files` | Live FS roots; hash load must use vault cache, not `Documents/` `rglob` |
+| Beeper | `beeper:local` | `max_threads` | Live SQLite; `fetch_batches`. Default-exclude iMessage / BlueBubbles / Helga-Pataki accounts — iMessage snapshot stays source of record. |
+| Google Contacts | `contacts:google` | page / `max_items` | API only — not Apple/VCF import |
+| GitHub | `github-history:local` | stage limits | Live `gh` stage, then ingest — not a zip export |
+| Gmail correspondents | `gmail-correspondents:{account}` | `page_token` | Person cards from API, not Email-vault walk |
 
-- These sources are already curated or structured.
-- Records generally represent facts/actions, not marketing.
+iMessage uses a **copied snapshot** of the live Messages store (`ppa-imessage-snapshot.py`), not `~/Library/Messages/chat.db` and not a vendor zip. GitHub stage is the same idea: live fetch written to disk for ingest.
 
-Behavior:
+### Manual exports (no updater)
 
-- Use source-specific cursors/hashes.
-- Emit dirty UIDs for downstream processors when structured fields change.
-- Tombstone unavailable records when the source can prove deletion.
+These adapters stay `python -m archive_sync …` imports. Do not add them to `EXECUTABLE_ADAPTER_SOURCE_IDS`.
+
+- Copilot Finance CSV
+- LinkedIn Connections CSV
+- Notion people / staff CSV
+- Seed people
+- Apple Health XML
+- Medical FHIR / CCD / Epic EHI / vaccine PDF
+- Apple Contacts / VCF file import
+
+A leftover `health:apple-health` declaration template may exist. Treat it as export, not executable.
 
 ## Integration With `ppa maintain`
 
@@ -370,7 +384,7 @@ Source updaters must prove cursor and dirty-set behavior before Arnold enablemen
 Required gates:
 
 1. **Synthetic fixtures:** source declarations, batch summaries, cursor commit safety, and state transitions pass.
-2. **Small slice/source fixture:** Gmail, Calendar, iMessage, and Photos representative batches produce expected promoted/suppressed/quarantine/dirty counts.
+2. **Small slice/source fixture:** every live stream produces expected promoted/suppressed/quarantine/dirty counts (Gmail promotion-gated; others source-default).
 3. **Larger slice:** run source updater reporting at realistic volume and capture wall-time.
 4. **Local seed dry-run:** source updater state is computed without mutating canonical seed.
 5. **Local seed staging apply:** cursor and dirty-set persistence are tested against staging state.
@@ -415,13 +429,14 @@ Recovery rules:
 
 **Phase 2 (required for H / v3):**
 
-- Source updater **execution** exists for Gmail and Calendar (then iMessage/Photos).
+- Source updater **execution** exists for **every live (non-export) stream**. Gmail and Calendar are done; remaining streams listed above.
+- Export adapters stay refused.
 - Committed batch summaries are persisted from real runs.
 - Cursor commit safety preserved under apply.
 - Gmail uses promotion-gated reporting.
 - Dirty UIDs are consumable by E Phase 2.
-- `ppa maintain --run-source-updaters` invokes updaters (not only snapshots).
-- Section H seed and Arnold updater gates can pass.
+- `ppa maintain --run-source-updaters` invokes live updaters (not only snapshots).
+- Section H seed and Arnold updater gates can pass for required live sources.
 - Reports include gate name, engine mode when relevant, cursor before/after, dirty count, errors, next action.
 
 ## Completion Artifacts

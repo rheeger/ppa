@@ -96,6 +96,27 @@ class FailingLedger:
         return []
 
 
+class CompositePromotionLedger:
+    """File ledger for continue-state; Postgres CCS so search can label quarantine."""
+
+    def __init__(self, file_ledger: FilePromotionLedger, db_ledger: DbPromotionLedger) -> None:
+        self._file = file_ledger
+        self._db = db_ledger
+
+    def get_thread_state(self, gmail_thread_id: str) -> str:
+        return self._file.get_thread_state(gmail_thread_id)
+
+    def get_decision(self, gmail_thread_id: str) -> EmailCorpusDecisionRecord | None:
+        return self._file.get_decision(gmail_thread_id)
+
+    def persist(self, record: EmailCorpusDecisionRecord) -> None:
+        self._file.persist(record)
+        self._db.persist(record)
+
+    def all_decisions(self) -> list[EmailCorpusDecisionRecord]:
+        return self._file.all_decisions()
+
+
 class DbPromotionLedger:
     """Optional Postgres-backed ledger via Section B state store."""
 

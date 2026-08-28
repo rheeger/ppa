@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
+import os
 import re
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -10,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from archive_sync.adapters.base import BaseAdapter, IngestResult
+from archive_vault.schema import PersonCard
 from archive_vault.sync_state import load_sync_state
 
 from .batch import (
@@ -20,7 +24,9 @@ from .batch import (
 )
 from .constants import (
     ADAPTER_VERSION_DEFAULT,
+    CONTACTS_EXPORT_SCOPES,
     EXECUTABLE_ADAPTER_SOURCE_IDS,
+    EXPORT_ADAPTER_SOURCE_IDS,
     RUN_STATUS_BLOCKED,
     RUN_STATUS_FAILED,
     RUN_STATUS_PARTIAL,
@@ -35,6 +41,8 @@ from .declarations import (
 )
 from .report import write_source_updater_report
 from .state_store import SourceUpdaterStateStore
+
+logger = logging.getLogger("ppa.source_updaters")
 
 _AUTH_BLOCKED_RE = re.compile(
     r"(auth|oauth|token|credential|permission|forbidden|unauthorized|access.?denied|not\s+authorized|invalid_scope)",
@@ -64,15 +72,56 @@ def parse_source_key(source_key: str) -> tuple[str, str]:
 
 def resolve_declaration(source_key: str) -> SourceUpdaterDeclaration:
     adapter_source_id, scope = parse_source_key(source_key)
-    decl = declaration_for_adapter_source_id(adapter_source_id, scope=scope)
+    lookup_id = "apple-health" if adapter_source_id == "health" else adapter_source_id
+    decl = declaration_for_adapter_source_id(lookup_id, scope=scope)
+    contacts_export = lookup_id == "contacts" and scope.strip().lower() in CONTACTS_EXPORT_SCOPES
+    is_executable = lookup_id in EXECUTABLE_ADAPTER_SOURCE_IDS and not contacts_export
+    if not is_executable:
+        known_export = (
+            adapter_source_id in EXPORT_ADAPTER_SOURCE_IDS
+            or lookup_id in EXPORT_ADAPTER_SOURCE_IDS
+            or contacts_export
+            or decl is not None
+        )
+        if known_export:
+            raise ValueError(
+                f"Source {source_key!r} is declared but not executable in Phase 2 "
+                f"(supported: {', '.join(sorted(EXECUTABLE_ADAPTER_SOURCE_IDS))})"
+            )
+        raise ValueError(f"No source updater declaration for adapter {adapter_source_id!r}")
     if decl is None:
         raise ValueError(f"No source updater declaration for adapter {adapter_source_id!r}")
-    if adapter_source_id not in EXECUTABLE_ADAPTER_SOURCE_IDS:
-        raise ValueError(
-            f"Source {source_key!r} is declared but not executable in Phase 2 "
-            f"(supported: {', '.join(sorted(EXECUTABLE_ADAPTER_SOURCE_IDS))})"
-        )
     return decl
+
+
+# CLI --max-items → adapter ingest kwarg.
+MAX_ITEMS_INGEST_KWARGS: dict[str, str] = {
+    "gmail-messages": "max_threads",
+    "calendar-events": "max_events",
+    "imessage": "max_messages",
+    "otter-transcripts": "max_meetings",
+    "file-libraries": "max_files",
+    "photos": "max_assets",
+    "beeper": "max_threads",
+    "github-history": "max_items",
+    "gmail-correspondents": "max_messages",
+    "contacts": "max_items",
+}
+
+
+def apply_max_items_kwarg(
+    adapter_source_id: str,
+    ingest_kwargs: dict[str, Any],
+    max_items: int | None,
+) -> dict[str, Any]:
+    """Map ``--max-items`` onto the adapter ingest kwarg, if any."""
+
+    if max_items is None:
+        return ingest_kwargs
+    key = MAX_ITEMS_INGEST_KWARGS.get(adapter_source_id)
+    if key is not None:
+        ingest_kwargs[key] = max_items
+    return ingest_kwargs
 
 
 def build_adapter(adapter_source_id: str) -> BaseAdapter:
@@ -84,6 +133,38 @@ def build_adapter(adapter_source_id: str) -> BaseAdapter:
         from archive_sync.adapters.calendar_events import CalendarEventsAdapter
 
         return CalendarEventsAdapter()
+    if adapter_source_id == "imessage":
+        from archive_sync.adapters.imessage import IMessageAdapter
+
+        return IMessageAdapter()
+    if adapter_source_id == "otter-transcripts":
+        from archive_sync.adapters.otter_transcripts import OtterTranscriptsAdapter
+
+        return OtterTranscriptsAdapter()
+    if adapter_source_id == "file-libraries":
+        from archive_sync.adapters.file_libraries import FileLibrariesAdapter
+
+        return FileLibrariesAdapter()
+    if adapter_source_id == "photos":
+        from archive_sync.adapters.photos import PhotosAdapter
+
+        return PhotosAdapter()
+    if adapter_source_id == "beeper":
+        from archive_sync.adapters.beeper import BeeperAdapter
+
+        return BeeperAdapter()
+    if adapter_source_id == "contacts":
+        from archive_sync.adapters.contacts import ContactsAdapter
+
+        return ContactsAdapter()
+    if adapter_source_id == "github-history":
+        from archive_sync.adapters.github_history import GitHubHistoryAdapter
+
+        return GitHubHistoryAdapter()
+    if adapter_source_id == "gmail-correspondents":
+        from archive_sync.adapters.gmail_correspondents import GmailCorrespondentsAdapter
+
+        return GmailCorrespondentsAdapter()
     raise ValueError(f"No executable adapter for {adapter_source_id!r}")
 
 
@@ -96,16 +177,60 @@ def adapter_ingest_kwargs(
     """Build kwargs passed to ``adapter.ingest`` for a declaration."""
 
     _, scope = parse_source_key(decl.source_key)
-    kwargs: dict[str, Any] = {"account_email": scope}
-    if decl.adapter_source_id == "gmail-messages":
+    adapter_id = decl.adapter_source_id
+    kwargs: dict[str, Any] = {}
+    if adapter_id == "gmail-messages":
+        kwargs["account_email"] = scope
         kwargs["gmail_promotion_gate"] = True
         if catch_up:
             # Reset page cursor so threads.list starts at newest mail.
             # Keep the promotion gate on; history_id quick-update stays cheap.
             kwargs["catch_up"] = True
             kwargs["quick_update"] = True
-    if decl.adapter_source_id == "calendar-events":
-        kwargs.setdefault("calendar_id", "primary")
+        return kwargs
+    if adapter_id == "calendar-events":
+        kwargs["account_email"] = scope
+        kwargs["calendar_id"] = "primary"
+        return kwargs
+    if adapter_id == "imessage":
+        kwargs["source_label"] = scope
+        snapshot_dir = (
+            os.environ.get("IMESSAGE_SNAPSHOT_DIR") or os.environ.get("PPA_IMESSAGE_SNAPSHOT_DIR") or ""
+        ).strip()
+        if snapshot_dir:
+            kwargs["snapshot_dir"] = snapshot_dir
+        return kwargs
+    if adapter_id == "otter-transcripts":
+        kwargs["account_email"] = scope
+        return kwargs
+    if adapter_id == "file-libraries":
+        kwargs["roots"] = [scope]
+        return kwargs
+    if adapter_id == "photos":
+        kwargs["source_label"] = scope
+        return kwargs
+    if adapter_id == "beeper":
+        from archive_sync.adapters.beeper import IMESSAGE_BEEPER_ACCOUNT_PREFIXES
+
+        # Helga-Pataki BlueBubbles bridge: iMessage stays the Messages snapshot source.
+        kwargs["exclude_account_prefixes"] = list(IMESSAGE_BEEPER_ACCOUNT_PREFIXES)
+        return kwargs
+    if adapter_id == "contacts":
+        kwargs["sources"] = ["google"]
+        if "@" in scope:
+            kwargs["account_email"] = scope
+        return kwargs
+    if adapter_id == "github-history":
+        stage_dir = (
+            os.environ.get("PPA_GITHUB_STAGE_DIR") or os.environ.get("HFA_GITHUB_STAGE_DIR") or ""
+        ).strip()
+        if stage_dir:
+            kwargs["stage_dir"] = stage_dir
+        return kwargs
+    if adapter_id == "gmail-correspondents":
+        kwargs["account_email"] = scope
+        return kwargs
+    kwargs["account_email"] = scope
     return kwargs
 
 
@@ -118,17 +243,42 @@ def classify_run_exception(exc: BaseException) -> str:
     return RUN_STATUS_FAILED
 
 
+def _commit_state_store(state_store: SourceUpdaterStateStore | None) -> None:
+    """Flush per-source so a later kill still leaves last-run rows."""
+
+    if state_store is None:
+        return
+    conn = getattr(state_store, "_conn", None)
+    if conn is None:
+        return
+    try:
+        conn.commit()
+    except Exception:
+        logger.exception("source updater state commit failed")
+
+
 def _install_dirty_uid_tracker(adapter: BaseAdapter, dirty: list[str]) -> Callable[[], None]:
-    """Track card UIDs from to_card (dry-run + apply) and after_card_write (apply)."""
+    """Track persisted card UIDs for downstream processors.
+
+    Non-person cards: UID from ``to_card`` (dry-run + apply) and ``after_card_write``.
+    Person cards: only ``after_card_write``, which ingest calls with the persisted
+    host card after merge/create. Conflicts write nothing and are not tracked.
+    """
 
     original_to_card = adapter.to_card
     original_after = adapter.after_card_write
+    seen: set[str] = set()
+
+    def _track(uid: object) -> None:
+        text = str(uid or "").strip()
+        if text and text not in seen:
+            seen.add(text)
+            dirty.append(text)
 
     def tracking_to_card(item: dict[str, Any]):
         card, provenance, body = original_to_card(item)
-        uid = str(getattr(card, "uid", "") or "").strip()
-        if uid and uid not in dirty:
-            dirty.append(uid)
+        if not isinstance(card, PersonCard):
+            _track(getattr(card, "uid", ""))
         return card, provenance, body
 
     def tracking_after(
@@ -140,9 +290,7 @@ def _install_dirty_uid_tracker(adapter: BaseAdapter, dirty: list[str]) -> Callab
         action,
         **kwargs,
     ):
-        uid = str(getattr(card, "uid", "") or "").strip()
-        if uid and uid not in dirty:
-            dirty.append(uid)
+        _track(getattr(card, "uid", ""))
         return original_after(
             vault_path,
             card,
@@ -258,15 +406,19 @@ def run_source_updater(
 
     adapter_obj = adapter or build_adapter(decl.adapter_source_id)
     ingest_kwargs = adapter_ingest_kwargs(decl, apply=apply, catch_up=catch_up)
-    if max_items is not None:
-        if decl.adapter_source_id == "gmail-messages":
-            ingest_kwargs["max_threads"] = max_items
-            # Keep gmail_promotion_gate=True (from adapter_ingest_kwargs). Volume
-            # is bounded by max_threads; vault presence for the gate uses the
-            # vault-scan cache, not a full markdown walk. Catch-up must not
-            # disable the gate either — including uncapped catch-up runs.
-        elif decl.adapter_source_id == "calendar-events":
-            ingest_kwargs["max_events"] = max_items
+    if (
+        decl.adapter_source_id == "gmail-messages"
+        and state_store is not None
+        and getattr(state_store, "_conn", None) is not None
+        and getattr(state_store, "_schema", "")
+    ):
+        ingest_kwargs["promotion_db_conn"] = state_store._conn
+        ingest_kwargs["promotion_db_schema"] = state_store._schema
+        ingest_kwargs["promotion_decision_run_id"] = decision_run_id or run_id
+    # Gmail: keep gmail_promotion_gate=True. Volume is bounded by max_threads;
+    # vault presence for the gate uses the vault-scan cache, not a full markdown
+    # walk. Catch-up must not disable the gate either — including uncapped runs.
+    apply_max_items_kwarg(decl.adapter_source_id, ingest_kwargs, max_items)
 
     cursor_key = adapter_obj.get_cursor_key(**ingest_kwargs)
     cursor_before = dict(load_sync_state(vault).get(cursor_key, {}) or {})
@@ -287,11 +439,28 @@ def run_source_updater(
     if catch_up and decl.adapter_source_id == "gmail-messages":
         warnings.append("catch_up: gmail page cursor reset (newest-first; history_id skip kept)")
 
+    logger.info(
+        "source updater start source_key=%s apply=%s max_items=%s catch_up=%s cursor_key=%s",
+        decl.source_key,
+        apply,
+        max_items if max_items is not None else "none",
+        catch_up,
+        cursor_key,
+    )
+    ingest_started = time.perf_counter()
     try:
         result = adapter_obj.ingest(str(vault), dry_run=dry_run, **ingest_kwargs)
     except Exception as exc:
         restore()
+        elapsed = time.perf_counter() - ingest_started
         status = classify_run_exception(exc)
+        logger.exception(
+            "source updater failed source_key=%s status=%s elapsed=%.1fs error=%s",
+            decl.source_key,
+            status,
+            elapsed,
+            exc,
+        )
         report = SourceUpdaterRunReport(
             run_id=run_id,
             source_key=decl.source_key,
@@ -314,6 +483,7 @@ def run_source_updater(
             write_source_updater_report(repo_root, report)
         if state_store is not None:
             state_store.record_run(report)
+            _commit_state_store(state_store)
         return SourceUpdaterRunResult(
             report=report,
             exit_hint=4 if status == RUN_STATUS_BLOCKED else 1,
@@ -371,6 +541,19 @@ def run_source_updater(
         write_source_updater_report(repo_root, report)
     if state_store is not None:
         state_store.record_run(report)
+        _commit_state_store(state_store)
+
+    elapsed = time.perf_counter() - ingest_started
+    logger.info(
+        "source updater done source_key=%s status=%s created=%s merged=%s errors=%s dirty_uids=%s elapsed=%.1fs",
+        decl.source_key,
+        status,
+        result.created,
+        result.merged,
+        len(result.errors),
+        len(dirty),
+        elapsed,
+    )
 
     exit_hint = 0 if status in (RUN_STATUS_SUCCESS, RUN_STATUS_PARTIAL) else 1
     return SourceUpdaterRunResult(report=report, exit_hint=exit_hint)
@@ -394,7 +577,15 @@ def run_source_updaters(
 
     multi = SourceUpdaterMultiRunResult()
     worst = 0
-    for source_key in source_keys:
+    logger.info(
+        "source updaters run start count=%d apply=%s max_items=%s sources=%s",
+        len(source_keys),
+        apply,
+        max_items if max_items is not None else "none",
+        ",".join(source_keys),
+    )
+    for index, source_key in enumerate(source_keys, start=1):
+        logger.info("source updaters step %d/%d source_key=%s", index, len(source_keys), source_key)
         adapter = None
         if adapter_factory is not None:
             try:
@@ -424,6 +615,12 @@ def run_source_updaters(
             elif one.exit_hint == 1 and worst == 0:
                 worst = 1
     multi.exit_code = worst
+    logger.info(
+        "source updaters run done count=%d exit_code=%s statuses=%s",
+        len(multi.reports),
+        worst,
+        ",".join(f"{r.source_key}:{r.status}" for r in multi.reports),
+    )
     return multi
 
 

@@ -327,6 +327,15 @@ def test_expand_declarations_includes_required_sources() -> None:
     keys = {d.source_key for d in decls}
     assert "gmail-messages:me@example.com" in keys
     assert "calendar-events:cal@example.com" in keys
+    assert "gmail-correspondents:me@example.com" in keys
     assert "imessage:local" in keys
     assert "photos:local" in keys
+    assert "file-libraries:documents" in keys
+    assert "beeper:local" in keys
+    assert "contacts:google" in keys
+    assert "github-history:local" in keys
     assert "health:apple-health" in keys
+    assert "otter-transcripts:me@example.com" not in keys
+
+    with_otter = expand_declarations(otter_accounts=("me@example.com",))
+    assert "otter-transcripts:me@example.com" in {d.source_key for d in with_otter}

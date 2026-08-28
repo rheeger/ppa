@@ -258,6 +258,36 @@ def _normalize_email_tuple(raw: Any) -> tuple[str, ...]:
     return ()
 
 
+def _uid_from_ref(raw: str) -> str:
+    """Normalize a wikilink or bare UID to a card UID."""
+
+    value = raw.strip()
+    if not value:
+        return ""
+    if value.startswith("[[") and value.endswith("]]"):
+        value = value[2:-2].strip()
+    return value.split("|", 1)[0].strip()
+
+
+def _uids_from_frontmatter_list(raw: Any) -> tuple[str, ...]:
+    """Extract card UIDs from a frontmatter list (wikilinks or bare UIDs)."""
+
+    if raw is None:
+        return ()
+    if isinstance(raw, str):
+        items: list[Any] = [raw]
+    elif isinstance(raw, (list, tuple)):
+        items = list(raw)
+    else:
+        return ()
+    out: list[str] = []
+    for item in items:
+        uid = _uid_from_ref(str(item))
+        if uid and uid not in out:
+            out.append(uid)
+    return tuple(out)
+
+
 def _from_emails_from_frontmatter(fm: dict[str, Any]) -> tuple[str, ...]:
     """Collect From addresses stored on a thread card (if any)."""
 
@@ -312,7 +342,9 @@ def thread_from_frontmatter(
     uid = str(fm.get("uid") or Path(rel_path).stem)
     participants = tuple(str(x).strip().lower() for x in (fm.get("participants") or []) if str(x).strip())
     owner = (owner_email or str(fm.get("account_email") or "")).strip().lower()
-    messages = fm.get("messages") or []
+    message_uids = _uids_from_frontmatter_list(fm.get("message_uids") or fm.get("messages"))
+    attachment_uids = _uids_from_frontmatter_list(fm.get("attachment_uids") or fm.get("attachments"))
+    derived_uids = _uids_from_frontmatter_list(fm.get("derived_uids") or fm.get("derived_cards"))
     from_emails = _from_emails_from_frontmatter(fm)
     for email in message_from_emails:
         value = email.strip().lower()
@@ -337,14 +369,16 @@ def thread_from_frontmatter(
         participant_emails=participants,
         owner_email=owner,
         label_ids=tuple(str(x) for x in (fm.get("label_ids") or [])),
-        message_count=int(fm.get("message_count") or len(messages) or 0),
+        message_count=int(fm.get("message_count") or len(message_uids) or 0),
         first_message_at=str(fm.get("first_message_at") or ""),
         last_message_at=str(fm.get("last_message_at") or ""),
         has_attachments=bool(fm.get("has_attachments")),
         calendar_event_hints=bool(fm.get("calendar_events") or fm.get("invite_event_id_hints")),
         owner_sent_message=owner_sent,
         owner_replied=owner_replied,
-        message_uids=tuple(str(x) for x in messages),
+        message_uids=message_uids,
+        attachment_uids=attachment_uids,
+        derived_uids=derived_uids,
         triage_classification=str(fm.get("triage_classification") or ""),
         triage_confidence=float(fm.get("triage_confidence") or 0.0),
         triage_card_types=_parse_card_types(fm.get("triage_card_types")),

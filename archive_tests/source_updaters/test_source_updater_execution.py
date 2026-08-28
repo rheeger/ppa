@@ -19,7 +19,9 @@ from archive_sync.source_updaters.constants import (
 )
 from archive_sync.source_updaters.runner import (
     adapter_ingest_kwargs,
+    apply_max_items_kwarg,
     batch_summary_from_ingest,
+    build_adapter,
     classify_run_exception,
     parse_source_key,
     resolve_declaration,
@@ -469,3 +471,131 @@ def test_gmail_max_items_without_catch_up_still_keeps_promotion_gate(tmp_path: P
     assert adapter.ingest_kwargs.get("gmail_promotion_gate") is True
     assert adapter.ingest_kwargs.get("max_threads") == 10
     assert adapter.ingest_kwargs.get("catch_up") is not True
+
+
+_LIVE_ADAPTERS: list[tuple[str, str, str]] = [
+    ("gmail-messages:me@example.com", "gmail-messages", "GmailMessagesAdapter"),
+    ("calendar-events:cal@example.com", "calendar-events", "CalendarEventsAdapter"),
+    ("imessage:local", "imessage", "IMessageAdapter"),
+    ("otter-transcripts:me@example.com", "otter-transcripts", "OtterTranscriptsAdapter"),
+    ("file-libraries:documents", "file-libraries", "FileLibrariesAdapter"),
+    ("photos:apple-photos", "photos", "PhotosAdapter"),
+    ("beeper:local", "beeper", "BeeperAdapter"),
+    ("contacts:google", "contacts", "ContactsAdapter"),
+    ("github-history:local", "github-history", "GitHubHistoryAdapter"),
+    ("gmail-correspondents:me@example.com", "gmail-correspondents", "GmailCorrespondentsAdapter"),
+]
+
+
+@pytest.mark.parametrize("source_key,adapter_source_id,class_name", _LIVE_ADAPTERS)
+def test_live_keys_resolve_and_build_adapter(source_key: str, adapter_source_id: str, class_name: str) -> None:
+    decl = resolve_declaration(source_key)
+    assert decl.adapter_source_id == adapter_source_id
+    adapter = build_adapter(adapter_source_id)
+    assert type(adapter).__name__ == class_name
+
+
+@pytest.mark.parametrize(
+    "source_key",
+    [
+        "copilot-finance:local",
+        "linkedin:local",
+        "notion-people:local",
+        "notion-staff:local",
+        "health:apple-health",
+        "apple-health:apple-health",
+        "medical-records:local",
+        "contacts:apple",
+        "contacts:vcf",
+        "seed-people:local",
+    ],
+)
+def test_export_keys_are_not_executable(source_key: str) -> None:
+    with pytest.raises(ValueError, match="not executable"):
+        resolve_declaration(source_key)
+
+
+def test_adapter_ingest_kwargs_per_live_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("IMESSAGE_SNAPSHOT_DIR", raising=False)
+    monkeypatch.delenv("PPA_IMESSAGE_SNAPSHOT_DIR", raising=False)
+    monkeypatch.delenv("PPA_GITHUB_STAGE_DIR", raising=False)
+    monkeypatch.delenv("HFA_GITHUB_STAGE_DIR", raising=False)
+
+    gmail = adapter_ingest_kwargs(resolve_declaration("gmail-messages:me@example.com"), apply=False)
+    assert gmail == {"account_email": "me@example.com", "gmail_promotion_gate": True}
+
+    calendar = adapter_ingest_kwargs(resolve_declaration("calendar-events:cal@example.com"), apply=False)
+    assert calendar == {"account_email": "cal@example.com", "calendar_id": "primary"}
+
+    imessage = adapter_ingest_kwargs(resolve_declaration("imessage:local"), apply=False)
+    assert imessage == {"source_label": "local"}
+    assert "account_email" not in imessage
+    assert "snapshot_dir" not in imessage
+
+    otter = adapter_ingest_kwargs(resolve_declaration("otter-transcripts:me@example.com"), apply=False)
+    assert otter == {"account_email": "me@example.com"}
+
+    documents = adapter_ingest_kwargs(resolve_declaration("file-libraries:documents"), apply=False)
+    assert documents == {"roots": ["documents"]}
+    assert "account_email" not in documents
+
+    photos = adapter_ingest_kwargs(resolve_declaration("photos:apple-photos"), apply=False)
+    assert photos == {"source_label": "apple-photos"}
+    assert "account_email" not in photos
+
+    beeper = adapter_ingest_kwargs(resolve_declaration("beeper:local"), apply=False)
+    assert beeper["exclude_account_prefixes"] == ["imessage", "bluebubbles", "bluebubble"]
+    assert "account_email" not in beeper
+
+    contacts = adapter_ingest_kwargs(resolve_declaration("contacts:google"), apply=False)
+    assert contacts == {"sources": ["google"]}
+    assert "account_email" not in contacts
+    assert contacts["sources"] == ["google"]
+
+    github = adapter_ingest_kwargs(resolve_declaration("github-history:local"), apply=False)
+    assert github == {}
+    assert "account_email" not in github
+    assert "stage_dir" not in github
+
+    correspondents = adapter_ingest_kwargs(
+        resolve_declaration("gmail-correspondents:me@example.com"), apply=False
+    )
+    assert correspondents == {"account_email": "me@example.com"}
+
+
+def test_imessage_snapshot_dir_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PPA_IMESSAGE_SNAPSHOT_DIR", "/tmp/imessage-snap")
+    kwargs = adapter_ingest_kwargs(resolve_declaration("imessage:local"), apply=False)
+    assert kwargs["snapshot_dir"] == "/tmp/imessage-snap"
+    assert kwargs["source_label"] == "local"
+
+
+def test_github_stage_dir_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PPA_GITHUB_STAGE_DIR", "/tmp/github-stage")
+    kwargs = adapter_ingest_kwargs(resolve_declaration("github-history:local"), apply=False)
+    assert kwargs["stage_dir"] == "/tmp/github-stage"
+
+
+def test_max_items_maps_per_adapter() -> None:
+    expected = {
+        "gmail-messages": "max_threads",
+        "calendar-events": "max_events",
+        "imessage": "max_messages",
+        "otter-transcripts": "max_meetings",
+        "file-libraries": "max_files",
+        "photos": "max_assets",
+        "beeper": "max_threads",
+        "github-history": "max_items",
+        "gmail-correspondents": "max_messages",
+        "contacts": "max_items",
+    }
+    for adapter_source_id, key in expected.items():
+        mapped = apply_max_items_kwarg(adapter_source_id, {}, 12)
+        assert mapped == {key: 12}
+
+
+def test_build_adapter_refuses_export_ids() -> None:
+    with pytest.raises(ValueError, match="No executable adapter"):
+        build_adapter("apple-health")
+    with pytest.raises(ValueError, match="No executable adapter"):
+        build_adapter("copilot-finance")

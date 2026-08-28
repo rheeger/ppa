@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from abc import ABC, abstractmethod
 from collections import Counter
@@ -36,6 +37,8 @@ from archive_vault.schema import (
 from archive_vault.slugger import normalize_for_slug, unique_slug
 from archive_vault.sync_state import load_sync_state, update_cursor
 from archive_vault.vault import read_note, write_card
+
+logger = logging.getLogger("ppa.adapters")
 
 
 def deterministic_provenance(
@@ -477,6 +480,12 @@ class BaseAdapter(ABC):
             return value
 
         ingest_started_at = perf_counter()
+        logger.info(
+            "adapter ingest start source_id=%s dry_run=%s progress_every=%s",
+            self.source_id,
+            dry_run,
+            progress_every,
+        )
         config = _run_logged("load config", lambda: load_config(vault))
         cursor_key = _run_logged("resolve cursor key", lambda: self.get_cursor_key(**kwargs))
         cursor = _run_logged("load sync state", lambda: load_sync_state(vault).get(cursor_key, {}))
@@ -581,18 +590,37 @@ class BaseAdapter(ABC):
                 cursor.update(checkpoint)
                 _write_progress()
 
-        def _refresh_person_indexes(wikilink: str, rel_path: Path, delta_people_index: PersonIndex) -> None:
+        def _refresh_person_indexes(wikilink: str, rel_path: Path, delta_people_index: PersonIndex) -> BaseCard:
             assert people_index is not None
             started_at = perf_counter()
             _log(f"refresh person indexes start: wikilink={wikilink} rel_path={rel_path}")
             frontmatter, _, _ = read_note(vault, str(rel_path))
-            person_data = validate_card_permissive(frontmatter).model_dump(mode="python")
+            persisted = validate_card_permissive(frontmatter)
+            person_data = persisted.model_dump(mode="python")
             people_index.upsert(wikilink, person_data)
             delta_people_index.upsert(wikilink, person_data)
             person_uid = str(person_data.get("uid", "")).strip()
             if person_uid:
                 person_uid_index[person_uid] = wikilink
             _log(f"refresh person indexes done: wikilink={wikilink} elapsed_s={perf_counter() - started_at:.2f}")
+            return persisted
+
+        def _after_person_persist(
+            prepared: PreparedIngestItem,
+            persisted: BaseCard,
+            rel_path: Path,
+            action: str,
+        ) -> None:
+            if dry_run:
+                return
+            self.after_card_write(
+                vault,
+                persisted,
+                rel_path,
+                raw_item=prepared.raw_item,
+                action=action,
+                **kwargs,
+            )
 
         def _process_nonperson(prepared: PreparedIngestItem) -> str:
             nonlocal processed_successfully
@@ -654,7 +682,9 @@ class BaseAdapter(ABC):
                     )
                     identity_cache.upsert(wikilink, self._person_identity_aliases(card))
                     if merged_path is not None:
-                        _refresh_person_indexes(wikilink, Path(merged_path).relative_to(vault), delta_people_index)
+                        rel_path = Path(merged_path).relative_to(vault)
+                        persisted = _refresh_person_indexes(wikilink, rel_path, delta_people_index)
+                        _after_person_persist(prepared, persisted, rel_path, "merge")
                     person_uid_index[card.uid] = wikilink
                 result.merged += 1
                 processed_successfully += 1
@@ -694,11 +724,13 @@ class BaseAdapter(ABC):
                     )
                     identity_cache.upsert(resolve_result.wikilink, self._person_identity_aliases(card))
                     if merged_path is not None:
-                        _refresh_person_indexes(
+                        rel_path = Path(merged_path).relative_to(vault)
+                        persisted = _refresh_person_indexes(
                             resolve_result.wikilink,
-                            Path(merged_path).relative_to(vault),
+                            rel_path,
                             delta_people_index,
                         )
+                        _after_person_persist(prepared, persisted, rel_path, "merge")
                     person_uid_index[card.uid] = resolve_result.wikilink
                 result.merged += 1
                 processed_successfully += 1
@@ -727,13 +759,16 @@ class BaseAdapter(ABC):
                 people_index.upsert(wikilink, card.model_dump(mode="python"))
                 delta_people_index.upsert(wikilink, card.model_dump(mode="python"))
                 person_uid_index[card.uid] = wikilink
+                _after_person_persist(prepared, card, Path(rel_path), "create")
             result.created += 1
             processed_successfully += 1
             _checkpoint(prepared.raw_item, card, prepared.item_index)
             return "create"
 
         _log("fetch batches iterator start")
-        for batch_index, raw_batch in enumerate(self.fetch_batches(str(vault), cursor, config=config, **kwargs)):
+        for batch_index, raw_batch in enumerate(
+            self.fetch_batches(str(vault), cursor, config=config, dry_run=dry_run, **kwargs)
+        ):
             materialize_started_at = perf_counter()
             _log(f"batch {batch_index} materialize start")
             batch = (
@@ -917,6 +952,15 @@ class BaseAdapter(ABC):
                 f"batch {batch.sequence} done: created={result.created} merged={result.merged} "
                 f"conflicted={result.conflicted} skipped={result.skipped} errors={len(result.errors)}"
             )
+            logger.info(
+                "adapter batch done source_id=%s batch=%s created=%s merged=%s skipped=%s errors=%s",
+                self.source_id,
+                batch.sequence,
+                result.created,
+                result.merged,
+                result.skipped,
+                len(result.errors),
+            )
         _log("fetch batches iterator done")
 
         if not dry_run:
@@ -926,8 +970,18 @@ class BaseAdapter(ABC):
                 cursor.update(final_cursor)
                 _log("final cursor patch apply done")
             _write_progress()
+        elapsed = perf_counter() - ingest_started_at
         _log(
             f"ingest done: created={result.created} merged={result.merged} conflicted={result.conflicted} "
-            f"skipped={result.skipped} errors={len(result.errors)} elapsed_s={perf_counter() - ingest_started_at:.2f}"
+            f"skipped={result.skipped} errors={len(result.errors)} elapsed_s={elapsed:.2f}"
+        )
+        logger.info(
+            "adapter ingest done source_id=%s created=%s merged=%s skipped=%s errors=%s elapsed=%.1fs",
+            self.source_id,
+            result.created,
+            result.merged,
+            result.skipped,
+            len(result.errors),
+            elapsed,
         )
         return result

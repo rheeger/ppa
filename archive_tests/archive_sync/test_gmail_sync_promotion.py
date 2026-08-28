@@ -152,7 +152,7 @@ def test_active_thread_promotes_cards(tmp_path: Path) -> None:
     assert result.record.corpus_decision == "active"
 
 
-def test_quarantine_thread_no_active_cards(tmp_path: Path) -> None:
+def test_quarantine_thread_emits_labeled_cards(tmp_path: Path) -> None:
     gate = _gate(tmp_path)
     thread, messages = _marketing_thread_record()
     thread["label_ids"] = ["INBOX", "CATEGORY_PROMOTIONS", "STARRED"]
@@ -164,8 +164,9 @@ def test_quarantine_thread_no_active_cards(tmp_path: Path) -> None:
         vault_has_active_card=False,
     )
     assert result.outcome == PromotionOutcome.QUARANTINE
-    assert result.emit_cards is False
+    assert result.emit_cards is True
     assert result.record.corpus_decision == "quarantine"
+    assert result.dirty_card_uids
 
 
 def test_email_corpus_decisions_precedence_over_classify_index(tmp_path: Path) -> None:

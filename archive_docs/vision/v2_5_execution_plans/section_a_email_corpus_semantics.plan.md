@@ -11,7 +11,7 @@ This section is conceptual but binding. Sections B and C must use this policy ra
 - Do not implement the policy in this planning pass.
 - Do not modify Gmail adapters, materializers, CLI commands, schemas, or enrichment code in this planning pass.
 - Do not define a new marketing-only classifier.
-- Do not decide physical vault pruning.
+- Do not decide physical vault pruning in this section. Slice vault-remove of suppressed/quarantine mail is Section B remaining work.
 - Do not change derived card schemas.
 - Do not change the meaning of existing typed extraction categories except where this plan separates corpus membership from typed extraction.
 

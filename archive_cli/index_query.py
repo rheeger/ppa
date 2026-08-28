@@ -193,7 +193,7 @@ class QueryMixin:
             clauses.append(corpus_clause)
         return clauses, params
 
-    def _active_corpus_clause(self, alias: str) -> str:
+    def _corpus_state_table_enabled(self) -> bool:
         cached = getattr(self, "_corpus_state_filter_enabled", None)
         if cached is None:
             from archive_cli.corpus_hygiene.state_store import corpus_state_table_exists
@@ -201,11 +201,21 @@ class QueryMixin:
             with self._connect() as conn:
                 self._corpus_state_filter_enabled = corpus_state_table_exists(conn, self.schema)
             cached = self._corpus_state_filter_enabled
-        if not cached:
+        return bool(cached)
+
+    def _active_corpus_clause(self, alias: str) -> str:
+        if not self._corpus_state_table_enabled():
             return ""
         from archive_cli.corpus_hygiene.state_store import active_corpus_sql_filter
 
         return active_corpus_sql_filter(schema=self.schema, card_alias=alias).strip()
+
+    def _corpus_state_select_sql(self, alias: str) -> str:
+        if not self._corpus_state_table_enabled():
+            return "'active' AS corpus_state"
+        from archive_cli.corpus_hygiene.state_store import corpus_state_sql_expr
+
+        return f"{corpus_state_sql_expr(schema=self.schema, card_alias=alias)} AS corpus_state"
 
     @staticmethod
     def _merge_lexical_uid_rows(a: list[dict[str, Any]], b: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -220,15 +230,18 @@ class QueryMixin:
 
     @staticmethod
     def _lexical_row_sort_key(row: dict[str, Any]) -> tuple:
+        from archive_cli.corpus_hygiene.state_store import retrieval_weight_for_corpus_state
+
         exact = (
             int(row.get("slug_exact", 0))
             + int(row.get("summary_exact", 0))
             + int(row.get("external_id_exact", 0))
             + int(row.get("person_exact", 0))
         )
+        weight = retrieval_weight_for_corpus_state(row.get("corpus_state"))
         return (
             -exact,
-            -float(row.get("lexical_score", 0.0)),
+            -float(row.get("lexical_score", 0.0)) * weight,
             _format_activity_at(row.get("activity_at")),
             str(row.get("rel_path", "")),
         )
@@ -261,9 +274,14 @@ class QueryMixin:
             end_date=end_date,
         )
         branch_limit = max(limit * 2, limit)
+        from archive_cli.corpus_hygiene.state_store import (
+            QUARANTINE_RETRIEVAL_WEIGHT,
+            annotate_retrieval_corpus_fields,
+        )
 
         select_sql = f"""
             SELECT c.uid AS card_uid, c.rel_path, c.summary, c.type, c.activity_at,
+                   {self._corpus_state_select_sql("c")},
                    ts_rank_cd(c.search_document, plainto_tsquery('english', %s)) AS lexical_score,
                    CASE WHEN lower(c.slug) = %s THEN 1 ELSE 0 END AS slug_exact,
                    CASE WHEN lower(c.summary) = %s THEN 1 ELSE 0 END AS summary_exact,
@@ -284,7 +302,8 @@ class QueryMixin:
             return f"""
                 SELECT * FROM ({inner_sql}) AS _lex
                 ORDER BY (_lex.slug_exact + _lex.summary_exact + _lex.external_id_exact + _lex.person_exact) DESC,
-                         _lex.lexical_score DESC,
+                         (_lex.lexical_score * CASE WHEN _lex.corpus_state = 'quarantine'
+                             THEN {QUARANTINE_RETRIEVAL_WEIGHT} ELSE 1 END) DESC,
                          _lex.activity_at DESC,
                          _lex.rel_path ASC
                 LIMIT %s
@@ -340,6 +359,8 @@ class QueryMixin:
             exact_rows = [dict(r) for r in conn.execute(exact_sql, exact_params).fetchall()]
 
         merged = self._merge_lexical_uid_rows(fts_rows, exact_rows)
+        for row in merged:
+            annotate_retrieval_corpus_fields(row)
         merged.sort(key=self._lexical_row_sort_key)
         return merged[:limit]
 
@@ -368,6 +389,7 @@ class QueryMixin:
         )
         sql = f"""
             SELECT chunk.card_uid, card.rel_path, card.summary, card.type, card.activity_at,
+                   {self._corpus_state_select_sql("card")},
                    chunk.chunk_type, chunk.chunk_index, chunk.source_fields, chunk.content, chunk.token_count,
                    1 - (embedding.embedding <=> %s::vector) AS similarity
             FROM {self.schema}.chunks chunk
@@ -403,6 +425,11 @@ class QueryMixin:
         to fuse_lexical_vector_rows which computes its own unified score.
         """
         grouped: dict[str, dict[str, Any]] = {}
+        from archive_cli.corpus_hygiene.state_store import (
+            annotate_retrieval_corpus_fields,
+            retrieval_weight_for_corpus_state,
+        )
+
         for row in rows:
             card_uid = str(row["card_uid"])
             similarity = float(row["similarity"])
@@ -415,6 +442,7 @@ class QueryMixin:
                     "summary": str(row["summary"]),
                     "type": str(row["type"]),
                     "activity_at": _format_activity_at(row.get("activity_at")),
+                    "corpus_state": row.get("corpus_state"),
                     "matched_by": "vector",
                     "matched_chunk_count": 0,
                     "similarity": similarity,
@@ -437,9 +465,14 @@ class QueryMixin:
                 entry["source_fields"] = source_fields
                 entry["provenance_bias"] = _field_provenance_label(source_fields)
                 entry["provenance_score"] = _field_provenance_bonus(source_fields)
+        for entry in grouped.values():
+            annotate_retrieval_corpus_fields(entry)
         ranked = sorted(
             grouped.values(),
-            key=lambda e: (-float(e["similarity"]), str(e["rel_path"])),
+            key=lambda e: (
+                -float(e["similarity"]) * retrieval_weight_for_corpus_state(e.get("corpus_state")),
+                str(e["rel_path"]),
+            ),
         )
         return ranked[:limit]
 
@@ -451,14 +484,20 @@ class QueryMixin:
         computes its own unified score in the fusion stage.
         """
         _apply_recency_boost(rows, key_name="recency_score")
+        from archive_cli.corpus_hygiene.state_store import retrieval_weight_for_corpus_state
+
         for entry in rows:
             chunk_match_boost = min(max(int(entry["matched_chunk_count"]) - 1, 0) * 0.025, 0.1)
+            weight = retrieval_weight_for_corpus_state(entry.get("corpus_state"))
             entry["score"] = round(
-                (float(entry["similarity"]) * 1.35)
-                + _card_type_prior(str(entry["type"]))
-                + float(entry.get("recency_score", 0.0))
-                + float(entry.get("provenance_score", 0.0))
-                + chunk_match_boost,
+                (
+                    (float(entry["similarity"]) * 1.35)
+                    + _card_type_prior(str(entry["type"]))
+                    + float(entry.get("recency_score", 0.0))
+                    + float(entry.get("provenance_score", 0.0))
+                    + chunk_match_boost
+                )
+                * weight,
                 6,
             )
         rows.sort(
@@ -772,7 +811,8 @@ class QueryMixin:
         )
         params.append(limit)
         sql = f"""
-            SELECT DISTINCT c.rel_path, c.summary, c.type, c.activity_at
+            SELECT DISTINCT c.rel_path, c.summary, c.type, c.activity_at,
+                   {self._corpus_state_select_sql("c")}
             FROM {self.schema}.cards c
             WHERE {" AND ".join(clauses)}
             ORDER BY c.activity_at DESC, c.rel_path ASC
@@ -786,7 +826,8 @@ class QueryMixin:
         clauses, params = self._filter_clauses(alias="c", start_date=start_date, end_date=end_date)
         params.append(limit)
         sql = f"""
-            SELECT c.activity_at AS created, c.rel_path, c.summary, c.type
+            SELECT c.activity_at AS created, c.rel_path, c.summary, c.type,
+                   {self._corpus_state_select_sql("c")}
             FROM {self.schema}.cards c
             WHERE {" AND ".join(clauses)}
             ORDER BY c.activity_at ASC, c.rel_path ASC
@@ -958,7 +999,8 @@ class QueryMixin:
         with self._connect() as conn:
             if direction in ("forward", "both"):
                 sql = f"""
-                    SELECT c.uid, c.rel_path, c.summary, c.type, c.activity_at, c.activity_end_at
+                    SELECT c.uid, c.rel_path, c.summary, c.type, c.activity_at, c.activity_end_at,
+                           {self._corpus_state_select_sql("c")}
                     FROM {self.schema}.cards c
                     WHERE {where_sql}
                       AND c.activity_at IS NOT NULL
@@ -972,7 +1014,8 @@ class QueryMixin:
                 )
             if direction in ("backward", "both"):
                 sql = f"""
-                    SELECT c.uid, c.rel_path, c.summary, c.type, c.activity_at, c.activity_end_at
+                    SELECT c.uid, c.rel_path, c.summary, c.type, c.activity_at, c.activity_end_at,
+                           {self._corpus_state_select_sql("c")}
                     FROM {self.schema}.cards c
                     WHERE {where_sql}
                       AND c.activity_at IS NOT NULL
@@ -985,7 +1028,8 @@ class QueryMixin:
                     "backward",
                 )
             sql_during = f"""
-                SELECT c.uid, c.rel_path, c.summary, c.type, c.activity_at, c.activity_end_at
+                SELECT c.uid, c.rel_path, c.summary, c.type, c.activity_at, c.activity_end_at,
+                       {self._corpus_state_select_sql("c")}
                 FROM {self.schema}.cards c
                 WHERE {where_sql}
                   AND c.activity_at IS NOT NULL

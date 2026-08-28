@@ -124,6 +124,7 @@ def test_ingest_merges_duplicates(tmp_vault):
     assert result.merged == 1
     assert frontmatter["source"] == ["contacts.apple", "linkedin"]
     assert frontmatter["emails"] == ["jane@example.com", "j.smith@corp.com"]
+    assert frontmatter["uid"] == "hfa-person-111111111111"
 
 
 def test_parallel_ingest_merges_same_batch_duplicates(tmp_vault):

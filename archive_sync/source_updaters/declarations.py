@@ -20,10 +20,15 @@ from .constants import (
     DEFAULT_ACTIVE_POLICIES,
     DEFAULT_ACTIVE_PROMOTION_GATED,
     GMAIL_POLICY_VERSION,
+    SOURCE_TYPE_BEEPER,
     SOURCE_TYPE_CALENDAR,
+    SOURCE_TYPE_CONTACTS,
+    SOURCE_TYPE_DOCUMENTS,
+    SOURCE_TYPE_GITHUB,
     SOURCE_TYPE_GMAIL,
     SOURCE_TYPE_HEALTH,
     SOURCE_TYPE_IMESSAGE,
+    SOURCE_TYPE_OTTER,
     SOURCE_TYPE_PHOTOS,
 )
 
@@ -122,6 +127,90 @@ def _photos_template(label: str = "local") -> SourceUpdaterDeclaration:
     )
 
 
+def _otter_template(account: str = "<account>") -> SourceUpdaterDeclaration:
+    return SourceUpdaterDeclaration(
+        source_key=f"otter-transcripts:{account}",
+        source_type=SOURCE_TYPE_OTTER,
+        adapter_name="OtterTranscriptsAdapter",
+        adapter_source_id="otter-transcripts",
+        cursor_kind=CURSOR_PAGE_TOKEN,
+        cursor_kinds=(CURSOR_PAGE_TOKEN,),
+        supports_incremental=True,
+        supports_deletes=False,
+        default_active_policy=DEFAULT_ACTIVE_ALL,
+    )
+
+
+def _file_libraries_template(label: str = "documents") -> SourceUpdaterDeclaration:
+    return SourceUpdaterDeclaration(
+        source_key=f"file-libraries:{label}",
+        source_type=SOURCE_TYPE_DOCUMENTS,
+        adapter_name="FileLibrariesAdapter",
+        adapter_source_id="file-libraries",
+        cursor_kind=CURSOR_HASH,
+        cursor_kinds=(CURSOR_HASH, CURSOR_MODIFIED_AT),
+        supports_incremental=True,
+        supports_deletes=True,
+        default_active_policy=DEFAULT_ACTIVE_ALL,
+    )
+
+
+def _beeper_template(label: str = "local") -> SourceUpdaterDeclaration:
+    return SourceUpdaterDeclaration(
+        source_key=f"beeper:{label}",
+        source_type=SOURCE_TYPE_BEEPER,
+        adapter_name="BeeperAdapter",
+        adapter_source_id="beeper",
+        cursor_kind=CURSOR_MODIFIED_AT,
+        cursor_kinds=(CURSOR_MODIFIED_AT,),
+        supports_incremental=True,
+        supports_deletes=False,
+        default_active_policy=DEFAULT_ACTIVE_ALL,
+    )
+
+
+def _contacts_template(label: str = "google") -> SourceUpdaterDeclaration:
+    return SourceUpdaterDeclaration(
+        source_key=f"contacts:{label}",
+        source_type=SOURCE_TYPE_CONTACTS,
+        adapter_name="ContactsAdapter",
+        adapter_source_id="contacts",
+        cursor_kind=CURSOR_PAGE_TOKEN,
+        cursor_kinds=(CURSOR_PAGE_TOKEN,),
+        supports_incremental=False,
+        supports_deletes=False,
+        default_active_policy=DEFAULT_ACTIVE_ALL,
+    )
+
+
+def _github_template(label: str = "local") -> SourceUpdaterDeclaration:
+    return SourceUpdaterDeclaration(
+        source_key=f"github-history:{label}",
+        source_type=SOURCE_TYPE_GITHUB,
+        adapter_name="GitHubHistoryAdapter",
+        adapter_source_id="github-history",
+        cursor_kind=CURSOR_HASH,
+        cursor_kinds=(CURSOR_HASH,),
+        supports_incremental=True,
+        supports_deletes=False,
+        default_active_policy=DEFAULT_ACTIVE_ALL,
+    )
+
+
+def _gmail_correspondents_template(account: str = "<account>") -> SourceUpdaterDeclaration:
+    return SourceUpdaterDeclaration(
+        source_key=f"gmail-correspondents:{account}",
+        source_type=SOURCE_TYPE_GMAIL,
+        adapter_name="GmailCorrespondentsAdapter",
+        adapter_source_id="gmail-correspondents",
+        cursor_kind=CURSOR_PAGE_TOKEN,
+        cursor_kinds=(CURSOR_PAGE_TOKEN, CURSOR_HISTORY_ID),
+        supports_incremental=True,
+        supports_deletes=False,
+        default_active_policy=DEFAULT_ACTIVE_ALL,
+    )
+
+
 def _health_template(label: str = "apple-health") -> SourceUpdaterDeclaration:
     return SourceUpdaterDeclaration(
         source_key=f"health:{label}",
@@ -140,7 +229,13 @@ _DECLARATION_TEMPLATES: tuple[SourceUpdaterDeclaration, ...] = (
     _gmail_template(),
     _calendar_template(),
     _imessage_template(),
+    _otter_template(),
+    _file_libraries_template(),
     _photos_template(),
+    _beeper_template(),
+    _contacts_template(),
+    _github_template(),
+    _gmail_correspondents_template(),
     _health_template(),
 )
 
@@ -154,19 +249,32 @@ def iter_declaration_templates() -> tuple[SourceUpdaterDeclaration, ...]:
 
 
 def declaration_for_adapter_source_id(adapter_source_id: str, *, scope: str = "") -> SourceUpdaterDeclaration | None:
-    template = _ADAPTER_TO_TEMPLATE.get(adapter_source_id)
+    lookup_id = "apple-health" if adapter_source_id == "health" else adapter_source_id
+    template = _ADAPTER_TO_TEMPLATE.get(lookup_id)
     if template is None:
         return None
     scope = scope.strip() or "<account>"
-    if adapter_source_id == "gmail-messages":
+    if lookup_id == "gmail-messages":
         return _gmail_template(scope)
-    if adapter_source_id == "calendar-events":
+    if lookup_id == "calendar-events":
         return _calendar_template(scope)
-    if adapter_source_id == "imessage":
+    if lookup_id == "imessage":
         return _imessage_template(scope or "local")
-    if adapter_source_id == "photos":
+    if lookup_id == "otter-transcripts":
+        return _otter_template(scope)
+    if lookup_id == "file-libraries":
+        return _file_libraries_template(scope or "documents")
+    if lookup_id == "photos":
         return _photos_template(scope or "local")
-    if adapter_source_id == "apple-health":
+    if lookup_id == "beeper":
+        return _beeper_template(scope or "local")
+    if lookup_id == "contacts":
+        return _contacts_template(scope or "google")
+    if lookup_id == "github-history":
+        return _github_template(scope or "local")
+    if lookup_id == "gmail-correspondents":
+        return _gmail_correspondents_template(scope)
+    if lookup_id == "apple-health":
         return _health_template(scope or "apple-health")
     return template
 
@@ -175,8 +283,14 @@ def expand_declarations(
     *,
     gmail_accounts: tuple[str, ...] = (),
     calendar_accounts: tuple[str, ...] = (),
+    otter_accounts: tuple[str, ...] = (),
+    gmail_correspondent_accounts: tuple[str, ...] = (),
     imessage_label: str = "local",
     photos_label: str = "local",
+    file_libraries_label: str = "documents",
+    beeper_label: str = "local",
+    contacts_label: str = "google",
+    github_label: str = "local",
     health_label: str = "apple-health",
     include_templates: bool = False,
 ) -> list[SourceUpdaterDeclaration]:
@@ -193,8 +307,21 @@ def expand_declarations(
         acct = account.strip()
         if acct:
             out.append(_calendar_template(acct))
+    for account in otter_accounts:
+        acct = account.strip()
+        if acct:
+            out.append(_otter_template(acct))
+    correspondent_accounts = gmail_correspondent_accounts or gmail_accounts
+    for account in correspondent_accounts:
+        acct = account.strip()
+        if acct:
+            out.append(_gmail_correspondents_template(acct))
     out.append(_imessage_template(imessage_label))
+    out.append(_file_libraries_template(file_libraries_label))
     out.append(_photos_template(photos_label))
+    out.append(_beeper_template(beeper_label))
+    out.append(_contacts_template(contacts_label))
+    out.append(_github_template(github_label))
     out.append(_health_template(health_label))
     return out
 

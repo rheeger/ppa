@@ -28,7 +28,6 @@ from xml.etree import ElementTree
 from archive_vault.identity import IdentityCache
 from archive_vault.schema import DocumentCard
 from archive_vault.uid import generate_uid
-from archive_vault.vault import read_note
 
 from .base import BaseAdapter, FetchedBatch, deterministic_provenance
 
@@ -39,6 +38,7 @@ except Exception:  # pragma: no cover - exercised in live use
 else:  # pragma: no cover - runtime behavior only
     logging.getLogger("pypdf").setLevel(logging.ERROR)
 
+logger = logging.getLogger("ppa.file_libraries")
 FILE_LIBRARY_SOURCE = "file.library"
 DEFAULT_BATCH_SIZE = 100
 MAX_BODY_CHARS = 40000
@@ -1119,20 +1119,79 @@ class FileLibrariesAdapter(BaseAdapter):
             selected.append((root_label, path))
         return selected
 
+    def _document_frontmatter_rows_from_cache(self, vault_path: str) -> list[dict[str, Any]]:
+        """One Rust (or single-cursor) dump of Documents/ frontmatter. Builds cache on miss."""
+
+        from archive_cli.vault_cache import VaultScanCache
+
+        vault = Path(vault_path)
+        scan_cache = VaultScanCache.build_or_load(vault, tier=1, progress_every=0)
+        cache_path = VaultScanCache.cache_path_for_vault(vault)
+        types = ["document"]
+        prefix = "Documents/"
+        if cache_path.is_file():
+            try:
+                import archive_crate
+
+                return list(
+                    archive_crate.frontmatter_dicts_from_cache(
+                        str(cache_path),
+                        types=types,
+                        prefix=prefix,
+                    )
+                )
+            except Exception:
+                pass
+        by_type, _rel_by_uid, uid_by_path, _uid_by_stem, frontmatter_by_uid = scan_cache.slice_lookup_tables()
+        rows: list[dict[str, Any]] = []
+        for rel in by_type.get("document") or []:
+            if not str(rel).replace("\\", "/").startswith(prefix):
+                continue
+            uid = uid_by_path.get(rel, "")
+            fm = dict(frontmatter_by_uid.get(uid) or {})
+            if not fm:
+                continue
+            rows.append({"rel_path": rel, "frontmatter": fm})
+        return rows
+
     def _load_existing_hashes(self, vault_path: str) -> dict[str, str]:
         hashes: dict[str, str] = {}
         documents_dir = Path(vault_path) / "Documents"
         if not documents_dir.exists():
             return hashes
-        for path in documents_dir.rglob("*.md"):
-            rel_path = path.relative_to(vault_path)
-            frontmatter, _, _ = read_note(vault_path, str(rel_path))
+        rows = self._document_frontmatter_rows_from_cache(vault_path)
+        started = perf_counter()
+        total = len(rows)
+        progress_every = 50_000
+        for index, row in enumerate(rows, start=1):
+            frontmatter = dict(row.get("frontmatter") or {})
             if str(frontmatter.get("type", "")).strip() != "document":
                 continue
             source_id = _clean(frontmatter.get("source_id", ""))
             metadata_sha = _clean(frontmatter.get("metadata_sha", ""))
             if source_id and metadata_sha:
                 hashes[source_id] = metadata_sha
+            if progress_every and total and index % progress_every == 0:
+                elapsed = max(perf_counter() - started, 0.0)
+                minutes, seconds = divmod(int(elapsed), 60)
+                logger.info(
+                    "document hash load rows=%d/%d (%.0f%%) elapsed=%d:%02d hashes=%d",
+                    index,
+                    total,
+                    100.0 * index / total,
+                    minutes,
+                    seconds,
+                    len(hashes),
+                )
+        elapsed = max(perf_counter() - started, 0.0)
+        minutes, seconds = divmod(int(elapsed), 60)
+        logger.info(
+            "document hash load done rows=%d hashes=%d elapsed=%d:%02d",
+            total,
+            len(hashes),
+            minutes,
+            seconds,
+        )
         return hashes
 
     def _build_item(

@@ -10,12 +10,14 @@ HEAD `3a90bc0` on branch `v2.5`. Goal of the current wave: **local full seed →
 
 **Landed:** Sections A–C/G; D Phase 1 + Phase 2 (runner + Track B catch-up + Track C calendar mint/capped apply); E Phase 1 + Phase 2 (Track A wired dirty-UID executors); F surfaces; H local gates 0–5 / 5b (hygiene staging 786k CCS + rollback Jul 12; Gmail 5b capped Jul). Merge commits `685d07b` `5ed5b07` `0fb51b4` + join proof `5737db3`. **Scale hot paths** `0c53d7e` `f339580` `0bdbd48` `9139c58` `35901b0` + ladder `3a90bc0` (1pct + 10pct; 5pct skipped). Not live seed maintain.
 
-**What remains for local seed:**
+**What remains before local seed:**
 
-1. **Gate 5b re-proof** on a **full seed staging copy** (never the canonical seed), then catch-up + processors maintain.
-2. **Local soak** + **F readiness** with real-run evidence (surfaces can go green on snapshots today).
+1. **Slice hygiene vault-remove** on 1pct then 10pct: delete suppressed/quarantine notes, purge UIDs, write the Gmail promotion ledger. CCS-only apply is not cleaned. Leave slices cleaned; rollback is small-N only.
+2. **Live source updaters for every non-export stream** on 1pct then 10pct. Gmail and Calendar are already proven. Remaining: iMessage, Otter, Documents, Photos, Beeper, Google Contacts, GitHub, Gmail correspondents. Manual exports (Finance CSV, LinkedIn, Notion people CSVs, Health XML, medical file dumps, Apple VCF) stay import-only.
+3. **Then** Gate 5b re-proof on a **full seed staging copy** (never the canonical seed), then catch-up + processors maintain.
+4. **Local soak** + **F readiness** with real-run evidence (surfaces can go green on snapshots today).
 
-The five whole-corpus I/O engines are done. Do not re-implement hygiene COPY, census cache dump, Gmail/Calendar cache indexes, or dirty-only extract. Still-open (not those five): rebuild has no UID allowlist; `embed_pending` is limit-N.
+The five whole-corpus I/O engines are done. Do not re-implement hygiene COPY, census cache dump, Gmail/Calendar cache indexes, or dirty-only extract. Dirty-UID rematerialize allowlist landed (`1c02e10`). Still-open (not those engines): `embed_pending` is limit-N.
 
 Snapshots from `--record-source-status` / `--record-processor-status` are **not** live updating. D/E Phase 2 are **not** missing.
 
@@ -36,7 +38,7 @@ Snapshots from `--record-source-status` / `--record-processor-status` are **not*
 
 9. **Section D Phase 2** — landed (`source updater execution` + Track B `20401ea` + Track C `66e1300` + Gmail/Calendar cache indexes `0bdbd48` `9139c58`). Runner is real; maintain still needs explicit source keys; cursors still list/page-token.
 10. **Section E Phase 2** — landed (`processor dag execution` + Track A `fa5f5a2` + dirty-only extract `35901b0`). Executors are wired; rebuild/embed still lack a true UID filter.
-11. **Section H local 0–5b + scale** — 0–5b done on fixtures / staging / capped Gmail; scale ladder `3a90bc0` on 1pct + 10pct. **Next:** 5b re-proof on a full seed staging copy → catch-up + processors maintain → local soak + F real-run evidence.
+11. **Section H local 0–5b + scale** — 0–5b done on fixtures / staging / capped Gmail; scale ladder `3a90bc0` on 1pct + 10pct. **Next:** slice vault-remove + remaining live updaters on 1pct/10pct → then 5b on a full seed staging copy → catch-up + processors maintain → local soak + F real-run evidence.
 
 Do not claim freshness from snapshots. Do not treat Arnold as the next step.
 
@@ -46,7 +48,7 @@ Do not claim freshness from snapshots. Do not treat Arnold as the next step.
 - Existing classification is reused before new LLM calls.
 - Gmail remains the source of record for suppressed bulk email.
 - Suppression is auditable and reversible.
-- The first v2.5 implementation does not physically delete vault markdown.
+- First-pass hygiene (landed) is CCS-only and does not delete vault markdown. **Remaining slice work does:** suppressed/quarantine notes are deleted so inbound Gmail cannot recreate them. Do not physically prune the canonical seed or Arnold from this wave.
 - Existing active cards are not silently demoted by routine sync.
 - Seed and Arnold are never first apply targets for corpus hygiene.
 - Arnold corpus apply requires a reviewed Arnold dry-run `decision_run_id`.
@@ -65,7 +67,7 @@ Do not run these by default during v2.5 implementation:
 - all-linker reruns.
 - production apply without `decision_run_id`.
 - Arnold apply without an Arnold dry-run generated from current Arnold state.
-- physical vault pruning.
+- physical vault pruning on the canonical seed or Arnold (slice vault-remove of suppressed/quarantine mail is the remaining hygiene path).
 - full Phase 9 `ppa-deploy-v2` / rebuild for routine code promotion (prefer `ppa-sync` + `ppa-install` + `migrate`).
 - claiming Gate H soak success from `--record-*-status` alone.
 
@@ -120,19 +122,19 @@ Every report must include enough paths to find related artifacts from `ppa statu
 
 ## Per-Section Deliverables
 
-| Section   | Minimum implementation deliverables                           | Status                          |
-| --------- | ------------------------------------------------------------- | ------------------------------- |
-| G         | Gate/report framework, refusal rules, engine-mode reporting   | Done                            |
-| A         | `EmailPromotionPolicy`, fixtures                              | Done                            |
-| B dry-run | classification reuse, census, samples                         | Done                            |
-| B apply   | staging apply, rollback, rebuild-safety                       | Done (Arnold apply in H)        |
-| C         | Gmail classify-before-promotion gate                          | Done (enable in H)              |
-| D Phase 1 | declarations, batch shapes, snapshots                         | Done                            |
-| D Phase 2 | **run adapters**, commit cursors, dirty UIDs, maintain flag   | **Landed** (B/C merge + cache indexes) |
-| E Phase 1 | declarations, plan/staleness, snapshots                       | Done                            |
-| E Phase 2 | **run processors** on dirty UIDs, maintain flag               | **Landed** (Track A + dirty extract) |
-| F         | JSON/human status, readiness fail-closed on real-run evidence | Surfaces landed; **evidence hole remains** |
-| H         | Seed updater proof, corpus apply, soak, readiness             | Local 0–5b + scale landed; **next** is 5b re-proof on seed copy + soak. Arnold deferred |
+| Section   | Minimum implementation deliverables                           | Status                                                                                  |
+| --------- | ------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| G         | Gate/report framework, refusal rules, engine-mode reporting   | Done                                                                                    |
+| A         | `EmailPromotionPolicy`, fixtures                              | Done                                                                                    |
+| B dry-run | classification reuse, census, samples                         | Done                                                                                    |
+| B apply   | staging apply, rollback, rebuild-safety                       | Done (Arnold apply in H)                                                                |
+| C         | Gmail classify-before-promotion gate                          | Done (enable in H)                                                                      |
+| D Phase 1 | declarations, batch shapes, snapshots                         | Done                                                                                    |
+| D Phase 2 | **run adapters**, commit cursors, dirty UIDs, maintain flag   | Gmail/Calendar landed; **remaining live streams not yet executable**                    |
+| E Phase 1 | declarations, plan/staleness, snapshots                       | Done                                                                                    |
+| E Phase 2 | **run processors** on dirty UIDs, maintain flag               | **Landed** (Track A + dirty extract)                                                    |
+| F         | JSON/human status, readiness fail-closed on real-run evidence | Surfaces landed; **evidence hole remains**                                              |
+| H         | Seed updater proof, corpus apply, soak, readiness             | Next: slice vault-remove + all live streams on 1pct/10pct, then seed-copy 5b. Arnold deferred |
 
 No section is complete with code alone. Each section must produce reports/tests proving the relevant gate behavior.
 

@@ -22,6 +22,13 @@ def _confidence_footer(*, confidence: str = "", row_count: int = 0) -> str:
     return f"\n--- Confidence: {confidence} | {row_count} results ---"
 
 
+def _corpus_state_tag(row: dict) -> str:
+    state = str(row.get("corpus_state") or "active").strip() or "active"
+    if state == "active":
+        return ""
+    return f" corpus_state={state}"
+
+
 def format_search_line(row: dict) -> str:
     """Render a search/query result row with type, date, and fuller summary."""
     rel_path = row.get("rel_path", "")
@@ -29,7 +36,7 @@ def format_search_line(row: dict) -> str:
     date = _activity_date(row.get("activity_at"))
     summary = str(row.get("summary", ""))[:200]
     meta = ", ".join(part for part in [card_type, date] if part)
-    return f"- {rel_path} [{meta}]: {summary}"
+    return f"- {rel_path} [{meta}]: {summary}{_corpus_state_tag(row)}"
 
 
 def format_search(result: dict) -> str:
@@ -64,7 +71,10 @@ def format_graph(rel_path: str, graph: dict[str, Any]) -> str:
 def format_timeline(result: dict) -> str:
     """Format archive_timeline result."""
     rows = result["rows"]
-    results = [f"- {str(row['created'])[:10]} {row['rel_path']}: {str(row['summary'])[:160]}" for row in rows]
+    results = [
+        f"- {str(row['created'])[:10]} {row['rel_path']}: {str(row['summary'])[:160]}{_corpus_state_tag(row)}"
+        for row in rows
+    ]
     return "\n".join(results) if results else "No matches"
 
 
@@ -482,7 +492,8 @@ def format_vector_search(model: str, version: int, rows: list[dict], *, confiden
             lines.append(
                 f"- {row['rel_path']} [{card_type}, {date}] matched_by={row['matched_by']} score={float(row['score']):.4f} "
                 f"sim={float(row['similarity']):.4f} chunk={row['chunk_type']}#{row['chunk_index']} "
-                f"provenance_bias={row['provenance_bias']} matched_chunks={row['matched_chunk_count']}\n"
+                f"provenance_bias={row['provenance_bias']} matched_chunks={row['matched_chunk_count']}"
+                f"{_corpus_state_tag(row)}\n"
                 f"  summary: {summary}\n"
                 f"  preview: {row['preview']}"
             )
@@ -509,7 +520,8 @@ def format_hybrid_search(query: str, rows: list[dict], *, confidence: str = "") 
                 f"- {row['rel_path']} [{card_type}, {date}] matched_by={row['matched_by']} score={float(row['score']):.4f} "
                 f"lexical={float(row['lexical_score']):.4f} vector={float(row['vector_similarity']):.4f} "
                 f"exact_match={str(bool(row['exact_match'])).lower()}{graph_hops}{chunk} "
-                f"provenance_bias={row['provenance_bias']}\n"
+                f"provenance_bias={row['provenance_bias']}"
+                f"{_corpus_state_tag(row)}\n"
                 f"  summary: {summary}\n"
                 f"  preview: {preview}"
             )

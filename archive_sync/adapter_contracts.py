@@ -330,8 +330,13 @@ SOURCE_UPDATER_ADAPTER_SOURCE_IDS: frozenset[str] = frozenset(
         "gmail-messages",
         "calendar-events",
         "imessage",
+        "otter-transcripts",
+        "file-libraries",
         "photos",
-        "apple-health",
+        "beeper",
+        "contacts",
+        "github-history",
+        "gmail-correspondents",
     }
 )
 

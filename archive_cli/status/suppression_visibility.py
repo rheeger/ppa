@@ -49,7 +49,11 @@ class SuppressionVisibilityResult:
 
 
 def evaluate_suppression_visibility(conn: Any, schema: str, *, sample_limit: int = 200) -> SuppressionVisibilityResult:
-    """Fail when suppressed/quarantine cards remain retrieval-active or queued for downstream work."""
+    """Fail when suppressed cards remain retrieval-active or queued for downstream work.
+
+    Quarantine is retrievable by design; it is still a violation if it sits on
+    the enrichment or linker queues.
+    """
 
     if not corpus_state_table_exists(conn, schema):
         return SuppressionVisibilityResult(ok=True, skipped="card_corpus_state_missing")
@@ -72,10 +76,10 @@ def evaluate_suppression_visibility(conn: Any, schema: str, *, sample_limit: int
         state = str(row["corpus_state"] if isinstance(row, dict) else row[1])
         if state == CORPUS_STATE_SUPPRESSED:
             suppressed += 1
+            if is_card_retrieval_active(conn, schema, card_uid):
+                violations.append(card_uid)
         else:
             quarantine += 1
-        if is_card_retrieval_active(conn, schema, card_uid):
-            violations.append(card_uid)
 
     enrichment_violations = 0
     if _table_exists(conn, schema, "enrichment_queue") and (suppressed or quarantine):

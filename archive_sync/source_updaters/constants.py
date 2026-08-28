@@ -7,8 +7,38 @@ SECTION_D_EXECUTION_STATE = "source_updater_execution_complete"
 
 SOURCE_UPDATER_LOG_ROOT = "source-updaters"
 
-# Executable adapters for Phase 2 (Gmail + Calendar first).
-EXECUTABLE_ADAPTER_SOURCE_IDS: frozenset[str] = frozenset({"gmail-messages", "calendar-events"})
+# Live (non-export) adapters the source-updater runner can construct and ingest.
+EXECUTABLE_ADAPTER_SOURCE_IDS: frozenset[str] = frozenset(
+    {
+        "gmail-messages",
+        "calendar-events",
+        "imessage",
+        "otter-transcripts",
+        "file-libraries",
+        "photos",
+        "beeper",
+        "contacts",
+        "github-history",
+        "gmail-correspondents",
+    }
+)
+
+# Manual-export adapters: declared or known, but refused as not executable.
+EXPORT_ADAPTER_SOURCE_IDS: frozenset[str] = frozenset(
+    {
+        "copilot-finance",
+        "linkedin",
+        "notion-people",
+        "notion-staff",
+        "apple-health",
+        "health",
+        "medical-records",
+        "seed-people",
+    }
+)
+
+# contacts:google is live; apple/vcf stay export-only.
+CONTACTS_EXPORT_SCOPES: frozenset[str] = frozenset({"apple", "vcf"})
 
 STALENESS_FRESH = "fresh"
 STALENESS_STALE = "stale"
@@ -52,7 +82,12 @@ CURSOR_ETAG = "etag"
 SOURCE_TYPE_GMAIL = "gmail"
 SOURCE_TYPE_CALENDAR = "calendar"
 SOURCE_TYPE_IMESSAGE = "imessage"
+SOURCE_TYPE_OTTER = "otter"
+SOURCE_TYPE_DOCUMENTS = "documents"
 SOURCE_TYPE_PHOTOS = "photos"
+SOURCE_TYPE_BEEPER = "beeper"
+SOURCE_TYPE_CONTACTS = "contacts"
+SOURCE_TYPE_GITHUB = "github"
 SOURCE_TYPE_HEALTH = "health"
 
 # Freshness: last success within this many days => fresh (else stale if success exists).

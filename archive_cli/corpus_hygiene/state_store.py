@@ -15,6 +15,8 @@ CORPUS_STATE_ACTIVE = "active"
 CORPUS_STATE_SUPPRESSED = "suppressed"
 CORPUS_STATE_QUARANTINE = "quarantine"
 NON_ACTIVE_CORPUS_STATES = frozenset({CORPUS_STATE_SUPPRESSED, CORPUS_STATE_QUARANTINE})
+REMOVAL_CORPUS_STATES = frozenset({CORPUS_STATE_SUPPRESSED})
+QUARANTINE_RETRIEVAL_WEIGHT = 0.35
 
 
 def _utc_now() -> datetime:
@@ -86,14 +88,47 @@ def corpus_state_table_exists(conn: Any, schema: str) -> bool:
     return row is not None
 
 
+def normalize_corpus_state(value: Any) -> str:
+    cleaned = str(value or "").strip()
+    if cleaned == CORPUS_STATE_QUARANTINE:
+        return CORPUS_STATE_QUARANTINE
+    if cleaned == CORPUS_STATE_SUPPRESSED:
+        return CORPUS_STATE_SUPPRESSED
+    return CORPUS_STATE_ACTIVE
+
+
+def retrieval_weight_for_corpus_state(state: Any) -> float:
+    if normalize_corpus_state(state) == CORPUS_STATE_QUARANTINE:
+        return QUARANTINE_RETRIEVAL_WEIGHT
+    return 1.0
+
+
+def annotate_retrieval_corpus_fields(row: dict[str, Any]) -> dict[str, Any]:
+    """Stamp ``corpus_state`` and ``retrieval_weight`` onto a search row."""
+
+    state = normalize_corpus_state(row.get("corpus_state"))
+    row["corpus_state"] = state
+    row["retrieval_weight"] = retrieval_weight_for_corpus_state(state)
+    return row
+
+
+def corpus_state_sql_expr(*, schema: str, card_alias: str) -> str:
+    """COALESCE subquery: card_corpus_state row, else ``active``."""
+
+    return (
+        f"COALESCE((SELECT cs.corpus_state FROM {schema}.card_corpus_state cs "
+        f"WHERE cs.card_uid = {card_alias}.uid), '{CORPUS_STATE_ACTIVE}')"
+    )
+
+
 def active_corpus_sql_filter(*, schema: str, card_alias: str) -> str:
-    """SQL fragment: include card only when corpus_state is active or unset."""
+    """SQL fragment: hide suppressed cards. Quarantine stays retrievable."""
 
     return f"""
         NOT EXISTS (
             SELECT 1 FROM {schema}.card_corpus_state cs
             WHERE cs.card_uid = {card_alias}.uid
-              AND cs.corpus_state IN ('suppressed', 'quarantine')
+              AND cs.corpus_state = '{CORPUS_STATE_SUPPRESSED}'
         )
     """
 
@@ -109,17 +144,108 @@ def get_card_corpus_state(conn: Any, schema: str, card_uid: str) -> str:
 
 
 def is_card_retrieval_active(conn: Any, schema: str, card_uid: str) -> bool:
+    """True unless the card is suppressed. Quarantine remains retrievable."""
+
     if not corpus_state_table_exists(conn, schema):
         return True
-    return get_card_corpus_state(conn, schema, card_uid) == CORPUS_STATE_ACTIVE
+    return get_card_corpus_state(conn, schema, card_uid) != CORPUS_STATE_SUPPRESSED
 
 
 def card_uids_for_decision(record: EmailCorpusDecisionRecord) -> list[str]:
     uids: list[str] = []
-    for uid in (record.thread_uid, *record.message_uids, *record.attachment_uids):
+    for uid in (
+        record.thread_uid,
+        *record.message_uids,
+        *record.attachment_uids,
+        *record.derived_uids,
+    ):
         if uid and uid not in uids:
             uids.append(uid)
     return uids
+
+
+def _uids_for_corpus_states(
+    records: list[EmailCorpusDecisionRecord],
+    states: frozenset[str],
+) -> list[str]:
+    uids: list[str] = []
+    for record in records:
+        if record.corpus_decision not in states:
+            continue
+        for uid in card_uids_for_decision(record):
+            if uid not in uids:
+                uids.append(uid)
+    return uids
+
+
+def removal_uids_for_records(records: list[EmailCorpusDecisionRecord]) -> list[str]:
+    """UIDs to vault-remove / purge: suppressed only. Quarantine stays on disk."""
+
+    return _uids_for_corpus_states(records, REMOVAL_CORPUS_STATES)
+
+
+def quarantine_uids_for_records(records: list[EmailCorpusDecisionRecord]) -> list[str]:
+    """UIDs belonging to quarantine decisions (thread + message + derived + attach)."""
+
+    return _uids_for_corpus_states(records, frozenset({CORPUS_STATE_QUARANTINE}))
+
+
+def rel_paths_for_card_uids(conn: Any, schema: str, card_uids: list[str]) -> dict[str, str]:
+    """Resolve note paths from the index ``cards`` table (no vault walk)."""
+
+    if not card_uids:
+        return {}
+    rows = conn.execute(
+        f"SELECT uid AS card_uid, rel_path FROM {schema}.cards WHERE uid = ANY(%s)",
+        (list(card_uids),),
+    ).fetchall()
+    out: dict[str, str] = {}
+    for row in rows:
+        uid = str(row["card_uid"] if isinstance(row, dict) else row[0])
+        rel = str(row["rel_path"] if isinstance(row, dict) else row[1])
+        if uid and rel:
+            out[uid] = rel
+    return out
+
+
+def purge_card_uids(conn: Any, schema: str, card_uids: list[str]) -> int:
+    """Incrementally delete cards, chunks, embeddings, and projections for *card_uids*.
+
+    Never escalates to a full rebuild and never rebuilds IVFFlat.
+    """
+
+    uid_list = [uid for uid in dict.fromkeys(card_uids) if uid]
+    if not uid_list:
+        return 0
+    conn.execute(
+        f"""
+        DELETE FROM {schema}.embeddings
+        WHERE chunk_key IN (
+            SELECT chunk_key FROM {schema}.chunks WHERE card_uid = ANY(%s)
+        )
+        """,
+        (uid_list,),
+    )
+    conn.execute(f"DELETE FROM {schema}.chunks WHERE card_uid = ANY(%s)", (uid_list,))
+    conn.execute(
+        f"DELETE FROM {schema}.edges WHERE source_uid = ANY(%s) OR target_uid = ANY(%s)",
+        (uid_list, uid_list),
+    )
+    from archive_cli.projections.registry import TYPED_PROJECTIONS
+
+    for projection in TYPED_PROJECTIONS:
+        conn.execute(
+            f"DELETE FROM {schema}.{projection.table_name} WHERE card_uid = ANY(%s)",
+            (uid_list,),
+        )
+    conn.execute(f"DELETE FROM {schema}.external_ids WHERE card_uid = ANY(%s)", (uid_list,))
+    conn.execute(f"DELETE FROM {schema}.card_orgs WHERE card_uid = ANY(%s)", (uid_list,))
+    conn.execute(f"DELETE FROM {schema}.card_people WHERE card_uid = ANY(%s)", (uid_list,))
+    conn.execute(f"DELETE FROM {schema}.card_sources WHERE card_uid = ANY(%s)", (uid_list,))
+    conn.execute(f"DELETE FROM {schema}.note_manifest WHERE card_uid = ANY(%s)", (uid_list,))
+    conn.execute(f"DELETE FROM {schema}.cards WHERE uid = ANY(%s)", (uid_list,))
+    conn.commit()
+    return len(uid_list)
 
 
 @dataclass
@@ -127,6 +253,10 @@ class ApplyCounts:
     cards_updated: int = 0
     threads_applied: int = 0
     by_corpus_state: dict[str, int] | None = None
+    files_deleted: int = 0
+    uids_purged: int = 0
+    ledger_records_appended: int = 0
+    rollback_kit_files: int = 0
 
 
 def _bulk_corpus_states(conn: Any, schema: str, card_uids: list[str]) -> dict[str, str]:
@@ -335,6 +465,7 @@ def apply_decision_records(
 class RollbackCounts:
     cards_restored: int = 0
     threads_restored: int = 0
+    kit_files_restored: int = 0
 
 
 def rollback_decision_run(conn: Any, schema: str, decision_run_id: str) -> RollbackCounts:

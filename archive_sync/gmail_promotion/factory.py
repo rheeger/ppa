@@ -8,7 +8,13 @@ from typing import Any
 from archive_cli.corpus_hygiene.classification_reuse import open_classify_index
 from .classification_resolve import GmailClassificationResolver, load_card_classifications_from_index_rows
 from .gate import GmailPromotionGate
-from .ledger import DbPromotionLedger, FilePromotionLedger, PromotionLedger, default_ledger_path
+from .ledger import (
+    CompositePromotionLedger,
+    DbPromotionLedger,
+    FilePromotionLedger,
+    PromotionLedger,
+    default_ledger_path,
+)
 from .metrics import GmailPromotionBatchMetrics
 
 
@@ -25,10 +31,14 @@ def build_promotion_gate(
     fail_on_missing_classification: bool = False,
 ) -> GmailPromotionGate:
     ledger: PromotionLedger
+    file_ledger = FilePromotionLedger(default_ledger_path(vault_path))
     if conn is not None and schema and decision_run_id:
-        ledger = DbPromotionLedger(conn, schema, decision_run_id=decision_run_id)
+        ledger = CompositePromotionLedger(
+            file_ledger,
+            DbPromotionLedger(conn, schema, decision_run_id=decision_run_id),
+        )
     else:
-        ledger = FilePromotionLedger(default_ledger_path(vault_path))
+        ledger = file_ledger
 
     corpus_records = ledger.all_decisions()
     from .classification_resolve import corpus_decisions_index

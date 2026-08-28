@@ -93,6 +93,8 @@ def render_apply_summary(result: object, report: GateRunReport) -> str:
         "",
         f"- threads_applied: {result.counts.threads_applied}",
         f"- cards_updated: {result.counts.cards_updated}",
+        f"- files_deleted: {result.counts.files_deleted}",
+        f"- uids_purged: {result.counts.uids_purged}",
         "",
     ]
     if result.counts.by_corpus_state:
@@ -100,12 +102,13 @@ def render_apply_summary(result: object, report: GateRunReport) -> str:
         lines.append("")
         for state, count in sorted(result.counts.by_corpus_state.items()):
             lines.append(f"- {state}: {count}")
+    deleted_label = "yes" if result.vault_markdown_deleted else "no"
     lines.extend(
         [
             "",
             "## Safety",
             "",
-            "- vault markdown deleted: no",
+            f"- vault markdown deleted: {deleted_label}",
             "- rollback available: yes",
             "",
             f"next_recommended_gate: `{report.next_recommended_gate}`",
@@ -129,11 +132,12 @@ def render_rollback_summary(result: object, report: GateRunReport) -> str:
         "",
         f"- cards_restored: {result.counts.cards_restored}",
         f"- threads_restored: {result.counts.threads_restored}",
+        f"- kit_files_restored: {result.counts.kit_files_restored}",
         "",
         "## Safety",
         "",
         "- llm_calls: no",
-        "- vault markdown deleted: no",
+        f"- vault markdown deleted: {'yes' if result.vault_markdown_deleted else 'no'}",
         "",
         f"next_recommended_gate: `{report.next_recommended_gate}`",
     ]

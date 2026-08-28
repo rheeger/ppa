@@ -234,26 +234,71 @@ def _coerce_cli_value(value: Any) -> str:
     return str(value)
 
 
+def _parse_user_info_text(text: str) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if line.startswith("Name:"):
+            parsed["name"] = _clean(line.split(":", 1)[1])
+        elif line.startswith("Email:"):
+            parsed["email"] = _clean(line.split(":", 1)[1])
+        elif line.startswith("Current DateTime:"):
+            parsed["current_datetime"] = _clean(line.split(":", 1)[1])
+    return parsed
+
+
+def _unwrap_mcp_content(payload: dict[str, Any]) -> dict[str, Any] | None:
+    content = payload.get("content")
+    if not isinstance(content, list):
+        return None
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        raw_text = item.get("text")
+        if not isinstance(raw_text, str) or not raw_text.strip():
+            continue
+        try:
+            nested = json.loads(raw_text)
+        except json.JSONDecodeError:
+            user_info = _parse_user_info_text(raw_text)
+            if user_info:
+                return user_info
+            continue
+        if isinstance(nested, dict):
+            return nested
+        return {"data": nested}
+    return None
+
+
 def _parse_json_from_stdout(stdout: str) -> dict[str, Any]:
     text = stdout.strip()
     if not text:
         return {}
+
+    def _normalize(payload: Any) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            return {"data": payload}
+        inner = payload.get("result")
+        if inner is not None and "content" not in payload:
+            if isinstance(inner, str):
+                try:
+                    nested = json.loads(inner)
+                except json.JSONDecodeError:
+                    user_info = _parse_user_info_text(inner)
+                    return user_info or {"text": inner}
+                return _normalize(nested)
+            if isinstance(inner, dict):
+                unwrapped = _unwrap_mcp_content(inner)
+                if unwrapped is not None:
+                    return unwrapped
+                return _normalize(inner)
+        unwrapped = _unwrap_mcp_content(payload)
+        if unwrapped is not None:
+            return unwrapped
+        return payload
+
     try:
-        payload = json.loads(text)
-        if isinstance(payload, dict):
-            content = payload.get("content")
-            if isinstance(content, list):
-                for item in content:
-                    if not isinstance(item, dict):
-                        continue
-                    raw_text = item.get("text")
-                    if isinstance(raw_text, str) and raw_text.strip():
-                        try:
-                            nested = json.loads(raw_text)
-                            return nested if isinstance(nested, dict) else {"data": nested}
-                        except json.JSONDecodeError:
-                            continue
-        return payload if isinstance(payload, dict) else {"data": payload}
+        return _normalize(json.loads(text))
     except json.JSONDecodeError:
         pass
     for line in reversed(text.splitlines()):
@@ -261,8 +306,7 @@ def _parse_json_from_stdout(stdout: str) -> dict[str, Any]:
         if not line or line[0] not in "{[":
             continue
         try:
-            payload = json.loads(line)
-            return payload if isinstance(payload, dict) else {"data": payload}
+            return _normalize(json.loads(line))
         except json.JSONDecodeError:
             continue
     raise RuntimeError("mcporter output did not contain JSON")
@@ -464,6 +508,7 @@ class OtterMcpClient:
         self._discovered_tools: dict[str, str] | None = None
         self._user_info: dict[str, Any] | None = None
         self._tool_lock = threading.Lock()
+        self._detail_cache: dict[str, dict[str, Any]] = {}
 
     def _ensure_mcporter(self) -> str:
         resolved = shutil.which(self.mcporter_bin)
@@ -535,6 +580,7 @@ class OtterMcpClient:
                 or _pick("transcript")
                 or _pick("fetch")
                 or _pick("get", "transcript"),
+                "user_info": _pick("get_user_info") or _pick("user", "info") or _pick("get", "user"),
             }
             if not discovered["transcript"]:
                 discovered["transcript"] = discovered["detail"]
@@ -549,23 +595,33 @@ class OtterMcpClient:
     def _get_user_info(self) -> dict[str, Any]:
         if self._user_info is not None:
             return self._user_info
-        try:
-            info = self._call_tool("get_user_info")
-            self._user_info = info if isinstance(info, dict) else {}
+        tools = self._discover_tools()
+        tool_names = [
+            name
+            for name in [tools.get("user_info"), "otter_get_user_info", "get_user_info"]
+            if name
+        ]
+        last_error: Exception | None = None
+        for tool_name in dict.fromkeys(tool_names):
+            try:
+                info = self._call_tool(tool_name)
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                continue
+            if not isinstance(info, dict):
+                continue
+            if info.get("name") or info.get("email") or info.get("username"):
+                self._user_info = info
+                return self._user_info
+            text = _first_nonempty(info.get("text"), info.get("result"))
+            parsed = _parse_user_info_text(text) if text else {}
+            if parsed:
+                self._user_info = parsed
+                return self._user_info
+        if last_error is not None:
+            self._user_info = {}
             return self._user_info
-        except RuntimeError:
-            stdout, _ = self._run_mcporter("call", f"{self.server_name}.get_user_info")
-            parsed: dict[str, Any] = {}
-            for raw_line in stdout.splitlines():
-                line = raw_line.strip()
-                if line.startswith("Name:"):
-                    parsed["name"] = _clean(line.split(":", 1)[1])
-                elif line.startswith("Email:"):
-                    parsed["email"] = _clean(line.split(":", 1)[1])
-                elif line.startswith("Current DateTime:"):
-                    parsed["current_datetime"] = _clean(line.split(":", 1)[1])
-            self._user_info = parsed
-            return self._user_info
+        self._user_info = {}
         return self._user_info
 
     def _call_with_id_fallbacks(self, tool_name: str, meeting_id: str, explicit_arg: str = "") -> dict[str, Any]:
@@ -600,21 +656,22 @@ class OtterMcpClient:
         user_info = self._get_user_info()
         params: dict[str, Any] = {
             "query": "",
-            "created_after": _format_otter_search_date(updated_after or start_after) or "",
             "created_before": _format_otter_search_date(end_before) or date.today().strftime("%Y/%m/%d"),
-            "include_shared_meetings": "true",
+            "include_shared_meetings": True,
         }
+        created_after = _format_otter_search_date(updated_after or start_after)
+        if created_after:
+            params["created_after"] = created_after
         username = _first_nonempty(user_info.get("name"), user_info.get("username"))
         if username:
             params["username"] = username
-        params["query"] = ""
-        page_size_arg = _clean(os.environ.get("OTTER_MCP_PAGE_SIZE_ARG", ""))
-        page_token_arg = _clean(os.environ.get("OTTER_MCP_PAGE_TOKEN_ARG", ""))
+        page_size_arg = _clean(os.environ.get("OTTER_MCP_PAGE_SIZE_ARG", "page_size"))
+        page_token_arg = _clean(os.environ.get("OTTER_MCP_PAGE_TOKEN_ARG", "cursor"))
         updated_after_arg = _clean(os.environ.get("OTTER_MCP_UPDATED_AFTER_ARG", "created_after"))
         start_after_arg = _clean(os.environ.get("OTTER_MCP_START_AFTER_ARG", "created_after"))
         end_before_arg = _clean(os.environ.get("OTTER_MCP_END_BEFORE_ARG", "created_before"))
         if page_size_arg:
-            params[page_size_arg] = page_size
+            params[page_size_arg] = min(max(1, int(page_size)), 25)
         if page_token_arg and page_token:
             params[page_token_arg] = page_token
         if updated_after_arg and updated_after:
@@ -622,17 +679,28 @@ class OtterMcpClient:
         if start_after_arg and start_after:
             params[start_after_arg] = _format_otter_search_date(start_after)
         if end_before_arg:
-            params[end_before_arg] = _format_otter_search_date(end_before) or params.get(end_before_arg, "")
-        return self._call_tool(tools["list"], **params)
+            formatted_end = _format_otter_search_date(end_before)
+            if formatted_end:
+                params[end_before_arg] = formatted_end
+            elif end_before_arg not in params:
+                params[end_before_arg] = date.today().strftime("%Y/%m/%d")
+        return self._call_tool(tools["list"], **{key: value for key, value in params.items() if value not in (None, "")})
 
     def get_meeting_detail(self, meeting_id: str) -> dict[str, Any]:
+        cached = self._detail_cache.get(meeting_id)
+        if cached is not None:
+            return cached
         tools = self._discover_tools()
         if not tools.get("detail"):
             raise RuntimeError(f"Could not discover a detail tool for MCP server {self.server_name}")
-        return self._call_with_id_fallbacks(tools["detail"], meeting_id, explicit_arg=self.meeting_id_arg)
+        detail = self._call_with_id_fallbacks(tools["detail"], meeting_id, explicit_arg=self.meeting_id_arg)
+        self._detail_cache[meeting_id] = detail
+        return detail
 
     def get_transcript(self, meeting_id: str) -> dict[str, Any]:
         tools = self._discover_tools()
+        if tools.get("transcript") and tools.get("detail") and tools["transcript"] == tools["detail"]:
+            return self.get_meeting_detail(meeting_id)
         if not tools.get("transcript"):
             raise RuntimeError(f"Could not discover a transcript tool for MCP server {self.server_name}")
         return self._call_with_id_fallbacks(tools["transcript"], meeting_id, explicit_arg=self.transcript_id_arg)

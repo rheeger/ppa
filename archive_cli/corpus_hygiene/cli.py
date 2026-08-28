@@ -33,6 +33,7 @@ from .census import (
 )
 from .constants import SECTION_B_APPLY_COMPLETION_STATE, SECTION_B_COMPLETION_STATE
 from .guards import guard_corpus_hygiene_apply, guard_corpus_hygiene_rollback
+from .restore_quarantine import restore_quarantine_from_decision_run
 from .rollback import run_email_corpus_rollback
 
 
@@ -193,6 +194,7 @@ def cmd_email_apply(args: argparse.Namespace) -> int:
                 engine_mode=ppa_engine(),
                 repo_root=repo_root,
                 registry=registry,
+                ccs_only=bool(getattr(args, "ccs_only", False)),
             )
     except GateRefusalError as exc:
         _emit_cli_payload({"refused": True, "reason": exc.reason, "message": str(exc)}, args)
@@ -206,6 +208,9 @@ def cmd_email_apply(args: argparse.Namespace) -> int:
         "decision_run_id": decision_run_id,
         "threads_applied": result.counts.threads_applied,
         "cards_updated": result.counts.cards_updated,
+        "files_deleted": result.counts.files_deleted,
+        "uids_purged": result.counts.uids_purged,
+        "vault_markdown_deleted": result.vault_markdown_deleted,
         "artifact_paths": result.artifact_paths,
         "rollback_path": result.rollback_path,
     }
@@ -264,6 +269,56 @@ def cmd_email_rollback(args: argparse.Namespace) -> int:
     return EXIT_SUCCESS
 
 
+def cmd_email_restore_quarantine(args: argparse.Namespace) -> int:
+    resolved = _resolve_apply_rollback_environment(args)
+    if isinstance(resolved, int):
+        return resolved
+    store, _archive_instance = resolved
+    source_vault = Path(args.source_vault).expanduser().resolve()
+    if not source_vault.is_dir():
+        _emit_cli_payload(
+            {"error": f"source vault not found: {source_vault}", "validation_failed": True},
+            args,
+        )
+        return EXIT_VALIDATION_FAILED
+    skip_rebuild = bool(getattr(args, "skip_rebuild", False))
+    try:
+        counts = restore_quarantine_from_decision_run(
+            decision_run_id=args.decision_run_id.strip(),
+            repo_root=_repo_root(),
+            source_vault=source_vault,
+            dest_vault=Path(store.vault),
+            rematerialize=not skip_rebuild,
+            store=None if skip_rebuild else store,
+            progress_every=int(getattr(args, "progress_every", 200) or 200),
+        )
+    except (ValueError, FileNotFoundError) as exc:
+        _emit_cli_payload({"error": str(exc), "validation_failed": True}, args)
+        return EXIT_VALIDATION_FAILED
+
+    payload = {
+        "decision_run_id": args.decision_run_id.strip(),
+        "quarantine_threads": counts.quarantine_threads,
+        "uids_requested": counts.uids_requested,
+        "paths_mapped": counts.paths_mapped,
+        "files_copied": counts.files_copied,
+        "files_already_present": counts.files_already_present,
+        "files_missing_from_source": counts.files_missing_from_source,
+        "uids_unmapped": counts.uids_unmapped,
+        "ledger_lines_dropped": counts.ledger_lines_dropped,
+        "rematerialized": counts.rematerialized,
+        "rematerialize_counts": counts.rematerialize_counts,
+    }
+    if args.format == "json":
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(f"restore-quarantine decision_run_id: {args.decision_run_id.strip()}")
+        print(f"files_copied: {counts.files_copied}")
+        print(f"ledger_lines_dropped: {counts.ledger_lines_dropped}")
+        print(f"rematerialized: {counts.rematerialized}")
+    return EXIT_SUCCESS
+
+
 def add_parser(subparsers: argparse._SubParsersAction) -> None:
     parser = subparsers.add_parser(
         "corpus-hygiene",
@@ -302,6 +357,11 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         action="store_true",
         help="Required for production instance apply (Arnold gate chain)",
     )
+    p_apply.add_argument(
+        "--ccs-only",
+        action="store_true",
+        help="Write corpus state only; skip vault delete, index purge, and promotion ledger",
+    )
     p_apply.set_defaults(func=cmd_email_apply)
 
     p_rb = email_sub.add_parser("rollback", help="Rollback a staging apply decision run")
@@ -310,6 +370,23 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
     p_rb.add_argument("--instance-role", default="")
     p_rb.add_argument("--format", choices=["text", "json"], default="text")
     p_rb.set_defaults(func=cmd_email_rollback)
+
+    p_rq = email_sub.add_parser(
+        "restore-quarantine",
+        help="Copy vault-removed quarantine notes back from a read-only source vault",
+    )
+    p_rq.add_argument("--decision-run-id", required=True)
+    p_rq.add_argument("--source-vault", required=True, help="Read-only vault that still has the notes")
+    p_rq.add_argument("--vault", default="")
+    p_rq.add_argument("--instance-role", default="")
+    p_rq.add_argument("--format", choices=["text", "json"], default="text")
+    p_rq.add_argument(
+        "--skip-rebuild",
+        action="store_true",
+        help="Copy files and rewrite the ledger only; skip uid_allowlist rematerialize",
+    )
+    p_rq.add_argument("--progress-every", type=int, default=200)
+    p_rq.set_defaults(func=cmd_email_restore_quarantine)
 
 
 def dispatch(args: argparse.Namespace) -> int:

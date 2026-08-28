@@ -2,29 +2,60 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
-from archive_cli.corpus_hygiene.apply import run_email_corpus_apply
+from archive_cli.corpus_hygiene.apply import (
+    copy_rollback_kit,
+    delete_vault_markdown,
+    restore_rollback_kit,
+    run_email_corpus_apply,
+)
 from archive_cli.corpus_hygiene.census import CensusContext, run_email_census_dry_run
-from archive_cli.corpus_hygiene.classification_reuse import EmailThreadRecord
+from archive_cli.corpus_hygiene.classification_reuse import EmailThreadRecord, thread_from_frontmatter
 from archive_cli.corpus_hygiene.decision_io import decisions_artifact_path, load_decision_records_jsonl
 from archive_cli.corpus_hygiene.guards import guard_corpus_hygiene_apply
 from archive_cli.corpus_hygiene.rollback import run_email_corpus_rollback
 from archive_cli.corpus_hygiene.state_store import (
     CORPUS_STATE_ACTIVE,
+    CORPUS_STATE_QUARANTINE,
+    CORPUS_STATE_SUPPRESSED,
+    active_corpus_sql_filter,
+    card_uids_for_decision,
     get_card_corpus_state,
     is_card_retrieval_active,
+    removal_uids_for_records,
 )
 from archive_cli.index_store import PostgresArchiveIndex
 from archive_cli.migrate import MigrationRunner
 from archive_cli.validation_gates.constants import GATE_RUN_STATUS_PASSED, GATE_SYNTHETIC_FIXTURES
 from archive_cli.validation_gates.gate_registry import GateRegistry
 from archive_cli.validation_gates.guards import GateRefusalError
+from archive_sync.gmail_promotion.ledger import FilePromotionLedger, default_ledger_path
 from archive_sync.llm_enrichment.email_promotion_policy import EMAIL_PROMOTION_POLICY_VERSION
 
 _FIXTURE_RUN_ID = "section-b-apply-test"
+
+
+def test_active_corpus_sql_filter_hides_suppressed_only() -> None:
+    sql = active_corpus_sql_filter(schema="archive", card_alias="c")
+    assert CORPUS_STATE_SUPPRESSED in sql
+    assert CORPUS_STATE_QUARANTINE not in sql
+
+
+def test_removal_uids_are_suppressed_only() -> None:
+    census = run_email_census_dry_run(
+        _fixture_threads(),
+        context=CensusContext(decision_run_id=_FIXTURE_RUN_ID, engine_mode="n/a"),
+    )
+    removed = set(removal_uids_for_records(census.records))
+    assert "uid-mkt" in removed
+    assert "uid-msg-1" in removed
+    assert "uid-derived" not in removed
+    assert "meal-order-1" not in removed
+    assert "uid-txn" not in removed
 
 
 def _thread(**kwargs: object) -> EmailThreadRecord:
@@ -91,6 +122,13 @@ def _seed_cards(idx: PostgresArchiveIndex, uids: list[str]) -> None:
                 (uid, f"email/{uid}.md", f"summary {uid}", uid, f"hash-{uid}", uid),
             )
         conn.commit()
+
+
+def _write_note(vault: Path, rel_path: str, body: str = "# note\n") -> Path:
+    path = vault / rel_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+    return path
 
 
 def _register_dry_run_gate(
@@ -169,15 +207,21 @@ class TestEmailCorpusApplyRollback:
                 vault_path=str(tmp_path),
                 engine_mode="n/a",
                 repo_root=tmp_path,
+                ccs_only=True,
             )
 
             assert apply_result.counts.threads_applied == 3
+            assert apply_result.vault_markdown_deleted is False
             assert get_card_corpus_state(conn, idx.schema, "uid-mkt") == "suppressed"
             assert get_card_corpus_state(conn, idx.schema, "uid-txn") == "active"
             assert get_card_corpus_state(conn, idx.schema, "uid-derived") == "quarantine"
-            assert get_card_corpus_state(conn, idx.schema, "meal-order-1") == CORPUS_STATE_ACTIVE
+            assert get_card_corpus_state(conn, idx.schema, "meal-order-1") == CORPUS_STATE_QUARANTINE
             assert not is_card_retrieval_active(conn, idx.schema, "uid-mkt")
             assert is_card_retrieval_active(conn, idx.schema, "uid-txn")
+            assert is_card_retrieval_active(conn, idx.schema, "uid-derived")
+            assert is_card_retrieval_active(conn, idx.schema, "meal-order-1")
+            rollback_payload = json.loads(Path(apply_result.rollback_path).read_text(encoding="utf-8"))
+            assert "meal-order-1" in rollback_payload["card_uids"]
 
             rollback_result = run_email_corpus_rollback(
                 conn,
@@ -232,3 +276,183 @@ def test_decision_record_required_fields_for_apply() -> None:
         "policy_version",
     ):
         assert getattr(rec, field)
+
+
+def test_card_uids_for_decision_includes_derived() -> None:
+    census = run_email_census_dry_run(
+        _fixture_threads(),
+        context=CensusContext(decision_run_id=_FIXTURE_RUN_ID, engine_mode="n/a"),
+    )
+    derived = next(rec for rec in census.records if rec.thread_uid == "uid-derived")
+    uids = card_uids_for_decision(derived)
+    assert "uid-derived" in uids
+    assert "meal-order-1" in uids
+
+
+def test_thread_from_frontmatter_keeps_attachment_and_derived_uids() -> None:
+    thread = thread_from_frontmatter(
+        "email/uid-derived.md",
+        {
+            "uid": "uid-derived",
+            "messages": ["[[uid-msg-1]]"],
+            "attachments": ["[[att-1]]"],
+            "derived_uids": ["meal-order-1"],
+        },
+    )
+    assert thread.message_uids == ("uid-msg-1",)
+    assert thread.attachment_uids == ("att-1",)
+    assert thread.derived_uids == ("meal-order-1",)
+
+
+def test_vault_remove_deletes_files_and_appends_ledger(tmp_path: Path) -> None:
+    rel = "email/uid-mkt.md"
+    note = _write_note(tmp_path, rel, "# marketing\n")
+    deleted = delete_vault_markdown(tmp_path, [rel], progress_every=1)
+    assert deleted == 1
+    assert not note.exists()
+
+    census = run_email_census_dry_run(
+        [_fixture_threads()[0]],
+        context=CensusContext(decision_run_id=_FIXTURE_RUN_ID, engine_mode="n/a"),
+    )
+    from archive_cli.corpus_hygiene.apply import append_promotion_ledger
+
+    appended = append_promotion_ledger(tmp_path, census.records)
+    assert appended == 1
+    ledger = FilePromotionLedger(default_ledger_path(tmp_path))
+    assert ledger.get_thread_state("g-mkt") == "suppressed"
+    assert ledger.get_thread_state("g-unknown") == CORPUS_STATE_ACTIVE
+
+
+def test_rollback_kit_restore_small_n(tmp_path: Path) -> None:
+    rels = [f"email/uid-{i}.md" for i in range(3)]
+    for rel in rels:
+        _write_note(tmp_path, rel, f"# {rel}\n")
+    kit, copied = copy_rollback_kit(tmp_path, rels, decision_run_id=_FIXTURE_RUN_ID, limit=20)
+    assert len(copied) == 3
+    assert (kit / "kit_manifest.json").is_file()
+    for rel in rels:
+        (tmp_path / rel).unlink()
+        assert not (tmp_path / rel).exists()
+    restored = restore_rollback_kit(tmp_path, _FIXTURE_RUN_ID)
+    assert restored == 3
+    for rel in rels:
+        assert (tmp_path / rel).is_file()
+
+
+@pytest.mark.integration
+class TestEmailCorpusVaultRemove:
+    SCHEMA = "ppa_b_vault_remove"
+
+    def test_apply_deletes_notes_purges_index_and_writes_ledger(
+        self,
+        pgvector_dsn: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        idx = _bootstrap_schema(pgvector_dsn, tmp_path, self.SCHEMA)
+        threads = _fixture_threads()
+        uids = ["uid-mkt", "uid-msg-1", "uid-txn", "uid-derived", "meal-order-1"]
+        _seed_cards(idx, uids)
+        for uid in uids:
+            _write_note(tmp_path, f"email/{uid}.md", f"# {uid}\n")
+        with idx._connect() as conn:
+            conn.execute(
+                f"""
+                INSERT INTO {idx.schema}.chunks
+                    (chunk_key, card_uid, rel_path, chunk_type, chunk_index, content, content_hash)
+                VALUES (%s, %s, %s, 'body', 0, 'mkt body', 'hash-chunk-mkt')
+                """,
+                ("ck-uid-mkt", "uid-mkt", "email/uid-mkt.md"),
+            )
+            conn.commit()
+
+        archive_instance = f"fixture:{self.SCHEMA}@127.0.0.1:5432/archive@{tmp_path.name}"
+        _register_dry_run_gate(
+            idx,
+            run_id=_FIXTURE_RUN_ID,
+            archive_instance=archive_instance,
+            vault_path=str(tmp_path),
+        )
+        _write_dry_run_artifacts(tmp_path, _FIXTURE_RUN_ID, threads)
+
+        with idx._connect() as conn:
+            registry = GateRegistry(conn, idx.schema)
+            _record, decisions_path = guard_corpus_hygiene_apply(
+                registry,
+                decision_run_id=_FIXTURE_RUN_ID,
+                archive_instance=archive_instance,
+                repo_root=tmp_path,
+                instance_role="fixture",
+            )
+            records = load_decision_records_jsonl(decisions_path)
+            apply_result = run_email_corpus_apply(
+                conn,
+                idx.schema,
+                records,
+                decision_run_id=_FIXTURE_RUN_ID,
+                archive_instance=archive_instance,
+                vault_path=str(tmp_path),
+                engine_mode="n/a",
+                repo_root=tmp_path,
+            )
+
+            assert apply_result.vault_markdown_deleted is True
+            assert apply_result.counts.files_deleted == 2
+            report = json.loads(Path(apply_result.artifact_paths["report"]).read_text(encoding="utf-8"))
+            assert report["details"]["safety"]["vault_markdown_deleted"] is True
+            summary = Path(apply_result.artifact_paths["summary"]).read_text(encoding="utf-8")
+            assert "vault markdown deleted: yes" in summary
+            rollback_payload = json.loads(Path(apply_result.rollback_path).read_text(encoding="utf-8"))
+            assert "meal-order-1" in rollback_payload["card_uids"]
+            assert "meal-order-1" not in rollback_payload["removed_card_uids"]
+            assert "uid-derived" not in rollback_payload["removed_card_uids"]
+            assert "uid-mkt" in rollback_payload["removed_card_uids"]
+
+            assert not (tmp_path / "email/uid-mkt.md").exists()
+            assert not (tmp_path / "email/uid-msg-1.md").exists()
+            assert (tmp_path / "email/uid-derived.md").is_file()
+            assert (tmp_path / "email/meal-order-1.md").is_file()
+            assert (tmp_path / "email/uid-txn.md").is_file()
+
+            gone = conn.execute(
+                f"SELECT uid FROM {idx.schema}.cards WHERE uid = ANY(%s)",
+                (["uid-mkt", "uid-msg-1"],),
+            ).fetchall()
+            assert gone == []
+            kept = conn.execute(
+                f"SELECT uid FROM {idx.schema}.cards WHERE uid = ANY(%s) ORDER BY uid",
+                (["uid-derived", "meal-order-1", "uid-txn"],),
+            ).fetchall()
+            assert [str(row["uid"]) for row in kept] == ["meal-order-1", "uid-derived", "uid-txn"]
+            assert get_card_corpus_state(conn, idx.schema, "uid-derived") == CORPUS_STATE_QUARANTINE
+            assert get_card_corpus_state(conn, idx.schema, "meal-order-1") == CORPUS_STATE_QUARANTINE
+            assert is_card_retrieval_active(conn, idx.schema, "uid-derived")
+            leftover_chunks = conn.execute(
+                f"SELECT chunk_key FROM {idx.schema}.chunks WHERE card_uid = %s",
+                ("uid-mkt",),
+            ).fetchall()
+            assert leftover_chunks == []
+
+            ledger = FilePromotionLedger(default_ledger_path(tmp_path))
+            assert ledger.get_thread_state("g-mkt") == "suppressed"
+            assert ledger.get_thread_state("g-derived") == CORPUS_STATE_ACTIVE
+            assert ledger.get_thread_state("g-txn") == CORPUS_STATE_ACTIVE
+
+            rollback_result = run_email_corpus_rollback(
+                conn,
+                idx.schema,
+                decision_run_id=_FIXTURE_RUN_ID,
+                archive_instance=archive_instance,
+                vault_path=str(tmp_path),
+                engine_mode="n/a",
+                repo_root=tmp_path,
+            )
+            assert rollback_result.counts.kit_files_restored >= 1
+            assert rollback_result.counts.kit_files_restored <= 20
+            assert (tmp_path / "email/uid-mkt.md").is_file()
+            assert (tmp_path / "email/uid-txn.md").is_file()
+            rb_report = json.loads(Path(rollback_result.artifact_paths["report"]).read_text(encoding="utf-8"))
+            assert rb_report["details"]["safety"]["vault_markdown_deleted"] is True
+            assert rb_report["details"]["kit_files_restored"] == rollback_result.counts.kit_files_restored
