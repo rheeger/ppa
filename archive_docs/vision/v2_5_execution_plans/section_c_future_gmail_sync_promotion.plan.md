@@ -1,12 +1,12 @@
 # Section C Execution Plan - Future Gmail Sync Promotion
 
-**Status (Aug 2026):** Adapter gate is on. **Product fork (locked 2026-08-26–28):** suppressed inbound does **not** emit cards (ledger only). Quarantine inbound **writes** labeled cards (`emit_cards=True`, `retrieval_weight=0.35`). Written C3 (“quarantine = compact review, no cards”) is superseded.
+**Status (Aug 2026, HEAD `5980464`):** Adapter gate is on. **Product fork (locked):** suppressed inbound does **not** emit cards (ledger only). Quarantine inbound **writes** labeled cards (`emit_cards=True`, `retrieval_weight=0.35`). Written C3 (“quarantine = compact review, no cards”) is superseded. This seed is the living corpus; Arnold is not the home.
 
 ## Objective
 
 Specify how future Gmail syncs should classify and promote records before creating active PPA cards.
 
-This plan makes the Gmail adapter lifecycle use the same `EmailPromotionPolicy` defined in Section A and the same decision store defined in Section B. The goal is to prevent future sync from reintroducing marketing/bulk/noise email into the active corpus after Arnold is cleaned.
+This plan makes the Gmail adapter lifecycle use the same `EmailPromotionPolicy` defined in Section A and the same decision store defined in Section B. The goal is to prevent future sync from reintroducing marketing/bulk/noise email into the active corpus after this seed is cleaned.
 
 ## Non-Goals
 

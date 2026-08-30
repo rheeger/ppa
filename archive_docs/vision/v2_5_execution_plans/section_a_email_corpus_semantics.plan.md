@@ -1,6 +1,6 @@
 # Section A Execution Plan - Email Corpus Semantics
 
-**Status (Aug 2026):** Policy implemented and fixture-tested. **Product fork locked 2026-08-26–28:** quarantine is labeled vault cards (`retrieval_weight=0.35`, inbound `emit_cards=True`), not a compact review record with no cards. Suppressed marketing is deleted from vault + purged from index + Gmail ledger; suppressed inbound does not emit. Written C3 (“quarantine = compact review, no cards”) is superseded.
+**Status (Aug 2026, HEAD `5980464`):** Policy implemented and fixture-tested. **Product fork locked:** quarantine is labeled vault cards (`retrieval_weight=0.35`, inbound `emit_cards=True`), not a compact review record with no cards. Suppressed marketing is deleted from vault + purged from index + Gmail ledger; suppressed inbound does not emit. Written C3 (“quarantine = compact review, no cards”) is superseded. This seed is the living corpus; Arnold is not the home.
 
 ## Objective
 
@@ -319,7 +319,7 @@ Section A does not require a CLI by itself, but later commands should expose the
 
 ## Migration / Rollout Notes
 
-- Section B applies this policy to existing Arnold cards.
+- Section B applies this policy to existing seed cards (filename “Arnold cleanup” is historical).
 - Section C applies this policy to future Gmail sync before card promotion.
 - The first implementation should keep policy behavior deterministic and auditable before optimizing performance.
 - Physical deletion of **suppressed** marketing is the locked B/C fork (this seed already applied). Quarantine is not deleted.
@@ -346,7 +346,7 @@ Required gates:
 2. **Small slice:** policy decisions are generated for real marketing, transactional, personal, starred promotional, and ambiguous Gmail threads.
 3. **Larger slice:** decision counts remain stable and reports remain bounded.
 4. **Local seed dry-run:** policy evaluates seed records using existing classifications first.
-5. **Arnold dry-run:** policy produces reviewable decisions without apply.
+5. **Arnold dry-run:** historical. **Not a v2.5 closer.** This seed already received apply.
 
 Rust standard:
 

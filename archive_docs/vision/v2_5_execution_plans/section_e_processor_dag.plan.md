@@ -1,6 +1,6 @@
 # Section E Execution Plan - Processor DAG
 
-**Status (Aug 2026, HEAD `b57136f`):** Phase 1 and Phase 2 are **landed**. Track A (`fa5f5a2`) closed the stub executors — dirty-UID paths now call incremental rebuild, embed-pending, incremental link refresh, `run_enrichment_for_uids`, and UID-scoped ER. Dirty extract is allowlist-scoped (`35901b0`). Dirty-UID rematerialize allowlist incremental landed (`1c02e10`); host UID after merge (`b57136f`). Index after campaign: ~1,392,108 cards, 3,962,176 embeddings, pending 0. Remaining scale hole: `embed_pending` is limit-N not `card_uid` filter. **Open on this seed:** one `maintain --run-processors`. Join proof is fixture maintain; that maintain has not been run on this seed. Arnold is out of current scope.
+**Status (Aug 2026, HEAD `5980464`):** Phase 1 and Phase 2 are **landed**. Track A (`fa5f5a2`) closed the stub executors — dirty-UID paths now call incremental rebuild, embed-pending, incremental link refresh, `run_enrichment_for_uids`, and UID-scoped ER. Dirty extract is allowlist-scoped (`35901b0`). Dirty-UID rematerialize allowlist incremental landed (`1c02e10`); host UID after merge (`b57136f`). Index after campaign: ~1,392,108 cards, 3,962,176 embeddings, pending 0. Soak ran on this seed. Remaining scale hole: `embed_pending` is limit-N not `card_uid` filter — not a v2.5 closer. Arnold is not the home.
 
 ## Objective
 
@@ -22,7 +22,7 @@ Delivered:
 - CLI: `ppa processors` (declarations, status, plan).
 - `ppa maintain --record-processor-status` seeds status only — **does not run processors**.
 
-Phase 1 is **not** incremental refresh. Do not treat it as Section E complete for v3 readiness.
+Phase 1 is **not** incremental refresh. Phase 2 + soak on this seed is the v2.5 closer. Do not treat Arnold processor proof as remaining work.
 
 ### Phase 2 — Execution (LANDED; see status note above)
 
@@ -460,9 +460,9 @@ Required gates:
 2. **Small slice:** dirty inputs trigger only expected processors.
 3. **Larger slice:** queue size, runtime, and skipped suppressed inputs are measured.
 4. **Local seed dry-run:** expected processor blast radius is reported without running expensive jobs by default.
-5. **Local seed staging apply:** affected processors run on staging outputs and rollback works by run ID/output identity.
-6. **Arnold dry-run:** report processor work that would run after cleanup/future sync.
-7. **Arnold reviewed execution:** only reviewed processor runs execute on production.
+5. **Local seed apply:** this seed already received dirty-UID processing + soak. Do not copy the seed to re-prove it.
+6. **Arnold dry-run:** historical. **Not a v2.5 closer.**
+7. **Arnold reviewed execution:** historical. **Not a v2.5 closer.**
 
 Rust standard:
 
@@ -470,7 +470,7 @@ Rust standard:
 - Use Rust cache/type-filtered scans to compute input sets.
 - Do not run full embeddings or all linkers by default; process dirty active inputs only.
 - Processor reports must include engine mode, elapsed runtime, throughput, skipped suppressed count, and stale reason counts.
-- Rust/Python divergence in chunk keys, materialized rows, or active/suppressed filtering blocks Arnold processor execution.
+- Rust/Python divergence in chunk keys, materialized rows, or active/suppressed filtering blocks a production-role processor run.
 
 ## Operational Reporting
 
@@ -525,15 +525,15 @@ Rollback should be scoped by processor run ID when possible.
 
 **Phase 1 (landed):** declarations, staleness/plan, status CLI, maintain snapshot hooks, contract tests.
 
-**Phase 2 (required for H / v3):**
+**Phase 2 (landed for v2.5-local):**
 
 - Dirty inputs from source updaters map to executable processor plans.
 - Runner executes only stale/pending active work via existing entrypoints.
 - Active-only processors skip suppressed/quarantine inputs.
-- `ppa maintain --run-processors` participates in the live cycle.
+- `ppa maintain --run-processors` participates in the live cycle; soak ran on this seed.
 - Reports prove no default full embedding, full linker, or broad LLM rerun.
 - Missing config/provider blocked states return structured exit `4`.
-- Section H seed/Arnold processor gates can pass.
+- Section H Arnold processor gates are **not** required to close v2.5.
 
 ## Completion Artifacts
 

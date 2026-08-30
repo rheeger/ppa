@@ -1,12 +1,12 @@
 # Section D Execution Plan - Source Updater Contract
 
-**Status (Aug 2026, HEAD `b57136f`):** Phase 1 and Phase 2 **runner** are landed, including Track B catch-up, Track C calendar mint, and cache-backed Gmail/Calendar indexes. **2026-08-26–28 live updaters ran on the canonical seed** (schema `ppa`) — not a staging copy. Do not copy the seed first. Do not full-mailbox-walk correspondents.
+**Status (Aug 2026, HEAD `5980464`):** Phase 1 and Phase 2 **runner** are landed, including Track B catch-up, Track C calendar mint, and cache-backed Gmail/Calendar indexes. **Live updaters ran on the canonical seed** `/Users/rheeger/Archive/seed/hf-archives-seed-20260307-235127` schema `ppa` — not a staging copy. That seed **is** the corpus. Do not copy the seed first. Do not full-mailbox-walk correspondents. Do not deploy Arnold.
 
-**SUCCESS on this seed:** calendar, contacts, otter, file-libraries, beeper, imessage, gmail-messages, gmail-correspondents (vault-first + `after:last_sync` + HTTP/batch).
+**Ops model:** run updaters where the secrets and devices live (this Mac, later Helga Pataki — iMessage snapshots, Photos parked, local Beeper, GitHub `gh`, Otter MCP, Google tokens). The corpus lives here.
 
-**FAILED:** GitHub (`--stage-dir` required). **Not run / parked:** Photos. Catch-up not run.
+**SUCCESS on this seed:** calendar, contacts, otter, file-libraries, beeper, imessage, gmail-messages, gmail-correspondents (vault-first + `after:last_sync` + HTTP/batch). GitHub campaign fixes landed (`5980464`). Otter MCP auth persists.
 
-Remaining: GitHub `--stage-dir`. Manual exports stay import-only. Arnold is out of current scope.
+**Not run / parked:** Photos. Catch-up not run. Manual exports stay import-only. Arnold is not the home.
 
 ## Objective
 
@@ -47,7 +47,7 @@ Non-goals for Phase 2:
 
 - Do not replace `BaseAdapter` / invent a new sync framework.
 - Do not require webhooks.
-- Do not enable Arnold production updater runs before Section H seed proof.
+- Do not enable Arnold production updater runs. Arnold is not the home. Run updaters where the secrets/devices live; the corpus lives here.
 - Do not silently demote existing active cards during routine sync (Section C rules still apply).
 
 #### Phase 2 Agent Handoff Checklist
@@ -385,7 +385,7 @@ Future implementation should include:
 
 ## Validation Ladder and Rust Standard
 
-Source updaters must prove cursor and dirty-set behavior before Arnold enablement.
+Source updaters must prove cursor and dirty-set behavior on this seed. Written Arnold enablement is not a v2.5 closer.
 
 Required gates:
 
@@ -393,16 +393,16 @@ Required gates:
 2. **Small slice/source fixture:** every live stream produces expected promoted/suppressed/quarantine/dirty counts (Gmail promotion-gated; others source-default).
 3. **Larger slice:** run source updater reporting at realistic volume and capture wall-time.
 4. **Local seed dry-run:** source updater state is computed; on this machine the canonical seed **already received** `--apply`.
-5. **Local seed apply:** this campaign applied on the canonical seed (schema `ppa`), not a staging copy. Do not copy the seed first. Future Arnold still uses staging.
-6. **Arnold dry-run:** source freshness and proposed batch behavior are reported without changing production.
-7. **Arnold enablement:** source updater runs only after cursor rollback/recovery is documented.
+5. **Local seed apply:** this campaign applied on the canonical seed (schema `ppa`), not a staging copy. Do not copy the seed first. This seed **is** the corpus.
+6. **Arnold dry-run:** historical. **Not a v2.5 closer.**
+7. **Arnold enablement:** historical. **Not a v2.5 closer.**
 
 Rust standard:
 
 - Use Rust cache/type-filtered scans to reconcile active card state during source updater validation.
 - Source reports must include engine mode when cache/materialization paths are used.
 - Avoid provider-triggered broad rescans when history/sync-token/rowid/modified-at cursors are available.
-- Rust/Python divergence in dirty-card discovery blocks Arnold enablement.
+- Rust/Python divergence in dirty-card discovery blocks a production-role enablement.
 
 ## Operational Reporting
 
@@ -433,16 +433,16 @@ Recovery rules:
 
 **Phase 1 (landed):** declarations, batch shapes, cursor helpers, status snapshots, CLI read paths, focused contract tests.
 
-**Phase 2 (required for H / v3):**
+**Phase 2 (landed for v2.5-local):**
 
-- Source updater **execution** exists for live (non-export) streams. This seed: SUCCESS for the list in the status header; GitHub `--stage-dir` still required; Photos parked.
+- Source updater **execution** exists for live (non-export) streams this Mac can run. This seed: SUCCESS for the list in the status header; Photos parked.
 - Export adapters stay refused.
 - Committed batch summaries are persisted from real runs.
 - Cursor commit safety preserved under apply.
 - Gmail uses promotion-gated reporting.
 - Dirty UIDs are consumable by E Phase 2.
 - `ppa maintain --run-source-updaters` invokes live updaters (not only snapshots).
-- Section H seed and Arnold updater gates can pass for required live sources.
+- Section H Arnold updater gates are **not** required to close v2.5.
 - Reports include gate name, engine mode when relevant, cursor before/after, dirty count, errors, next action.
 
 ## Completion Artifacts

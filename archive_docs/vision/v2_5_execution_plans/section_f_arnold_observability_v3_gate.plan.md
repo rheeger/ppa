@@ -1,10 +1,12 @@
 # Section F Execution Plan - Arnold Observability and v3 Readiness Gate
 
-**Status (Aug 2026, HEAD `b57136f`):** Surfaces landed. **Evidence hole remains** — readiness can go green on snapshots. Remaining close-out: soak + real-run evidence on this seed after one `maintain --run-processors`. Arnold soak/6+ deferred.
+The filename is **historical**. Observability is for this local seed, not Arnold soak.
+
+**Status (Aug 2026, HEAD `5980464`):** Surfaces landed. F freshness uses **live keys**. Soak ran on this seed. Formal `ready: false` leftover from missing `validation_gates` / `corpus_cleanup` review rows is an **accepted local exception** (`local_seed_living_corpus`). Do not restage a fake ladder to satisfy the enum. Arnold soak/6+ is **not** a v2.5 closer.
 
 ## Objective
 
-Define how Arnold reports production health after v2.5 and how PPA decides it is ready to resume v3 packaging work.
+Define how **this living seed** reports production health after v2.5. v3 packaging is a later product decision. It is not gated on standing Arnold back up.
 
 Section F turns the concepts from Sections A-E into operator-visible status:
 
@@ -23,7 +25,7 @@ Section F turns the concepts from Sections A-E into operator-visible status:
 - Do not implement status commands in this planning pass.
 - Do not require a web dashboard.
 - Do not hide failures behind a single green/red indicator.
-- Do not declare v3 ready based only on docs existing; v3 readiness requires later implementation proof on Arnold.
+- Do not declare v3 ready based only on docs existing. Do not require Arnold soak for v2.5-done. Do not invent `validation_gates` / `corpus_cleanup` review rows to flip `ready: true`.
 
 ## Existing Code and Docs to Inspect Before Implementation
 
@@ -50,7 +52,7 @@ Before implementation:
 - Run `git status --short --branch` and stop if the tree is not clean.
 - Build machine-readable status before polished text UI.
 - Make readiness fail closed until all required reports/gates exist.
-- Do not declare v3 ready based only on docs or partial implementation.
+- Do not declare v3 ready based only on docs or partial implementation. v2.5-local does not wait on `ready: true`.
 - Prefer aggregating existing status stores over inventing new Section F-only state.
 
 Likely implementation files:
@@ -75,7 +77,7 @@ Stop conditions:
 - status cannot identify the failing source/processor/gate.
 - readiness can pass without Section G gate evidence.
 - reports do not include engine mode or decision run IDs.
-- Arnold status hides partial failures behind a green summary.
+- Status hides partial failures behind a green summary.
 - status implementation starts mutating source cursors, corpus state, embeddings, or processors.
 - Section F builds a separate source/processor state model instead of consuming Sections B/D/E/G.
 - normal operator misuse produces tracebacks instead of structured status/errors.
@@ -416,8 +418,8 @@ Required gates:
 3. **Larger slice:** status remains readable and report size is manageable.
 4. **Local seed dry-run:** status summarizes full-seed dry-run without mutation.
 5. **Local seed staging apply:** status shows apply, rollback, rebuild-safety, and processor outcomes.
-6. **Arnold dry-run:** status shows not-ready until apply/soak checks pass.
-7. **Arnold reviewed apply and soak:** status is the authority for v3 readiness.
+6. **Arnold dry-run:** historical. **Not a v2.5 closer.**
+7. **Arnold reviewed apply and soak:** historical. Local soak already ran. Formal `ready: false` leftover is an accepted local exception.
 
 Rust standard:
 
@@ -444,10 +446,10 @@ Section F implementation is ready when:
 - Append-only maintenance reports exist.
 - Health thresholds are explicit.
 - v3 readiness gate exists and fails closed.
-- Arnold can show why it is or is not ready for v3.
+- This seed can show source freshness from live keys and why formal `ready` is still false (accepted leftover review rows).
 - Operator docs explain dry-run, apply, rollback, status, and maintenance report interpretation.
-- v3 readiness cannot pass unless Section G gate evidence exists through Arnold soak.
-- **v3 readiness cannot pass on snapshot-only source/processor status;** required checks 5–7 need real run reports from D/E Phase 2.
+- v2.5-local does **not** require Section G gate evidence through Arnold soak.
+- Snapshot-only source/processor state still cannot flip the enum to ready. That leftover does **not** block v2.5-done. Do not invent fake gate rows.
 - status includes report paths, decision run IDs, engine mode, rollback status, and failed gate details.
 - status/readiness can run without executing live sync, processors, embeddings, or linkers.
 - missing config/vault/database cases return structured output and documented exit code, not tracebacks.

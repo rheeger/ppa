@@ -1,33 +1,36 @@
 # Section H Execution Plan - v2.5 Validation and Promotion Runbook
 
-**Status (Aug 2026, HEAD `b57136f`):** Local gates 0–5 / earlier 5b (CCS staging + capped Gmail) and the scale ladder are landed. **2026-08-26–28 campaign then applied on the canonical seed** `/Users/rheeger/Archive/seed/hf-archives-seed-20260307-235127` schema `ppa` — not a staging copy. The written sequence (slice vault-remove → 1pct/10pct updaters → Gate 5b on a staging copy → catch-up) was **skipped**. Do not copy the seed first. “Never mutate the canonical seed” is a historical constraint for **future Arnold**, not this machine.
+**Status (Aug 2026, HEAD `5980464`):** **v2.5-local is complete.** Local gates 0–5 / earlier 5b and the scale ladder are landed. Hygiene + live updaters + soak already ran **on the canonical seed** `/Users/rheeger/Archive/seed/hf-archives-seed-20260307-235127` schema `ppa` — not a staging copy. The written sequence (slice vault-remove → 1pct/10pct updaters → Gate 5b on a staging copy → Arnold) was **skipped** and is **not** the remaining path.
+
+**Completion note:** `local_seed_living_corpus`. Formal `ready: false` leftover from missing `validation_gates` / `corpus_cleanup` review rows is an **accepted local exception**. Do not restage a fake ladder. Do not invent fake gate artifacts. Do not copy the seed. Do not deploy Arnold.
+
+“Never mutate the canonical seed” was a written constraint for an Arnold promotion path. This seed **is** the living corpus. Arnold is **down** and is **not** the long-term home.
 
 **Product fork (locked):** suppressed marketing deleted (~502,622 files; no `rollback.json`). Quarantine stays as labeled cards (`retrieval_weight=0.35`). Inbound uncertain Gmail writes cards (`emit_cards=True`); suppressed inbound does not.
 
-**Live updaters on this seed:** SUCCESS calendar, contacts, otter, file-libraries, beeper, imessage, gmail-messages, gmail-correspondents (vault-first + `after:last_sync` + HTTP/batch). GitHub FAILED (`--stage-dir` required). Photos not run. Dirty rematerialize allowlist incremental; index ~1,392,108 cards / 3,962,176 embeddings / pending 0. No full rebuild, no IVFFlat, no `--catch-up`.
+**Live updaters on this seed:** SUCCESS calendar, contacts, otter, file-libraries, beeper, imessage, gmail-messages, gmail-correspondents (vault-first + `after:last_sync` + HTTP/batch). GitHub campaign fixes landed (`5980464`). Photos not run (parked). Dirty rematerialize allowlist incremental; index ~1,392,108 cards / 3,962,176 embeddings / pending 0. Soak ran. Otter MCP auth persists. F freshness uses live keys. No full rebuild, no IVFFlat, no `--catch-up`.
 
-**Remaining (Arnold excluded):** (1) hygiene leftovers — quadratic UID collect + persist `rollback.json` on future applies; (2) GitHub `--stage-dir`; (3) one `maintain --run-processors` on this seed; (4) soak + F real-run evidence. Parked: Photos, catch-up, full rebuild, Arnold 6+. Do not re-run vault-remove. Do not full-mailbox-walk correspondents.
+**Parked (not v2.5 closers):** Photos, Apple Health, `--catch-up`, full rebuild, Arnold gates 6+. Do not re-run vault-remove. Do not full-mailbox-walk correspondents.
 
 ## Objective
 
-Prove that v2.5 makes Arnold a **living, high-signal archive** — not only that Phase-1 contracts and corpus tooling exist.
+Prove that v2.5 makes **this local seed** a living, high-signal archive — not that Phase-1 contracts exist, and **not** that Arnold is promoted.
 
-Prerequisite: **D Phase 2** and **E Phase 2** commits are on `v2.5` (`source updater execution`, `processor dag execution`). Do not run this runbook against Phase-1-only code and call freshness proven.
+Prerequisite: **D Phase 2** and **E Phase 2** commits are on `v2.5` (`source updater execution`, `processor dag execution`). Those commits are landed. Do not run this runbook against Phase-1-only code and call freshness proven.
 
 ```text
 focused tests
   → synthetic gate
   → smoke / larger slice (corpus + updater fixtures)
-  → local seed: corpus dry-run + staging apply (optional if already proven)
-  → local seed: SOURCE UPDATER + PROCESSOR proof   ← required for live update
-  → Arnold code deploy (sync + install + migrate; no full Phase 9 rebuild by default)
-  → Arnold: SOURCE UPDATER + PROCESSOR proof
-  → Arnold corpus dry-run → reviewed apply
-  → Arnold soak (maintain with real updaters/processors)
-  → ppa readiness READY
+  → local seed applied in place (hygiene + live updaters)   ← done on this machine
+  → local soak                                             ← done
+  → v2.5-local complete (local_seed_living_corpus)
+
+historical / not required for v2.5:
+  Arnold code deploy → Arnold updater proof → Arnold corpus apply → Arnold soak
 ```
 
-Section H is not a new feature section. It is the runbook that turns implemented v2.5 into production confidence and unblocks v3.
+Section H is not a new feature section. It is the runbook that recorded how v2.5 became a living seed. Gates 6+ below are **historical text**. Do not execute them to close v2.5.
 
 ## Relationship to Other Sections
 
@@ -46,10 +49,11 @@ Section H is not a new feature section. It is the runbook that turns implemented
 
 - Do not introduce new corpus semantics or a second promotion policy.
 - Do not treat `--record-source-status` / `--record-processor-status` as updater/processor proof.
-- Do not apply corpus hygiene to Arnold before seed **and** Arnold updater proof.
+- Do not apply corpus hygiene to Arnold. Arnold is down and is not the home.
 - Do not run full Phase 9 `ppa-deploy-v2` (rebuild + embedding restore) for routine code promotion unless schema/index requires it.
 - Do not re-run vault-remove on this seed (already applied; quarantine kept). Do not physically prune Arnold. Do not copy the seed first.
 - Do not start v3 packaging from this runbook.
+- Do not restage a fake validation ladder to flip `ready: true`.
 
 ## Existing Code and Docs to Inspect Before Running
 
@@ -74,14 +78,14 @@ Before running validation:
   - `v2.5 section E: processor dag execution`
 - Confirm branch is pushed to `ppa/v2.5`.
 - Confirm `PPA_ENGINE=rust` unless explicitly running Python parity.
-- Confirm operator can reach Arnold (`ssh arnold@192.168.50.27` or `ARNOLD_HOST` from hey-arnold).
+- Do **not** require SSH to Arnold. Arnold is down and is not the v2.5 target.
 
 Stop immediately if:
 
 - D/E Phase 2 commits are missing.
 - the branch is dirty.
 - focused tests fail.
-- any command would apply to Arnold before Arnold dry-run review.
+- any command would copy this seed, deploy Arnold, or invent `validation_gates` / `corpus_cleanup` review rows.
 - updater “proof” is only a status snapshot with no cursor before/after from a real run.
 
 ## Standard Environment Matrix
@@ -94,8 +98,8 @@ Export these explicitly for every gate. Do not rely on ambient shell state.
 | Smoke slice        | `/tmp/ppa-test-slice-smoke`       | `archive_test_slice_smoke`                   | `slice`                     | From `make test-slice-smoke`              |
 | Larger slice       | `/tmp/ppa-test-slice`             | `archive_test_slice`                         | `slice`                     | From `make test-slice`                    |
 | Local seed dry-run | `$(PPA_SEED_VAULT)` from Makefile | `archive_seed` / this machine uses `ppa`     | `seed`                      | **This machine already applied** on the canonical seed. Do not copy-and-reapply. |
-| Local seed staging | **This machine: same seed** (`hf-archives-seed-20260307-235127`) | `ppa` (not a staging copy) | `seed`                      | Written “copy first” sequence was skipped. Future Arnold still uses a copy. |
-| Arnold             | Arnold vault (`PPA_PATH` on host) | production schema (usually `ppa`)            | `production`                | Requires `--confirm-production` for apply |
+| Local seed (living corpus) | `/Users/rheeger/Archive/seed/hf-archives-seed-20260307-235127` | `ppa` (not a staging copy) | `seed`                      | This **is** the corpus. Written “copy first” / Arnold tail was skipped. |
+| Arnold             | Historical only                   | n/a                                          | n/a                         | **Not a v2.5 closer.** Arnold is down. Do not deploy. |
 
 Always also set:
 
@@ -150,7 +154,7 @@ At end of each gate: tests/commands exited `0` (or documented `3` for intentiona
 
 ## Gate 0: Branch and Focused Test Baseline
 
-**Purpose:** Confirm the branch is coherent before touching slices, seed, or Arnold.
+**Purpose:** Confirm the branch is coherent before touching slices or this seed.
 
 ```bash
 cd /path/to/ppa
@@ -265,7 +269,7 @@ Review: reuse rate, new LLM count, suppression/quarantine, high-risk buckets.
 
 **Exit criteria:** report reviewed. On this machine the canonical seed **already received** apply after this gate’s historical dry-run; do not treat “no mutation” as a current-state description.
 
-**Do not proceed unless:** report reviewed. Do not copy the seed first.
+**Do not proceed unless:** report reviewed. Do not copy the seed first. This gate already ran; do not redo it to “unskip” the written sequence.
 
 ---
 
@@ -279,13 +283,13 @@ export PPA_PATH=/Users/rheeger/Archive/seed/hf-archives-seed-20260307-235127
 export PPA_INDEX_SCHEMA=ppa
 export PPA_ARCHIVE_INSTANCE_ROLE=seed
 
-# Future Arnold / other machines: still use a staging copy.
+# Do not invent a staging copy of this seed to “pass” a written gate.
 # export PPA_PATH=<seed_staging_vault_copy>
 # export PPA_INDEX_SCHEMA=<seed_staging_schema>
 # export PPA_ARCHIVE_INSTANCE_ROLE=seed-staging
 ```
 
-**Disallowed now:** re-running vault-remove on this seed; Arnold mutation; deleting quarantine cards. This apply wrote no `rollback.json`.
+**Disallowed now:** re-running vault-remove on this seed; copying the seed; Arnold deploy/mutation; deleting quarantine cards. This apply wrote no `rollback.json`.
 
 **Exit criteria:** apply+rollback+rebuild safety; status shows corpus state; readiness still not-ready.
 
@@ -303,11 +307,12 @@ export PPA_PATH=/Users/rheeger/Archive/seed/hf-archives-seed-20260307-235127
 export PPA_INDEX_SCHEMA=ppa
 export PPA_ARCHIVE_INSTANCE_ROLE=seed
 # This machine already --apply'd live updaters on the canonical seed. Do not copy first.
+# Soak already ran. Do not re-run SUCCESS streams to manufacture gate rows.
 ```
 
 ### Per-source updater proof
 
-For each **live** source (not a manual export). **This seed SUCCESS:** `calendar`, `contacts`, `otter-transcripts`, `file-libraries`, `beeper`, `imessage`, `gmail-messages`, `gmail-correspondents` (vault-first + `after:last_sync` + HTTP/batch). **FAILED / open:** `github-history` (`--stage-dir` required). **Not run / parked:** `photos`. Do not re-run SUCCESS streams. Do not full-mailbox-walk correspondents. Do not run Finance/LinkedIn/Notion CSV/Health XML/medical dumps/Apple VCF as updaters.
+For each **live** source (not a manual export). **This seed SUCCESS:** `calendar`, `contacts`, `otter-transcripts`, `file-libraries`, `beeper`, `imessage`, `gmail-messages`, `gmail-correspondents` (vault-first + `after:last_sync` + HTTP/batch). GitHub campaign fixes landed (`5980464`). **Not run / parked:** `photos`. Do not re-run SUCCESS streams. Do not full-mailbox-walk correspondents. Do not run Finance/LinkedIn/Notion CSV/Health XML/medical dumps/Apple VCF as updaters.
 
 ```bash
 # Capture cursor before
@@ -363,18 +368,20 @@ DIRTY="$(jq -r '.dirty_uids_path // .artifact_paths.dirty_uids // empty' /tmp/su
 
 **Exit criteria (this machine, Aug 2026):**
 
-- SUCCESS updater proof already recorded for the streams listed above. GitHub still needs `--stage-dir`. Photos parked. Export streams are out of this gate.
-- **Still open:** one `maintain --run-processors` on this seed (fixture join proof is not that run).
-- Do not require full rebuild / IVFFlat / `--catch-up` for this close-out.
-- Catch-up is parked.
+- SUCCESS updater proof already recorded for the streams listed above. Photos parked. Export streams are out of this gate.
+- Soak ran. Otter MCP auth persists. F freshness uses live keys.
+- Do not require full rebuild / IVFFlat / `--catch-up` for v2.5-done.
+- Formal `ready: false` leftover is an accepted local exception (`local_seed_living_corpus`).
 
-**Do not proceed to Arnold.** Remaining local close-out is GitHub `--stage-dir`, processors maintain, soak + F real-run evidence.
+**Do not proceed to Arnold.** v2.5-local is complete. Gates 6–9 below are historical.
 
 ---
 
-## Gate 6: Arnold Code Deploy (v2.5 branch)
+## Gate 6: Arnold Code Deploy (v2.5 branch) — HISTORICAL, NOT REQUIRED
 
-**Purpose:** Put D/E Phase 2 code on Arnold **without** corpus apply and without default full rebuild.
+**Status:** not a v2.5 closer. Arnold is down. Do not run this gate to finish v2.5.
+
+**Purpose (historical write-up):** Put D/E Phase 2 code on Arnold **without** corpus apply and without default full rebuild.
 
 ### From laptop (hey-arnold repo)
 
@@ -428,9 +435,11 @@ make -C /path/to/hey-arnold ppa-mcp-status
 
 ---
 
-## Gate 6b: Arnold Source Updater + Processor Proof (REQUIRED)
+## Gate 6b: Arnold Source Updater + Processor Proof — HISTORICAL, NOT REQUIRED
 
-**Purpose:** Same as Gate 5b on production, with production role. Prefer dry-run first; apply with care.
+**Status:** not a v2.5 closer. Do not run this gate to finish v2.5.
+
+**Purpose (historical write-up):** Same as Gate 5b on production, with production role. Prefer dry-run first; apply with care.
 
 ```bash
 export PPA_ENGINE=rust
@@ -459,9 +468,11 @@ export PPA_ARCHIVE_INSTANCE_ROLE=production
 
 ---
 
-## Gate 7: Arnold Corpus Dry-Run
+## Gate 7: Arnold Corpus Dry-Run — HISTORICAL, NOT REQUIRED
 
-**Purpose:** Evaluate production corpus cleanup without mutation.
+**Status:** not a v2.5 closer. This seed already received hygiene apply.
+
+**Purpose (historical write-up):** Evaluate production corpus cleanup without mutation.
 
 ```bash
 export PPA_ENGINE=rust
@@ -486,9 +497,11 @@ Record gate `production_dry_run` with review notes.
 
 ---
 
-## Gate 8: Arnold Reviewed Corpus Apply
+## Gate 8: Arnold Reviewed Corpus Apply — HISTORICAL, NOT REQUIRED
 
-**Purpose:** Apply reviewed corpus-state changes.
+**Status:** not a v2.5 closer. Do not apply to Arnold.
+
+**Purpose (historical write-up):** Apply reviewed corpus-state changes.
 
 ```bash
 export PPA_ENGINE=rust
@@ -518,9 +531,11 @@ Expected: exit `0`. Missing `--confirm-production` or wrong role → exit `3`.
 
 ---
 
-## Gate 9: Arnold Soak and Readiness
+## Gate 9: Arnold Soak and Readiness — HISTORICAL, NOT REQUIRED
 
-**Purpose:** Prove Arnold stays healthy through **real** maintain (updaters + processors), not snapshots alone.
+**Status:** not a v2.5 closer. Local soak already ran on this seed. Formal `ready: false` leftover (`validation_gates` / `corpus_cleanup` review rows) is an accepted local exception (`local_seed_living_corpus`). Do not restage a fake ladder.
+
+**Purpose (historical write-up):** Prove Arnold stays healthy through **real** maintain (updaters + processors), not snapshots alone.
 
 ```bash
 export PPA_ENGINE=rust
@@ -561,20 +576,19 @@ Stop and ask for review if:
 - updater apply would advance cursor past unpersisted work.
 - a command would “unskip” Gate 5b by copying this seed and re-applying hygiene or SUCCESS updaters.
 - any command would re-run vault-remove or full-mailbox-walk correspondents on this already-applied seed.
-- any command would mutate Arnold corpus before Gate 7 review.
-- readiness flips ready on snapshot-only evidence.
+- any command would deploy Arnold or mutate an Arnold corpus.
+- a next agent restages a fake ladder to flip `ready: true`.
 - Rust/Python divergence appears on active/suppressed materialization.
 
 ## Completion Artifacts
 
-Leave:
+Leave (v2.5-local — do not invent missing Arnold / enum rows):
 
-- Gate 0–9 reports under `logs/validation-gates/`.
-- Seed and Arnold updater run JSONs (Gmail + Calendar minimum).
-- Processor plan/run JSONs tied to dirty UIDs.
-- Arnold census + apply + rollback paths.
-- Final `ppa readiness` JSON with `ready: true`.
-- Short operator note: deploy method used (`ppa-sync`/`ppa-install` vs full `ppa-deploy-v2`).
+- Existing Gate 0–5 / 5b and scale reports under `logs/validation-gates/`.
+- This-seed updater run evidence (Gmail + Calendar minimum already ran).
+- Soak evidence on this seed. Otter MCP auth persists. F freshness uses live keys.
+- Completion note: `local_seed_living_corpus`. Formal `ready: false` leftover from missing `validation_gates` / `corpus_cleanup` review rows is accepted.
+- Do **not** require Arnold updater JSONs, Arnold census/apply paths, or `ready: true`.
 
 ## Commit Instructions
 
@@ -586,4 +600,4 @@ Section H is operational. Optional docs-only commit if runbook/docs change:
 
 ## Definition of Done
 
-Section H is complete when Gates 0–9 pass, updater/processor proof exists on seed and Arnold, corpus apply is reviewed and applied, soak passes, and `ppa readiness --format json` reports ready with real-run evidence — unblocking v3 packaging work.
+Section H is complete for **v2.5-local** when this seed is the living high-signal archive: hygiene applied in place, live updaters that this Mac can run have succeeded, soak has run, Otter MCP auth persists, and F freshness uses live keys. Formal `ready: false` leftover is an accepted local exception (`local_seed_living_corpus`). Gates 6–9 (Arnold deploy/apply/soak) are **not** required. Do not copy the seed. Do not deploy Arnold. Do not invent fake gate artifacts.
