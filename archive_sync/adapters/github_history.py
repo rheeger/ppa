@@ -36,6 +36,8 @@ DEFAULT_BATCH_SIZE = 200
 RATE_LIMIT_FLOOR = 250
 DEFAULT_STAGE_WORKERS = 2
 MAX_RETRIES = 6
+PRIMARY_RATE_LIMIT_WAIT_RETRIES = 2
+MAX_RATE_LIMIT_SLEEP_SECONDS = 3600
 GRAPHQL_PAGE_SIZE_CANDIDATES = (25, 10, 5)
 REST_PAGE_SIZE_CANDIDATES = (25, 10, 5)
 REQUEST_INTERVAL_SECONDS = 0.5
@@ -355,6 +357,26 @@ def _issue_number_from_url(url: str) -> str:
     return parts[-1] if parts else ""
 
 
+def _http_header_int(blob: str, name: str) -> int | None:
+    needle = name.lower() + ":"
+    for raw_line in str(blob or "").splitlines():
+        line = raw_line.strip()
+        if not line.lower().startswith(needle):
+            continue
+        try:
+            return int(line.split(":", 1)[1].strip())
+        except (TypeError, ValueError, IndexError):
+            return None
+    return None
+
+
+def _is_primary_rate_limit(message: str) -> bool:
+    text = str(message or "").lower()
+    if "secondary rate limit" in text:
+        return False
+    return "rate limit exceeded" in text or "api rate limit exceeded" in text
+
+
 class GitHubHistoryAdapter(BaseAdapter):
     source_id = "github-history"
     preload_existing_uid_index = False
@@ -419,11 +441,31 @@ class GitHubHistoryAdapter(BaseAdapter):
             return min(180, 30 * max(1, attempt))
         return min(60, 2**attempt)
 
+    def _wait_seconds_for_primary_rate_limit(self) -> int:
+        """Sleep budget until core reset. Prefer 403 response headers; rate_limit JSON can be stale."""
+        proc = subprocess.run(
+            ["gh", "api", "-i", "user"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        header_blob = f"{proc.stdout or ''}\n{proc.stderr or ''}"
+        remaining = _http_header_int(header_blob, "x-ratelimit-remaining")
+        reset_unix = _http_header_int(header_blob, "x-ratelimit-reset")
+        if remaining is None or reset_unix is None:
+            return 0
+        if remaining >= RATE_LIMIT_FLOOR:
+            return 0
+        wait = int(reset_unix) - int(time.time()) + 2
+        return min(MAX_RATE_LIMIT_SLEEP_SECONDS, max(1, wait))
+
     def _run_gh_json(self, command: list[str], *, max_retries: int | None = None) -> Any:
-        last_error: RuntimeError | None = None
         command_preview = " ".join(command[:6]) + (" ..." if len(command) > 6 else "")
         attempts_total = max(1, int(max_retries or MAX_RETRIES))
-        for attempt in range(1, attempts_total + 1):
+        rate_limit_waits = 0
+        attempt = 0
+        while True:
+            attempt += 1
             self._throttle_request()
             proc = subprocess.run(command, capture_output=True, text=True, check=False)
             if proc.returncode == 0:
@@ -433,16 +475,23 @@ class GitHubHistoryAdapter(BaseAdapter):
                     raise RuntimeError(f"Invalid gh JSON output: {exc}") from exc
 
             stderr = (proc.stderr or proc.stdout or "").strip()
-            message = stderr.lower()
-            if attempt < attempts_total and any(marker in message for marker in RETRYABLE_MARKERS):
+            retryable = any(marker in stderr.lower() for marker in RETRYABLE_MARKERS)
+            if retryable and _is_primary_rate_limit(stderr) and rate_limit_waits < PRIMARY_RATE_LIMIT_WAIT_RETRIES:
+                wait = self._wait_seconds_for_primary_rate_limit()
+                if wait > 0:
+                    rate_limit_waits += 1
+                    print(
+                        f"[github-history] primary rate-limit wait={wait}s "
+                        f"attempt={attempt} waits={rate_limit_waits}/{PRIMARY_RATE_LIMIT_WAIT_RETRIES} "
+                        f"command={command_preview}"
+                    )
+                    time.sleep(wait)
+                    continue
+            if retryable and attempt < attempts_total:
                 sleep_seconds = self._retry_delay_seconds(stderr or "gh command failed", attempt)
                 time.sleep(sleep_seconds)
-                last_error = RuntimeError(f"{stderr or 'gh command failed'} | command={command_preview}")
                 continue
             raise RuntimeError(f"{stderr or 'gh command failed'} | command={command_preview}")
-        if last_error is not None:
-            raise last_error
-        raise RuntimeError("gh command failed")
 
     def _paged_rest_rows(
         self,
@@ -493,7 +542,12 @@ class GitHubHistoryAdapter(BaseAdapter):
         now = datetime.now(timezone.utc)
         sleep_seconds = max(0.0, (reset_dt - now).total_seconds()) + 1.0
         if sleep_seconds > 0:
-            time.sleep(min(sleep_seconds, 300.0))
+            wait = min(sleep_seconds, float(MAX_RATE_LIMIT_SLEEP_SECONDS))
+            print(
+                f"[github-history] graphql rate-limit remaining={remaining} "
+                f"wait={wait:.0f}s reset={reset_at}"
+            )
+            time.sleep(wait)
 
     def _list_visible_repositories(self, *, max_repos: int | None = None) -> list[dict[str, Any]]:
         payload = self._gh_api(

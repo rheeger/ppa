@@ -8,6 +8,7 @@ import random
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 import urllib.error
@@ -480,8 +481,222 @@ class OtterApiClient:
         return self._request_json(f"/meetings/{urllib.parse.quote(meeting_id)}/transcript")
 
 
+# Cursor MCP server name is user-otter_meeting_mcp; mcporter config uses otter_meeting_mcp.
+# OAuth tokens persist on disk (same role as ~/.gmail-mcp/credentials.json):
+#   ~/.mcporter/credentials.json          — mcporter OAuth store (refresh_token)
+#   ~/.config/ppa/otter-mcp/credentials.json — PPA mirror so CLI soaks survive mcporter resets
+DEFAULT_OTTER_MCP_CREDENTIALS = Path.home() / ".mcporter" / "credentials.json"
+DEFAULT_OTTER_PPA_TOKEN_PATH = Path.home() / ".config" / "ppa" / "otter-mcp" / "credentials.json"
+_OTTER_LIST_TOOL_ALIASES = ("otter_search", "list_recent_meetings", "list_meetings", "search_meetings")
+_OTTER_DETAIL_TOOL_ALIASES = ("otter_fetch", "get_meeting", "get_speech", "fetch_meeting")
+_OTTER_TRANSCRIPT_TOOL_ALIASES = ("otter_fetch", "get_transcript", "fetch_transcript")
+_OTTER_USER_INFO_TOOL_ALIASES = ("otter_get_user_info", "get_user_info")
+
+
+def otter_mcp_credentials_path() -> Path:
+    return Path(os.environ.get("OTTER_MCP_CREDENTIALS_PATH") or DEFAULT_OTTER_MCP_CREDENTIALS)
+
+
+def otter_ppa_token_path() -> Path:
+    return Path(os.environ.get("OTTER_MCP_PPA_TOKEN_PATH") or DEFAULT_OTTER_PPA_TOKEN_PATH)
+
+
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=f"{path.stem}-", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, indent=2, sort_keys=True))
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, path)
+        os.chmod(path, 0o600)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def _otter_tokens_from_mcporter_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
+    entries = payload.get("entries")
+    if not isinstance(entries, dict):
+        return None
+    for entry in entries.values():
+        if not isinstance(entry, dict):
+            continue
+        tokens = entry.get("tokens")
+        if not isinstance(tokens, dict):
+            continue
+        refresh = _first_nonempty(tokens.get("refresh_token"))
+        access = _first_nonempty(tokens.get("access_token"))
+        if not (refresh or access):
+            continue
+        return {
+            "serverName": entry.get("serverName") or "otter_meeting_mcp",
+            "serverUrl": entry.get("serverUrl") or "https://mcp.otter.ai/mcp",
+            "updatedAt": entry.get("updatedAt") or datetime.now(timezone.utc).isoformat(),
+            "clientInfo": entry.get("clientInfo") if isinstance(entry.get("clientInfo"), dict) else {},
+            "tokens": {
+                key: tokens.get(key)
+                for key in ("access_token", "token_type", "expires_in", "scope", "refresh_token")
+                if tokens.get(key) not in (None, "")
+            },
+        }
+    return None
+
+
+def persist_otter_mcp_tokens(
+    *,
+    credentials_path: Path | None = None,
+    ppa_token_path: Path | None = None,
+) -> Path | None:
+    """Mirror mcporter Otter OAuth tokens onto the PPA disk path."""
+
+    src = Path(credentials_path) if credentials_path is not None else otter_mcp_credentials_path()
+    dest = Path(ppa_token_path) if ppa_token_path is not None else otter_ppa_token_path()
+    if not src.exists():
+        return None
+    try:
+        payload = json.loads(src.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    snapshot = _otter_tokens_from_mcporter_payload(payload)
+    if snapshot is None:
+        return None
+    _write_json_atomic(dest, snapshot)
+    return dest
+
+
+def restore_otter_mcp_tokens(
+    *,
+    credentials_path: Path | None = None,
+    ppa_token_path: Path | None = None,
+) -> bool:
+    """Rehydrate ~/.mcporter/credentials.json from the PPA token mirror if tokens are missing."""
+
+    dest = Path(ppa_token_path) if ppa_token_path is not None else otter_ppa_token_path()
+    src = Path(credentials_path) if credentials_path is not None else otter_mcp_credentials_path()
+    if not dest.exists():
+        return False
+    try:
+        snapshot = json.loads(dest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    tokens = snapshot.get("tokens") if isinstance(snapshot, dict) else None
+    if not isinstance(tokens, dict) or not _first_nonempty(tokens.get("refresh_token"), tokens.get("access_token")):
+        return False
+    payload: dict[str, Any] = {"version": 1, "entries": {}}
+    if src.exists():
+        try:
+            existing = json.loads(src.read_text(encoding="utf-8"))
+            if isinstance(existing, dict):
+                payload = existing
+        except (OSError, json.JSONDecodeError):
+            pass
+    entries = payload.setdefault("entries", {})
+    if not isinstance(entries, dict):
+        entries = {}
+        payload["entries"] = entries
+    if _otter_tokens_from_mcporter_payload(payload) is not None:
+        return True
+    entry_key = next(
+        (key for key, value in entries.items() if isinstance(value, dict) and value.get("serverName") == "otter_meeting_mcp"),
+        "otter_meeting_mcp",
+    )
+    existing_entry = entries.get(entry_key) if isinstance(entries.get(entry_key), dict) else {}
+    entries[entry_key] = {
+        **existing_entry,
+        "serverName": snapshot.get("serverName") or existing_entry.get("serverName") or "otter_meeting_mcp",
+        "serverUrl": snapshot.get("serverUrl") or existing_entry.get("serverUrl") or "https://mcp.otter.ai/mcp",
+        "updatedAt": snapshot.get("updatedAt") or datetime.now(timezone.utc).isoformat(),
+        "clientInfo": snapshot.get("clientInfo") or existing_entry.get("clientInfo") or {},
+        "tokens": tokens,
+    }
+    payload["version"] = payload.get("version") or 1
+    _write_json_atomic(src, payload)
+    return True
+
+
+def _extract_json_object(text: str) -> dict[str, Any] | None:
+    start = text.find("{")
+    if start < 0:
+        return None
+    try:
+        parsed = json.loads(text[start:])
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _candidate_tool_names(stdout: str) -> list[str]:
+    """Parse mcporter list text or --json into tool names, including otter_* aliases."""
+
+    candidates: list[str] = []
+    payload = _extract_json_object(stdout)
+    if payload is not None:
+        tools = payload.get("tools")
+        if isinstance(tools, list):
+            for tool in tools:
+                if isinstance(tool, dict):
+                    name = _clean(tool.get("name", ""))
+                    if name:
+                        candidates.append(name)
+                elif isinstance(tool, str) and _clean(tool):
+                    candidates.append(_clean(tool))
+        names = payload.get("names")
+        if isinstance(names, list):
+            candidates.extend(_clean(name) for name in names if _clean(name))
+    for raw_line in stdout.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("function "):
+            signature = line[len("function ") :]
+            tool_name = signature.split("(", 1)[0].strip()
+            if tool_name:
+                candidates.append(tool_name)
+            continue
+        token = line.split()[0].strip(" -*:")
+        if token and all(ch.isalnum() or ch in {"_", "-", "."} for ch in token):
+            candidates.append(token)
+    lowered = stdout.lower()
+    for alias in (
+        *_OTTER_LIST_TOOL_ALIASES,
+        *_OTTER_DETAIL_TOOL_ALIASES,
+        *_OTTER_TRANSCRIPT_TOOL_ALIASES,
+        *_OTTER_USER_INFO_TOOL_ALIASES,
+    ):
+        if alias.lower() in lowered:
+            candidates.append(alias)
+    # Cursor otter_meeting_mcp JSDoc often names otter_fetch / otter_get_user_info
+    # without a `function otter_search()` line. If any otter_* tool is present,
+    # include the known list/get aliases so discovery still succeeds.
+    if any(name.startswith("otter_") for name in candidates) or "otter_" in lowered:
+        candidates.extend(_OTTER_LIST_TOOL_ALIASES)
+        candidates.extend(_OTTER_DETAIL_TOOL_ALIASES)
+        candidates.extend(_OTTER_USER_INFO_TOOL_ALIASES)
+    seen: set[str] = set()
+    unique: list[str] = []
+    for name in candidates:
+        key = name.split(".")[-1]
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        unique.append(key)
+    return unique
+
+
 class OtterMcpClient:
-    """Otter MCP client over mcporter."""
+    """Otter MCP client over mcporter.
+
+    Auth persistence (refresh token on disk, survives process restart):
+    ``~/.mcporter/credentials.json`` and the PPA mirror
+    ``~/.config/ppa/otter-mcp/credentials.json``. Override with
+    ``OTTER_MCP_CREDENTIALS_PATH`` / ``OTTER_MCP_PPA_TOKEN_PATH``.
+    """
 
     def __init__(
         self,
@@ -536,27 +751,40 @@ class OtterMcpClient:
             raise RuntimeError(error)
         return proc.stdout, proc.stderr
 
+    def _ensure_persisted_auth(self) -> None:
+        restore_otter_mcp_tokens()
+        persist_otter_mcp_tokens()
+
     def _discover_tools(self) -> dict[str, str]:
         if self._discovered_tools is not None:
             return self._discovered_tools
         with self._tool_lock:
             if self._discovered_tools is not None:
                 return self._discovered_tools
-            stdout, _ = self._run_mcporter("list", self.server_name)
-            candidates: list[str] = []
-            for raw_line in stdout.splitlines():
-                line = raw_line.strip()
-                if not line:
+            self._ensure_persisted_auth()
+            stdout = ""
+            last_error: Exception | None = None
+            for args in (
+                ("list", self.server_name, "--json"),
+                ("list", "--json", self.server_name),
+                ("list", self.server_name),
+            ):
+                try:
+                    stdout, _ = self._run_mcporter(*args)
+                    if stdout.strip():
+                        break
+                except Exception as exc:  # noqa: BLE001
+                    last_error = exc
                     continue
-                if line.startswith("function "):
-                    signature = line[len("function ") :]
-                    tool_name = signature.split("(", 1)[0].strip()
-                    if tool_name:
-                        candidates.append(tool_name)
-                    continue
-                token = line.split()[0].strip(" -*:")
-                if token and all(ch.isalnum() or ch in {"_", "-", "."} for ch in token):
-                    candidates.append(token)
+            if not stdout.strip() and last_error is not None:
+                raise RuntimeError(
+                    f"Could not list tools for MCP server {self.server_name}. "
+                    f"Otter OAuth tokens belong in {otter_mcp_credentials_path()} "
+                    f"(PPA mirror {otter_ppa_token_path()}). Re-auth: mcporter auth {self.server_name}. "
+                    f"Last error: {last_error}"
+                ) from last_error
+            persist_otter_mcp_tokens()
+            candidates = _candidate_tool_names(stdout)
 
             def _pick(*keywords: str) -> str:
                 lowered = [(tool, tool.lower()) for tool in candidates]
@@ -565,27 +793,40 @@ class OtterMcpClient:
                         return tool
                 return ""
 
+            def _pick_alias(aliases: tuple[str, ...]) -> str:
+                by_name = {tool.lower(): tool for tool in candidates}
+                for alias in aliases:
+                    if alias.lower() in by_name:
+                        return by_name[alias.lower()]
+                return ""
+
             discovered = {
                 "list": self.list_tool
+                or _pick_alias(_OTTER_LIST_TOOL_ALIASES)
                 or _pick("search")
                 or _pick("list", "meeting")
                 or _pick("list", "speech")
                 or _pick("recent", "meeting"),
                 "detail": self.detail_tool
+                or _pick_alias(_OTTER_DETAIL_TOOL_ALIASES)
                 or _pick("fetch")
                 or _pick("get", "meeting")
                 or _pick("get", "speech")
                 or _pick("meeting"),
                 "transcript": self.transcript_tool
+                or _pick_alias(_OTTER_TRANSCRIPT_TOOL_ALIASES)
                 or _pick("transcript")
                 or _pick("fetch")
                 or _pick("get", "transcript"),
-                "user_info": _pick("get_user_info") or _pick("user", "info") or _pick("get", "user"),
+                "user_info": self._pick_user_info(_pick, _pick_alias),
             }
             if not discovered["transcript"]:
                 discovered["transcript"] = discovered["detail"]
             self._discovered_tools = discovered
             return discovered
+
+    def _pick_user_info(self, _pick, _pick_alias) -> str:
+        return _pick_alias(_OTTER_USER_INFO_TOOL_ALIASES) or _pick("get_user_info") or _pick("user", "info") or _pick("get", "user")
 
     def _call_tool(self, tool_name: str, **kwargs: Any) -> dict[str, Any]:
         args = [f"{key}={_coerce_cli_value(value)}" for key, value in kwargs.items() if value not in (None, [])]

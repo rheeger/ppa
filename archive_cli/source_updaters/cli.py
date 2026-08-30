@@ -203,6 +203,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     catch_up = bool(getattr(args, "catch_up", False) or getattr(args, "reset_cursor", False))
     max_items = getattr(args, "max_items", None)
+    stage_dir = str(getattr(args, "stage_dir", "") or "").strip() or None
 
     if len(sources) == 1:
         one = run_source_updater(
@@ -217,6 +218,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             state_store=state_store,
             max_items=max_items,
             catch_up=catch_up,
+            stage_dir=stage_dir,
         )
         payload = {
             "completion_state": SECTION_D_EXECUTION_STATE,
@@ -245,6 +247,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         state_store=state_store,
         max_items=max_items,
         catch_up=catch_up,
+        stage_dir=stage_dir,
     )
     payload = multi.to_dict()
     payload["apply"] = apply
@@ -367,6 +370,14 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
     p_run.add_argument("--ladder-gate", default=GATE_SYNTHETIC_FIXTURES)
     p_run.add_argument("--run-id", default="")
     p_run.add_argument("--max-items", type=int, default=None, help="Cap threads/events fetched")
+    p_run.add_argument(
+        "--stage-dir",
+        default="",
+        help="Staged GitHub extraction directory (required for github-history). "
+        "Overrides PPA_GITHUB_STAGE_DIR / HFA_GITHUB_STAGE_DIR. "
+        "Must contain repos.jsonl, commits.jsonl, threads.jsonl, messages.jsonl "
+        "(from github-history-stage / ppa-github-extract-parallel).",
+    )
     p_run.add_argument(
         "--catch-up",
         action="store_true",

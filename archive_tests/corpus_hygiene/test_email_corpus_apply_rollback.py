@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 from pathlib import Path
 
@@ -12,17 +13,21 @@ from archive_cli.corpus_hygiene.apply import (
     delete_vault_markdown,
     restore_rollback_kit,
     run_email_corpus_apply,
+    write_rollback_json,
 )
 from archive_cli.corpus_hygiene.census import CensusContext, run_email_census_dry_run
 from archive_cli.corpus_hygiene.classification_reuse import EmailThreadRecord, thread_from_frontmatter
 from archive_cli.corpus_hygiene.decision_io import decisions_artifact_path, load_decision_records_jsonl
+from archive_cli.corpus_hygiene.decisions import EmailCorpusDecisionRecord
 from archive_cli.corpus_hygiene.guards import guard_corpus_hygiene_apply
 from archive_cli.corpus_hygiene.rollback import run_email_corpus_rollback
 from archive_cli.corpus_hygiene.state_store import (
     CORPUS_STATE_ACTIVE,
     CORPUS_STATE_QUARANTINE,
     CORPUS_STATE_SUPPRESSED,
+    _uids_for_corpus_states,
     active_corpus_sql_filter,
+    all_card_uids_for_records,
     card_uids_for_decision,
     get_card_corpus_state,
     is_card_retrieval_active,
@@ -287,6 +292,106 @@ def test_card_uids_for_decision_includes_derived() -> None:
     uids = card_uids_for_decision(derived)
     assert "uid-derived" in uids
     assert "meal-order-1" in uids
+
+
+def _minimal_decision_record(**kwargs: object) -> EmailCorpusDecisionRecord:
+    defaults: dict[str, object] = {
+        "decision_run_id": "r",
+        "source_key": "sk",
+        "account_email": "a@b.c",
+        "gmail_thread_id": "g",
+        "gmail_history_id": "",
+        "thread_body_sha": "",
+        "thread_uid": "t",
+        "message_uids": (),
+        "attachment_uids": (),
+        "derived_uids": (),
+        "classification": None,
+        "canonical_classification": "marketing",
+        "confidence": 0.9,
+        "card_types": (),
+        "classification_source": "test",
+        "classify_prompt_version": "",
+        "classify_model": "",
+        "policy_version": "v",
+        "previous_corpus_state": CORPUS_STATE_ACTIVE,
+        "corpus_decision": CORPUS_STATE_SUPPRESSED,
+        "processor_decision": "suppress",
+        "decision_reason": "",
+        "decision_signals": (),
+    }
+    defaults.update(kwargs)
+    return EmailCorpusDecisionRecord(**defaults)  # type: ignore[arg-type]
+
+
+def test_uid_collect_hot_path_uses_set_membership() -> None:
+    for fn in (card_uids_for_decision, _uids_for_corpus_states, all_card_uids_for_records):
+        src = inspect.getsource(fn)
+        assert "if uid not in uids" not in src
+        assert "uid not in uids:" not in src
+        assert "seen: set[str]" in src
+        assert "uid not in seen" in src
+
+
+def test_card_uids_for_decision_first_seen_order_and_dedupe() -> None:
+    rec = _minimal_decision_record(
+        thread_uid="thread-1",
+        message_uids=("thread-1", "msg-1", "msg-1"),
+        attachment_uids=("att-1",),
+        derived_uids=("thread-1", "derived-1"),
+    )
+    assert card_uids_for_decision(rec) == ["thread-1", "msg-1", "att-1", "derived-1"]
+
+
+def test_removal_uids_large_n_set_collect() -> None:
+    n = 2500
+    records = [
+        _minimal_decision_record(
+            thread_uid=f"t-{i}",
+            message_uids=(f"m-{i}", f"t-{i}"),
+            corpus_decision=CORPUS_STATE_SUPPRESSED,
+        )
+        for i in range(n)
+    ]
+    uids = removal_uids_for_records(records)
+    assert len(uids) == n * 2
+    assert uids[0] == "t-0"
+    assert uids[1] == "m-0"
+    assert uids[-2] == f"t-{n - 1}"
+    assert uids[-1] == f"m-{n - 1}"
+
+
+def test_write_rollback_json_large_uid_set(tmp_path: Path) -> None:
+    n = 5000
+    card_uids = [f"card-{i:05d}" for i in range(n)]
+    removed = [f"rm-{i:05d}" for i in range(n // 2)]
+    path = tmp_path / "artifacts" / "rollback.json"
+    written = write_rollback_json(
+        path,
+        decision_run_id="large-n",
+        archive_instance="fixture:test",
+        card_uids=card_uids,
+        removed_card_uids=removed,
+        vault_markdown_deleted=True,
+        rollback_kit_path="/kit",
+        ccs_only=False,
+    )
+    assert written == path
+    assert path.is_file()
+    assert not path.with_name("rollback.json.tmp").exists()
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["card_uids"] == sorted(card_uids)
+    assert payload["removed_card_uids"] == removed
+    assert payload["decision_run_id"] == "large-n"
+    assert payload["vault_markdown_deleted"] is True
+    assert payload["rollback_kit_path"] == "/kit"
+
+
+def test_apply_persists_rollback_json_via_streamed_writer() -> None:
+    src = inspect.getsource(run_email_corpus_apply)
+    assert "write_rollback_json(" in src
+    assert "json.dumps(rollback_payload" not in src
+    assert src.count("write_rollback_json(") >= 2
 
 
 def test_thread_from_frontmatter_keeps_attachment_and_derived_uids() -> None:

@@ -5,10 +5,101 @@ from __future__ import annotations
 from typing import Any
 
 from .batch import SourceUpdaterBatchSummary
-from .constants import ADAPTER_VERSION_DEFAULT, RUN_STATUS_SUCCESS
+from .constants import (
+    ADAPTER_VERSION_DEFAULT,
+    EXPORT_ADAPTER_SOURCE_IDS,
+    PARKED_ADAPTER_SOURCE_IDS,
+    RUN_STATUS_SUCCESS,
+)
 from .cursor_io import read_adapter_cursor, summarize_cursor_payload
-from .declarations import SourceUpdaterDeclaration, expand_declarations
+from .declarations import SourceUpdaterDeclaration, declaration_for_adapter_source_id, expand_declarations
 from .state_store import SourceUpdaterStateRecord, SourceUpdaterStateStore
+
+
+def is_template_source_key(source_key: str) -> bool:
+    """True for declaration placeholders such as ``gmail-messages:<account>``."""
+
+    key = (source_key or "").strip()
+    if not key:
+        return False
+    if "<" in key or ">" in key:
+        return True
+    if ":" not in key:
+        return False
+    scope = key.split(":", 1)[1].strip().lower()
+    return scope in {"account", "source_label", "<account>", "<source_label>"}
+
+
+def adapter_id_from_source_key(source_key: str) -> str:
+    key = (source_key or "").strip()
+    if ":" not in key:
+        return key
+    return key.split(":", 1)[0].strip()
+
+
+def is_parked_source_key(source_key: str) -> bool:
+    adapter = adapter_id_from_source_key(source_key)
+    if adapter == "health":
+        adapter = "apple-health"
+    return adapter in PARKED_ADAPTER_SOURCE_IDS or adapter in EXPORT_ADAPTER_SOURCE_IDS
+
+
+def is_required_freshness_source(source_key: str, *, enabled: bool = True) -> bool:
+    """Live, non-template, non-parked streams that can fail READY."""
+
+    if not source_key or not enabled:
+        return False
+    if is_template_source_key(source_key):
+        return False
+    if is_parked_source_key(source_key):
+        return False
+    return True
+
+
+def resolve_status_declarations(
+    declarations: list[SourceUpdaterDeclaration],
+    states: dict[str, SourceUpdaterStateRecord] | None = None,
+) -> list[SourceUpdaterDeclaration]:
+    """Prefer concrete live keys over ``<account>`` templates."""
+
+    live_keys = [
+        key
+        for key in (states or {})
+        if key and not is_template_source_key(key)
+    ]
+    by_adapter: dict[str, list[str]] = {}
+    for key in live_keys:
+        by_adapter.setdefault(adapter_id_from_source_key(key), []).append(key)
+
+    out: list[SourceUpdaterDeclaration] = []
+    seen: set[str] = set()
+
+    def _append(decl: SourceUpdaterDeclaration | None) -> None:
+        if decl is None or not decl.source_key or decl.source_key in seen:
+            return
+        out.append(decl)
+        seen.add(decl.source_key)
+
+    for decl in declarations:
+        adapter = decl.adapter_source_id
+        matches = list(by_adapter.get(adapter, []))
+        if adapter == "apple-health":
+            matches = matches or list(by_adapter.get("health", []))
+        if matches:
+            for key in matches:
+                scope = key.split(":", 1)[1] if ":" in key else ""
+                lookup = "health" if adapter == "apple-health" else adapter
+                _append(declaration_for_adapter_source_id(lookup, scope=scope))
+            continue
+        if not is_template_source_key(decl.source_key):
+            _append(decl)
+
+    for key in live_keys:
+        if key in seen:
+            continue
+        adapter, _, scope = key.partition(":")
+        _append(declaration_for_adapter_source_id(adapter, scope=scope))
+    return out
 
 
 def snapshot_declaration_state(
@@ -75,7 +166,7 @@ def status_payload_for_declarations(
 
     states = {s.source_key: s for s in store.list_state()}
     sources: list[dict[str, Any]] = []
-    for decl in declarations:
+    for decl in resolve_status_declarations(declarations, states):
         state = states.get(decl.source_key)
         cursor = read_adapter_cursor(vault_path, decl.adapter_source_id)
         entry: dict[str, Any] = {

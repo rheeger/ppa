@@ -20,6 +20,7 @@ from archive_sync.source_updaters.constants import (
     STALENESS_FAILED,
     STALENESS_NEVER_SYNCED,
 )
+from archive_sync.source_updaters.snapshot import is_required_freshness_source
 
 from .corpus_summary import query_corpus_summary, rollback_decision_run_ids
 from .suppression_visibility import SuppressionVisibilityResult, evaluate_suppression_visibility
@@ -63,9 +64,12 @@ def _source_health_ok(sources_payload: dict[str, Any]) -> tuple[bool, list[str]]
         staleness = str(state.get("staleness_state") or STALENESS_NEVER_SYNCED)
         if not source_key:
             continue
+        enabled = bool(state.get("enabled", entry.get("declaration", {}).get("enabled", True)))
+        if not is_required_freshness_source(source_key, enabled=enabled):
+            continue
         if staleness in (STALENESS_FAILED, STALENESS_BLOCKED):
             failures.append(f"source:{source_key}:{staleness}")
-        if staleness == STALENESS_NEVER_SYNCED and bool(state.get("enabled", True)):
+        if staleness == STALENESS_NEVER_SYNCED:
             failures.append(f"source:{source_key}:never_synced")
     return not failures, failures
 

@@ -40,6 +40,9 @@ EXPORT_ADAPTER_SOURCE_IDS: frozenset[str] = frozenset(
 # contacts:google is live; apple/vcf stay export-only.
 CONTACTS_EXPORT_SCOPES: frozenset[str] = frozenset({"apple", "vcf"})
 
+# Declared but not required for v3 freshness on this campaign (manual / parked).
+PARKED_ADAPTER_SOURCE_IDS: frozenset[str] = frozenset({"photos", "apple-health", "health"})
+
 STALENESS_FRESH = "fresh"
 STALENESS_STALE = "stale"
 STALENESS_FAILED = "failed"

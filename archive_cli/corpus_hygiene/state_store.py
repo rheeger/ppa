@@ -152,6 +152,9 @@ def is_card_retrieval_active(conn: Any, schema: str, card_uid: str) -> bool:
 
 
 def card_uids_for_decision(record: EmailCorpusDecisionRecord) -> list[str]:
+    """Thread + message + attachment + derived UIDs for one record (set-deduped)."""
+
+    seen: set[str] = set()
     uids: list[str] = []
     for uid in (
         record.thread_uid,
@@ -159,7 +162,8 @@ def card_uids_for_decision(record: EmailCorpusDecisionRecord) -> list[str]:
         *record.attachment_uids,
         *record.derived_uids,
     ):
-        if uid and uid not in uids:
+        if uid and uid not in seen:
+            seen.add(uid)
             uids.append(uid)
     return uids
 
@@ -168,12 +172,27 @@ def _uids_for_corpus_states(
     records: list[EmailCorpusDecisionRecord],
     states: frozenset[str],
 ) -> list[str]:
+    seen: set[str] = set()
     uids: list[str] = []
     for record in records:
         if record.corpus_decision not in states:
             continue
         for uid in card_uids_for_decision(record):
-            if uid not in uids:
+            if uid and uid not in seen:
+                seen.add(uid)
+                uids.append(uid)
+    return uids
+
+
+def all_card_uids_for_records(records: list[EmailCorpusDecisionRecord]) -> list[str]:
+    """All card UIDs across *records* (set-deduped, first-seen order)."""
+
+    seen: set[str] = set()
+    uids: list[str] = []
+    for record in records:
+        for uid in card_uids_for_decision(record):
+            if uid and uid not in seen:
+                seen.add(uid)
                 uids.append(uid)
     return uids
 

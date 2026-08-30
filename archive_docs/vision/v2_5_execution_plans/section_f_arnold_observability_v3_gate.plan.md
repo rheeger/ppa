@@ -1,5 +1,7 @@
 # Section F Execution Plan - Arnold Observability and v3 Readiness Gate
 
+**Status (Aug 2026, HEAD `b57136f`):** Surfaces landed. **Evidence hole remains** — readiness can go green on snapshots. Remaining close-out: soak + real-run evidence on this seed after one `maintain --run-processors`. Arnold soak/6+ deferred.
+
 ## Objective
 
 Define how Arnold reports production health after v2.5 and how PPA decides it is ready to resume v3 packaging work.

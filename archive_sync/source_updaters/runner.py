@@ -168,11 +168,21 @@ def build_adapter(adapter_source_id: str) -> BaseAdapter:
     raise ValueError(f"No executable adapter for {adapter_source_id!r}")
 
 
+def _resolve_github_stage_dir(stage_dir: str | None) -> str:
+    """CLI ``--stage-dir`` wins over ``PPA_GITHUB_STAGE_DIR`` / ``HFA_GITHUB_STAGE_DIR``."""
+
+    explicit = (stage_dir or "").strip()
+    if explicit:
+        return explicit
+    return (os.environ.get("PPA_GITHUB_STAGE_DIR") or os.environ.get("HFA_GITHUB_STAGE_DIR") or "").strip()
+
+
 def adapter_ingest_kwargs(
     decl: SourceUpdaterDeclaration,
     *,
     apply: bool,
     catch_up: bool = False,
+    stage_dir: str | None = None,
 ) -> dict[str, Any]:
     """Build kwargs passed to ``adapter.ingest`` for a declaration."""
 
@@ -221,11 +231,9 @@ def adapter_ingest_kwargs(
             kwargs["account_email"] = scope
         return kwargs
     if adapter_id == "github-history":
-        stage_dir = (
-            os.environ.get("PPA_GITHUB_STAGE_DIR") or os.environ.get("HFA_GITHUB_STAGE_DIR") or ""
-        ).strip()
-        if stage_dir:
-            kwargs["stage_dir"] = stage_dir
+        resolved_stage = _resolve_github_stage_dir(stage_dir)
+        if resolved_stage:
+            kwargs["stage_dir"] = resolved_stage
         return kwargs
     if adapter_id == "gmail-correspondents":
         kwargs["account_email"] = scope
@@ -380,6 +388,7 @@ def run_source_updater(
     decision_run_id: str = "",
     max_items: int | None = None,
     catch_up: bool = False,
+    stage_dir: str | None = None,
 ) -> SourceUpdaterRunResult:
     """Run one source updater. Dry-run by default; ``apply`` persists and advances cursor."""
 
@@ -405,7 +414,7 @@ def run_source_updater(
         return SourceUpdaterRunResult(report=report, exit_hint=2)
 
     adapter_obj = adapter or build_adapter(decl.adapter_source_id)
-    ingest_kwargs = adapter_ingest_kwargs(decl, apply=apply, catch_up=catch_up)
+    ingest_kwargs = adapter_ingest_kwargs(decl, apply=apply, catch_up=catch_up, stage_dir=stage_dir)
     if (
         decl.adapter_source_id == "gmail-messages"
         and state_store is not None
@@ -440,11 +449,12 @@ def run_source_updater(
         warnings.append("catch_up: gmail page cursor reset (newest-first; history_id skip kept)")
 
     logger.info(
-        "source updater start source_key=%s apply=%s max_items=%s catch_up=%s cursor_key=%s",
+        "source updater start source_key=%s apply=%s max_items=%s catch_up=%s stage_dir=%s cursor_key=%s",
         decl.source_key,
         apply,
         max_items if max_items is not None else "none",
         catch_up,
+        ingest_kwargs.get("stage_dir") or "none",
         cursor_key,
     )
     ingest_started = time.perf_counter()
@@ -572,6 +582,7 @@ def run_source_updaters(
     adapter_factory: Callable[[str], BaseAdapter] | None = None,
     max_items: int | None = None,
     catch_up: bool = False,
+    stage_dir: str | None = None,
 ) -> SourceUpdaterMultiRunResult:
     """Run multiple sources with failure isolation."""
 
@@ -604,6 +615,7 @@ def run_source_updaters(
             adapter=adapter,
             max_items=max_items,
             catch_up=catch_up,
+            stage_dir=stage_dir,
         )
         multi.reports.append(one.report)
         if one.exit_hint > worst:

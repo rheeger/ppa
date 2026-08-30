@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -13,7 +15,7 @@ from typing import Any
 from archive_cli.ppa_engine import ppa_engine
 from archive_cli.validation_gates.constants import GATE_LOCAL_SEED_STAGING_APPLY, GATE_RUN_STATUS_PASSED
 from archive_cli.validation_gates.gate_registry import GateRegistry
-from archive_cli.validation_gates.report import GateRunReport, write_gate_report
+from archive_cli.validation_gates.report import GateRunReport, gate_artifact_dir, write_gate_report
 from archive_sync.gmail_promotion.ledger import FilePromotionLedger, default_ledger_path
 from archive_sync.llm_enrichment.email_promotion_policy import EMAIL_PROMOTION_POLICY_VERSION
 
@@ -24,8 +26,8 @@ from .report import render_apply_summary
 from .state_store import (
     CORPUS_STATE_SUPPRESSED,
     ApplyCounts,
+    all_card_uids_for_records,
     apply_decision_records,
-    card_uids_for_decision,
     purge_card_uids,
     rel_paths_for_card_uids,
     removal_uids_for_records,
@@ -36,6 +38,7 @@ logger = logging.getLogger("ppa.corpus_hygiene")
 ROLLBACK_KIT_LIMIT = 20
 DEFAULT_DELETE_PROGRESS_EVERY = 100
 HYGIENE_ROLLBACK_KIT_ROOT = "_artifacts/hygiene-rollback-kit"
+ROLLBACK_JSON_FLUSH_EVERY = 4096
 
 
 @dataclass
@@ -63,6 +66,83 @@ def _format_mins_secs(seconds: float) -> str:
 
 def rollback_kit_dir(vault_path: str | Path, decision_run_id: str) -> Path:
     return Path(vault_path) / HYGIENE_ROLLBACK_KIT_ROOT / decision_run_id
+
+
+def apply_rollback_json_path(repo_root: str | Path, decision_run_id: str) -> Path:
+    return (
+        gate_artifact_dir(
+            repo_root,
+            gate=SECTION_B_APPLY_ARTIFACT_GATE,
+            run_id=f"{decision_run_id}-apply",
+        )
+        / "rollback.json"
+    )
+
+
+def _write_json_string_array(fh: Any, items: list[str]) -> None:
+    """Stream a JSON string array (indent=2) and flush periodically."""
+
+    fh.write("[\n")
+    n = len(items)
+    for i, item in enumerate(items):
+        suffix = "," if i + 1 < n else ""
+        fh.write(f"    {json.dumps(item)}{suffix}\n")
+        if (i + 1) % ROLLBACK_JSON_FLUSH_EVERY == 0:
+            fh.flush()
+    fh.write("  ]")
+
+
+def write_rollback_json(
+    path: str | Path,
+    *,
+    decision_run_id: str,
+    archive_instance: str,
+    card_uids: Iterable[str],
+    removed_card_uids: Iterable[str],
+    vault_markdown_deleted: bool,
+    rollback_kit_path: str = "",
+    ccs_only: bool = False,
+) -> Path:
+    """Persist rollback.json via a streamed, atomically-replaced write.
+
+    UID arrays are collected with sets by the caller. This writer never
+    ``json.dumps`` the whole payload, so a large-N apply cannot die while
+    materializing one giant string. A completed file is renamed into place;
+    a kill mid-write leaves the previous complete ``rollback.json`` if any.
+    """
+
+    dest = Path(path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + ".tmp")
+    card_list = sorted({uid for uid in card_uids if uid})
+    removed_list = [uid for uid in dict.fromkeys(removed_card_uids) if uid]
+    logger.info(
+        "hygiene rollback.json start card_uids=%d removed_card_uids=%d path=%s",
+        len(card_list),
+        len(removed_list),
+        dest,
+    )
+    with tmp.open("w", encoding="utf-8") as fh:
+        fh.write("{\n")
+        fh.write(f'  "archive_instance": {json.dumps(archive_instance)},\n')
+        fh.write('  "card_uids": ')
+        _write_json_string_array(fh, card_list)
+        fh.write(",\n")
+        fh.flush()
+        fh.write(f'  "ccs_only": {json.dumps(ccs_only)},\n')
+        fh.write(f'  "decision_run_id": {json.dumps(decision_run_id)},\n')
+        fh.write('  "removed_card_uids": ')
+        _write_json_string_array(fh, removed_list)
+        fh.write(",\n")
+        fh.flush()
+        fh.write(f'  "rollback_kit_path": {json.dumps(rollback_kit_path)},\n')
+        fh.write(f'  "vault_markdown_deleted": {json.dumps(vault_markdown_deleted)}\n')
+        fh.write("}\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, dest)
+    logger.info("hygiene rollback.json wrote path=%s", dest)
+    return dest
 
 
 def safe_vault_file(vault_path: Path, rel_path: str) -> Path | None:
@@ -210,6 +290,7 @@ def apply_vault_remove(
     decision_run_id: str,
     progress_every: int = DEFAULT_DELETE_PROGRESS_EVERY,
     kit_limit: int = ROLLBACK_KIT_LIMIT,
+    remove_uids: list[str] | None = None,
 ) -> ApplyCounts:
     """Delete suppressed notes, purge those UIDs, append the promotion ledger.
 
@@ -217,7 +298,8 @@ def apply_vault_remove(
     """
 
     counts = ApplyCounts()
-    remove_uids = removal_uids_for_records(records)
+    if remove_uids is None:
+        remove_uids = removal_uids_for_records(records)
     vault = Path(vault_path) if vault_path else None
     rel_by_uid: dict[str, str] = {}
     if conn is not None and schema and remove_uids:
@@ -258,8 +340,24 @@ def run_email_corpus_apply(
     validate_decision_records(records, decision_run_id=decision_run_id)
     t0 = time.perf_counter()
     counts = apply_decision_records(conn, schema, records, decision_run_id=decision_run_id)
+    card_uids = all_card_uids_for_records(records)
+    removed_card_uids = removal_uids_for_records(records)
     vault_markdown_deleted = False
     rollback_kit_path = ""
+    rollback_path = ""
+    if repo_root is not None:
+        rollback_dest = apply_rollback_json_path(repo_root, decision_run_id)
+        write_rollback_json(
+            rollback_dest,
+            decision_run_id=decision_run_id,
+            archive_instance=archive_instance,
+            card_uids=card_uids,
+            removed_card_uids=removed_card_uids,
+            vault_markdown_deleted=False,
+            rollback_kit_path="",
+            ccs_only=ccs_only,
+        )
+        rollback_path = str(rollback_dest)
     if not ccs_only and vault_path:
         vr = apply_vault_remove(
             conn,
@@ -268,6 +366,7 @@ def run_email_corpus_apply(
             vault_path=vault_path,
             decision_run_id=decision_run_id,
             progress_every=progress_every,
+            remove_uids=removed_card_uids,
         )
         counts.files_deleted = vr.files_deleted
         counts.uids_purged = vr.uids_purged
@@ -289,24 +388,23 @@ def run_email_corpus_apply(
         vault_markdown_deleted=vault_markdown_deleted,
         rollback_kit_path=rollback_kit_path,
         ccs_only=ccs_only,
+        rollback_path=rollback_path,
     )
     if repo_root is not None:
         result.artifact_paths = write_apply_artifacts(repo_root, result)
-        rollback_payload = {
-            "decision_run_id": decision_run_id,
-            "archive_instance": archive_instance,
-            "card_uids": sorted(
-                {uid for rec in records for uid in card_uids_for_decision(rec) if uid}
-            ),
-            "removed_card_uids": removal_uids_for_records(records),
-            "vault_markdown_deleted": vault_markdown_deleted,
-            "rollback_kit_path": rollback_kit_path,
-            "ccs_only": ccs_only,
-        }
-        rollback_path = Path(result.artifact_paths["report"]).parent / "rollback.json"
-        rollback_path.write_text(json.dumps(rollback_payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        result.rollback_path = str(rollback_path)
-        result.artifact_paths["rollback"] = str(rollback_path)
+        rollback_dest = Path(result.artifact_paths["report"]).parent / "rollback.json"
+        write_rollback_json(
+            rollback_dest,
+            decision_run_id=decision_run_id,
+            archive_instance=archive_instance,
+            card_uids=card_uids,
+            removed_card_uids=removed_card_uids,
+            vault_markdown_deleted=vault_markdown_deleted,
+            rollback_kit_path=rollback_kit_path,
+            ccs_only=ccs_only,
+        )
+        result.rollback_path = str(rollback_dest)
+        result.artifact_paths["rollback"] = str(rollback_dest)
         if rollback_kit_path:
             result.artifact_paths["rollback_kit"] = rollback_kit_path
 

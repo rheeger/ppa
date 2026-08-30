@@ -227,7 +227,7 @@ def test_source_failure_appears_in_status(pgvector_dsn: str, tmp_path: Path) -> 
         su.ensure_tables()
         su.upsert_state(
             SourceUpdaterStateRecord(
-                source_key="gmail-messages:<account>",
+                source_key="gmail-messages:owner@example.com",
                 source_type="gmail",
                 staleness_state=STALENESS_FAILED,
                 last_error="auth expired",
@@ -409,7 +409,7 @@ def test_partial_failures_not_hidden_by_green_summary(pgvector_dsn: str, tmp_pat
         su.ensure_tables()
         su.upsert_state(
             SourceUpdaterStateRecord(
-                source_key="calendar-events:<account>",
+                source_key="calendar-events:owner@example.com",
                 source_type="calendar",
                 staleness_state="stale",
             )
@@ -426,3 +426,70 @@ def test_partial_failures_not_hidden_by_green_summary(pgvector_dsn: str, tmp_pat
     assert payload["warnings"] or payload["errors"]
     text = format_status_text(payload)
     assert "NOT READY" in text or "DEGRADED" in text or "FAILED" in text
+
+
+def test_freshness_uses_live_keys_not_templates() -> None:
+    from archive_cli.status.readiness import _source_health_ok
+    from archive_sync.source_updaters.declarations import _gmail_template, _photos_template, _health_template
+    from archive_sync.source_updaters.snapshot import resolve_status_declarations
+    from archive_sync.source_updaters.state_store import SourceUpdaterStateRecord
+
+    live = SourceUpdaterStateRecord(
+        source_key="gmail-messages:rheeger@gmail.com",
+        source_type="gmail",
+        staleness_state="fresh",
+    )
+    resolved = resolve_status_declarations(
+        [_gmail_template(), _photos_template(), _health_template()],
+        {"gmail-messages:rheeger@gmail.com": live},
+    )
+    keys = [decl.source_key for decl in resolved]
+    assert "gmail-messages:rheeger@gmail.com" in keys
+    assert "gmail-messages:<account>" not in keys
+    assert "photos:local" in keys
+    assert "health:apple-health" in keys
+
+    payload = {
+        "sources": [
+            {
+                "declaration": {"source_key": "gmail-messages:<account>", "enabled": True},
+                "state": {"source_key": "gmail-messages:<account>", "staleness_state": "never_synced", "enabled": True},
+            },
+            {
+                "declaration": {"source_key": "gmail-messages:rheeger@gmail.com", "enabled": True},
+                "state": {"source_key": "gmail-messages:rheeger@gmail.com", "staleness_state": "fresh", "enabled": True},
+            },
+            {
+                "declaration": {"source_key": "photos:local", "enabled": True},
+                "state": {"source_key": "photos:local", "staleness_state": "never_synced", "enabled": True},
+            },
+            {
+                "declaration": {"source_key": "health:apple-health", "enabled": True},
+                "state": {"source_key": "health:apple-health", "staleness_state": "never_synced", "enabled": True},
+            },
+        ]
+    }
+    ok, failures = _source_health_ok(payload)
+    assert ok is True
+    assert failures == []
+
+
+def test_freshness_still_fails_live_never_synced() -> None:
+    from archive_cli.status.readiness import _source_health_ok
+
+    ok, failures = _source_health_ok(
+        {
+            "sources": [
+                {
+                    "declaration": {"source_key": "imessage:macbook-air", "enabled": True},
+                    "state": {
+                        "source_key": "imessage:macbook-air",
+                        "staleness_state": "never_synced",
+                        "enabled": True,
+                    },
+                }
+            ]
+        }
+    )
+    assert ok is False
+    assert "source:imessage:macbook-air:never_synced" in failures

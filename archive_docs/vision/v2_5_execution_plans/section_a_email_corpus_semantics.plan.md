@@ -1,5 +1,7 @@
 # Section A Execution Plan - Email Corpus Semantics
 
+**Status (Aug 2026):** Policy implemented and fixture-tested. **Product fork locked 2026-08-26–28:** quarantine is labeled vault cards (`retrieval_weight=0.35`, inbound `emit_cards=True`), not a compact review record with no cards. Suppressed marketing is deleted from vault + purged from index + Gmail ledger; suppressed inbound does not emit. Written C3 (“quarantine = compact review, no cards”) is superseded.
+
 ## Objective
 
 Define the shared email corpus model for v2.5. This plan specifies the states, policy inputs, policy outputs, classification reuse rules, examples, and acceptance criteria for `EmailPromotionPolicy`.
@@ -11,7 +13,7 @@ This section is conceptual but binding. Sections B and C must use this policy ra
 - Do not implement the policy in this planning pass.
 - Do not modify Gmail adapters, materializers, CLI commands, schemas, or enrichment code in this planning pass.
 - Do not define a new marketing-only classifier.
-- Do not decide physical vault pruning in this section. Slice vault-remove of suppressed/quarantine mail is Section B remaining work.
+- Do not decide physical vault pruning in this section. Product fork (locked this campaign, owned by B/C): suppressed marketing is deleted; quarantine stays as labeled cards.
 - Do not change derived card schemas.
 - Do not change the meaning of existing typed extraction categories except where this plan separates corpus membership from typed extraction.
 
@@ -67,7 +69,7 @@ Every Gmail thread receives one corpus state:
 | ----- | ------- | ------------------------------ | -------------------------------------- | ------------------- | ------------------------------- |
 | `active` | First-class archive artifact | Yes | Yes | Yes | Yes |
 | `suppressed` | Intentionally excluded from active corpus, ledger only | No for future sync; inactive for historical cleanup | No | No | No |
-| `quarantine` | Ambiguous or conflicting signals; review needed | Minimal review record only | No by default | No | No by default |
+| `quarantine` | Ambiguous or conflicting signals; review needed. **Locked fork:** labeled cards stay (`retrieval_weight=0.35`); inbound writes cards (`emit_cards=True`). Compact-review-only is superseded. | Yes — labeled cards, not compact-only | Downweighted (`retrieval_weight=0.35`); not default-equal to active | No | No by default |
 
 ### Processor Decision
 
@@ -192,7 +194,7 @@ Quarantine when:
 - thread has attachments and would otherwise be suppressed.
 - thread has existing derived cards but raw email would otherwise be suppressed.
 
-Quarantine is a review path, not a permanent state.
+Quarantine is a review path, not a permanent state. Cards stay in the vault as labeled records (`retrieval_weight=0.35`). They are not compact-review-only and they are not deleted with suppressed marketing.
 
 ## Confidence Thresholds
 
@@ -320,7 +322,7 @@ Section A does not require a CLI by itself, but later commands should expose the
 - Section B applies this policy to existing Arnold cards.
 - Section C applies this policy to future Gmail sync before card promotion.
 - The first implementation should keep policy behavior deterministic and auditable before optimizing performance.
-- Physical deletion is out of scope for the first rollout.
+- Physical deletion of **suppressed** marketing is the locked B/C fork (this seed already applied). Quarantine is not deleted.
 
 ## Tests and Validation
 

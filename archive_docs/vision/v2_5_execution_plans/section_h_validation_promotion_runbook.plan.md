@@ -1,6 +1,12 @@
 # Section H Execution Plan - v2.5 Validation and Promotion Runbook
 
-**Status (Aug 2026):** Local gates **0–5b are done** for Gmail/Calendar + CCS hygiene. Scale hot paths landed on 1pct + 10pct. **Remaining before seed-copy 5b:** (1) slice hygiene vault-remove (leave cleaned); (2) capped `--apply` for every **live** stream that is not a manual export. Then Gate 5b on a full seed staging copy, catch-up + processors maintain, local soak. Arnold (6 / 6b / 7) is deferred.
+**Status (Aug 2026, HEAD `b57136f`):** Local gates 0–5 / earlier 5b (CCS staging + capped Gmail) and the scale ladder are landed. **2026-08-26–28 campaign then applied on the canonical seed** `/Users/rheeger/Archive/seed/hf-archives-seed-20260307-235127` schema `ppa` — not a staging copy. The written sequence (slice vault-remove → 1pct/10pct updaters → Gate 5b on a staging copy → catch-up) was **skipped**. Do not copy the seed first. “Never mutate the canonical seed” is a historical constraint for **future Arnold**, not this machine.
+
+**Product fork (locked):** suppressed marketing deleted (~502,622 files; no `rollback.json`). Quarantine stays as labeled cards (`retrieval_weight=0.35`). Inbound uncertain Gmail writes cards (`emit_cards=True`); suppressed inbound does not.
+
+**Live updaters on this seed:** SUCCESS calendar, contacts, otter, file-libraries, beeper, imessage, gmail-messages, gmail-correspondents (vault-first + `after:last_sync` + HTTP/batch). GitHub FAILED (`--stage-dir` required). Photos not run. Dirty rematerialize allowlist incremental; index ~1,392,108 cards / 3,962,176 embeddings / pending 0. No full rebuild, no IVFFlat, no `--catch-up`.
+
+**Remaining (Arnold excluded):** (1) hygiene leftovers — quadratic UID collect + persist `rollback.json` on future applies; (2) GitHub `--stage-dir`; (3) one `maintain --run-processors` on this seed; (4) soak + F real-run evidence. Parked: Photos, catch-up, full rebuild, Arnold 6+. Do not re-run vault-remove. Do not full-mailbox-walk correspondents.
 
 ## Objective
 
@@ -42,7 +48,7 @@ Section H is not a new feature section. It is the runbook that turns implemented
 - Do not treat `--record-source-status` / `--record-processor-status` as updater/processor proof.
 - Do not apply corpus hygiene to Arnold before seed **and** Arnold updater proof.
 - Do not run full Phase 9 `ppa-deploy-v2` (rebuild + embedding restore) for routine code promotion unless schema/index requires it.
-- Do not physically prune the canonical seed or Arnold. Slice vault-remove of suppressed/quarantine mail is the remaining hygiene path.
+- Do not re-run vault-remove on this seed (already applied; quarantine kept). Do not physically prune Arnold. Do not copy the seed first.
 - Do not start v3 packaging from this runbook.
 
 ## Existing Code and Docs to Inspect Before Running
@@ -87,8 +93,8 @@ Export these explicitly for every gate. Do not rely on ambient shell state.
 | Synthetic / unit   | n/a or fixture                    | n/a                                          | `fixture`                   | No vault mutation                         |
 | Smoke slice        | `/tmp/ppa-test-slice-smoke`       | `archive_test_slice_smoke`                   | `slice`                     | From `make test-slice-smoke`              |
 | Larger slice       | `/tmp/ppa-test-slice`             | `archive_test_slice`                         | `slice`                     | From `make test-slice`                    |
-| Local seed dry-run | `$(PPA_SEED_VAULT)` from Makefile | `archive_seed`                               | `seed`                      | **No apply on canonical seed**            |
-| Local seed staging | **copy** of seed vault            | staging schema (e.g. `archive_seed_staging`) | `seed-staging`              | Apply/rollback only here                  |
+| Local seed dry-run | `$(PPA_SEED_VAULT)` from Makefile | `archive_seed` / this machine uses `ppa`     | `seed`                      | **This machine already applied** on the canonical seed. Do not copy-and-reapply. |
+| Local seed staging | **This machine: same seed** (`hf-archives-seed-20260307-235127`) | `ppa` (not a staging copy) | `seed`                      | Written “copy first” sequence was skipped. Future Arnold still uses a copy. |
 | Arnold             | Arnold vault (`PPA_PATH` on host) | production schema (usually `ppa`)            | `production`                | Requires `--confirm-production` for apply |
 
 Always also set:
@@ -247,7 +253,7 @@ export PPA_INDEX_SCHEMA=archive_test_slice
 ```bash
 export PPA_ENGINE=rust
 export PPA_PATH="${PPA_SEED_VAULT:-/Users/rheeger/Archive/seed/hf-archives-seed-20260307-235127}"
-export PPA_INDEX_SCHEMA=archive_seed
+export PPA_INDEX_SCHEMA=ppa   # this machine after the campaign; historical write-up used archive_seed
 export PPA_ARCHIVE_INSTANCE_ROLE=seed
 
 .venv/bin/python -m archive_cli corpus-hygiene email census \
@@ -257,25 +263,29 @@ export PPA_ARCHIVE_INSTANCE_ROLE=seed
 
 Review: reuse rate, new LLM count, suppression/quarantine, high-risk buckets.
 
-**Exit criteria:** report reviewed; no mutation of canonical seed.
+**Exit criteria:** report reviewed. On this machine the canonical seed **already received** apply after this gate’s historical dry-run; do not treat “no mutation” as a current-state description.
 
-**Do not proceed unless:** report reviewed.
+**Do not proceed unless:** report reviewed. Do not copy the seed first.
 
 ---
 
 ## Gate 5: Local Seed Staging Corpus Apply / Rollback
 
-**Purpose:** Seed-scale apply only on a **copy** / staging schema.
+**Purpose (historical write-up):** seed-scale apply on a **copy** / staging schema. **This machine skipped that.** Hygiene apply already ran on the canonical seed (`PPA_PATH` = seed vault, schema `ppa`). Do not copy the seed and re-apply.
 
 ```bash
-export PPA_PATH=<seed_staging_vault_copy>
-export PPA_INDEX_SCHEMA=<seed_staging_schema>
-export PPA_ARCHIVE_INSTANCE_ROLE=seed-staging
+# This machine (already done — do not redo):
+export PPA_PATH=/Users/rheeger/Archive/seed/hf-archives-seed-20260307-235127
+export PPA_INDEX_SCHEMA=ppa
+export PPA_ARCHIVE_INSTANCE_ROLE=seed
 
-# census → DECISION_RUN_ID → apply → rollback (same pattern as Gate 2)
+# Future Arnold / other machines: still use a staging copy.
+# export PPA_PATH=<seed_staging_vault_copy>
+# export PPA_INDEX_SCHEMA=<seed_staging_schema>
+# export PPA_ARCHIVE_INSTANCE_ROLE=seed-staging
 ```
 
-**Disallowed:** canonical seed mutation; Arnold mutation; markdown pruning.
+**Disallowed now:** re-running vault-remove on this seed; Arnold mutation; deleting quarantine cards. This apply wrote no `rollback.json`.
 
 **Exit criteria:** apply+rollback+rebuild safety; status shows corpus state; readiness still not-ready.
 
@@ -289,16 +299,15 @@ export PPA_ARCHIVE_INSTANCE_ROLE=seed-staging
 
 ```bash
 export PPA_ENGINE=rust
-export PPA_PATH="${PPA_SEED_VAULT}"
-export PPA_INDEX_SCHEMA=archive_seed
+export PPA_PATH=/Users/rheeger/Archive/seed/hf-archives-seed-20260307-235127
+export PPA_INDEX_SCHEMA=ppa
 export PPA_ARCHIVE_INSTANCE_ROLE=seed
-# Prefer staging vault/schema if updater apply would mutate seed cursors you must keep frozen.
-# If using canonical seed, prefer --dry-run first; only --apply when intentional.
+# This machine already --apply'd live updaters on the canonical seed. Do not copy first.
 ```
 
 ### Per-source updater proof
 
-For each **live** source (not a manual export). Already proven on slices: `gmail`, `calendar`. Remaining: `imessage`, `otter-transcripts`, `file-libraries` / Documents, `photos`, `beeper`, `contacts:google`, `github-history`, `gmail-correspondents`. Do not run Finance/LinkedIn/Notion CSV/Health XML/medical dumps/Apple VCF as updaters.
+For each **live** source (not a manual export). **This seed SUCCESS:** `calendar`, `contacts`, `otter-transcripts`, `file-libraries`, `beeper`, `imessage`, `gmail-messages`, `gmail-correspondents` (vault-first + `after:last_sync` + HTTP/batch). **FAILED / open:** `github-history` (`--stage-dir` required). **Not run / parked:** `photos`. Do not re-run SUCCESS streams. Do not full-mailbox-walk correspondents. Do not run Finance/LinkedIn/Notion CSV/Health XML/medical dumps/Apple VCF as updaters.
 
 ```bash
 # Capture cursor before
@@ -352,14 +361,14 @@ DIRTY="$(jq -r '.dirty_uids_path // .artifact_paths.dirty_uids // empty' /tmp/su
   --format json | tee /tmp/seed-maintain.json
 ```
 
-**Exit criteria:**
+**Exit criteria (this machine, Aug 2026):**
 
-- Every live stream above has updater proof recorded (or `blocked` / exit 4 if the source is intentionally unavailable — do not fake success). Export streams are out of this gate.
-- At least one processor apply on a non-empty dirty set **or** documented empty-dirty with fixture proof elsewhere.
-- Maintain cycle completes without requiring full rebuild/embed/all-linkers.
-- Gate recorded as `local_seed_source_updater_proof` (or equivalent).
+- SUCCESS updater proof already recorded for the streams listed above. GitHub still needs `--stage-dir`. Photos parked. Export streams are out of this gate.
+- **Still open:** one `maintain --run-processors` on this seed (fixture join proof is not that run).
+- Do not require full rebuild / IVFFlat / `--catch-up` for this close-out.
+- Catch-up is parked.
 
-**Do not proceed unless:** Gate 5b exit criteria met. **Do not go to Arnold without 5b.**
+**Do not proceed to Arnold.** Remaining local close-out is GitHub `--stage-dir`, processors maintain, soak + F real-run evidence.
 
 ---
 
@@ -550,8 +559,8 @@ Stop and ask for review if:
 - dry-run wants broad new LLM classification unexpectedly.
 - report counts nondeterministic across identical dry-runs.
 - updater apply would advance cursor past unpersisted work.
-- Gate 5b or 6b would be skipped.
-- any command would mutate canonical seed before staging gate.
+- a command would “unskip” Gate 5b by copying this seed and re-applying hygiene or SUCCESS updaters.
+- any command would re-run vault-remove or full-mailbox-walk correspondents on this already-applied seed.
 - any command would mutate Arnold corpus before Gate 7 review.
 - readiness flips ready on snapshot-only evidence.
 - Rust/Python divergence appears on active/suppressed materialization.

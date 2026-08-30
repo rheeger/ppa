@@ -1,6 +1,12 @@
 # Section D Execution Plan - Source Updater Contract
 
-**Status (Aug 2026):** Phase 1 and Phase 2 **runner** are landed, including Track B catch-up, Track C calendar mint, and cache-backed Gmail/Calendar indexes. Gmail and Calendar are **slice-proven**. Remaining work is **not** a second Phase 2 framework: make every **live (non-export)** adapter executable, prove each on 1pct then 10pct, then Gate 5b on a seed copy. Manual exports stay import-only. Arnold is out of current scope.
+**Status (Aug 2026, HEAD `b57136f`):** Phase 1 and Phase 2 **runner** are landed, including Track B catch-up, Track C calendar mint, and cache-backed Gmail/Calendar indexes. **2026-08-26–28 live updaters ran on the canonical seed** (schema `ppa`) — not a staging copy. Do not copy the seed first. Do not full-mailbox-walk correspondents.
+
+**SUCCESS on this seed:** calendar, contacts, otter, file-libraries, beeper, imessage, gmail-messages, gmail-correspondents (vault-first + `after:last_sync` + HTTP/batch).
+
+**FAILED:** GitHub (`--stage-dir` required). **Not run / parked:** Photos. Catch-up not run.
+
+Remaining: GitHub `--stage-dir`. Manual exports stay import-only. Arnold is out of current scope.
 
 ## Objective
 
@@ -51,7 +57,7 @@ Before implementation:
 - Confirm tree clean on `v2.5`; Phase 1 D commit present.
 - Read this plan, Section C, Section E Phase 2, Section H, and `archive_cli/commands/maintain.py`.
 - Prefer wrapping `fetch_batches` / existing sync handler over rewriting adapters.
-- Start with Gmail + Calendar (done). Remaining live streams: iMessage, Otter, Documents, Photos, Beeper, Google Contacts, GitHub, Gmail correspondents. Do not add Finance/Health/LinkedIn/Notion CSV as executable.
+- Start with Gmail + Calendar (done). **This seed SUCCESS:** iMessage, Otter, Documents (`file-libraries`), Beeper, Google Contacts, Gmail correspondents (vault-first + `after:last_sync` + HTTP/batch). **Open:** GitHub `--stage-dir`. **Parked:** Photos. Do not add Finance/Health/LinkedIn/Notion CSV as executable. Do not re-walk the full mailbox for correspondents.
 
 Likely files:
 
@@ -89,7 +95,7 @@ Expected exit codes: `0` success, `1` runtime, `2` validation, `3` refused, `4` 
 #### Phase 2 Definition of Done
 
 - Gmail and Calendar: `--apply` advances cursor only after persisted side effects; reports dirty UIDs. **Landed and slice-proven.**
-- Remaining live streams: same contract, added to `EXECUTABLE_ADAPTER_SOURCE_IDS`, scoped kwargs + `--max-items` mapping, capped `--apply` on 1pct then 10pct.
+- Remaining live streams: same contract. **This seed:** most streams SUCCESS (see status). Open: GitHub `--stage-dir`. Parked: Photos.
 - Export adapters (`copilot-finance`, LinkedIn, Notion CSV, `apple-health`, medical file dumps, Apple VCF) stay refused as not executable.
 - `ppa maintain --run-source-updaters` runs enabled **live** sources and writes reports under `ppa/logs/v2_5/` or `ppa/logs/validation-gates/`.
 - Tests: fixture adapter runs, cursor safety, failure isolation, Gmail promotion-gated batch counts, plus factory tests that live keys resolve and export keys refuse.
@@ -297,13 +303,13 @@ Deletes:
 
 - Missing assets can become tombstoned if the source scan can distinguish deletion from permission/path errors.
 
-### Other live streams (must become executable)
+### Other live streams (executable; this-seed proof)
 
-Same contract as Gmail/Calendar. Add to `EXECUTABLE_ADAPTER_SOURCE_IDS` and map `--max-items` / scope kwargs. Prove capped `--apply` on 1pct then 10pct.
+Same contract as Gmail/Calendar. Added to `EXECUTABLE_ADAPTER_SOURCE_IDS`. **2026-08-26–28 this-seed `--apply`:** SUCCESS for Otter, Documents, Beeper, Google Contacts, Gmail correspondents (vault-first + `after:last_sync` + HTTP/batch), plus iMessage. GitHub FAILED (`--stage-dir` required). Photos not run (parked). Do not re-prove SUCCESS streams. Do not full-mailbox-walk correspondents.
 
 | Stream | Key shape | Cursor / cap | Notes |
 | --- | --- | --- | --- |
-| Otter | `otter-transcripts:{account}` | `page_token` / `max_meetings` | Live API |
+| Otter | `otter-transcripts:{account}` | `page_token` / `max_meetings` | MCP (`OTTER_FETCH_MODE=mcp`): list=`otter_search`, get=`otter_fetch`. OAuth refresh token on disk at `~/.mcporter/credentials.json` (mcporter) and the PPA mirror `~/.config/ppa/otter-mcp/credentials.json`. Override with `OTTER_MCP_CREDENTIALS_PATH` / `OTTER_MCP_PPA_TOKEN_PATH`. Re-auth: `mcporter auth otter_meeting_mcp`. |
 | Documents | `file-libraries:documents` | `max_files` | Live FS roots; hash load must use vault cache, not `Documents/` `rglob` |
 | Beeper | `beeper:local` | `max_threads` | Live SQLite; `fetch_batches`. Default-exclude iMessage / BlueBubbles / Helga-Pataki accounts — iMessage snapshot stays source of record. |
 | Google Contacts | `contacts:google` | page / `max_items` | API only — not Apple/VCF import |
@@ -386,8 +392,8 @@ Required gates:
 1. **Synthetic fixtures:** source declarations, batch summaries, cursor commit safety, and state transitions pass.
 2. **Small slice/source fixture:** every live stream produces expected promoted/suppressed/quarantine/dirty counts (Gmail promotion-gated; others source-default).
 3. **Larger slice:** run source updater reporting at realistic volume and capture wall-time.
-4. **Local seed dry-run:** source updater state is computed without mutating canonical seed.
-5. **Local seed staging apply:** cursor and dirty-set persistence are tested against staging state.
+4. **Local seed dry-run:** source updater state is computed; on this machine the canonical seed **already received** `--apply`.
+5. **Local seed apply:** this campaign applied on the canonical seed (schema `ppa`), not a staging copy. Do not copy the seed first. Future Arnold still uses staging.
 6. **Arnold dry-run:** source freshness and proposed batch behavior are reported without changing production.
 7. **Arnold enablement:** source updater runs only after cursor rollback/recovery is documented.
 
@@ -429,7 +435,7 @@ Recovery rules:
 
 **Phase 2 (required for H / v3):**
 
-- Source updater **execution** exists for **every live (non-export) stream**. Gmail and Calendar are done; remaining streams listed above.
+- Source updater **execution** exists for live (non-export) streams. This seed: SUCCESS for the list in the status header; GitHub `--stage-dir` still required; Photos parked.
 - Export adapters stay refused.
 - Committed batch summaries are persisted from real runs.
 - Cursor commit safety preserved under apply.

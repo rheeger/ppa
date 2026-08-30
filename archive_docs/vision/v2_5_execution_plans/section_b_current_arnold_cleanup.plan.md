@@ -1,6 +1,10 @@
 # Section B Execution Plan - Current Arnold Corpus Cleanup
 
-**Status (Aug 2026):** First-pass CCS apply/rollback is landed (DB-first, no file delete). That is **not cleaned**. Remaining slice work: delete suppressed/quarantine notes, purge index UIDs, write the Gmail promotion ledger so inbound sync cannot recreate them. Leave 1pct/10pct cleaned. Rollback is a small-N kit (~20 notes), not restoring the full pile. Do not vault-remove the canonical seed or Arnold in this wave.
+**Status (Aug 2026, HEAD `b57136f`):** First-pass CCS apply/rollback landed earlier (DB-first). **This campaign applied vault-remove of suppressed marketing on the canonical seed** `/Users/rheeger/Archive/seed/hf-archives-seed-20260307-235127` schema `ppa` (~502,622 files deleted; index + Gmail ledger purged). No `rollback.json`; rollback cannot restore those deletes.
+
+**Product fork (locked):** suppressed marketing is **deleted**. Quarantine **stays** as labeled cards (`retrieval_weight=0.35`). Older B text that said delete quarantine too is superseded.
+
+**Do not re-run vault-remove.** Remaining B work: quadratic UID collect + persist `rollback.json` on **future** applies. Arnold prune is out of scope.
 
 ## Objective
 
@@ -12,12 +16,12 @@ The cleanup must:
 - Convert raw marketing/bulk/noise email from active archive artifacts into suppressed ledger records.
 - Preserve useful derived structured cards that still have an independent reason to exist.
 - Keep the process deterministic, reviewable, rebuild-safe, and rollback-safe.
-- On slices: **match inbound Gmail** — suppressed/quarantine notes are not in the vault. Delete those files and purge their UIDs.
+- **Match inbound Gmail (locked fork):** suppressed notes are not in the vault (deleted + purged + ledger). Quarantine notes **stay** as labeled cards. Do not delete quarantine.
 
 ## Non-Goals
 
 - Do not implement cleanup in this planning pass (first-pass CCS tooling already exists).
-- Do not physically prune the canonical seed or Arnold from this section.
+- Do not re-run vault-remove on this seed (already applied). Do not physically prune Arnold from this section. Do not delete quarantine cards.
 - Do not rerun classification over all email.
 - Do not remove useful derived cards just because their source raw email is suppressed.
 - Do not change Gmail as the source of record for suppressed bulk email.
@@ -48,7 +52,7 @@ Before implementation:
 - Verify `EmailPromotionPolicy` fixture tests pass before building cleanup.
 - Implement dry-run census before any apply code.
 - Implement slice apply/rollback before local seed staging.
-- Never apply to canonical seed or Arnold from this section until Section G gates pass.
+- This machine’s canonical seed **already received** hygiene apply. Do not copy the seed first. Do not apply to Arnold from this section.
 
 Likely implementation files:
 
@@ -293,7 +297,7 @@ Recommended sequence:
 9. Preserve active derived cards with provenance to suppressed source email.
 10. Write an apply report with before/after counts.
 
-First-pass CCS apply (landed) does not delete markdown. Remaining slice work **does**: delete suppressed/quarantine notes and purge those UIDs so the vault matches inbound Gmail (those cards are never written).
+First-pass CCS apply hid rows in Postgres. **This campaign deleted suppressed marketing** (~502,622 files) and purged those UIDs + wrote the Gmail ledger. Quarantine cards were **not** deleted. Inbound Gmail: suppressed does not emit; quarantine writes labeled cards (`emit_cards=True`). Do not re-run vault-remove.
 
 ## B7. Rebuild Safety
 
@@ -316,7 +320,7 @@ The execution preference is strategy 2 if it preserves auditability and rollback
 
 ## B8. Derived Card Preservation
 
-Derived cards that exist **only** because of a suppressed/quarantine thread are in the vault-remove set (today `derived_uids` is recorded and ignored — that hole is in scope).
+Derived cards that exist **only** because of a **suppressed** thread are in the vault-remove set. Quarantine-derived cards stay with the labeled quarantine cards. (`derived_uids` was recorded and ignored on earlier passes — leftover, not a reason to re-run vault-remove.)
 
 Keep derived cards that still have an independent reason to exist (a proven action with structured fields: `meal_order`, `ride`, `flight`, `purchase`, etc.). Preserve `source_email` provenance on those keepers even if the source email is gone.
 
@@ -332,7 +336,7 @@ Rollback should:
 - Preserve the decision history for audit.
 - Emit a rollback report with counts.
 
-First-pass rollback restores CCS only. Remaining slice rollback is a **small-N kit** (~20 deleted notes copied aside before apply). Do not restore the full marketing pile. After one restore/re-remove proof, slices stay cleaned.
+This campaign wrote **no** `rollback.json`. Rollback cannot restore the ~502,622 deleted files. Future applies must persist `rollback.json`. Do not restore the full marketing pile. Do not treat missing rollback as a reason to re-apply.
 
 ## B10. Tests and Validation
 
@@ -358,7 +362,7 @@ Required gates:
 2. **Small slice:** dry-run, apply, rollback, and rebuild-safety pass on a slice containing marketing, transactional, personal, attachment, derived-card, and unknown examples.
 3. **Larger slice:** runtime, report size, classification reuse, suppressed retrieval filtering, and linker filtering are measured.
 4. **Local seed dry-run:** full seed is evaluated without mutation; report is reviewed.
-5. **Local seed staging apply:** apply/rollback is run only against a copied vault, staging schema, or staging corpus-state store.
+5. **Local seed apply:** this campaign applied on the canonical seed (schema `ppa`), not a copy. Do not copy-and-reapply. Future Arnold still uses staging.
 6. **Arnold dry-run:** production state is evaluated without mutation and samples are reviewed.
 7. **Arnold reviewed apply:** only a reviewed Arnold decision run can be applied.
 8. **Arnold soak:** normal maintenance proves suppressed email does not return.
@@ -394,12 +398,12 @@ Section B implementation is ready when:
 - Existing Arnold email can be evaluated without rerunning classification for already-classified threads.
 - Dry-run census is deterministic and reviewable.
 - First-pass CCS apply is landed (hide in Postgres).
-- Remaining slice apply **deletes** suppressed/quarantine notes, purges those UIDs, and writes the promotion ledger. Slices stay cleaned.
+- **This seed:** suppressed marketing deleted (~502,622 files), UIDs purged, Gmail ledger written. Quarantine stays as labeled cards. Do not re-run vault-remove.
 - Suppressed email is gone from the vault and from default retrieval — not only filtered at query time.
 - Derived-only marketing cards are removed; independently useful derived cards remain.
-- A later Gmail continue does not recreate removed thread UIDs.
-- Small-N rollback kit can restore ≤20 notes; full-pile restore is out of scope.
-- Do not vault-remove the canonical seed or Arnold from this wave.
+- A later Gmail continue does not recreate removed **suppressed** thread UIDs. Quarantine inbound writes cards.
+- This apply has no `rollback.json`; those deletes are not restorable. Future applies must persist rollback. Full-pile restore is out of scope.
+- Remaining: quadratic UID collect + persist `rollback.json` on future applies. Arnold prune is out of scope.
 
 ## Completion Artifacts
 
@@ -411,7 +415,7 @@ The implementation agent must leave:
 - rollback report proving restored prior state.
 - rebuild-safety report proving suppressed records do not reappear.
 - Arnold dry-run report if production apply is being proposed.
-- slice vault-remove evidence (`vault_markdown_deleted: yes`) plus a small-N rollback kit; no seed/Arnold file prune.
+- this-seed vault-remove evidence (~502,622 suppressed files deleted; no `rollback.json`). Do not re-apply. Arnold file prune is out of scope.
 
 ## Commit Instructions
 

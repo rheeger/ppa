@@ -570,10 +570,113 @@ def test_imessage_snapshot_dir_from_env(monkeypatch: pytest.MonkeyPatch) -> None
     assert kwargs["source_label"] == "local"
 
 
+def test_github_run_without_stage_dir_fails_contract(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PPA_GITHUB_STAGE_DIR", raising=False)
+    monkeypatch.delenv("HFA_GITHUB_STAGE_DIR", raising=False)
+    vault = _minimal_vault(tmp_path)
+    result = run_source_updater(
+        source_key="github-history:local",
+        vault_path=vault,
+        apply=False,
+        repo_root=tmp_path,
+    )
+    assert result.exit_hint == 1
+    assert result.report.status == RUN_STATUS_FAILED
+    assert any("stage-dir" in err for err in result.report.errors)
+
+
 def test_github_stage_dir_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PPA_GITHUB_STAGE_DIR", "/tmp/github-stage")
     kwargs = adapter_ingest_kwargs(resolve_declaration("github-history:local"), apply=False)
     assert kwargs["stage_dir"] == "/tmp/github-stage"
+
+
+def test_github_stage_dir_from_cli_overrides_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PPA_GITHUB_STAGE_DIR", "/tmp/github-stage-env")
+    kwargs = adapter_ingest_kwargs(
+        resolve_declaration("github-history:local"),
+        apply=False,
+        stage_dir="/tmp/github-stage-cli",
+    )
+    assert kwargs["stage_dir"] == "/tmp/github-stage-cli"
+
+
+def test_github_stage_dir_cli_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PPA_GITHUB_STAGE_DIR", raising=False)
+    monkeypatch.delenv("HFA_GITHUB_STAGE_DIR", raising=False)
+    kwargs = adapter_ingest_kwargs(
+        resolve_declaration("github-history:local"),
+        apply=False,
+        stage_dir="~/Archive/github-stage",
+    )
+    assert kwargs["stage_dir"] == "~/Archive/github-stage"
+
+
+def test_run_source_updater_passes_github_stage_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PPA_GITHUB_STAGE_DIR", raising=False)
+    monkeypatch.delenv("HFA_GITHUB_STAGE_DIR", raising=False)
+    vault = _minimal_vault(tmp_path)
+    adapter = _RecordingGithubAdapter()
+    stage = str(tmp_path / "github-stage")
+    run_source_updater(
+        source_key="github-history:local",
+        vault_path=vault,
+        apply=False,
+        adapter=adapter,
+        repo_root=tmp_path,
+        stage_dir=stage,
+        max_items=25,
+    )
+    assert adapter.ingest_kwargs.get("stage_dir") == stage
+    assert adapter.ingest_kwargs.get("max_items") == 25
+    assert adapter.ingest_kwargs.get("catch_up") is not True
+
+
+def test_source_updaters_run_parser_accepts_stage_dir() -> None:
+    import argparse
+
+    from archive_cli.source_updaters.cli import add_parser
+
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(dest="command")
+    add_parser(sub)
+    args = parser.parse_args(
+        [
+            "source-updaters",
+            "run",
+            "--source",
+            "github-history:local",
+            "--apply",
+            "--stage-dir",
+            "/tmp/github-stage",
+            "--max-items",
+            "50",
+        ]
+    )
+    assert args.stage_dir == "/tmp/github-stage"
+    assert args.apply is True
+    assert args.max_items == 50
+    assert args.source == ["github-history:local"]
+    assert getattr(args, "catch_up", False) is False
+
+
+class _RecordingGithubAdapter(BaseAdapter):
+    source_id = "github-history"
+    enable_person_resolution = False
+    preload_existing_uid_index = False
+
+    def __init__(self) -> None:
+        self.ingest_kwargs: dict[str, Any] = {}
+
+    def fetch(self, vault_path: str, cursor: dict[str, Any], config=None, **kwargs) -> list[dict[str, Any]]:
+        return []
+
+    def to_card(self, item: dict[str, Any]):
+        raise NotImplementedError
+
+    def ingest(self, vault_path: str, dry_run: bool = False, **kwargs: Any) -> IngestResult:
+        self.ingest_kwargs = dict(kwargs)
+        return IngestResult()
 
 
 def test_max_items_maps_per_adapter() -> None:

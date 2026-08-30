@@ -1,6 +1,6 @@
 # Section E Execution Plan - Processor DAG
 
-**Status (Aug 2026, HEAD `3a90bc0`):** Phase 1 and Phase 2 are **landed**. Track A (`fa5f5a2`) closed the stub executors — dirty-UID paths now call incremental rebuild, embed-pending, incremental link refresh, `run_enrichment_for_uids`, and UID-scoped ER. Dirty extract is allowlist-scoped (`35901b0`; no full `email_message` scan). Remaining scale holes: rebuild has no UID allowlist; `embed_pending` is limit-N not `card_uid` filter. Join proof is fixture maintain, not live seed. Arnold is out of current scope.
+**Status (Aug 2026, HEAD `b57136f`):** Phase 1 and Phase 2 are **landed**. Track A (`fa5f5a2`) closed the stub executors — dirty-UID paths now call incremental rebuild, embed-pending, incremental link refresh, `run_enrichment_for_uids`, and UID-scoped ER. Dirty extract is allowlist-scoped (`35901b0`). Dirty-UID rematerialize allowlist incremental landed (`1c02e10`); host UID after merge (`b57136f`). Index after campaign: ~1,392,108 cards, 3,962,176 embeddings, pending 0. Remaining scale hole: `embed_pending` is limit-N not `card_uid` filter. **Open on this seed:** one `maintain --run-processors`. Join proof is fixture maintain; that maintain has not been run on this seed. Arnold is out of current scope.
 
 ## Objective
 

@@ -1,5 +1,7 @@
 # Section G Execution Plan - Validation Ladder and Rust Execution Standard
 
+**Status (Aug 2026, HEAD `b57136f`):** Rails landed (`3a90bc0` scale ladder on 1pct + 10pct). **This machine already mutated the canonical seed** (2026-08-26–28 hygiene + live updaters on schema `ppa`). The written slice → seed-copy 5b sequence was **skipped**. Do not tell the next agent to copy the seed first. “Never mutate the canonical seed” is a historical constraint for **future Arnold**. Remaining: soak + F real-run evidence. Arnold 6+ deferred.
+
 ## Objective
 
 Define the required path from v2.5 implementation work to safe production completion on Arnold.
@@ -16,7 +18,7 @@ It also defines the Rust execution standard. v2.5 should use the Rust engine for
 
 - Do not implement the validation harness in this planning pass.
 - Do not run Arnold cleanup from this plan.
-- Do not require physical vault pruning of the canonical seed or Arnold. Slice vault-remove of suppressed/quarantine mail is required before seed-copy 5b.
+- Do not re-run vault-remove on this seed (already applied; suppressed deleted, quarantine kept). Do not physically prune Arnold. Do not copy the seed first.
 - Do not require a new Rust rewrite for v2.5.
 - Do not bypass Python code where Rust does not already own the path.
 - Do not treat wall-clock speed as a reason to skip correctness gates.
@@ -255,7 +257,7 @@ Exit criteria:
 
 Purpose:
 
-- Prove apply and rollback at seed scale without touching the canonical seed or Arnold.
+- This machine already applied at seed scale on the canonical seed. Do not re-prove by copying the seed. Do not touch Arnold.
 
 Requirements:
 
@@ -269,10 +271,9 @@ Requirements:
 
 Exit criteria:
 
-- staging apply passes.
-- rollback passes.
-- rebuild safety passes.
-- no canonical seed mutation.
+- this machine: hygiene apply already landed on the canonical seed (no `rollback.json`; deletes not restorable).
+- do not copy-and-reapply to “pass” this gate.
+- future Arnold still requires staging apply + rollback + rebuild safety.
 
 ### Gate 6: Arnold Dry-Run
 
@@ -386,9 +387,10 @@ Every v2.5 execution plan should respect these guardrails:
 
 Seed safety:
 
-- The canonical seed is never the first apply target.
-- Local seed apply must use a copied vault, staging schema, or staging corpus-state store.
-- Rollback must be validated on staging before any production apply.
+- **This machine (2026-08-26–28):** the canonical seed **was** the apply target (hygiene + live updaters, schema `ppa`). The written “copy the seed first” sequence was skipped. Do not copy-and-reapply.
+- “Never mutate the canonical seed” is a historical constraint for **future Arnold**, not a description of this seed.
+- Rollback was not persisted (`rollback.json` missing); those deletes are not restorable. Future applies must persist rollback.
+- Arnold apply still requires a reviewed production dry-run. Do not treat this seed mutation as permission to mutate Arnold.
 
 Arnold safety:
 
@@ -427,7 +429,7 @@ Future implementation should add tests or scripts that prove:
 - Gate 1 synthetic fixtures pass without real vault access.
 - Gate 2 slice apply/rollback passes.
 - Gate 3 larger slice produces bounded reports and no full reclassification.
-- Gate 5 seed staging apply does not mutate canonical seed.
+- Gate 5 on **this** machine already mutated the canonical seed (campaign landed). Future Arnold still uses a staging copy.
 - Rust engine mode is recorded in reports.
 - Unsupported Python fallbacks are visible.
 - Arnold readiness cannot pass unless prior gates are recorded.

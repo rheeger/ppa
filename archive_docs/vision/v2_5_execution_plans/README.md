@@ -6,16 +6,28 @@ v2.5 implementation is production-sensitive. Do not start on Arnold. Do not star
 
 ## Current Status (read this first)
 
-HEAD `3a90bc0` on branch `v2.5`. Goal of the current wave: **local full seed → v2.5**. Arnold deploy/apply is deferred / out of current scope.
+HEAD `b57136f` on branch `v2.5` (Aug 2026). Goal of the current wave: **close out this local seed**. Arnold deploy/apply is deferred / out of current scope.
 
-**Landed:** Sections A–C/G; D Phase 1 + Phase 2 (runner + Track B catch-up + Track C calendar mint/capped apply); E Phase 1 + Phase 2 (Track A wired dirty-UID executors); F surfaces; H local gates 0–5 / 5b (hygiene staging 786k CCS + rollback Jul 12; Gmail 5b capped Jul). Merge commits `685d07b` `5ed5b07` `0fb51b4` + join proof `5737db3`. **Scale hot paths** `0c53d7e` `f339580` `0bdbd48` `9139c58` `35901b0` + ladder `3a90bc0` (1pct + 10pct; 5pct skipped). Not live seed maintain.
+**Landed:** Sections A–C/G; D Phase 1 + Phase 2 (runner + Track B catch-up + Track C calendar mint); E Phase 1 + Phase 2 (Track A wired dirty-UID executors + rematerialize allowlist `1c02e10`); F surfaces; H local gates 0–5 / 5b (earlier CCS staging + Gmail 5b). Merge commits `685d07b` `5ed5b07` `0fb51b4` + join proof `5737db3`. **Scale hot paths** `0c53d7e`…`3a90bc0` (1pct + 10pct). **2026-08-26–28 local-seed campaign** applied hygiene + most live updaters **on the canonical seed** `/Users/rheeger/Archive/seed/hf-archives-seed-20260307-235127` schema `ppa`. That seed **was** the apply target. The written sequence (slice vault-remove → 1pct/10pct updaters → Gate 5b on a staging copy → catch-up) was **skipped**. Do not copy the seed first. “Never mutate the canonical seed” is a historical constraint for **future Arnold**, not this machine.
 
-**What remains before local seed:**
+**Product fork (locked this campaign):** suppressed marketing is **deleted** from vault + purged from index + Gmail ledger. Quarantine **stays** as labeled cards (`retrieval_weight=0.35`). New inbound uncertain Gmail writes those cards (`emit_cards=True`). Suppressed inbound does not emit. This forks written C3 (“quarantine = compact review, no cards”) and older B text that said delete quarantine too.
 
-1. **Slice hygiene vault-remove** on 1pct then 10pct: delete suppressed/quarantine notes, purge UIDs, write the Gmail promotion ledger. CCS-only apply is not cleaned. Leave slices cleaned; rollback is small-N only.
-2. **Live source updaters for every non-export stream** on 1pct then 10pct. Gmail and Calendar are already proven. Remaining: iMessage, Otter, Documents, Photos, Beeper, Google Contacts, GitHub, Gmail correspondents. Manual exports (Finance CSV, LinkedIn, Notion people CSVs, Health XML, medical file dumps, Apple VCF) stay import-only.
-3. **Then** Gate 5b re-proof on a **full seed staging copy** (never the canonical seed), then catch-up + processors maintain.
-4. **Local soak** + **F readiness** with real-run evidence (surfaces can go green on snapshots today).
+**Demonstrated on this seed:**
+
+- Hygiene apply ~502,622 files deleted. No `rollback.json`; rollback cannot restore those deletes.
+- Live updaters SUCCESS: calendar, contacts, otter, file-libraries, beeper, imessage, gmail-messages, gmail-correspondents (vault-first + `after:last_sync` + HTTP/batch). Do not full-mailbox-walk correspondents.
+- GitHub FAILED (`--stage-dir` required). Photos not run.
+- Dirty rematerialize: allowlist incremental; host UID after merge (`b57136f`). Index ~1,392,108 cards, 3,962,176 embeddings, pending 0.
+- No full rebuild, no IVFFlat, no `--catch-up`.
+
+**What remains (Arnold excluded):**
+
+1. Hygiene leftovers: quadratic UID collect + persist `rollback.json` on **future** applies. Do not re-run vault-remove.
+2. GitHub `--stage-dir`.
+3. One `maintain --run-processors` on this seed.
+4. Soak + F readiness with real-run evidence (surfaces can go green on snapshots today).
+
+Parked: Photos, catch-up, full rebuild, Arnold 6+.
 
 The five whole-corpus I/O engines are done. Do not re-implement hygiene COPY, census cache dump, Gmail/Calendar cache indexes, or dirty-only extract. Dirty-UID rematerialize allowlist landed (`1c02e10`). Still-open (not those engines): `embed_pending` is limit-N.
 
@@ -34,11 +46,11 @@ Snapshots from `--record-source-status` / `--record-processor-status` are **not*
 7. **Section E Phase 1** — processor declarations, plans, status snapshots.
 8. **Section F Phase 1** — status/readiness surfaces.
 
-### Phase 2 + promotion (landed through A/B/C merge; local seed remaining)
+### Phase 2 + promotion (landed through A/B/C merge + 2026-08-26–28 seed campaign)
 
 9. **Section D Phase 2** — landed (`source updater execution` + Track B `20401ea` + Track C `66e1300` + Gmail/Calendar cache indexes `0bdbd48` `9139c58`). Runner is real; maintain still needs explicit source keys; cursors still list/page-token.
-10. **Section E Phase 2** — landed (`processor dag execution` + Track A `fa5f5a2` + dirty-only extract `35901b0`). Executors are wired; rebuild/embed still lack a true UID filter.
-11. **Section H local 0–5b + scale** — 0–5b done on fixtures / staging / capped Gmail; scale ladder `3a90bc0` on 1pct + 10pct. **Next:** slice vault-remove + remaining live updaters on 1pct/10pct → then 5b on a full seed staging copy → catch-up + processors maintain → local soak + F real-run evidence.
+10. **Section E Phase 2** — landed (`processor dag execution` + Track A `fa5f5a2` + dirty-only extract `35901b0` + rematerialize allowlist `1c02e10`). Executors are wired. Remaining: one `maintain --run-processors` on this seed; `embed_pending` is still limit-N.
+11. **Section H local 0–5b + scale + seed campaign** — 0–5b done on fixtures / staging / capped Gmail; scale ladder `3a90bc0` on 1pct + 10pct; 2026-08-26–28 campaign applied hygiene + most live updaters **on this seed**. **Next:** hygiene leftovers + GitHub `--stage-dir` + one `maintain --run-processors` → local soak + F real-run evidence. Do not copy the seed. Do not re-run vault-remove. Parked: Photos, catch-up, full rebuild, Arnold.
 
 Do not claim freshness from snapshots. Do not treat Arnold as the next step.
 
@@ -48,9 +60,9 @@ Do not claim freshness from snapshots. Do not treat Arnold as the next step.
 - Existing classification is reused before new LLM calls.
 - Gmail remains the source of record for suppressed bulk email.
 - Suppression is auditable and reversible.
-- First-pass hygiene (landed) is CCS-only and does not delete vault markdown. **Remaining slice work does:** suppressed/quarantine notes are deleted so inbound Gmail cannot recreate them. Do not physically prune the canonical seed or Arnold from this wave.
+- First-pass hygiene (CCS-only) hid rows in Postgres. **This campaign deleted suppressed marketing** from the vault + purged index + Gmail ledger. Quarantine **stays** as labeled cards (`retrieval_weight=0.35`). Do not re-run vault-remove. Do not delete quarantine.
 - Existing active cards are not silently demoted by routine sync.
-- Seed and Arnold are never first apply targets for corpus hygiene.
+- This machine’s canonical seed **was** the hygiene/updater apply target. “Never mutate the canonical seed” is a historical constraint for **future Arnold**, not this seed. Do not copy the seed first.
 - Arnold corpus apply requires a reviewed Arnold dry-run `decision_run_id`.
 - Full reclassification, full embeddings, and all-linker runs are explicit opt-in exceptions.
 - `PPA_ENGINE=rust` is the default for supported scan/cache/materialization/chunking validation paths.
@@ -67,7 +79,7 @@ Do not run these by default during v2.5 implementation:
 - all-linker reruns.
 - production apply without `decision_run_id`.
 - Arnold apply without an Arnold dry-run generated from current Arnold state.
-- physical vault pruning on the canonical seed or Arnold (slice vault-remove of suppressed/quarantine mail is the remaining hygiene path).
+- another vault-remove of suppressed mail on this seed (already applied; no `rollback.json`). Do not delete quarantine cards. Physical prune of Arnold remains out of scope.
 - full Phase 9 `ppa-deploy-v2` / rebuild for routine code promotion (prefer `ppa-sync` + `ppa-install` + `migrate`).
 - claiming Gate H soak success from `--record-*-status` alone.
 
@@ -130,11 +142,11 @@ Every report must include enough paths to find related artifacts from `ppa statu
 | B apply   | staging apply, rollback, rebuild-safety                       | Done (Arnold apply in H)                                                                |
 | C         | Gmail classify-before-promotion gate                          | Done (enable in H)                                                                      |
 | D Phase 1 | declarations, batch shapes, snapshots                         | Done                                                                                    |
-| D Phase 2 | **run adapters**, commit cursors, dirty UIDs, maintain flag   | Gmail/Calendar landed; **remaining live streams not yet executable**                    |
+| D Phase 2 | **run adapters**, commit cursors, dirty UIDs, maintain flag   | Most live streams SUCCESS on this seed; GitHub `--stage-dir` open; Photos parked        |
 | E Phase 1 | declarations, plan/staleness, snapshots                       | Done                                                                                    |
 | E Phase 2 | **run processors** on dirty UIDs, maintain flag               | **Landed** (Track A + dirty extract)                                                    |
 | F         | JSON/human status, readiness fail-closed on real-run evidence | Surfaces landed; **evidence hole remains**                                              |
-| H         | Seed updater proof, corpus apply, soak, readiness             | Next: slice vault-remove + all live streams on 1pct/10pct, then seed-copy 5b. Arnold deferred |
+| H         | Seed updater proof, corpus apply, soak, readiness             | Seed campaign landed on this machine. Remaining: GitHub `--stage-dir`, processors maintain, soak + F. Arnold deferred |
 
 No section is complete with code alone. Each section must produce reports/tests proving the relevant gate behavior.
 
@@ -335,7 +347,7 @@ Report shape implementation binding:
 | Small slice                                     | Prove corpus hygiene on real examples    | dry-run/apply/rollback/rebuild safety pass                  |
 | Larger slice                                    | Prove runtime/report scale               | bounded runtime, no broad LLM work                          |
 | Local seed dry-run                              | Evaluate full seed without mutation      | report reviewed, classification reuse acceptable            |
-| Local seed staging apply                        | Prove seed-scale apply/rollback safely   | copied vault/staging schema only, rollback passes           |
+| Local seed staging apply                        | Prove seed-scale apply/rollback safely   | **This machine:** already applied on the canonical seed (2026-08-26–28). Do not copy-and-reapply. Future Arnold still uses a staging copy. |
 | **Local seed source updater + processor proof** | Prove live update on seed                | real updater runs + dirty UID processor runs (Gate 5b)      |
 | Arnold code deploy                              | Put Phase 2 code on Arnold               | `ppa-sync` + `ppa-install` (+ migrate); MCP restarted       |
 | **Arnold source updater + processor proof**     | Prove live update on production          | real runs with cursors (Gate 6b)                            |
@@ -355,7 +367,7 @@ Stop and ask for review if:
 - Rust/Python validation diverges.
 - rebuild re-promotes suppressed records.
 - rollback fails on any slice or staging run.
-- any command would mutate canonical seed or Arnold before its gate.
+- any command would mutate **Arnold** before its gate, or re-run vault-remove / full-mailbox correspondents on this already-applied seed.
 - Gate 5b or 6b (updater/processor proof) would be skipped.
 - readiness would pass on snapshot-only source/processor status.
 
