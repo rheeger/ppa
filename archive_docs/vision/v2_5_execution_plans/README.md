@@ -12,6 +12,38 @@ HEAD `5980464` on branch `v2.5` (Aug 2026). **v2.5-local is complete.** The goal
 
 **Ops model:** run updaters where the secrets and devices live (this Mac, later Helga Pataki — iMessage snapshots, Photos parked, local Beeper, GitHub `gh`, Otter MCP, Google tokens). The corpus lives here.
 
+### Nightly maintain (2am local)
+
+Nightly **is** `ppa maintain` — not a second pipeline. The wrapper only resolves local-seed env (vault / DSN / keys) and passes the live-cycle flags. Dirty rematerialize + dirty embed (`embed_pending`) already run inside `--run-processors`. No `--catch-up`, no Photos / Apple Health, no `--allow-full-embedding` / IVFFlat / force-full rebuild.
+
+```text
+python -m archive_cli --log-file logs/ppa-maintain-nightly-YYYYMMDD.log maintain \
+  --run-source-updaters --apply-source-updaters \
+  --run-processors --apply-processors \
+  --source-updater gmail-messages:<GOOGLE_ACCOUNT> \
+  --source-updater calendar-events:<GOOGLE_ACCOUNT> \
+  --source-updater otter-transcripts:<GOOGLE_ACCOUNT> \
+  --source-updater gmail-correspondents:<GOOGLE_ACCOUNT> \
+  --source-updater contacts:google \
+  --source-updater file-libraries:documents \
+  --source-updater beeper:local \
+  --source-updater imessage:local \
+  --source-updater github-history:local
+```
+
+Beeper already default-excludes iMessage / BlueBubbles. GitHub uses `PPA_GITHUB_STAGE_DIR`. Otter uses `OTTER_FETCH_MODE=mcp`. iMessage reads `IMESSAGE_SNAPSHOT_DIR` (does not take a new snapshot).
+
+**Install (this Mac, does not run until 2am):**
+
+```bash
+make install-nightly-maintain
+# or: .venv/bin/python archive_scripts/ppa-maintain-nightly.py --install
+```
+
+`--install` writes `~/Library/LaunchAgents/com.rheeger.ppa.maintain-nightly.plist` and `launchctl bootstrap`s it. Dry-run the wrapper with `--dry-run`. Uninstall: `make uninstall-nightly-maintain`.
+
+**Logs (gitignored):** `logs/ppa-maintain-nightly-YYYYMMDD.log` (and `.json` report). Launchd stderr: `logs/ppa-maintain-nightly-launchd.err.log`. Tail: `tail -f logs/ppa-maintain-nightly-$(date +%Y%m%d).log`.
+
 **Landed:** Sections A–C/G; D Phase 1 + Phase 2; E Phase 1 + Phase 2; F surfaces; H local proof on this seed. Merge commits `685d07b` `5ed5b07` `0fb51b4` + join proof `5737db3`. **Scale hot paths** `0c53d7e`…`3a90bc0` (1pct + 10pct). **2026-08-26–28 local-seed campaign** (`b57136f`) applied hygiene + most live updaters **on this seed**. **Local close-out** (`5980464`): Otter MCP auth persists across restart, F freshness uses live keys, leftover hygiene/GitHub campaign fixes, soak. The written sequence (slice vault-remove → 1pct/10pct updaters → Gate 5b on a staging copy → Arnold) was **skipped**. Do not copy the seed first. “Never mutate the canonical seed” was a written-H constraint for an Arnold path that is **not** the product.
 
 **Product fork (locked this campaign):** suppressed marketing is **deleted** from vault + purged from index + Gmail ledger. Quarantine **stays** as labeled cards (`retrieval_weight=0.35`). New inbound uncertain Gmail writes those cards (`emit_cards=True`). Suppressed inbound does not emit. This forks written C3 (“quarantine = compact review, no cards”) and older B text that said delete quarantine too.

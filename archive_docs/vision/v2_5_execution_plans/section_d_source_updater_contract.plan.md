@@ -347,6 +347,8 @@ Target order after D Phase 2 + E Phase 2:
 
 Phase 1 only did step 7 snapshots. Phase 2 must add steps 1–2. E Phase 2 adds 4–6.
 
+**Nightly (this Mac, 2am):** `make install-nightly-maintain` schedules `archive_scripts/ppa-maintain-nightly.py`, which is this same `ppa maintain` command with `--apply-source-updaters --apply-processors` and live `--source-updater` keys (not Photos / Health, not `--catch-up`). Dirty embed is the embedding processor, not a second `embed-pending` job. See the README “Nightly maintain” section.
+
 ## Error Handling
 
 Source updater failures should be isolated by source.

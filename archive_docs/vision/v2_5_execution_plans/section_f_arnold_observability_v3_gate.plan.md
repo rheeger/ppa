@@ -346,7 +346,7 @@ v3 should not resume packaging until Arnold passes this gate after v2.5 implemen
    - Suppressed cards skip active-only processors.
 
 7. **Maintenance stable**
-   - `ppa maintain --run-source-updaters --run-processors` (or equivalent) can run through normal source/update/process/status flow.
+   - `ppa maintain --run-source-updaters --run-processors` (or equivalent) can run through normal source/update/process/status flow. Local nightly at 2am is that same command (see README “Nightly maintain”).
    - Reports are written.
    - Partial failure behavior is visible and recoverable.
    - `--record-source-status` / `--record-processor-status` alone **do not** satisfy this check.

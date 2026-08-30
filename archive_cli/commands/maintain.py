@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
@@ -208,7 +209,15 @@ def _run_source_updaters(
     )
     keys = list(source_keys or [])
     if not keys:
-        keys = default_maintain_source_keys()
+        account = (os.environ.get("GOOGLE_ACCOUNT") or "").strip()
+        otter = (os.environ.get("OTTER_ACCOUNT") or account).strip()
+        accounts = (account,) if account else ()
+        otter_accounts = (otter,) if otter else ()
+        keys = default_maintain_source_keys(
+            gmail_accounts=accounts,
+            calendar_accounts=accounts,
+            otter_accounts=otter_accounts,
+        )
     if not keys:
         logger.info("run_source_updaters skipped: no executable source keys configured")
         return 0, []

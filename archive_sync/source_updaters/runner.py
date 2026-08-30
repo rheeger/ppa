@@ -27,6 +27,7 @@ from .constants import (
     CONTACTS_EXPORT_SCOPES,
     EXECUTABLE_ADAPTER_SOURCE_IDS,
     EXPORT_ADAPTER_SOURCE_IDS,
+    PARKED_ADAPTER_SOURCE_IDS,
     RUN_STATUS_BLOCKED,
     RUN_STATUS_FAILED,
     RUN_STATUS_PARTIAL,
@@ -640,16 +641,24 @@ def default_maintain_source_keys(
     *,
     gmail_accounts: tuple[str, ...] = (),
     calendar_accounts: tuple[str, ...] = (),
+    otter_accounts: tuple[str, ...] = (),
 ) -> list[str]:
-    """Sources maintain should run when --run-source-updaters is set."""
+    """Live (non-parked) sources maintain should run when --run-source-updaters is set.
 
-    decls = expand_declarations(gmail_accounts=gmail_accounts, calendar_accounts=calendar_accounts)
-    keys = [
+    Photos and Apple Health stay parked. Gmail/Calendar/Otter/correspondents are
+    included only when concrete accounts are supplied (placeholders are skipped).
+    """
+
+    decls = expand_declarations(
+        gmail_accounts=gmail_accounts,
+        calendar_accounts=calendar_accounts,
+        otter_accounts=otter_accounts,
+    )
+    return [
         d.source_key
         for d in decls
-        if d.enabled and d.adapter_source_id in EXECUTABLE_ADAPTER_SOURCE_IDS and "<" not in d.source_key
+        if d.enabled
+        and d.adapter_source_id in EXECUTABLE_ADAPTER_SOURCE_IDS
+        and d.adapter_source_id not in PARKED_ADAPTER_SOURCE_IDS
+        and "<" not in d.source_key
     ]
-    if keys:
-        return keys
-    # No configured accounts — nothing executable without placeholders.
-    return []
