@@ -8,6 +8,7 @@ import os
 import subprocess
 import tempfile
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
@@ -380,6 +381,41 @@ def load_refresh_token(
     return None
 
 
+def _read_http_error_body(exc: urllib.error.HTTPError) -> str:
+    try:
+        raw = exc.read()
+    except Exception:
+        return ""
+    if isinstance(raw, bytes):
+        return raw.decode("utf-8", errors="replace")
+    return str(raw or "")
+
+
+def _token_error_description(body: str, fallback: str) -> str:
+    if not body.strip():
+        return fallback
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return body.strip() or fallback
+    if isinstance(payload, dict):
+        return str(payload.get("error_description") or payload.get("error") or body.strip() or fallback)
+    return body.strip() or fallback
+
+
+def _should_retry_mint_without_scopes(*, had_scopes: bool, status: int, body: str) -> bool:
+    """True when a scoped refresh was rejected for scope mismatch (HTTP 400)."""
+
+    if not had_scopes or int(status) != 400:
+        return False
+    lowered = body.lower()
+    if "invalid_grant" in lowered or "unauthorized_client" in lowered:
+        return False
+    if not lowered.strip():
+        return True
+    return "invalid_scope" in lowered or "scope" in lowered
+
+
 def mint_access_token(
     *,
     refresh_token: str,
@@ -398,8 +434,25 @@ def mint_access_token(
     encoded = urllib.parse.urlencode(data).encode("utf-8")
     req = urllib.request.Request(client_config.get("token_uri", DEFAULT_TOKEN_URI), data=encoded)
     req.add_header("Content-Type", "application/x-www-form-urlencoded")
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        payload = json.loads(resp.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = _read_http_error_body(exc)
+        if _should_retry_mint_without_scopes(
+            had_scopes=bool(resolved_scopes),
+            status=int(exc.code),
+            body=body,
+        ):
+            # Local refresh tokens often grant `calendar` but not `calendar.readonly`.
+            # Retrying without a scope restriction uses the original grant.
+            return mint_access_token(
+                refresh_token=refresh_token,
+                client_config=client_config,
+                scopes=None,
+            )
+        description = _token_error_description(body, str(exc))
+        raise RuntimeError(f"Token refresh failed: {description}") from exc
     if "error" in payload:
         description = payload.get("error_description", payload["error"])
         raise RuntimeError(f"Token refresh failed: {description}")

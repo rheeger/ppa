@@ -29,7 +29,7 @@ class TunnelManager:
     5 consecutive restart attempts before giving up and logging an error.
     """
 
-    def __init__(self, host: str, local_port: int = 5433, remote_port: int = 5432) -> None:
+    def __init__(self, host: str, local_port: int = 58471, remote_port: int = 5432) -> None:
         self.host = host.strip()
         self.local_port = int(local_port)
         self.remote_port = int(remote_port)

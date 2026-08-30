@@ -1,21 +1,29 @@
 # Section B Execution Plan - Current Arnold Corpus Cleanup
 
+The filename is **historical**. The apply target was this seed, not Arnold.
+
+**Status (Aug 2026, HEAD `5980464`):** First-pass CCS apply/rollback landed earlier (DB-first). **This campaign applied vault-remove of suppressed marketing on the canonical seed** `/Users/rheeger/Archive/seed/hf-archives-seed-20260307-235127` schema `ppa` (~502,622 files deleted; index + Gmail ledger purged). That seed **is** the living corpus. Arnold is down and was never the apply target for this campaign. No `rollback.json`; rollback cannot restore those deletes.
+
+**Product fork (locked):** suppressed marketing is **deleted**. Quarantine **stays** as labeled cards (`retrieval_weight=0.35`). Older B text that said delete quarantine too is superseded.
+
+**Do not re-run vault-remove.** Future applies should persist `rollback.json` and avoid quadratic UID collect; that is engineering hygiene, not a v2.5 closer. Arnold prune is not a v2.5 path.
+
 ## Objective
 
-Specify how a future v2.5 implementation will clean the email corpus already present in Arnold's production PPA.
+Specify how v2.5 cleans the email corpus already present in this living seed.
 
 The cleanup must:
 
 - Reuse existing classification data before making any new LLM calls.
 - Convert raw marketing/bulk/noise email from active archive artifacts into suppressed ledger records.
-- Preserve useful derived structured cards.
+- Preserve useful derived structured cards that still have an independent reason to exist.
 - Keep the process deterministic, reviewable, rebuild-safe, and rollback-safe.
-- Avoid physical vault deletion in the first pass.
+- **Match inbound Gmail (locked fork):** suppressed notes are not in the vault (deleted + purged + ledger). Quarantine notes **stay** as labeled cards. Do not delete quarantine.
 
 ## Non-Goals
 
-- Do not implement cleanup in this planning pass.
-- Do not delete vault markdown in the first v2.5 cleanup implementation.
+- Do not implement cleanup in this planning pass (first-pass CCS tooling already exists).
+- Do not re-run vault-remove on this seed (already applied). Do not physically prune Arnold from this section. Do not delete quarantine cards. Do not copy the seed.
 - Do not rerun classification over all email.
 - Do not remove useful derived cards just because their source raw email is suppressed.
 - Do not change Gmail as the source of record for suppressed bulk email.
@@ -46,7 +54,7 @@ Before implementation:
 - Verify `EmailPromotionPolicy` fixture tests pass before building cleanup.
 - Implement dry-run census before any apply code.
 - Implement slice apply/rollback before local seed staging.
-- Never apply to canonical seed or Arnold from this section until Section G gates pass.
+- This machine’s canonical seed **already received** hygiene apply and **is** the corpus. Do not copy the seed first. Do not apply to Arnold from this section.
 
 Likely implementation files:
 
@@ -68,7 +76,7 @@ Stop conditions:
 - report counts are nondeterministic.
 - apply path cannot roll back.
 - suppressed markdown reappears as active after rebuild.
-- any path would mutate Arnold before Arnold dry-run review.
+- any path would copy this seed, deploy Arnold, or re-run vault-remove.
 
 ## Required Future Command Shape
 
@@ -291,7 +299,7 @@ Recommended sequence:
 9. Preserve active derived cards with provenance to suppressed source email.
 10. Write an apply report with before/after counts.
 
-The first v2.5 implementation should not physically delete markdown files.
+First-pass CCS apply hid rows in Postgres. **This campaign deleted suppressed marketing** (~502,622 files) and purged those UIDs + wrote the Gmail ledger. Quarantine cards were **not** deleted. Inbound Gmail: suppressed does not emit; quarantine writes labeled cards (`emit_cards=True`). Do not re-run vault-remove.
 
 ## B7. Rebuild Safety
 
@@ -314,14 +322,9 @@ The execution preference is strategy 2 if it preserves auditability and rollback
 
 ## B8. Derived Card Preservation
 
-Derived cards should not be deleted just because their source email becomes suppressed.
+Derived cards that exist **only** because of a **suppressed** thread are in the vault-remove set. Quarantine-derived cards stay with the labeled quarantine cards. (`derived_uids` was recorded and ignored on earlier passes — leftover, not a reason to re-run vault-remove.)
 
-Rules:
-
-- Keep derived cards active when they represent a proven action: `meal_order`, `ride`, `flight`, `accommodation`, `purchase`, `shipment`, `subscription`, `event_ticket`, `payroll`, etc.
-- Preserve `source_email` provenance links even if the source email is suppressed.
-- If the source email is suppressed as marketing but the derived card exists, route the pair to review unless the derived card has strong structured fields.
-- If the derived card is empty/low-confidence and source email is suppressed, recommend deactivation through a later processor plan.
+Keep derived cards that still have an independent reason to exist (a proven action with structured fields: `meal_order`, `ride`, `flight`, `purchase`, etc.). Preserve `source_email` provenance on those keepers even if the source email is gone.
 
 ## B9. Rollback
 
@@ -335,7 +338,7 @@ Rollback should:
 - Preserve the decision history for audit.
 - Emit a rollback report with counts.
 
-Physical vault pruning is intentionally out of scope for the first cleanup because it makes rollback harder.
+This campaign wrote **no** `rollback.json`. Rollback cannot restore the ~502,622 deleted files. Future applies must persist `rollback.json`. Do not restore the full marketing pile. Do not treat missing rollback as a reason to re-apply.
 
 ## B10. Tests and Validation
 
@@ -353,18 +356,18 @@ Future implementation should include:
 
 ## B11. Validation Ladder and Rust Standard
 
-Cleanup must graduate through the Section G ladder before Arnold apply.
+Cleanup graduated through fixtures/slices, then applied **on this seed**. Written Arnold gates are historical.
 
 Required gates:
 
 1. **Synthetic fixtures:** classification precedence, decision records, dry-run determinism, and no-LLM-reuse behavior pass.
 2. **Small slice:** dry-run, apply, rollback, and rebuild-safety pass on a slice containing marketing, transactional, personal, attachment, derived-card, and unknown examples.
 3. **Larger slice:** runtime, report size, classification reuse, suppressed retrieval filtering, and linker filtering are measured.
-4. **Local seed dry-run:** full seed is evaluated without mutation; report is reviewed.
-5. **Local seed staging apply:** apply/rollback is run only against a copied vault, staging schema, or staging corpus-state store.
-6. **Arnold dry-run:** production state is evaluated without mutation and samples are reviewed.
-7. **Arnold reviewed apply:** only a reviewed Arnold decision run can be applied.
-8. **Arnold soak:** normal maintenance proves suppressed email does not return.
+4. **Local seed dry-run:** historical write-up; this machine then applied in place.
+5. **Local seed apply:** this campaign applied on the canonical seed (schema `ppa`), not a copy. Do not copy-and-reapply. This seed **is** the corpus.
+6. **Arnold dry-run:** historical. **Not a v2.5 closer.**
+7. **Arnold reviewed apply:** historical. **Not a v2.5 closer.**
+8. **Arnold soak:** historical. Local soak already ran on this seed.
 
 Rust standard:
 
@@ -372,7 +375,7 @@ Rust standard:
 - Prefer Rust vault cache and type-filtered cache reads for census generation.
 - Avoid Python full-vault walks in corpus hygiene unless debugging parity.
 - Every dry-run/apply/rollback report must include engine mode, elapsed runtime, and throughput by phase.
-- Any Rust/Python divergence in materialized active/suppressed behavior blocks Arnold apply.
+- Any Rust/Python divergence in materialized active/suppressed behavior blocks a production-role apply.
 
 ## Operational Reporting
 
@@ -394,15 +397,15 @@ Required metrics:
 
 Section B implementation is ready when:
 
-- Existing Arnold email can be evaluated without rerunning classification for already-classified threads.
+- Existing seed email can be evaluated without rerunning classification for already-classified threads.
 - Dry-run census is deterministic and reviewable.
-- Apply marks suppressed/quarantine state without deleting vault markdown.
-- Suppressed email disappears from default retrieval, embeddings, semantic link generation, and enrichment queues.
-- Useful derived cards remain active with provenance.
-- Incremental and full rebuild preserve corpus decisions.
-- Rollback restores previous active state without LLM calls.
-- Section G gates pass through local seed staging apply/rollback before Arnold dry-run.
-- Arnold apply is impossible without an Arnold-generated dry-run `decision_run_id` and explicit confirmation guard.
+- First-pass CCS apply is landed (hide in Postgres).
+- **This seed:** suppressed marketing deleted (~502,622 files), UIDs purged, Gmail ledger written. Quarantine stays as labeled cards. Do not re-run vault-remove.
+- Suppressed email is gone from the vault and from default retrieval — not only filtered at query time.
+- Derived-only marketing cards are removed; independently useful derived cards remain.
+- A later Gmail continue does not recreate removed **suppressed** thread UIDs. Quarantine inbound writes cards.
+- This apply has no `rollback.json`; those deletes are not restorable. Future applies must persist rollback. Full-pile restore is out of scope.
+- Future applies should persist rollback and avoid quadratic UID collect; that is not a v2.5 closer. Arnold prune is not a v2.5 path.
 
 ## Completion Artifacts
 
@@ -413,8 +416,7 @@ The implementation agent must leave:
 - local seed staging apply report.
 - rollback report proving restored prior state.
 - rebuild-safety report proving suppressed records do not reappear.
-- Arnold dry-run report if production apply is being proposed.
-- no physical markdown pruning.
+- this-seed vault-remove evidence (~502,622 suppressed files deleted; no `rollback.json`). Do not re-apply. Do not copy the seed. Arnold file prune is not a v2.5 path.
 
 ## Commit Instructions
 

@@ -83,7 +83,8 @@ class ContactsAdapter(BaseAdapter):
         selected = {item.strip().lower() for item in (sources or ["apple", "vcf", "google"]) if item.strip()}
         items: list[dict[str, Any]] = []
         if "google" in selected:
-            items.extend(self._fetch_google())
+            max_items = kwargs.get("max_items")
+            items.extend(self._fetch_google(max_items=max_items))
         if {"apple", "vcf"} & selected:
             if vcf_paths:
                 items.extend(self._fetch_vcf_files(vcf_paths=vcf_paths))
@@ -182,8 +183,9 @@ class ContactsAdapter(BaseAdapter):
             )
         )
 
-    def _fetch_google(self) -> list[dict[str, Any]]:
+    def _fetch_google(self, max_items: int | None = None) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
+        remaining = None if max_items in (None, "") else max(0, int(max_items))
         try:
             from archive_auth import ACCOUNTS
 
@@ -197,6 +199,8 @@ class ContactsAdapter(BaseAdapter):
 
             fields = "names,emailAddresses,phoneNumbers,organizations,birthdays,urls,biographies,nicknames"
             for account in self._selected_google_accounts(ACCOUNTS):
+                if remaining is not None and remaining <= 0:
+                    break
                 page_token = None
                 while True:
                     try:
@@ -217,6 +221,10 @@ class ContactsAdapter(BaseAdapter):
                         break
                     for person in response.get("connections", []):
                         rows.append(self._google_fields(person))
+                        if remaining is not None:
+                            remaining -= 1
+                            if remaining <= 0:
+                                return rows
                     page_token = response.get("nextPageToken")
                     if not page_token:
                         break

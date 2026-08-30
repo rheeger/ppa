@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
@@ -131,6 +132,13 @@ class MaintenanceReport:
     cards_rebuilt: int = 0
     enrichment_queue_depth: int = 0
     retrieval_gaps_since_last: int = 0
+    source_updater_snapshots: int = 0
+    source_updater_runs: int = 0
+    source_updater_reports: list[dict[str, Any]] = field(default_factory=list)
+    processor_status_snapshots: int = 0
+    processor_runs: int = 0
+    processor_reports: list[dict[str, Any]] = field(default_factory=list)
+    processor_output_count: int = 0
     errors: list[dict[str, str]] = field(default_factory=list)
     skipped_steps: list[str] = field(default_factory=list)
     nothing_to_do: bool = False
@@ -139,16 +147,332 @@ class MaintenanceReport:
         return {k: v for k, v in self.__dict__.items()}
 
 
+def _record_source_updater_snapshots(store: DefaultArchiveStore, schema: str) -> int:
+    """Read vault cursors into source_updater_state; does not run adapters."""
+
+    from pathlib import Path
+
+    from archive_sync.source_updaters.declarations import iter_declaration_templates
+    from archive_sync.source_updaters.snapshot import snapshot_all_declarations
+    from archive_sync.source_updaters.state_store import SourceUpdaterStateStore
+
+    meta_path = Path(store.vault) / "_meta" / "source-updaters.json"
+    try:
+        with store.index._connect() as conn:
+            state_store = SourceUpdaterStateStore(conn, schema, meta_path=meta_path)
+            state_store.ensure_tables()
+            records = snapshot_all_declarations(
+                state_store,
+                list(iter_declaration_templates()),
+                vault_path=str(store.vault),
+            )
+            conn.commit()
+            return len(records)
+    except Exception:
+        state_store = SourceUpdaterStateStore(None, meta_path=meta_path)
+        records = snapshot_all_declarations(
+            state_store,
+            list(iter_declaration_templates()),
+            vault_path=str(store.vault),
+        )
+        return len(records)
+
+
+def _run_source_updaters(
+    store: DefaultArchiveStore,
+    schema: str,
+    *,
+    apply: bool,
+    source_keys: list[str] | None = None,
+    max_items: int | None = None,
+    catch_up: bool = False,
+    logger: logging.Logger,
+) -> tuple[int, list[dict[str, Any]]]:
+    """Execute enabled source updaters (Section D Phase 2). Isolates per-source failures."""
+
+    from pathlib import Path
+
+    from archive_cli.config import load_archive_config
+    from archive_cli.ppa_engine import ppa_engine
+    from archive_cli.validation_gates.constants import GATE_SYNTHETIC_FIXTURES
+    from archive_cli.validation_gates.instance_identity import derive_archive_instance
+    from archive_sync.source_updaters.runner import default_maintain_source_keys, run_source_updaters
+    from archive_sync.source_updaters.state_store import SourceUpdaterStateStore
+
+    repo_root = Path(__file__).resolve().parents[2]
+    meta_path = Path(store.vault) / "_meta" / "source-updaters.json"
+    cfg = load_archive_config()
+    archive_instance = derive_archive_instance(
+        vault_path=str(store.vault),
+        index_dsn=cfg.index_dsn,
+        index_schema=schema,
+    )
+    keys = list(source_keys or [])
+    if not keys:
+        account = (os.environ.get("GOOGLE_ACCOUNT") or "").strip()
+        otter = (os.environ.get("OTTER_ACCOUNT") or account).strip()
+        accounts = (account,) if account else ()
+        otter_accounts = (otter,) if otter else ()
+        keys = default_maintain_source_keys(
+            gmail_accounts=accounts,
+            calendar_accounts=accounts,
+            otter_accounts=otter_accounts,
+        )
+    if not keys:
+        logger.info("run_source_updaters skipped: no executable source keys configured")
+        return 0, []
+
+    try:
+        with store.index._connect() as conn:
+            state_store = SourceUpdaterStateStore(conn, schema, meta_path=meta_path)
+            state_store.ensure_tables()
+            multi = run_source_updaters(
+                source_keys=keys,
+                vault_path=str(store.vault),
+                apply=apply,
+                archive_instance=archive_instance,
+                engine_mode=ppa_engine(),
+                ladder_gate=GATE_SYNTHETIC_FIXTURES,
+                repo_root=repo_root,
+                state_store=state_store,
+                max_items=max_items,
+                catch_up=catch_up,
+            )
+            conn.commit()
+    except Exception:
+        state_store = SourceUpdaterStateStore(None, meta_path=meta_path)
+        multi = run_source_updaters(
+            source_keys=keys,
+            vault_path=str(store.vault),
+            apply=apply,
+            archive_instance=archive_instance,
+            engine_mode=ppa_engine(),
+            ladder_gate=GATE_SYNTHETIC_FIXTURES,
+            repo_root=repo_root,
+            state_store=state_store,
+            max_items=max_items,
+            catch_up=catch_up,
+        )
+    return len(multi.reports), [r.to_dict() for r in multi.reports]
+
+
+def _record_processor_status_snapshots(store: DefaultArchiveStore, schema: str) -> int:
+    """Seed processor_state from declarations; does not run processors."""
+
+    from pathlib import Path
+
+    from archive_sync.processors.declarations import iter_processor_declarations
+    from archive_sync.processors.state_store import ProcessorStateRecord, ProcessorStateStore
+
+    meta_path = Path(store.vault) / "_meta" / "processors.json"
+    try:
+        with store.index._connect() as conn:
+            state_store = ProcessorStateStore(conn, schema, meta_path=meta_path)
+            state_store.ensure_tables()
+            count = 0
+            for decl in iter_processor_declarations():
+                existing = state_store.get_state(decl.processor_key)
+                if existing is None:
+                    state_store.upsert_state(
+                        ProcessorStateRecord(
+                            processor_key=decl.processor_key,
+                            processor_version=decl.processor_version,
+                            enabled=decl.enabled,
+                        )
+                    )
+                    count += 1
+            conn.commit()
+            return count
+    except Exception:
+        state_store = ProcessorStateStore(None, meta_path=meta_path)
+        count = 0
+        for decl in iter_processor_declarations():
+            existing = state_store.get_state(decl.processor_key)
+            if existing is None:
+                state_store.upsert_state(
+                    ProcessorStateRecord(
+                        processor_key=decl.processor_key,
+                        processor_version=decl.processor_version,
+                        enabled=decl.enabled,
+                    )
+                )
+                count += 1
+        return count
+
+
+def _run_processors(
+    store: DefaultArchiveStore,
+    schema: str,
+    *,
+    apply: bool,
+    dirty_uids_path: str = "",
+    source_updater_reports: list[dict[str, Any]] | None = None,
+    processor_keys: list[str] | None = None,
+    allow_full_embedding: bool = False,
+    allow_all_linkers: bool = False,
+    allow_broad_llm: bool = False,
+    logger: logging.Logger,
+) -> tuple[int, list[dict[str, Any]], int]:
+    """Execute processor DAG on dirty UIDs (Section E Phase 2)."""
+
+    from pathlib import Path
+
+    from archive_cli.config import load_archive_config
+    from archive_cli.ppa_engine import ppa_engine
+    from archive_cli.validation_gates.constants import GATE_SYNTHETIC_FIXTURES
+    from archive_cli.validation_gates.instance_identity import derive_archive_instance
+    from archive_sync.processors.runner import run_processors
+    from archive_sync.processors.state_store import ProcessorStateStore
+
+    repo_root = Path(__file__).resolve().parents[2]
+    meta_path = Path(store.vault) / "_meta" / "processors.json"
+    cfg = load_archive_config()
+    archive_instance = derive_archive_instance(
+        vault_path=str(store.vault),
+        index_dsn=cfg.index_dsn,
+        index_schema=schema,
+    )
+
+    try:
+        with store.index._connect() as conn:
+            state_store = ProcessorStateStore(conn, schema, meta_path=meta_path)
+            state_store.ensure_tables()
+            keys = list(processor_keys or [])
+            result = run_processors(
+                dirty_uids_path=Path(dirty_uids_path) if dirty_uids_path else None,
+                source_updater_reports=source_updater_reports,
+                vault_path=str(store.vault),
+                store=store,
+                state_store=state_store,
+                processor_keys=keys or None,
+                apply=apply,
+                dry_run=not apply,
+                allow_full_embedding=allow_full_embedding,
+                allow_all_linkers=allow_all_linkers,
+                allow_broad_llm=allow_broad_llm,
+                archive_instance=archive_instance,
+                engine_mode=ppa_engine(),
+                ladder_gate=GATE_SYNTHETIC_FIXTURES,
+                repo_root=repo_root,
+            )
+            conn.commit()
+    except Exception:
+        state_store = ProcessorStateStore(None, meta_path=meta_path)
+        keys = list(processor_keys or [])
+        result = run_processors(
+            dirty_uids_path=Path(dirty_uids_path) if dirty_uids_path else None,
+            source_updater_reports=source_updater_reports,
+            vault_path=str(store.vault),
+            store=store,
+            state_store=state_store,
+            processor_keys=keys or None,
+            apply=apply,
+            dry_run=not apply,
+            allow_full_embedding=allow_full_embedding,
+            allow_all_linkers=allow_all_linkers,
+            allow_broad_llm=allow_broad_llm,
+            archive_instance=archive_instance,
+            engine_mode=ppa_engine(),
+            ladder_gate=GATE_SYNTHETIC_FIXTURES,
+            repo_root=repo_root,
+        )
+    logger.info(
+        "run_processors executed=%s stale=%s skipped=%s outputs=%s",
+        result.executed,
+        result.report.stale_count,
+        result.report.skipped_count,
+        result.report.output_count,
+    )
+    return 1, [result.to_dict()], int(result.report.output_count or 0)
+
+
 def run_maintenance(
     *,
     store: DefaultArchiveStore,
     logger: logging.Logger,
     dry_run: bool = False,
+    record_source_status: bool = False,
+    record_processor_status: bool = False,
+    run_source_updaters: bool = False,
+    source_updater_keys: list[str] | None = None,
+    apply_source_updaters: bool = False,
+    source_updater_max_items: int | None = None,
+    source_updater_catch_up: bool = False,
+    run_processors: bool = False,
+    apply_processors: bool = False,
+    dirty_uids_path: str = "",
+    processor_keys: list[str] | None = None,
+    allow_full_embedding: bool = False,
+    allow_all_linkers: bool = False,
+    allow_broad_llm: bool = False,
 ) -> MaintenanceReport:
     report = MaintenanceReport()
     report.started_at = datetime.now(timezone.utc).isoformat()
     idx = store.index
     schema = str(getattr(idx, "schema", "ppa"))
+
+    if run_source_updaters:
+        try:
+            # Default dry-run unless explicitly applying source updaters.
+            apply = bool(apply_source_updaters) and not dry_run
+            count, payloads = _run_source_updaters(
+                store,
+                schema,
+                apply=apply,
+                source_keys=source_updater_keys,
+                max_items=source_updater_max_items,
+                catch_up=source_updater_catch_up,
+                logger=logger,
+            )
+            report.source_updater_runs = count
+            report.source_updater_reports = payloads
+            if not apply:
+                report.skipped_steps.append("source_updater_cursor_commit (dry-run)")
+        except Exception as exc:
+            logger.exception("maintain_run_source_updaters_failed")
+            report.errors.append({"step": "run_source_updaters", "error": str(exc)})
+
+    if record_source_status and not dry_run:
+        try:
+            report.source_updater_snapshots = _record_source_updater_snapshots(store, schema)
+        except Exception as exc:
+            logger.exception("maintain_source_updater_snapshot_failed")
+            report.errors.append({"step": "source_updater_snapshot", "error": str(exc)})
+    elif record_source_status:
+        report.skipped_steps.append("source_updater_snapshot (dry-run)")
+
+    if record_processor_status and not dry_run:
+        try:
+            report.processor_status_snapshots = _record_processor_status_snapshots(store, schema)
+        except Exception as exc:
+            logger.exception("maintain_processor_status_snapshot_failed")
+            report.errors.append({"step": "processor_status_snapshot", "error": str(exc)})
+    elif record_processor_status:
+        report.skipped_steps.append("processor_status_snapshot (dry-run)")
+
+    if run_processors:
+        try:
+            apply = bool(apply_processors) and not dry_run
+            count, payloads, outputs = _run_processors(
+                store,
+                schema,
+                apply=apply,
+                dirty_uids_path=dirty_uids_path,
+                source_updater_reports=report.source_updater_reports or None,
+                processor_keys=processor_keys,
+                allow_full_embedding=allow_full_embedding,
+                allow_all_linkers=allow_all_linkers,
+                allow_broad_llm=allow_broad_llm,
+                logger=logger,
+            )
+            report.processor_runs = count
+            report.processor_reports = payloads
+            report.processor_output_count = outputs
+            if not apply:
+                report.skipped_steps.append("processor_execution (dry-run)")
+        except Exception as exc:
+            logger.exception("maintain_run_processors_failed")
+            report.errors.append({"step": "run_processors", "error": str(exc)})
 
     from ..providers import resolve_provider
 
@@ -196,6 +520,16 @@ def run_maintenance(
 
     report.new_cards_ingested = len(new_rows)
     created_n = sum(1 for r in new_rows if r.get("action") == "created")
+    tailed_uids = {
+        str(row.get("card_uid") or "").strip()
+        for row in new_rows
+        if str(row.get("card_uid") or "").strip()
+    }
+    created_uids = {
+        str(row.get("card_uid") or "").strip()
+        for row in new_rows
+        if row.get("action") == "created" and str(row.get("card_uid") or "").strip()
+    }
 
     reg_mod = _try_import("archive_sync.extractors.registry")
     if reg_mod is None:
@@ -211,6 +545,7 @@ def run_maintenance(
                 registry=reg_mod.build_default_registry(),
                 dry_run=dry_run,
                 limit=min(created_n, 10_000),
+                uid_allowlist=created_uids,
             )
             metrics = runner.run()
             report.cards_extracted = int(getattr(metrics, "extracted_cards", 0) or 0)
@@ -223,7 +558,11 @@ def run_maintenance(
         report.skipped_steps.append("entity_resolution (module import failed)")
     else:
         try:
-            res = er_mod.run_entity_resolution(str(store.vault), dry_run=dry_run)
+            res = er_mod.run_entity_resolution(
+                str(store.vault),
+                dry_run=dry_run,
+                uid_allowlist=tailed_uids,
+            )
             report.entities_resolved = int(
                 (res.get("places_created") or 0)
                 + (res.get("places_merged") or 0)
@@ -240,7 +579,7 @@ def run_maintenance(
         report.skipped_steps.append("watermark_update (dry-run)")
     else:
         try:
-            counts = store.rebuild()
+            counts = store.rebuild(force_full=False, uid_allowlist=tailed_uids)
             report.cards_rebuilt = int(counts.get("cards", 0) or 0)
         except Exception as exc:
             logger.exception("maintain_rebuild_failed")

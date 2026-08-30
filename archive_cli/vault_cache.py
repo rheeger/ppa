@@ -737,6 +737,35 @@ class VaultScanCache:
             out[str(uid)] = str(rp)
         return out
 
+    def frontmatter_rows_for_uids(self, uids: set[str] | frozenset[str] | list[str]) -> list[dict[str, Any]]:
+        """One IN-query dump of uid / rel_path / frontmatter for the given UIDs."""
+
+        wanted = sorted({str(uid).strip() for uid in uids if str(uid).strip()})
+        if not wanted:
+            return []
+        out: list[dict[str, Any]] = []
+        # SQLite default max variable count is 999; stay well under it.
+        chunk_size = 500
+        with self._lock:
+            for i in range(0, len(wanted), chunk_size):
+                chunk = wanted[i : i + chunk_size]
+                placeholders = ",".join("?" * len(chunk))
+                rows = self._conn.execute(
+                    f"SELECT uid, rel_path, card_type, frontmatter_json FROM notes WHERE uid IN ({placeholders})",
+                    chunk,
+                ).fetchall()
+                for uid_raw, rel_raw, _card_type, fj_raw in rows:
+                    fm: dict[str, Any] = {}
+                    if fj_raw:
+                        try:
+                            parsed = json.loads(fj_raw)
+                        except json.JSONDecodeError:
+                            parsed = {}
+                        if isinstance(parsed, dict):
+                            fm = parsed
+                    out.append({"uid": str(uid_raw), "rel_path": str(rel_raw), "frontmatter": fm})
+        return out
+
     def rel_path_to_uid(self) -> dict[str, str]:
         with self._lock:
             rows = self._conn.execute("SELECT rel_path, uid FROM notes WHERE uid != ''").fetchall()

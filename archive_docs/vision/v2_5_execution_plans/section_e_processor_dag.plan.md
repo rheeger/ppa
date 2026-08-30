@@ -1,14 +1,100 @@
 # Section E Execution Plan - Processor DAG
 
+**Status (Aug 2026, HEAD `5980464`):** Phase 1 and Phase 2 are **landed**. Track A (`fa5f5a2`) closed the stub executors — dirty-UID paths now call incremental rebuild, embed-pending, incremental link refresh, `run_enrichment_for_uids`, and UID-scoped ER. Dirty extract is allowlist-scoped (`35901b0`). Dirty-UID rematerialize allowlist incremental landed (`1c02e10`); host UID after merge (`b57136f`). Index after campaign: ~1,392,108 cards, 3,962,176 embeddings, pending 0. Soak ran on this seed. Remaining scale hole: `embed_pending` is limit-N not `card_uid` filter — not a v2.5 closer. Arnold is not the home.
+
 ## Objective
 
-Define how v2.5 turns extraction, enrichment, embeddings, and linkers into an incremental processor DAG.
+Define how v2.5 turns extraction, enrichment, embeddings, and linkers into an incremental processor DAG, then **execute** that DAG on dirty inputs from Section D.
 
 The source updater contract in Section D produces dirty inputs. The processor DAG decides which downstream work is stale, runs only what is necessary, and records enough status for Section F observability.
 
-## Non-Goals
+## Implementation Phases
 
-- Do not implement a generic workflow engine in this planning pass.
+### Phase 1 — Contract (LANDED)
+
+Commit: `v2.5 section E: processor dag` (`b24a4114` on branch `v2.5`).
+
+Delivered:
+
+- Processor declarations for promotion, typed extraction, thread enrichment, materialization, embeddings, linkers, entity resolution.
+- Staleness / input-hash helpers and plan builder.
+- Run report shapes and state store.
+- CLI: `ppa processors` (declarations, status, plan).
+- `ppa maintain --record-processor-status` seeds status only — **does not run processors**.
+
+Phase 1 is **not** incremental refresh. Phase 2 + soak on this seed is the v2.5 closer. Do not treat Arnold processor proof as remaining work.
+
+### Phase 2 — Execution (LANDED; see status note above)
+
+Objective: consume dirty UIDs from source updater runs, plan processors, execute only stale/pending work via existing extract/enrich/embed/link entrypoints, wire into `ppa maintain`.
+
+Non-goals for Phase 2:
+
+- Do not invent a generic workflow engine.
+- Do not rewrite extractors/embedders/linkers.
+- Do not run full embeddings, all linkers, or broad LLM jobs by default.
+- Do not process suppressed/quarantine inputs on active-only processors.
+
+#### Phase 2 Agent Handoff Checklist
+
+Before implementation:
+
+- Confirm D Phase 2 commit present and dirty UID artifact path known.
+- Confirm tree clean on `v2.5`.
+- Read this plan, Section D Phase 2, Section H, `maintain.py`, extract/enrich/embed/link entrypoints.
+- Start by executing **one** cheap processor path end-to-end (e.g. materialization or typed extraction on a fixture dirty set) before wiring all processors.
+
+Likely files:
+
+- `archive_sync/processors/runner.py` (new) — execute a plan item via existing entrypoints.
+- `archive_cli/processors/cli.py` — implement `run` with `--apply` / dry-run defaults.
+- `archive_cli/commands/maintain.py` — after source updaters, call processor runner on dirty UIDs.
+- Thin adapters into `extractors/runner.py`, enrich orchestrator, embedder, seed_links — not rewrites.
+
+Required CLI shape:
+
+```bash
+# Plan only
+ppa processors plan --dirty-uids PATH --format json
+
+# Execute planned work for one processor (dry-run default)
+ppa processors run --processor email_typed_extraction --dirty-uids PATH --dry-run --format json
+ppa processors run --processor email_typed_extraction --dirty-uids PATH --apply --run-id <id> --format json
+
+# Maintain
+ppa maintain --run-source-updaters --run-processors
+```
+
+Expensive work still requires Section G opt-in guards (`guard_expensive_work_opt_in`).
+
+#### Phase 2 Required Behavior
+
+1. Load dirty UIDs from D Phase 2 artifact or maintain in-memory handoff.
+2. Build processor plan (staleness, active-only skips, dependency order).
+3. Execute pending items by calling existing runners; record `processor_runs`.
+4. Idempotent upserts by output identity; skip already-current outputs.
+5. Isolate LLM failures from deterministic processors.
+6. Write reports with counts, skip/stale reasons, engine mode, next action.
+
+#### Phase 2 Definition of Done
+
+- Dirty UIDs from a source updater run trigger only expected processors.
+- `ppa maintain --run-processors` executes the plan after updaters (or from provided dirty path).
+- Suppressed inputs skip active-only processors.
+- No default full embedding / all-linker / broad LLM rerun.
+- Tests cover execution idempotency, failure isolation, and suppression skips.
+- Commit subject: `v2.5 section E: processor dag execution`
+
+#### Phase 2 Completion Artifacts
+
+- Runner + CLI `run`.
+- Maintain flag wiring.
+- Plan+run reports from fixture dirty set.
+- Focused tests; tree clean after one commit.
+
+## Non-Goals (whole section)
+
+- Do not implement a generic workflow engine.
 - Do not rewrite all extractors.
 - Do not make every processor event-driven on day one.
 - Do not rerun classification for already-classified email unless content hash or policy requires it.
@@ -19,53 +105,15 @@ The source updater contract in Section D produces dirty inputs. The processor DA
 
 - `ppa/archive_docs/vision/v2_5_execution_plans/README.md`
 - `ppa/archive_docs/vision/v2.5vision.md`
-- `ppa/archive_docs/vision/v2_5_execution_plans/section_a_email_corpus_semantics.plan.md`
-- `ppa/archive_docs/vision/v2_5_execution_plans/section_c_future_gmail_sync_promotion.plan.md`
 - `ppa/archive_docs/vision/v2_5_execution_plans/section_d_source_updater_contract.plan.md`
+- `ppa/archive_sync/processors/` (Phase 1)
 - `ppa/archive_sync/extractors/runner.py`
-- `ppa/archive_sync/extractors/base.py`
-- `ppa/archive_sync/extractors/registry.py`
-- `ppa/archive_sync/llm_enrichment/enrich_runner.py`
 - `ppa/archive_sync/llm_enrichment/enrichment_orchestrator.py`
-- `ppa/archive_sync/llm_enrichment/card_enrichment_runner.py`
-- `ppa/archive_sync/llm_enrichment/workflows/`
 - `ppa/archive_cli/embedder.py`
 - `ppa/archive_cli/seed_links.py`
 - `ppa/archive_cli/commands/maintain.py`
 
-## Agent Handoff Checklist
-
-Before implementation:
-
-- Read `README.md`, `v2.5vision.md`, Sections D, F, G, and this plan.
-- Start with processor declarations and stale-output detection before scheduling broad work.
-- Represent existing extractors/enrichment/embedding/linkers in the DAG before adding new abstractions.
-- Do not run full embeddings or all linkers by default.
-
-Likely implementation files:
-
-- processor declaration/status module.
-- `archive_cli/commands/maintain.py`
-- `archive_sync/extractors/runner.py`
-- `archive_sync/llm_enrichment/enrichment_orchestrator.py`
-- `archive_cli/embedder.py`
-- `archive_cli/seed_links.py`
-
-Required first tests:
-
-- input hash changes mark output stale.
-- processor version bump marks expected inputs stale.
-- suppressed inputs skip active-only processors.
-- dirty input triggers only expected processors.
-
-Stop conditions:
-
-- queue expansion implies full corpus processor rerun by default.
-- suppressed cards can still be embedded or linked.
-- processor output identity is not deterministic.
-- rollback cannot identify outputs by run ID or output identity.
-
-## Core Concept
+## Core Concept (Phase 1 + Phase 2)
 
 A processor is any deterministic or LLM-assisted unit of work that consumes active cards or source decision records and produces cards, rows, chunks, embeddings, links, summaries, or status.
 
@@ -87,40 +135,91 @@ Examples:
 
 Every processor should declare:
 
-| Field | Meaning |
-| ----- | ------- |
-| `processor_key` | Stable name, e.g. `email_typed_extraction` |
-| `processor_version` | Version of logic/prompt/schema affecting output |
-| `input_card_types` | Card types consumed |
-| `input_filters` | Required corpus state, classification, labels, etc. |
-| `output_kinds` | Cards, embeddings, links, entity mentions, status rows |
-| `output_identity` | Deterministic identity rule for outputs |
-| `input_hash_fields` | Fields/body content that affect output |
-| `active_only` | Whether suppressed/quarantine inputs are ignored |
-| `depends_on` | Prior processors that must complete |
-| `idempotent` | Whether repeated runs produce the same outputs |
-| `llm_dependent` | Whether provider/model availability matters |
-| `rollback_strategy` | How outputs can be reverted or superseded |
+| Field               | Meaning                                                |
+| ------------------- | ------------------------------------------------------ |
+| `processor_key`     | Stable name, e.g. `email_typed_extraction`             |
+| `processor_version` | Version of logic/prompt/schema affecting output        |
+| `input_card_types`  | Card types consumed                                    |
+| `input_filters`     | Required corpus state, classification, labels, etc.    |
+| `output_kinds`      | Cards, embeddings, links, entity mentions, status rows |
+| `output_identity`   | Deterministic identity rule for outputs                |
+| `input_hash_fields` | Fields/body content that affect output                 |
+| `active_only`       | Whether suppressed/quarantine inputs are ignored       |
+| `depends_on`        | Prior processors that must complete                    |
+| `idempotent`        | Whether repeated runs produce the same outputs         |
+| `llm_dependent`     | Whether provider/model availability matters            |
+| `rollback_strategy` | How outputs can be reverted or superseded              |
+
+Initial implementation should define processor declarations without running processors. Prefer a registry that can be inspected by tests, `ppa status`, and Section F.
+
+Recommended first declarations:
+
+| Processor               | Key                       | Active only                | LLM dependent     | Output kind                |
+| ----------------------- | ------------------------- | -------------------------- | ----------------- | -------------------------- |
+| Email promotion policy  | `email_promotion_policy`  | No                         | No by default     | `email_corpus_decisions`   |
+| Email typed extraction  | `email_typed_extraction`  | Yes                        | Sometimes         | derived cards              |
+| Email thread enrichment | `email_thread_enrichment` | Yes                        | Yes               | summaries/entities/matches |
+| Materialization         | `materialization`         | No, but corpus-state aware | No                | cards/chunks/projections   |
+| Embedding               | `embedding`               | Yes                        | External provider | embeddings                 |
+| Linkers                 | `linkers`                 | Yes                        | Sometimes         | graph edges/link decisions |
+| Entity resolution       | `entity_resolution`       | Yes                        | Sometimes         | person/place/org links     |
 
 ## Processor Run Record
 
 Every processor run should record:
 
-| Field | Meaning |
-| ----- | ------- |
-| `run_id` | Processor run ID |
-| `processor_key` | Processor name |
-| `processor_version` | Version used |
-| `input_uid` | Source card/decision/input ID |
-| `input_hash` | Hash used for staleness |
-| `input_corpus_state` | Active/suppressed/quarantine |
-| `status` | `pending`, `running`, `complete`, `skipped`, `failed`, `stale` |
-| `skip_reason` | Why skipped |
-| `output_uids` | Derived cards or output rows |
-| `error` | Failure summary |
-| `started_at`, `completed_at` | Timing |
+| Field                        | Meaning                                                        |
+| ---------------------------- | -------------------------------------------------------------- |
+| `run_id`                     | Processor run ID                                               |
+| `processor_key`              | Processor name                                                 |
+| `processor_version`          | Version used                                                   |
+| `input_uid`                  | Source card/decision/input ID                                  |
+| `input_hash`                 | Hash used for staleness                                        |
+| `input_corpus_state`         | Active/suppressed/quarantine                                   |
+| `status`                     | `pending`, `running`, `complete`, `skipped`, `failed`, `stale` |
+| `skip_reason`                | Why skipped                                                    |
+| `output_uids`                | Derived cards or output rows                                   |
+| `error`                      | Failure summary                                                |
+| `started_at`, `completed_at` | Timing                                                         |
 
 This can be implemented through an existing `enrichment_queue` evolution, a new processor table, or a lightweight sidecar store. The execution preference is Postgres once the design is proven, because Section F needs production status.
+
+Preferred first implementation:
+
+- Add a durable `processor_runs` / `processor_state` store when an index connection exists.
+- Allow in-memory or fixture-only stores for tests.
+- Do not treat report files as the primary state source.
+- Link `processor_runs.run_id` to Section G `gate_runs.run_id` or mirror it exactly.
+
+Recommended `processor_state` fields:
+
+| Field               | Meaning                                       |
+| ------------------- | --------------------------------------------- |
+| `processor_key`     | Primary processor identity                    |
+| `processor_version` | Current version                               |
+| `enabled`           | Whether processor participates in maintenance |
+| `last_success_at`   | Last successful run                           |
+| `last_attempt_at`   | Last attempted run                            |
+| `last_error`        | Error payload                                 |
+| `pending_count`     | Current pending count                         |
+| `stale_count`       | Current stale count                           |
+| `failed_count`      | Current failed count                          |
+| `last_run_id`       | Last processor run                            |
+
+Recommended `processor_runs` fields:
+
+| Field                                                                        | Meaning                                              |
+| ---------------------------------------------------------------------------- | ---------------------------------------------------- |
+| `run_id`                                                                     | Gate-linked run ID                                   |
+| `processor_key`                                                              | Processor identity                                   |
+| `processor_version`                                                          | Version used                                         |
+| `archive_instance`                                                           | Section G archive instance                           |
+| `status`                                                                     | `success`, `partial`, `failed`, `blocked`, `skipped` |
+| `input_count`, `dirty_count`, `stale_count`, `skipped_count`, `output_count` | Counts                                               |
+| `skip_reasons`                                                               | JSON counts by reason                                |
+| `stale_reasons`                                                              | JSON counts by reason                                |
+| `engine_mode`                                                                | `rust`, `python`, `n/a`, or `mixed`                  |
+| `started_at`, `completed_at`                                                 | Timing                                               |
 
 ## Staleness Rules
 
@@ -137,14 +236,14 @@ A processor output is not stale merely because wall-clock time passed, unless th
 
 ## Rerun Rules
 
-| Trigger | Required behavior |
-| ------- | ----------------- |
-| Dirty input from source updater | Evaluate processors that consume that input |
-| Processor version bump | Re-evaluate matching prior inputs |
-| Corpus state changed to suppressed | Skip active-only processors and deactivate/filter outputs as needed |
-| Corpus state changed to active | Queue active processors |
-| Upstream output changed | Re-evaluate dependent processors |
-| LLM provider unavailable | Skip LLM-dependent processors with visible status; continue deterministic processors |
+| Trigger                            | Required behavior                                                                    |
+| ---------------------------------- | ------------------------------------------------------------------------------------ |
+| Dirty input from source updater    | Evaluate processors that consume that input                                          |
+| Processor version bump             | Re-evaluate matching prior inputs                                                    |
+| Corpus state changed to suppressed | Skip active-only processors and deactivate/filter outputs as needed                  |
+| Corpus state changed to active     | Queue active processors                                                              |
+| Upstream output changed            | Re-evaluate dependent processors                                                     |
+| LLM provider unavailable           | Skip LLM-dependent processors with visible status; continue deterministic processors |
 
 ## Email Processor Flow
 
@@ -279,6 +378,14 @@ flowchart LR
 
 The implementation can run independent processors in parallel later, but the first version should favor clarity and idempotency.
 
+Section E Phase 1 delivered declarations/staleness/reporting only. Phase 2 must:
+
+1. Keep the declaration registry and staleness helpers.
+2. Add an execution runner that calls existing extract/enrich/embed/link entrypoints.
+3. Wire `ppa maintain --run-processors` after `--run-source-updaters`.
+4. Keep dry-run/status CLI working without executing processors.
+5. Never execute broad processor work automatically without opt-in flags.
+
 ## Versioning
 
 Processor versions should be explicit constants or metadata values.
@@ -339,6 +446,9 @@ Future implementation should include:
 - Integration tests proving suppressed email is not embedded or linked.
 - Integration tests proving re-promoted email queues processors.
 - Failure tests proving LLM-dependent processor failure does not block deterministic processors.
+- CLI test proving processor status/dry-run works without executing processors.
+- CLI test proving missing provider/config-like blocked states return structured output and exit `4`, not traceback.
+- Test proving full embedding/all-linker/broad LLM work requires explicit opt-in.
 
 ## Validation Ladder and Rust Standard
 
@@ -350,9 +460,9 @@ Required gates:
 2. **Small slice:** dirty inputs trigger only expected processors.
 3. **Larger slice:** queue size, runtime, and skipped suppressed inputs are measured.
 4. **Local seed dry-run:** expected processor blast radius is reported without running expensive jobs by default.
-5. **Local seed staging apply:** affected processors run on staging outputs and rollback works by run ID/output identity.
-6. **Arnold dry-run:** report processor work that would run after cleanup/future sync.
-7. **Arnold reviewed execution:** only reviewed processor runs execute on production.
+5. **Local seed apply:** this seed already received dirty-UID processing + soak. Do not copy the seed to re-prove it.
+6. **Arnold dry-run:** historical. **Not a v2.5 closer.**
+7. **Arnold reviewed execution:** historical. **Not a v2.5 closer.**
 
 Rust standard:
 
@@ -360,7 +470,7 @@ Rust standard:
 - Use Rust cache/type-filtered scans to compute input sets.
 - Do not run full embeddings or all linkers by default; process dirty active inputs only.
 - Processor reports must include engine mode, elapsed runtime, throughput, skipped suppressed count, and stale reason counts.
-- Rust/Python divergence in chunk keys, materialized rows, or active/suppressed filtering blocks Arnold processor execution.
+- Rust/Python divergence in chunk keys, materialized rows, or active/suppressed filtering blocks a production-role processor run.
 
 ## Operational Reporting
 
@@ -374,6 +484,30 @@ Processor status should report:
 - completed count in last maintenance run.
 - LLM-dependent skipped count due to provider unavailability.
 - top errors and retryability.
+
+Recommended CLI surface:
+
+```bash
+ppa processors status --format json
+ppa processors plan --dirty-uids PATH --format json
+ppa processors run --processor <key> --run-id <run_id> --apply
+```
+
+Exact names can change, but Section F must have a programmatic way to read processor status and stale-work estimates without scraping logs.
+
+Report fields should include:
+
+| Field                                                                        | Meaning                                              |
+| ---------------------------------------------------------------------------- | ---------------------------------------------------- |
+| `run_id`                                                                     | Gate-linked run ID                                   |
+| `processor_key`                                                              | Processor identity                                   |
+| `processor_version`                                                          | Version used                                         |
+| `archive_instance`                                                           | Section G archive instance                           |
+| `status`                                                                     | `success`, `partial`, `failed`, `blocked`, `skipped` |
+| `input_count`, `dirty_count`, `stale_count`, `skipped_count`, `output_count` | Counts                                               |
+| `skip_reasons`, `stale_reasons`                                              | JSON reason maps                                     |
+| `artifact_paths`                                                             | JSON report / summary paths                          |
+| `engine_mode`                                                                | `rust`, `python`, `n/a`, or `mixed`                  |
 
 ## Rollback / Recovery
 
@@ -389,35 +523,32 @@ Rollback should be scoped by processor run ID when possible.
 
 ## Definition of Done
 
-Section E implementation is ready when:
+**Phase 1 (landed):** declarations, staleness/plan, status CLI, maintain snapshot hooks, contract tests.
 
-- Processor declarations exist for the major v2.5 processor types.
-- Dirty inputs from source updaters can be mapped to processor checks.
-- Staleness can be computed from input hashes and processor versions.
+**Phase 2 (landed for v2.5-local):**
+
+- Dirty inputs from source updaters map to executable processor plans.
+- Runner executes only stale/pending active work via existing entrypoints.
 - Active-only processors skip suppressed/quarantine inputs.
-- Email typed extraction, thread enrichment, embeddings, and linkers are represented in the DAG.
-- Processor status feeds Section F observability.
-- Tests cover staleness, idempotency, version bumps, and suppression-aware downstream behavior.
-- Section G gates pass through processor slice/staging validation before Arnold processor execution.
-- Processor reports prove no default full embedding, full linker, or broad LLM rerun occurs.
+- `ppa maintain --run-processors` participates in the live cycle; soak ran on this seed.
+- Reports prove no default full embedding, full linker, or broad LLM rerun.
+- Missing config/provider blocked states return structured exit `4`.
+- Section H Arnold processor gates are **not** required to close v2.5.
 
 ## Completion Artifacts
 
-The implementation agent must leave:
+**Phase 1:** declaration registry, staleness tests, plan/status samples.
 
-- processor declaration registry or equivalent.
-- stale-output detection test report.
-- dirty-input scheduling report for slice/staging.
-- active-only suppression skip report.
-- processor run report with engine mode, throughput, stale reasons, skipped reasons, and output identities.
-- rollback evidence for generated processor outputs.
+**Phase 2:** runner + CLI `run`, maintain wiring, fixture dirty-set run report, suppression skip proof, commit `v2.5 section E: processor dag execution`.
 
 ## Commit Instructions
 
-Commit this section by itself.
+Phase 1 already committed as `v2.5 section E: processor dag`.
 
-- Start only from a clean tree.
-- Stage only Section E implementation, tests, and artifacts.
-- Commit subject: `v2.5 section E: processor dag`
+Phase 2:
+
+- Start only from a clean tree after D Phase 2.
+- Stage only Phase 2 execution files, tests, and artifacts.
+- Commit subject: `v2.5 section E: processor dag execution`
 - Commit body must follow the shared pattern in `README.md`.
-- After commit, `git status --short` must be clean before Section F work starts.
+- After commit, `git status --short` must be clean before Section H (or F readiness hardening) starts.

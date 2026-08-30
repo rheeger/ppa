@@ -1,0 +1,9 @@
+{
+  "headline": "PPA status: DEGRADED",
+  "required_lines": [
+    "PPA status:",
+    "v3 readiness: NOT READY",
+    "instance:",
+    "failed:"
+  ]
+}

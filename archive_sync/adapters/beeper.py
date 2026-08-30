@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -22,11 +23,14 @@ from archive_vault.schema import (
     BeeperMessageCard,
     BeeperThreadCard,
     PersonCard,
+    validate_card_permissive,
 )
 from archive_vault.slugger import normalize_for_slug
 from archive_vault.sync_state import load_sync_state, update_cursor
 from archive_vault.uid import generate_uid
-from archive_vault.vault import write_card
+from archive_vault.vault import read_note, write_card
+
+logger = logging.getLogger("ppa.beeper")
 
 from .base import BaseAdapter, FetchedBatch, IngestResult, deterministic_provenance
 
@@ -36,6 +40,8 @@ ATTACHMENT_SOURCE = "beeper.attachment"
 DEFAULT_DB_PATH = Path.home() / "Library" / "Application Support" / "BeeperTexts" / "index.db"
 DEFAULT_MEDIA_ROOT = Path.home() / "Library" / "Application Support" / "BeeperTexts" / "media"
 WHITESPACE_RE = re.compile(r"\s+")
+# Helga-Pataki / BlueBubbles mirrors live Messages. iMessage stays the source of record.
+IMESSAGE_BEEPER_ACCOUNT_PREFIXES: tuple[str, ...] = ("imessage", "bluebubbles", "bluebubble")
 
 
 def _clean(value: Any) -> str:
@@ -52,6 +58,30 @@ def _parse_csv(value: str | list[str] | tuple[str, ...] | None, *, default: list
     else:
         raw_items = str(value).split(",")
     return [item.strip() for item in raw_items if item and item.strip()]
+
+
+def is_imessage_beeper_account(
+    account_id: str,
+    prefixes: list[str] | tuple[str, ...] | None = None,
+) -> bool:
+    """True when a Beeper account is an iMessage / BlueBubbles bridge (Helga)."""
+
+    prefixes_l = [p.lower() for p in (prefixes if prefixes is not None else IMESSAGE_BEEPER_ACCOUNT_PREFIXES)]
+    raw = _clean(account_id).lower()
+    if not raw or not prefixes_l:
+        return False
+    head = raw.split(".", 1)[0]
+    return head in prefixes_l or any(prefix in raw for prefix in prefixes_l)
+
+
+def resolve_beeper_exclude_prefixes(value: Any) -> list[str]:
+    """Default-exclude iMessage bridges. Pass ``[]`` / ``False`` to ingest them via Beeper."""
+
+    if value is False:
+        return []
+    if value is None:
+        return list(IMESSAGE_BEEPER_ACCOUNT_PREFIXES)
+    return [item.lower() for item in _parse_csv(value)]
 
 
 def _json_load(value: str | bytes | None, default: Any) -> Any:
@@ -319,6 +349,7 @@ class BeeperIndex:
         thread_types: list[str],
         account_ids: list[str],
         limit: int,
+        exclude_account_prefixes: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         conditions = ["(timestamp > ? OR (timestamp = ? AND threadID > ?))"]
         params: list[Any] = [after_timestamp, after_timestamp, after_thread_id]
@@ -330,6 +361,18 @@ class BeeperIndex:
             placeholders = ",".join("?" for _ in account_ids)
             conditions.append(f"accountID IN ({placeholders})")
             params.extend(account_ids)
+        exclude_prefixes = [p.lower() for p in (exclude_account_prefixes or []) if p]
+        if exclude_prefixes:
+            head_sql = (
+                "lower(CASE WHEN instr(accountID, '.') > 0 "
+                "THEN substr(accountID, 1, instr(accountID, '.') - 1) "
+                "ELSE accountID END)"
+            )
+            placeholders = ",".join("?" for _ in exclude_prefixes)
+            like_clauses = " OR ".join("lower(accountID) LIKE ?" for _ in exclude_prefixes)
+            conditions.append(f"NOT ({head_sql} IN ({placeholders}) OR {like_clauses})")
+            params.extend(exclude_prefixes)
+            params.extend(f"%{prefix}%" for prefix in exclude_prefixes)
         params.append(limit)
         query = f"""
             SELECT threadID, accountID, timestamp, thread
@@ -454,6 +497,9 @@ class BeeperAdapter(BaseAdapter):
     def get_cursor_key(self, **kwargs) -> str:
         thread_types = "+".join(sorted(_parse_csv(kwargs.get("thread_types"), default=["single"]))) or "single"
         account_ids = "+".join(sorted(_parse_csv(kwargs.get("account_ids")))) or "all"
+        exclude = "+".join(sorted(resolve_beeper_exclude_prefixes(kwargs.get("exclude_account_prefixes"))))
+        if exclude:
+            return f"{self.source_id}:{thread_types}:{account_ids}:excl={exclude}"
         return f"{self.source_id}:{thread_types}:{account_ids}"
 
     def fetch(self, vault_path: str, cursor: dict[str, Any], config=None, **kwargs) -> list[dict[str, Any]]:
@@ -990,6 +1036,7 @@ class BeeperAdapter(BaseAdapter):
         resolved_media_root = Path(media_root or DEFAULT_MEDIA_ROOT).expanduser().resolve()
         normalized_thread_types = _parse_csv(thread_types, default=["single"])
         normalized_account_ids = _parse_csv(account_ids)
+        exclude_account_prefixes = resolve_beeper_exclude_prefixes(kwargs.get("exclude_account_prefixes"))
         resolved_batch_size = max(
             1,
             int(batch_size or os.environ.get("HFA_BEEPER_BATCH_SIZE") or 10),
@@ -1013,6 +1060,7 @@ class BeeperAdapter(BaseAdapter):
             f"fetch_batches config: db_path={resolved_db_path} media_root={resolved_media_root} "
             f"batch_size={resolved_batch_size} workers={worker_count} "
             f"thread_types={normalized_thread_types} account_ids={normalized_account_ids or ['all']} "
+            f"exclude_account_prefixes={exclude_account_prefixes or ['none']} "
             f"max_threads={remaining if remaining is not None else 'all'} progress_every={progress_every}",
             verbose=verbose,
         )
@@ -1027,6 +1075,7 @@ class BeeperAdapter(BaseAdapter):
                     after_thread_id=last_completed_thread_id,
                     thread_types=normalized_thread_types,
                     account_ids=normalized_account_ids,
+                    exclude_account_prefixes=exclude_account_prefixes,
                     limit=limit,
                 )
                 if not threads:
@@ -1157,12 +1206,15 @@ class BeeperAdapter(BaseAdapter):
         identity_cache: IdentityCache,
         result: IngestResult,
         dry_run: bool,
+        raw_item: dict[str, Any] | None = None,
+        **kwargs,
     ) -> None:
         aliases = self._beeper_person_identity_aliases(plan.card)
         target_path = vault / plan.rel_path
+        write_raw_item = raw_item if raw_item is not None else {}
         if target_path.exists():
             if not dry_run:
-                merge_into_existing(
+                merged_path = merge_into_existing(
                     vault,
                     plan.wikilink,
                     plan.card.model_dump(mode="python"),
@@ -1171,6 +1223,17 @@ class BeeperAdapter(BaseAdapter):
                     identity_cache=identity_cache,
                     target_rel_path=plan.rel_path,
                 )
+                if merged_path is not None:
+                    frontmatter, _, _ = read_note(vault, str(plan.rel_path))
+                    persisted = validate_card_permissive(frontmatter)
+                    self.after_card_write(
+                        vault,
+                        persisted,
+                        plan.rel_path,
+                        raw_item=write_raw_item,
+                        action="merge",
+                        **kwargs,
+                    )
             else:
                 identity_cache.upsert(plan.wikilink, aliases)
             result.merged += 1
@@ -1185,6 +1248,14 @@ class BeeperAdapter(BaseAdapter):
                 provenance=plan.provenance,
             )
             identity_cache.upsert(plan.wikilink, aliases)
+            self.after_card_write(
+                vault,
+                plan.card,
+                plan.rel_path,
+                raw_item=write_raw_item,
+                action="create",
+                **kwargs,
+            )
         result.created += 1
 
     def _apply_nonperson_item(
@@ -1228,6 +1299,7 @@ class BeeperAdapter(BaseAdapter):
         resolved_media_root = Path(kwargs.get("media_root") or DEFAULT_MEDIA_ROOT).expanduser().resolve()
         normalized_thread_types = _parse_csv(kwargs.get("thread_types"), default=["single"])
         normalized_account_ids = _parse_csv(kwargs.get("account_ids"))
+        exclude_account_prefixes = resolve_beeper_exclude_prefixes(kwargs.get("exclude_account_prefixes"))
         batch_size = max(
             1,
             int(kwargs.get("batch_size") or os.environ.get("HFA_BEEPER_BATCH_SIZE") or 10),
@@ -1238,6 +1310,14 @@ class BeeperAdapter(BaseAdapter):
         processed_successfully = 0
         seen_items = 0
         ingest_started_at = perf_counter()
+        logger.info(
+            "beeper ingest start db_path=%s batch_size=%s workers=%s max_threads=%s exclude_prefixes=%s",
+            resolved_db_path,
+            batch_size,
+            worker_count,
+            remaining if remaining is not None else "all",
+            exclude_account_prefixes or ["none"],
+        )
 
         def _log(message: str) -> None:
             self._adapter_log(message, verbose=verbose)
@@ -1270,7 +1350,9 @@ class BeeperAdapter(BaseAdapter):
         _log(
             f"ingest start: db_path={resolved_db_path} media_root={resolved_media_root} "
             f"batch_size={batch_size} workers={worker_count} thread_types={normalized_thread_types} "
-            f"account_ids={normalized_account_ids or ['all']} max_threads={remaining if remaining is not None else 'all'}"
+            f"account_ids={normalized_account_ids or ['all']} "
+            f"exclude_account_prefixes={exclude_account_prefixes or ['none']} "
+            f"max_threads={remaining if remaining is not None else 'all'}"
         )
         index = BeeperIndex(resolved_db_path)
         last_completed_timestamp = int(cursor.get("last_completed_thread_timestamp", -1) or -1)
@@ -1286,6 +1368,7 @@ class BeeperAdapter(BaseAdapter):
                     after_thread_id=last_completed_thread_id,
                     thread_types=normalized_thread_types,
                     account_ids=normalized_account_ids,
+                    exclude_account_prefixes=exclude_account_prefixes,
                     limit=limit,
                 )
                 if not threads:
@@ -1332,6 +1415,13 @@ class BeeperAdapter(BaseAdapter):
                     yielded_threads += 1
                     if progress_every and yielded_threads % progress_every == 0:
                         _log(f"thread progress: threads={yielded_threads} last_thread_id={last_completed_thread_id}")
+                        logger.info(
+                            "beeper thread progress threads=%s created=%s merged=%s last_thread_id=%s",
+                            yielded_threads,
+                            result.created,
+                            result.merged,
+                            last_completed_thread_id,
+                        )
 
                 seen_items += len(person_items) + len(nonperson_items)
 
@@ -1391,9 +1481,18 @@ class BeeperAdapter(BaseAdapter):
         finally:
             index.close()
 
+        elapsed = perf_counter() - ingest_started_at
         _log(
             f"ingest done: created={result.created} merged={result.merged} conflicted={result.conflicted} "
-            f"skipped={result.skipped} errors={len(result.errors)} elapsed_s={perf_counter() - ingest_started_at:.2f}"
+            f"skipped={result.skipped} errors={len(result.errors)} elapsed_s={elapsed:.2f}"
+        )
+        logger.info(
+            "beeper ingest done created=%s merged=%s skipped=%s errors=%s elapsed=%.1fs",
+            result.created,
+            result.merged,
+            result.skipped,
+            len(result.errors),
+            elapsed,
         )
         return result
 

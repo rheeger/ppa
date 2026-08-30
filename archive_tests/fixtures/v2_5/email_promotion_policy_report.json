@@ -1,0 +1,173 @@
+{
+  "artifact_root": "ppa/logs/validation-gates/gate-synthetic-fixtures/section-a-synthetic/",
+  "blocked_without_section_g": [],
+  "completion_state": "section_a_gate_1_complete",
+  "decisions": [
+    {
+      "canonical_classification": "marketing",
+      "card_types": [],
+      "classification": "marketing",
+      "classification_source": "classify_index",
+      "confidence": 0.91,
+      "content_hash": "",
+      "corpus_decision": "suppressed",
+      "decision_reason": "marketing_classification_with_promotions_label",
+      "decision_signals": [
+        "category_promotions",
+        "marketing_classification"
+      ],
+      "evaluated_at": "2026-06-01T02:01:24+00:00",
+      "external_history_id": "",
+      "external_id": "t-marketing",
+      "policy_version": "email-promotion-v1",
+      "pre_override_corpus_decision": null,
+      "pre_override_processor_decision": null,
+      "pre_override_reason": null,
+      "processor_decision": "suppressed_no_processing",
+      "source_key": "gmail-messages:owner@example.com"
+    },
+    {
+      "canonical_classification": "transactional",
+      "card_types": [
+        "meal_order"
+      ],
+      "classification": "transactional",
+      "classification_source": "card_classifications",
+      "confidence": 0.84,
+      "content_hash": "",
+      "corpus_decision": "active",
+      "decision_reason": "transactional_extractable",
+      "decision_signals": [
+        "known_transactional_domain"
+      ],
+      "evaluated_at": "2026-06-01T02:01:24+00:00",
+      "external_history_id": "",
+      "external_id": "t-receipt",
+      "policy_version": "email-promotion-v1",
+      "pre_override_corpus_decision": null,
+      "pre_override_processor_decision": null,
+      "pre_override_reason": null,
+      "processor_decision": "typed_extraction",
+      "source_key": ""
+    },
+    {
+      "canonical_classification": "personal",
+      "card_types": [],
+      "classification": "personal",
+      "classification_source": "classify_index",
+      "confidence": 0.88,
+      "content_hash": "",
+      "corpus_decision": "active",
+      "decision_reason": "back_and_forth_participation",
+      "decision_signals": [
+        "back_and_forth_participation",
+        "owner_sent_message"
+      ],
+      "evaluated_at": "2026-06-01T02:01:24+00:00",
+      "external_history_id": "",
+      "external_id": "t-personal",
+      "policy_version": "email-promotion-v1",
+      "pre_override_corpus_decision": null,
+      "pre_override_processor_decision": null,
+      "pre_override_reason": null,
+      "processor_decision": "thread_enrichment",
+      "source_key": ""
+    },
+    {
+      "canonical_classification": "marketing",
+      "card_types": [],
+      "classification": "marketing",
+      "classification_source": "classify_index",
+      "confidence": 0.91,
+      "content_hash": "",
+      "corpus_decision": "quarantine",
+      "decision_reason": "starred_marketing_conflict",
+      "decision_signals": [
+        "starred_marketing_conflict"
+      ],
+      "evaluated_at": "2026-06-01T02:01:24+00:00",
+      "external_history_id": "",
+      "external_id": "t-starred-promo",
+      "policy_version": "email-promotion-v1",
+      "pre_override_corpus_decision": null,
+      "pre_override_processor_decision": null,
+      "pre_override_reason": null,
+      "processor_decision": "quarantine_review",
+      "source_key": ""
+    },
+    {
+      "canonical_classification": "automated",
+      "card_types": [],
+      "classification": "automated",
+      "classification_source": "classify_index",
+      "confidence": 0.42,
+      "content_hash": "",
+      "corpus_decision": "quarantine",
+      "decision_reason": "low_confidence_with_attachment",
+      "decision_signals": [
+        "low_confidence",
+        "has_attachments"
+      ],
+      "evaluated_at": "2026-06-01T02:01:24+00:00",
+      "external_history_id": "",
+      "external_id": "t-attach",
+      "policy_version": "email-promotion-v1",
+      "pre_override_corpus_decision": null,
+      "pre_override_processor_decision": null,
+      "pre_override_reason": null,
+      "processor_decision": "quarantine_review",
+      "source_key": ""
+    }
+  ],
+  "engine_mode": "n/a",
+  "gate": "synthetic-fixtures",
+  "gate_framework_state": "validation_gates_complete",
+  "ladder_gate": "Synthetic fixtures",
+  "next_recommended_gate": "small_slice",
+  "policy_version": "email-promotion-v1",
+  "run_id": "section-a-synthetic",
+  "safety": {
+    "llm_calls": false,
+    "production_mutation": false,
+    "vault_access": false
+  },
+  "section_b_apply_unlocked": false,
+  "section_g_framework": "validation_gates_complete",
+  "summary": {
+    "by_canonical_classification": {
+      "automated": 1,
+      "marketing": 2,
+      "personal": 1,
+      "transactional": 1
+    },
+    "by_classification_source": {
+      "card_classifications": 1,
+      "classify_index": 4
+    },
+    "by_corpus_decision": {
+      "active": 2,
+      "quarantine": 2,
+      "suppressed": 1
+    },
+    "by_decision_reason": {
+      "back_and_forth_participation": 1,
+      "low_confidence_with_attachment": 1,
+      "marketing_classification_with_promotions_label": 1,
+      "starred_marketing_conflict": 1,
+      "transactional_extractable": 1
+    },
+    "by_processor_decision": {
+      "quarantine_review": 2,
+      "suppressed_no_processing": 1,
+      "thread_enrichment": 1,
+      "typed_extraction": 1
+    },
+    "override_count": 0,
+    "total_evaluated": 5
+  },
+  "thresholds": {
+    "PROMOTE_TRANSACTIONAL_MIN": 0.5,
+    "QUARANTINE_BELOW": 0.5,
+    "SUPPRESS_CONFIDENCE_MIN": 0.75
+  }
+}

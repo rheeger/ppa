@@ -1,8 +1,12 @@
 # Section F Execution Plan - Arnold Observability and v3 Readiness Gate
 
+The filename is **historical**. Observability is for this local seed, not Arnold soak.
+
+**Status (Aug 2026, HEAD `5980464`):** Surfaces landed. F freshness uses **live keys**. Soak ran on this seed. Formal `ready: false` leftover from missing `validation_gates` / `corpus_cleanup` review rows is an **accepted local exception** (`local_seed_living_corpus`). Do not restage a fake ladder to satisfy the enum. Arnold soak/6+ is **not** a v2.5 closer.
+
 ## Objective
 
-Define how Arnold reports production health after v2.5 and how PPA decides it is ready to resume v3 packaging work.
+Define how **this living seed** reports production health after v2.5. v3 packaging is a later product decision. It is not gated on standing Arnold back up.
 
 Section F turns the concepts from Sections A-E into operator-visible status:
 
@@ -21,7 +25,7 @@ Section F turns the concepts from Sections A-E into operator-visible status:
 - Do not implement status commands in this planning pass.
 - Do not require a web dashboard.
 - Do not hide failures behind a single green/red indicator.
-- Do not declare v3 ready based only on docs existing; v3 readiness requires later implementation proof on Arnold.
+- Do not declare v3 ready based only on docs existing. Do not require Arnold soak for v2.5-done. Do not invent `validation_gates` / `corpus_cleanup` review rows to flip `ready: true`.
 
 ## Existing Code and Docs to Inspect Before Implementation
 
@@ -43,13 +47,18 @@ Section F turns the concepts from Sections A-E into operator-visible status:
 Before implementation:
 
 - Read `README.md`, `v2.5vision.md`, Sections B, D, E, G, and this plan.
+- Confirm Section A, Section B dry-run/apply, Section C, Section D, Section E, and Section G commits are present.
+- Confirm Section D and E provide machine-readable source/processor state without requiring live sync/processor execution.
+- Run `git status --short --branch` and stop if the tree is not clean.
 - Build machine-readable status before polished text UI.
 - Make readiness fail closed until all required reports/gates exist.
-- Do not declare v3 ready based only on docs or partial implementation.
+- Do not declare v3 ready based only on docs or partial implementation. v2.5-local does not wait on `ready: true`.
+- Prefer aggregating existing status stores over inventing new Section F-only state.
 
 Likely implementation files:
 
 - `archive_cli/commands/status.py` or equivalent.
+- `archive_cli/status/` or equivalent aggregation module.
 - `archive_cli/commands/maintain.py`
 - report/status modules introduced by Sections B, D, E, G.
 - `archive_cli/server.py` only if MCP should expose health later.
@@ -60,13 +69,18 @@ Required first tests:
 - readiness pass/fail logic.
 - source failure appears in status.
 - suppressed email visibility failure blocks readiness.
+- missing vault/config/database returns structured blocked/failed status, not traceback.
+- readiness can be evaluated without running source sync or processors.
 
 Stop conditions:
 
 - status cannot identify the failing source/processor/gate.
 - readiness can pass without Section G gate evidence.
 - reports do not include engine mode or decision run IDs.
-- Arnold status hides partial failures behind a green summary.
+- Status hides partial failures behind a green summary.
+- status implementation starts mutating source cursors, corpus state, embeddings, or processors.
+- Section F builds a separate source/processor state model instead of consuming Sections B/D/E/G.
+- normal operator misuse produces tracebacks instead of structured status/errors.
 
 ## Production Status Surfaces
 
@@ -77,6 +91,14 @@ v2.5 should define three status surfaces:
 3. **Historical reports:** append-only maintenance reports for trend/debugging.
 
 The first implementation can be plain text and JSON. v3 can later make it pretty with `rich`.
+
+Section F first implementation should:
+
+1. Add machine-readable status aggregation.
+2. Add human-readable summary from the same payload.
+3. Add readiness evaluation that fails closed.
+4. Add tests with fixture state from Sections B, D, E, and G.
+5. Avoid changing maintenance execution semantics except to emit or reference reports.
 
 ## `ppa status` Required Sections
 
@@ -95,21 +117,21 @@ Fields:
 
 For each source:
 
-| Field | Meaning |
-| ----- | ------- |
-| `source_key` | Source/account identity |
-| `source_type` | Gmail, Calendar, iMessage, Photos, etc. |
-| `enabled` | Whether source participates in maintenance |
-| `state` | `fresh`, `stale`, `failed`, `blocked`, `never_synced` |
-| `last_success_at` | Last successful sync |
-| `last_attempt_at` | Last attempted sync |
-| `cursor_summary` | Human-readable cursor |
-| `observed_last_run` | Last run observed count |
-| `promoted_last_run` | Last run promoted count |
-| `suppressed_last_run` | Last run suppressed count |
-| `quarantined_last_run` | Last run quarantine count |
-| `deleted_last_run` | Last run deleted/tombstoned count |
-| `last_error` | Last error summary |
+| Field                  | Meaning                                               |
+| ---------------------- | ----------------------------------------------------- |
+| `source_key`           | Source/account identity                               |
+| `source_type`          | Gmail, Calendar, iMessage, Photos, etc.               |
+| `enabled`              | Whether source participates in maintenance            |
+| `state`                | `fresh`, `stale`, `failed`, `blocked`, `never_synced` |
+| `last_success_at`      | Last successful sync                                  |
+| `last_attempt_at`      | Last attempted sync                                   |
+| `cursor_summary`       | Human-readable cursor                                 |
+| `observed_last_run`    | Last run observed count                               |
+| `promoted_last_run`    | Last run promoted count                               |
+| `suppressed_last_run`  | Last run suppressed count                             |
+| `quarantined_last_run` | Last run quarantine count                             |
+| `deleted_last_run`     | Last run deleted/tombstoned count                     |
+| `last_error`           | Last error summary                                    |
 
 ### 3. Corpus Health
 
@@ -217,6 +239,29 @@ Future implementation should expose JSON roughly like:
 
 Exact fields may change, but the categories above are required.
 
+Required top-level status fields:
+
+| Field                | Meaning                                             |
+| -------------------- | --------------------------------------------------- |
+| `archive`            | Instance, vault, schema, build/git info             |
+| `sources`            | Section D source state summaries                    |
+| `corpus`             | Section B active/suppressed/quarantine summaries    |
+| `email_hygiene`      | Policy/classification/decision-run coverage         |
+| `processors`         | Section E processor state summaries                 |
+| `embeddings`         | Active chunk embedding status                       |
+| `linkers`            | Linker backlog/failure/suppression filtering status |
+| `maintenance`        | Last maintain/report state                          |
+| `validation_gates`   | Section G gate evidence                             |
+| `v3_readiness`       | Fail-closed readiness result                        |
+| `errors`, `warnings` | Structured issues                                   |
+
+Status command behavior:
+
+- `--format json` emits only JSON on stdout.
+- text output is concise but includes failing gate/source/processor names.
+- missing config/vault/database should produce structured output and documented exit code.
+- status must not run live source sync, processor execution, embeddings, or linkers.
+
 ## Maintenance Report Shape
 
 Every `ppa maintain` run should write an append-only report.
@@ -242,19 +287,21 @@ Reports should be both:
 - machine-readable JSON.
 - summarized to stderr/stdout for operators.
 
+Section F should not require fully rewriting `ppa maintain` in its first implementation. It can start by aggregating existing source/corpus/processor/gate reports and adding a report writer hook for future maintain cycles.
+
 ## Health Thresholds
 
 Initial status thresholds:
 
-| Check | Healthy | Warning | Failed |
-| ----- | ------- | ------- | ------ |
-| Source updater | Last run succeeded | Stale or partial | Failed/blocked |
-| Gmail classification coverage | >= 98% | 95-98% | < 95% |
-| Quarantine backlog | Small and reviewed | Growing | Unreviewed large backlog |
-| Processor failures | 0 blocking failures | Non-blocking failures | Blocking failures |
-| Embedding coverage | Active chunks embedded | Pending backlog | Embedding failures |
-| Suppression filter | Suppressed excluded | Unknown | Suppressed visible in default retrieval |
-| Rebuild safety | Verified | Not recently verified | Failed verification |
+| Check                         | Healthy                | Warning               | Failed                                  |
+| ----------------------------- | ---------------------- | --------------------- | --------------------------------------- |
+| Source updater                | Last run succeeded     | Stale or partial      | Failed/blocked                          |
+| Gmail classification coverage | >= 98%                 | 95-98%                | < 95%                                   |
+| Quarantine backlog            | Small and reviewed     | Growing               | Unreviewed large backlog                |
+| Processor failures            | 0 blocking failures    | Non-blocking failures | Blocking failures                       |
+| Embedding coverage            | Active chunks embedded | Pending backlog       | Embedding failures                      |
+| Suppression filter            | Suppressed excluded    | Unknown               | Suppressed visible in default retrieval |
+| Rebuild safety                | Verified               | Not recently verified | Failed verification                     |
 
 The implementation can tune exact numeric thresholds, but failures should be explicit.
 
@@ -288,18 +335,21 @@ v3 should not resume packaging until Arnold passes this gate after v2.5 implemen
 
 5. **Source freshness working**
    - Gmail, Calendar, iMessage, and Photos source states are visible.
-   - Cursor safety verified.
+   - **At least one successful real updater run** (not status snapshot alone) exists per required source within freshness policy, with cursor before/after and dirty UID counts in the run report.
+   - Cursor safety verified (cursor advances only after persisted side effects).
    - Source failure isolation verified.
 
 6. **Processor DAG working**
    - Dirty inputs queue only affected processors.
+   - **At least one successful real processor run** on dirty UIDs from an updater batch (plan → apply), not declaration/status seed alone.
    - Processor version bump creates expected stale outputs.
    - Suppressed cards skip active-only processors.
 
 7. **Maintenance stable**
-   - `ppa maintain` can run through normal source/update/process/status flow.
+   - `ppa maintain --run-source-updaters --run-processors` (or equivalent) can run through normal source/update/process/status flow. Local nightly at 2am is that same command (see README “Nightly maintain”).
    - Reports are written.
    - Partial failure behavior is visible and recoverable.
+   - `--record-source-status` / `--record-processor-status` alone **do not** satisfy this check.
 
 8. **Rebuild safety verified**
    - Full or incremental rebuild preserves corpus decisions.
@@ -353,6 +403,9 @@ Future implementation should include:
 - Integration tests proving suppressed email is absent from retrieval and reported as suppressed.
 - Integration tests for maintenance report creation.
 - Golden-output tests for human-readable status.
+- CLI tests proving status does not mutate source/corpus/processor state.
+- CLI tests proving missing vault/config/database returns structured output and exit `4`, not traceback.
+- Tests proving readiness fails when Section B/D/E/G evidence is missing, failed, unreviewed, or from the wrong archive instance.
 
 ## Validation Ladder and Rust Standard
 
@@ -365,8 +418,8 @@ Required gates:
 3. **Larger slice:** status remains readable and report size is manageable.
 4. **Local seed dry-run:** status summarizes full-seed dry-run without mutation.
 5. **Local seed staging apply:** status shows apply, rollback, rebuild-safety, and processor outcomes.
-6. **Arnold dry-run:** status shows not-ready until apply/soak checks pass.
-7. **Arnold reviewed apply and soak:** status is the authority for v3 readiness.
+6. **Arnold dry-run:** historical. **Not a v2.5 closer.**
+7. **Arnold reviewed apply and soak:** historical. Local soak already ran. Formal `ready: false` leftover is an accepted local exception.
 
 Rust standard:
 
@@ -393,10 +446,14 @@ Section F implementation is ready when:
 - Append-only maintenance reports exist.
 - Health thresholds are explicit.
 - v3 readiness gate exists and fails closed.
-- Arnold can show why it is or is not ready for v3.
+- This seed can show source freshness from live keys and why formal `ready` is still false (accepted leftover review rows).
 - Operator docs explain dry-run, apply, rollback, status, and maintenance report interpretation.
-- v3 readiness cannot pass unless Section G gate evidence exists through Arnold soak.
+- v2.5-local does **not** require Section G gate evidence through Arnold soak.
+- Snapshot-only source/processor state still cannot flip the enum to ready. That leftover does **not** block v2.5-done. Do not invent fake gate rows.
 - status includes report paths, decision run IDs, engine mode, rollback status, and failed gate details.
+- status/readiness can run without executing live sync, processors, embeddings, or linkers.
+- missing config/vault/database cases return structured output and documented exit code, not tracebacks.
+- Section F consumes Sections B, D, E, and G state; it does not duplicate their state models.
 
 ## Completion Artifacts
 
@@ -408,6 +465,9 @@ The implementation agent must leave:
 - readiness pass/fail fixture reports.
 - operator runbook references.
 - proof that readiness fails when any required Section G gate evidence is missing.
+- blocked/failure status examples for missing vault/config/database.
+- status sample proving partial failures are visible and not hidden by a green summary.
+- status sample proving no live source sync or processor execution occurred.
 
 ## Commit Instructions
 
@@ -417,4 +477,5 @@ Commit this section by itself.
 - Stage only Section F implementation, tests, docs, and artifacts.
 - Commit subject: `v2.5 section F: arnold observability v3 gate`
 - Commit body must follow the shared pattern in `README.md`.
-- After commit, `git status --short` must be clean before Arnold reviewed apply/soak work starts.
+- After commit, `git status --short` must be clean before D/E Phase 2 or Section H work starts.
+- If readiness hardening is needed after D/E Phase 2, use a separate commit: `v2.5 section F: readiness real-run evidence`.

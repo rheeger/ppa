@@ -1,8 +1,12 @@
 #!/bin/zsh
 set -euo pipefail
 
+SCRIPT_DIR="${0:A:h}"
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/ppa-tunnel-env.sh"
+
 ARNOLD_HOST="${ARNOLD_HOST:-arnold@192.168.50.27}"
-LOCAL_PORT="${PPA_TUNNEL_PORT:-5433}"
+LOCAL_PORT="${PPA_TUNNEL_PORT}"
 REMOTE_PORT="5432"
 
 if lsof -i :"$LOCAL_PORT" -sTCP:LISTEN >/dev/null 2>&1; then

@@ -5,7 +5,14 @@ from __future__ import annotations
 import json
 
 from archive_sync.adapters.base import deterministic_provenance
-from archive_sync.adapters.otter_transcripts import OtterApiClient, OtterMcpClient, OtterTranscriptsAdapter
+from archive_sync.adapters.otter_transcripts import (
+    OtterApiClient,
+    OtterMcpClient,
+    OtterTranscriptsAdapter,
+    _candidate_tool_names,
+    persist_otter_mcp_tokens,
+    restore_otter_mcp_tokens,
+)
 from archive_vault.schema import CalendarEventCard, MeetingTranscriptCard, PersonCard
 from archive_vault.vault import read_note, write_card
 
@@ -132,6 +139,197 @@ def test_otter_mcp_client_discovers_tools_and_calls_mcporter(monkeypatch):
     assert detail["title"] == "Board Sync"
     assert transcript["transcript"][0]["text"] == "hello"
 
+
+def test_parse_json_from_stdout_unwraps_mcporter_result_envelope():
+    from archive_sync.adapters.otter_transcripts import _parse_json_from_stdout
+
+    search = json.dumps(
+        {
+            "result": {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps(
+                            {
+                                "results": [{"id": "meeting-1", "title": "Board Sync"}],
+                                "next_cursor": "page-2",
+                            }
+                        ),
+                    }
+                ]
+            }
+        }
+    )
+    parsed = _parse_json_from_stdout(search)
+    assert parsed["results"][0]["id"] == "meeting-1"
+    assert parsed["next_cursor"] == "page-2"
+
+    user = _parse_json_from_stdout(
+        json.dumps({"result": "User Information:\nName: Robbie Heeger\nEmail: Robbie@endaoment.org"})
+    )
+    assert user["name"] == "Robbie Heeger"
+    assert user["email"] == "Robbie@endaoment.org"
+
+
+def test_candidate_tool_names_from_mcporter_json() -> None:
+    stdout = json.dumps(
+        {
+            "name": "otter_meeting_mcp",
+            "tools": [
+                {"name": "otter_search"},
+                {"name": "otter_fetch"},
+                {"name": "otter_get_user_info"},
+            ],
+        }
+    )
+    names = _candidate_tool_names(stdout)
+    assert "otter_search" in names
+    assert "otter_fetch" in names
+    assert "otter_get_user_info" in names
+
+
+def test_candidate_tool_names_from_jsdoc_text_aliases() -> None:
+    stdout = """
+otter_meeting_mcp
+
+  /**
+   * Search meetings across platforms. Full transcripts come from the `otter_fetch` tool.
+   * ALWAYS call otter_get_user_info() first to get current date/time.
+   */
+"""
+    names = _candidate_tool_names(stdout)
+    assert "otter_search" in names
+    assert "otter_fetch" in names
+    assert "otter_get_user_info" in names
+
+
+def test_otter_mcp_client_discovers_json_list_tools(tmp_path, monkeypatch):
+    monkeypatch.setenv("OTTER_MCP_CREDENTIALS_PATH", str(tmp_path / "mcporter.json"))
+    monkeypatch.setenv("OTTER_MCP_PPA_TOKEN_PATH", str(tmp_path / "ppa.json"))
+    client = OtterMcpClient(mcporter_bin="/tmp/mcporter", server_name="otter_meeting_mcp")
+
+    def fake_run_mcporter(*args):
+        if "list" in args:
+            return (
+                json.dumps(
+                    {
+                        "name": "otter_meeting_mcp",
+                        "tools": [
+                            {"name": "otter_search"},
+                            {"name": "otter_fetch"},
+                            {"name": "otter_get_user_info"},
+                        ],
+                    }
+                ),
+                "",
+            )
+        raise AssertionError(args)
+
+    client._run_mcporter = fake_run_mcporter  # type: ignore[method-assign]
+    tools = client._discover_tools()
+    assert tools["list"] == "otter_search"
+    assert tools["detail"] == "otter_fetch"
+    assert tools["transcript"] == "otter_fetch"
+    assert tools["user_info"] == "otter_get_user_info"
+
+
+def test_persist_and_restore_otter_mcp_tokens(tmp_path) -> None:
+    mcporter_path = tmp_path / "mcporter-credentials.json"
+    ppa_path = tmp_path / "ppa-otter.json"
+    mcporter_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "entries": {
+                    "otter_meeting_mcp|abc": {
+                        "serverName": "otter_meeting_mcp",
+                        "serverUrl": "https://mcp.otter.ai/mcp",
+                        "tokens": {
+                            "access_token": "access-1",
+                            "refresh_token": "refresh-1",
+                            "token_type": "bearer",
+                            "scope": "profile:read",
+                        },
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    written = persist_otter_mcp_tokens(credentials_path=mcporter_path, ppa_token_path=ppa_path)
+    assert written == ppa_path
+    snapshot = json.loads(ppa_path.read_text(encoding="utf-8"))
+    assert snapshot["tokens"]["refresh_token"] == "refresh-1"
+
+    wiped = tmp_path / "mcporter-empty.json"
+    assert restore_otter_mcp_tokens(credentials_path=wiped, ppa_token_path=ppa_path) is True
+    restored = json.loads(wiped.read_text(encoding="utf-8"))
+    tokens = next(iter(restored["entries"].values()))["tokens"]
+    assert tokens["refresh_token"] == "refresh-1"
+
+
+def test_otter_mcp_client_uses_otter_prefixed_tools(monkeypatch):
+    client = OtterMcpClient(mcporter_bin="/tmp/mcporter", server_name="otter_meeting_mcp")
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run_mcporter(*args):
+        calls.append(args)
+        if args == ("list", "otter_meeting_mcp"):
+            return "function otter_search()\nfunction otter_fetch(id: string)\nfunction otter_get_user_info()\n", ""
+        if args[0] == "call":
+            if args[1] == "otter_meeting_mcp.otter_get_user_info":
+                return json.dumps({"result": "User Information:\nName: Robbie Heeger\nEmail: Robbie@endaoment.org"}), ""
+            if args[1] == "otter_meeting_mcp.otter_search":
+                return json.dumps(
+                    {
+                        "result": {
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": json.dumps({"results": [{"id": "meeting-1", "title": "Board Sync"}]}),
+                                }
+                            ]
+                        }
+                    }
+                ), ""
+            if args[1] == "otter_meeting_mcp.otter_fetch":
+                return json.dumps(
+                    {
+                        "result": {
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": json.dumps(
+                                        {
+                                            "id": "meeting-1",
+                                            "title": "Board Sync",
+                                            "text": "hello from otter",
+                                        }
+                                    ),
+                                }
+                            ]
+                        }
+                    }
+                ), ""
+        raise AssertionError(args)
+
+    client._run_mcporter = fake_run_mcporter  # type: ignore[method-assign]
+
+    meetings = client.list_meetings(page_size=5)
+    detail = client.get_meeting_detail("meeting-1")
+    transcript = client.get_transcript("meeting-1")
+
+    assert meetings["results"][0]["id"] == "meeting-1"
+    assert detail["title"] == "Board Sync"
+    assert transcript["text"] == "hello from otter"
+    called_tools = [args[1] for args in calls if args and args[0] == "call"]
+    assert "otter_meeting_mcp.otter_get_user_info" in called_tools
+    assert "otter_meeting_mcp.otter_search" in called_tools
+    assert "otter_meeting_mcp.otter_fetch" in called_tools
+    assert called_tools.count("otter_meeting_mcp.otter_fetch") == 1
+    search_args = next(args for args in calls if args[:2] == ("call", "otter_meeting_mcp.otter_search"))
+    assert any(arg.startswith("page_size=") for arg in search_args)
+    assert any(arg.startswith("username=Robbie") for arg in search_args)
 
 def test_build_client_prefers_mcp_when_requested(monkeypatch):
     monkeypatch.setenv("OTTER_FETCH_MODE", "mcp")

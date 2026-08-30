@@ -1637,7 +1637,17 @@ def _is_classification_skipped(conn: Any, schema: str, card_uid: str) -> bool:
 
     Cards without a card_classifications row (e.g. non-email cards, or email cards
     not yet triaged) are NOT skipped — safe-default-include preserves recall.
+    Suppressed/quarantine corpus_state (Section B) also excludes linker candidates.
     """
+    try:
+        from archive_cli.corpus_hygiene.state_store import corpus_state_table_exists, get_card_corpus_state
+
+        if corpus_state_table_exists(conn, schema):
+            state = get_card_corpus_state(conn, schema, card_uid)
+            if state in {"suppressed", "quarantine"}:
+                return True
+    except Exception:
+        pass
     skip_set = _semantic_skip_classifications()
     if not skip_set:
         return False

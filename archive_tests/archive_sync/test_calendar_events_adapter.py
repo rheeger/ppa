@@ -310,6 +310,73 @@ def test_ingest_writes_calendar_event_note(tmp_vault):
     assert frontmatter["event_body_sha"]
 
 
+def test_ensure_token_manager_uses_calendar_service_profile(monkeypatch):
+    calls: list[dict] = []
+
+    def fake_build(**kwargs):
+        calls.append(kwargs)
+        return object()
+
+    monkeypatch.setattr(
+        "archive_sync.adapters.calendar_events.build_google_cli_token_manager",
+        fake_build,
+    )
+    adapter = CalendarEventsAdapter()
+    adapter._ensure_token_manager("me@example.com")
+    assert calls == [{"account_email": "me@example.com", "services": ["calendar"]}]
+    adapter._ensure_token_manager("me@example.com")
+    assert len(calls) == 1
+
+
+def test_gws_survives_token_mint_failure(monkeypatch):
+    adapter = CalendarEventsAdapter()
+
+    class _BrokenMint:
+        def build_env(self, env=None, *, force_refresh: bool = False):
+            raise RuntimeError("Token refresh failed: invalid_scope")
+
+    adapter._token_manager = _BrokenMint()
+
+    class _Proc:
+        returncode = 0
+        stdout = '{"ok": true}'
+        stderr = ""
+
+    monkeypatch.setattr(
+        "archive_sync.adapters.calendar_events.subprocess.run",
+        lambda *a, **k: _Proc(),
+    )
+    assert adapter._gws(["calendar", "events", "list"]) == {"ok": True}
+
+
+def test_fetch_falls_back_to_http_on_invalid_scope_gws_error(tmp_vault, monkeypatch):
+    adapter = CalendarEventsAdapter()
+    adapter._gws = lambda args: (_ for _ in ()).throw(RuntimeError("HTTP Error 400: Bad Request invalid_scope"))  # type: ignore[method-assign]
+    adapter._calendar_events_list_http = lambda params: {  # type: ignore[method-assign]
+        "items": [
+            {
+                "id": "event-google-1",
+                "iCalUID": "event-uid-1",
+                "summary": "Fallback Meeting",
+                "start": {"dateTime": "2026-03-08T15:00:00Z"},
+                "end": {"dateTime": "2026-03-08T16:00:00Z"},
+                "organizer": {"email": "alice@example.com"},
+                "attendees": [{"email": "me@example.com"}],
+                "status": "confirmed",
+            }
+        ],
+        "nextPageToken": None,
+    }
+    monkeypatch.setattr(
+        adapter,
+        "_calendar_events_list_proxy",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no proxy")),
+    )
+
+    items = adapter.fetch(str(tmp_vault), {}, account_email="me@example.com", max_events=3)
+    assert items[0]["title"] == "Fallback Meeting"
+
+
 def test_quick_update_skips_unchanged_events(tmp_vault):
     adapter = CalendarEventsAdapter()
     initial = iter(

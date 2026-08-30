@@ -6,6 +6,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 # Shared with index_store ranking; keep in sync with CARD_TYPE_PRIORS there.
+from archive_cli.corpus_hygiene.state_store import (
+    annotate_retrieval_corpus_fields,
+    retrieval_weight_for_corpus_state,
+)
+
 from .index_config import _format_activity_at
 from .index_store import CARD_TYPE_PRIORS
 
@@ -142,6 +147,7 @@ def fuse_lexical_vector_rows(
             "provenance_bias": "deterministic" if exact_match else "mixed",
             "provenance_score": 0.08 if exact_match else 0.04,
             "graph_hops": "0" if card_uid in anchor_uids else "",
+            "corpus_state": row.get("corpus_state"),
             "score": 0.0,
         }
     for row in vector_rows:
@@ -165,6 +171,7 @@ def fuse_lexical_vector_rows(
                 "provenance_bias": str(row["provenance_bias"]),
                 "provenance_score": float(row["provenance_score"]),
                 "graph_hops": "",
+                "corpus_state": row.get("corpus_state"),
                 "score": 0.0,
             },
         )
@@ -178,9 +185,12 @@ def fuse_lexical_vector_rows(
             entry["matched_chunk_count"] = int(row["matched_chunk_count"])
             entry["provenance_bias"] = str(row["provenance_bias"])
             entry["provenance_score"] = float(row["provenance_score"])
+        if not entry.get("corpus_state") and row.get("corpus_state"):
+            entry["corpus_state"] = row.get("corpus_state")
     ranked = list(merged.values())
     _apply_recency_boost(ranked, key_name="recency_score")
     for entry in ranked:
+        annotate_retrieval_corpus_fields(entry)
         card_uid = str(entry["card_uid"])
         trust = float(neighbor_trust.get(card_uid, 0.0))
         if not entry["graph_hops"] and trust > 0.0:
@@ -191,7 +201,7 @@ def fuse_lexical_vector_rows(
         lexical_component = min(float(entry["lexical_score"]), 1.5) * (1.2 if not bool(entry["exact_match"]) else 1.4)
         vector_component = float(entry["vector_similarity"]) * 1.2
         multi_signal_boost = 0.2 if str(entry["matched_by"]) == "hybrid" else 0.0
-        entry["score"] = round(
+        raw = (
             exact_boost
             + lexical_component
             + vector_component
@@ -199,9 +209,9 @@ def fuse_lexical_vector_rows(
             + graph_boost
             + _card_type_prior(str(entry["type"]))
             + float(entry.get("recency_score", 0.0))
-            + float(entry.get("provenance_score", 0.0)),
-            6,
+            + float(entry.get("provenance_score", 0.0))
         )
+        entry["score"] = round(raw * float(entry["retrieval_weight"]), 6)
     return ranked
 
 
@@ -260,6 +270,7 @@ def score_breakdown_for_row(row: dict[str, Any]) -> dict[str, float]:
         "recency": recency,
         "provenance": provenance,
         "rerank_contribution": float(row.get("rerank_contribution", 0.0)),
+        "corpus_weight": retrieval_weight_for_corpus_state(row.get("corpus_state")),
     }
 
 

@@ -1,0 +1,32 @@
+{
+  "archive_instance": "fixture:ppa_fixture@127.0.0.1:5432/archive@seed-vault",
+  "artifact_paths": {
+    "errors": "",
+    "report": "ppa/logs/validation-gates/gate-synthetic_fixtures/gate-golden-001/report.json",
+    "rollback": "",
+    "samples": "",
+    "summary": "ppa/logs/validation-gates/gate-synthetic_fixtures/gate-golden-001/summary.md"
+  },
+  "completion_state": "validation_gate_framework_complete",
+  "corpus_counts": {},
+  "created_at": "2026-05-31T22:00:00+00:00",
+  "decision_run_id": "gate-golden-001",
+  "dirty_processor_count": 0,
+  "embedding_affected_count": 0,
+  "engine_mode": "rust",
+  "errors": [],
+  "gate": "synthetic_fixtures",
+  "gate_framework_state": "validation_gates_complete",
+  "index_schema": "ppa_fixture",
+  "ladder_gate": "synthetic_fixtures",
+  "linker_affected_count": 0,
+  "new_llm_call_count": 0,
+  "next_recommended_gate": "small_slice",
+  "overall_status": "passed",
+  "policy_version": "email-promotion-v1",
+  "run_id": "gate-golden-001",
+  "throughput_by_phase": {},
+  "total_elapsed_ms": 0,
+  "vault_path": "/tmp/seed-vault",
+  "warnings": []
+}

@@ -27,8 +27,6 @@ from archive_vault.thread_hash import (
     compute_email_thread_body_sha_from_payload,
 )
 from archive_vault.uid import generate_uid
-from archive_vault.vault import iter_notes, read_note
-
 from .base import BaseAdapter, FetchedBatch, deterministic_provenance
 from .gmail_correspondents import load_own_aliases
 
@@ -75,6 +73,39 @@ def _attachment_identity(account_email: str, message_id: str, attachment_id: str
 
 def _thread_uid(account_email: str, thread_id: str) -> str:
     return generate_uid("email-thread", THREAD_SOURCE, _thread_identity(account_email, thread_id))
+
+
+GMAIL_PAGE_CURSOR_FIELDS = ("page_token", "page_index", "page_thread_ids", "page_next_token")
+
+
+def reset_gmail_page_cursor(cursor: dict[str, Any] | None) -> dict[str, Any]:
+    """Clear page-walk fields so ``threads.list`` starts at newest mail.
+
+    Gmail lists threads newest-first. Resuming a stored ``page_token`` /
+    ``page_index`` continues that old walk and misses mail that arrived after
+    the walk started. Catch-up resets the page cursor in place while
+    preserving ``history_id`` / ``gmail_history_id`` so quick-update can still
+    skip unchanged threads.
+    """
+
+    target = cursor if cursor is not None else {}
+    target["page_token"] = None
+    target["page_index"] = 0
+    target["page_thread_ids"] = []
+    target["page_next_token"] = None
+    return target
+
+
+def catch_up_requested(*, catch_up: bool = False, reset_page_cursor: bool = False, **kwargs: Any) -> bool:
+    """True when caller asked for newest-first catch-up / page-cursor reset."""
+
+    if catch_up or reset_page_cursor:
+        return True
+    for key in ("reset_cursor", "reset_page_cursor", "catch_up"):
+        raw = kwargs.get(key)
+        if raw is True or (isinstance(raw, str) and raw.strip().lower() in {"1", "true", "yes", "on"}):
+            return True
+    return False
 
 
 def _message_uid(account_email: str, message_id: str) -> str:
@@ -494,6 +525,11 @@ class GmailMessagesAdapter(BaseAdapter):
             raise last_exc
         raise RuntimeError("gws retry failed without an exception")
 
+    def _promotion_gate_enabled(self, **kwargs) -> bool:
+        from archive_sync.gmail_promotion.gate import promotion_gate_enabled
+
+        return promotion_gate_enabled(kwargs)
+
     def _worker_count(self, explicit_value: int | None, *, env_var: str, default: int) -> int:
         raw_value = explicit_value if explicit_value is not None else os.environ.get(env_var)
         try:
@@ -510,9 +546,43 @@ class GmailMessagesAdapter(BaseAdapter):
                 links.append(resolved)
         return links
 
-    def _load_existing_quick_update_state(
+    def _gmail_frontmatter_rows_from_cache(self, vault_path: str) -> list[dict[str, Any]]:
+        """One Rust (or single-cursor) dump of Gmail card frontmatter. Builds cache on miss."""
+
+        from pathlib import Path
+
+        from archive_cli.vault_cache import VaultScanCache
+
+        vault = Path(vault_path)
+        scan_cache = VaultScanCache.build_or_load(vault, tier=1, progress_every=0)
+        cache_path = VaultScanCache.cache_path_for_vault(vault)
+        types = ["email_thread", "email_message", "email_attachment"]
+        if cache_path.is_file():
+            try:
+                import archive_crate
+
+                return list(
+                    archive_crate.frontmatter_dicts_from_cache(
+                        str(cache_path),
+                        types=types,
+                    )
+                )
+            except Exception:
+                pass
+        by_type, _rel_by_uid, uid_by_path, _uid_by_stem, frontmatter_by_uid = scan_cache.slice_lookup_tables()
+        rows: list[dict[str, Any]] = []
+        for card_type in types:
+            for rel in by_type.get(card_type) or []:
+                uid = uid_by_path.get(rel, "")
+                fm = dict(frontmatter_by_uid.get(uid) or {})
+                if not fm:
+                    continue
+                rows.append({"rel_path": rel, "frontmatter": fm})
+        return rows
+
+    def _gmail_state_from_frontmatter_rows(
         self,
-        vault_path: str,
+        rows: list[dict[str, Any]],
         *,
         account_email: str,
     ) -> tuple[dict[str, dict[str, str]], dict[str, str], dict[str, str]]:
@@ -520,14 +590,12 @@ class GmailMessagesAdapter(BaseAdapter):
         message_hashes: dict[str, str] = {}
         attachment_hashes: dict[str, str] = {}
         normalized_account = account_email.strip().lower()
-        for rel_path, _ in iter_notes(vault_path):
-            if not rel_path.parts:
-                continue
-            top_level = rel_path.parts[0]
-            if top_level not in {"EmailThreads", "Email", "EmailAttachments"}:
-                continue
-            frontmatter, _, _ = read_note(vault_path, str(rel_path))
-            if normalized_account and str(frontmatter.get("account_email", "")).strip().lower() != normalized_account:
+        for row in rows:
+            frontmatter = dict(row.get("frontmatter") or {})
+            if (
+                normalized_account
+                and str(frontmatter.get("account_email", "")).strip().lower() != normalized_account
+            ):
                 continue
             card_type = str(frontmatter.get("type", "")).strip()
             if card_type == "email_thread":
@@ -549,6 +617,41 @@ class GmailMessagesAdapter(BaseAdapter):
                         frontmatter.get("attachment_metadata_sha", "")
                     ).strip()
         return thread_state, message_hashes, attachment_hashes
+
+    def _load_gmail_thread_presence_from_cache(
+        self,
+        vault_path: str,
+        *,
+        account_email: str,
+    ) -> dict[str, dict[str, str]]:
+        """Load gmail_thread_id → stub state from vault-scan cache (promotion gate).
+
+        Cache miss builds the Rust/Python vault-scan cache. Never walks markdown.
+        Presence-only stubs are enough for ``vault_has_active_card``.
+        """
+        import logging
+
+        log = logging.getLogger("ppa.gmail")
+        rows = self._gmail_frontmatter_rows_from_cache(vault_path)
+        thread_state, _message_hashes, _attachment_hashes = self._gmail_state_from_frontmatter_rows(
+            rows,
+            account_email=account_email,
+        )
+        log.info(
+            "gmail_thread_presence_from_cache account=%s threads=%d",
+            account_email.strip().lower() or "*",
+            len(thread_state),
+        )
+        return thread_state
+
+    def _load_existing_quick_update_state(
+        self,
+        vault_path: str,
+        *,
+        account_email: str,
+    ) -> tuple[dict[str, dict[str, str]], dict[str, str], dict[str, str]]:
+        rows = self._gmail_frontmatter_rows_from_cache(vault_path)
+        return self._gmail_state_from_frontmatter_rows(rows, account_email=account_email)
 
     def _filter_quick_update_records(
         self,
@@ -1088,6 +1191,8 @@ class GmailMessagesAdapter(BaseAdapter):
         workers: int | None = None,
         attachment_workers: int | None = None,
         quick_update: bool = False,
+        catch_up: bool = False,
+        reset_page_cursor: bool = False,
         **kwargs,
     ):
         self._ensure_token_manager(account_email)
@@ -1096,6 +1201,10 @@ class GmailMessagesAdapter(BaseAdapter):
         own_emails.update(load_own_aliases(vault_path))
         identity_cache = IdentityCache(vault_path)
         hash_cache_enabled = bool(getattr(config, "gmail_thread_body_sha_cache_enabled", True))
+        if catch_up_requested(catch_up=catch_up, reset_page_cursor=reset_page_cursor, **kwargs):
+            reset_gmail_page_cursor(cursor)
+            # Newest-first walk is cheap only if unchanged threads skip via history_id.
+            quick_update = True
         quick_update_enabled = bool(quick_update and hash_cache_enabled)
         existing_thread_state: dict[str, dict[str, str]] = {}
         existing_message_hashes: dict[str, str] = {}
@@ -1130,6 +1239,30 @@ class GmailMessagesAdapter(BaseAdapter):
             default=min(4, fetch_workers),
         )
         sequence = 0
+        promotion_gate = None
+        if self._promotion_gate_enabled(**kwargs):
+            from archive_sync.gmail_promotion.factory import build_promotion_gate
+
+            decision_run_id = str(
+                kwargs.get("promotion_decision_run_id")
+                or kwargs.get("decision_run_id")
+                or f"gmail-promotion-{account}"
+            ).strip()
+            promotion_gate = build_promotion_gate(
+                vault_path,
+                account_email=account,
+                decision_run_id=decision_run_id,
+                conn=kwargs.get("promotion_db_conn"),
+                schema=str(kwargs.get("promotion_db_schema") or ""),
+                card_classification_rows=kwargs.get("promotion_card_classifications"),
+                allow_new_llm=bool(kwargs.get("promotion_allow_new_llm")),
+                fail_on_missing_classification=bool(kwargs.get("promotion_fail_on_missing_classification")),
+            )
+            if not existing_thread_state:
+                existing_thread_state = self._load_gmail_thread_presence_from_cache(
+                    vault_path,
+                    account_email=account,
+                )
 
         while True:
             if self._limits_reached(
@@ -1270,6 +1403,37 @@ class GmailMessagesAdapter(BaseAdapter):
                     skipped_unchanged_messages += batch_skip_details["skipped_unchanged_messages"]
                     skipped_unchanged_attachments += batch_skip_details["skipped_unchanged_attachments"]
                     batch_items: list[dict[str, Any]] = []
+                    commit_cursor = True
+
+                    if promotion_gate is not None and thread_records:
+                        thread_id = str(thread_record.get("thread_id", "")).strip()
+                        vault_has_active = thread_id in existing_thread_state
+                        promo_result = promotion_gate.evaluate_loaded_thread(
+                            thread_record,
+                            message_records,
+                            account_email=account,
+                            own_emails=own_emails,
+                            vault_has_active_card=vault_has_active,
+                        )
+                        try:
+                            promotion_gate.persist_decision(promo_result)
+                        except OSError:
+                            commit_cursor = False
+                            promo_result = promo_result.__class__(
+                                outcome=promo_result.outcome,
+                                record=promo_result.record,
+                                commit_cursor=False,
+                                emit_cards=False,
+                                dirty_card_uids=promo_result.dirty_card_uids,
+                                classification_source=promo_result.classification_source,
+                            )
+                        if promotion_gate.metrics is not None:
+                            promotion_gate.metrics.merge_skip_details(batch_skip_details)
+                        if not promo_result.emit_cards:
+                            thread_records = []
+                            message_records = []
+                            attachment_records = []
+                        commit_cursor = commit_cursor and promo_result.commit_cursor
 
                     if (max_threads is None or emitted_threads < max_threads) and thread_records:
                         batch_items.extend(thread_records)
@@ -1285,7 +1449,8 @@ class GmailMessagesAdapter(BaseAdapter):
                         batch_items.append(attachment_record)
                         emitted_attachments += 1
 
-                    page_index += 1
+                    if commit_cursor:
+                        page_index += 1
                     yield FetchedBatch(
                         items=batch_items,
                         cursor_patch={
@@ -1304,6 +1469,7 @@ class GmailMessagesAdapter(BaseAdapter):
                         sequence=sequence,
                         skipped_count=sum(batch_skip_details.values()),
                         skip_details=batch_skip_details,
+                        commit_cursor=commit_cursor,
                     )
                     sequence += 1
 
@@ -1356,6 +1522,8 @@ class GmailMessagesAdapter(BaseAdapter):
         workers: int | None = None,
         attachment_workers: int | None = None,
         quick_update: bool = False,
+        catch_up: bool = False,
+        reset_page_cursor: bool = False,
         **kwargs,
     ) -> list[dict[str, Any]]:
         self._ensure_token_manager(account_email)
@@ -1373,6 +1541,8 @@ class GmailMessagesAdapter(BaseAdapter):
             workers=workers,
             attachment_workers=attachment_workers,
             quick_update=quick_update,
+            catch_up=catch_up,
+            reset_page_cursor=reset_page_cursor,
             **kwargs,
         ):
             items.extend(batch.items)

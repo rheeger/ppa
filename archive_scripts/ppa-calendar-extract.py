@@ -10,7 +10,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from archive_auth import CALENDAR_READONLY_SCOPES, build_google_cli_token_manager
+from archive_auth import build_google_cli_token_manager
 from archive_sync.adapters.calendar_events import CalendarEventsAdapter
 
 
@@ -57,7 +57,7 @@ def main() -> int:
     adapter = CalendarEventsAdapter()
     token_manager = build_google_cli_token_manager(
         account_email=account_email,
-        scopes=CALENDAR_READONLY_SCOPES,
+        services=["calendar"],
     )
     if token_manager is not None:
         token_manager.ensure_env()

@@ -116,6 +116,32 @@ def test_merge_into_existing_unions_arrays(tmp_vault, sample_person_card, sample
     assert provenance["title"].source == "linkedin"
     assert provenance["emails"].source == "linkedin"
     assert provenance["summary"].source == "contacts.apple"
+    assert card.uid == sample_person_card.uid
+
+
+def test_merge_into_existing_keeps_host_uid(tmp_vault, sample_person_card, sample_person_provenance):
+    write_card(tmp_vault, "People/jane-smith.md", sample_person_card, provenance=sample_person_provenance)
+    incoming_uid = "hfa-person-phantom0001"
+    merge_into_existing(
+        tmp_vault,
+        "[[jane-smith]]",
+        {
+            "uid": incoming_uid,
+            "type": "person",
+            "source": ["linkedin"],
+            "source_id": "linkedin-jane",
+            "created": sample_person_card.created,
+            "updated": sample_person_card.updated,
+            "summary": sample_person_card.summary,
+            "emails": ["jane@example.com"],
+        },
+        {
+            "emails": ProvenanceEntry("linkedin", "2026-03-06", "deterministic"),
+        },
+    )
+    frontmatter, _, _ = read_note(tmp_vault, "People/jane-smith.md")
+    assert frontmatter["uid"] == sample_person_card.uid
+    assert incoming_uid != sample_person_card.uid
 
 
 def test_resolve_person_fuzzy_name_with_company_support_merges(tmp_vault):

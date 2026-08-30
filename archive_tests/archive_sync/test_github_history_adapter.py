@@ -452,6 +452,54 @@ def test_retry_delay_seconds_handles_secondary_limit_and_timeouts():
     assert adapter._retry_delay_seconds("gh: HTTP 502", 3) == 30
 
 
+def test_http_header_int_reads_ratelimit_reset():
+    from archive_sync.adapters.github_history import _http_header_int, _is_primary_rate_limit
+
+    blob = (
+        "HTTP/2.0 403 Forbidden\n"
+        "X-Ratelimit-Remaining: 0\n"
+        "X-Ratelimit-Reset: 1787942576\n"
+        "\n"
+        '{"message":"API rate limit exceeded"}\n'
+    )
+    assert _http_header_int(blob, "x-ratelimit-remaining") == 0
+    assert _http_header_int(blob, "x-ratelimit-reset") == 1787942576
+    assert _is_primary_rate_limit("gh: API rate limit exceeded for user ID 1 (HTTP 403)")
+    assert not _is_primary_rate_limit("You have exceeded a secondary rate limit")
+
+
+def test_run_gh_json_waits_until_primary_reset_even_with_one_retry(monkeypatch):
+    adapter = GitHubHistoryAdapter()
+    calls: list[str] = []
+    sleeps: list[float] = []
+
+    class _Proc:
+        def __init__(self, returncode: int, stdout: str = "", stderr: str = "") -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def fake_run(command, capture_output=True, text=True, check=False):
+        calls.append(" ".join(command[:4]))
+        if command[:3] == ["gh", "api", "-i"]:
+            return _Proc(
+                403,
+                stdout="X-Ratelimit-Remaining: 0\nX-Ratelimit-Reset: 1787942576\n",
+            )
+        if len([c for c in calls if c.startswith("gh api repos")]) == 1:
+            return _Proc(1, stderr="gh: API rate limit exceeded for user ID 1 (HTTP 403)")
+        return _Proc(0, stdout='{"ok": true}')
+
+    monkeypatch.setattr("archive_sync.adapters.github_history.subprocess.run", fake_run)
+    monkeypatch.setattr("archive_sync.adapters.github_history.time.sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr("archive_sync.adapters.github_history.time.time", lambda: 1787942576 - 25)
+    monkeypatch.setattr(adapter, "_throttle_request", lambda: None)
+
+    payload = adapter._run_gh_json(["gh", "api", "repos/endaoment/docs"], max_retries=1)
+    assert payload == {"ok": True}
+    assert sleeps == [27]
+
+
 def test_fetch_repo_bundle_limits_discussion_fetches_when_thread_cap_set(tmp_vault: Path, monkeypatch):
     adapter = GitHubHistoryAdapter()
     monkeypatch.setattr(adapter, "_repo_detail", lambda owner, repo: {"full_name": "rheeger/test"})

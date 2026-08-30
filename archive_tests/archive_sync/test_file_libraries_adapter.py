@@ -7,7 +7,7 @@ from pathlib import Path
 
 from archive_sync.adapters.base import deterministic_provenance
 from archive_sync.adapters.file_libraries import FileLibrariesAdapter
-from archive_vault.schema import PersonCard
+from archive_vault.schema import DocumentCard, PersonCard
 from archive_vault.vault import read_note, write_card
 
 
@@ -139,6 +139,54 @@ def test_quick_update_skips_unchanged_documents(tmp_vault: Path, tmp_path: Path)
     assert second.merged == 0
     assert second.skipped == 1
     assert second.skip_details["skipped_unchanged_documents"] == 1
+
+
+def test_load_existing_hashes_uses_vault_scan_cache_not_rglob(tmp_vault: Path, monkeypatch):
+    card = DocumentCard(
+        uid="hfa-document-abc123def456",
+        type="document",
+        source=["file.library"],
+        source_id="custom:endaoment-overview.md",
+        created="2026-03-10",
+        updated="2026-03-10",
+        summary="Endaoment Overview",
+        metadata_sha="abc123metadata",
+    )
+    write_card(
+        tmp_vault,
+        "Documents/endaoment-overview.md",
+        card,
+        provenance=deterministic_provenance(card, "file.library"),
+    )
+    skipped = DocumentCard(
+        uid="hfa-document-skipped00001",
+        type="document",
+        source=["file.library"],
+        source_id="custom:outside.md",
+        created="2026-03-10",
+        updated="2026-03-10",
+        summary="Outside Documents",
+        metadata_sha="outsidehash",
+    )
+    write_card(
+        tmp_vault,
+        "Finance/outside-document.md",
+        skipped,
+        provenance=deterministic_provenance(skipped, "file.library"),
+    )
+
+    orig_rglob = Path.rglob
+
+    def _rglob(self, pattern, *args, **kwargs):
+        if str(pattern) == "*.md":
+            raise AssertionError(f"vault markdown rglob is forbidden: {self} pattern={pattern!r}")
+        return orig_rglob(self, pattern, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "rglob", _rglob)
+
+    hashes = FileLibrariesAdapter()._load_existing_hashes(str(tmp_vault))
+    assert hashes == {"custom:endaoment-overview.md": "abc123metadata"}
+    assert "custom:outside.md" not in hashes
 
 
 def test_import_from_stage_writes_document_cards(tmp_vault: Path, tmp_path: Path):

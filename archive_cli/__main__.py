@@ -535,10 +535,14 @@ def main() -> None:
     emb_back_parser.add_argument("--limit", type=int, default=20)
     emb_back_parser.add_argument("--embedding-model", default="")
     emb_back_parser.add_argument("--embedding-version", type=int, default=0)
-    subparsers.add_parser(
+    status_parser = subparsers.add_parser(
         "status",
-        help="Index and runtime status as JSON (same as archive_status_json MCP tool)",
+        help="Index/runtime status JSON, or Section F production status with --format",
     )
+    from archive_cli.status import cli as _status_cli
+
+    _status_cli.patch_status_parser(status_parser)
+    _status_cli.add_readiness_parser(subparsers)
 
     extract_parser = subparsers.add_parser("extract-emails", help="Extract derived cards from email bodies")
     extract_parser.add_argument("--sender", default="", help="Filter to single extractor id (e.g. doordash)")
@@ -1066,6 +1070,22 @@ def main() -> None:
 
     _linker_cli.add_parser(subparsers)
 
+    from archive_cli.validation_gates import cli as _gates_cli
+
+    _gates_cli.add_parser(subparsers)
+
+    from archive_cli.corpus_hygiene import cli as _corpus_hygiene_cli
+
+    _corpus_hygiene_cli.add_parser(subparsers)
+
+    from archive_cli.source_updaters import cli as _source_updaters_cli
+
+    _source_updaters_cli.add_parser(subparsers)
+
+    from archive_cli.processors import cli as _processors_cli
+
+    _processors_cli.add_parser(subparsers)
+
     sub_maintain = subparsers.add_parser(
         "maintain",
         help="Run maintenance cycle: tail ingestion, extract, resolve, rebuild, report",
@@ -1075,7 +1095,86 @@ def main() -> None:
         action="store_true",
         help="Report what would be done without executing",
     )
-    deploy_parser = subparsers.add_parser("deploy", help="Run Phase 9 Arnold-side deployment sequence")
+    sub_maintain.add_argument(
+        "--record-source-status",
+        action="store_true",
+        help="Snapshot source updater state from vault cursors only (no adapter fetch)",
+    )
+    sub_maintain.add_argument(
+        "--run-source-updaters",
+        action="store_true",
+        help="Execute enabled source updaters (dry-run unless --apply-source-updaters)",
+    )
+    sub_maintain.add_argument(
+        "--apply-source-updaters",
+        action="store_true",
+        help="With --run-source-updaters, persist side effects and commit cursors",
+    )
+    sub_maintain.add_argument(
+        "--source-updater",
+        action="append",
+        default=[],
+        dest="source_updater_keys",
+        help="Limit --run-source-updaters to source_key (repeatable)",
+    )
+    sub_maintain.add_argument(
+        "--max-items",
+        type=int,
+        default=None,
+        dest="source_updater_max_items",
+        help="Cap threads/events per source updater during --run-source-updaters "
+        "(keeps gmail promotion gate on; bounds volume only)",
+    )
+    sub_maintain.add_argument(
+        "--catch-up",
+        action="store_true",
+        dest="source_updater_catch_up",
+        help="With --run-source-updaters, reset Gmail page cursor so the walk "
+        "starts at newest threads (keeps history_id skip; promotion gate stays on)",
+    )
+    sub_maintain.add_argument(
+        "--record-processor-status",
+        action="store_true",
+        help="Snapshot processor declaration state into durable store (no processor execution)",
+    )
+    sub_maintain.add_argument(
+        "--run-processors",
+        action="store_true",
+        help="Plan/execute processor DAG on dirty UIDs (dry-run unless --apply-processors)",
+    )
+    sub_maintain.add_argument(
+        "--apply-processors",
+        action="store_true",
+        help="With --run-processors, execute pending/stale processor work",
+    )
+    sub_maintain.add_argument(
+        "--dirty-uids",
+        default="",
+        help="Optional dirty_uids.jsonl / JSON path for --run-processors",
+    )
+    sub_maintain.add_argument(
+        "--processor",
+        action="append",
+        default=[],
+        dest="processor_keys",
+        help="Limit --run-processors to processor_key (repeatable)",
+    )
+    sub_maintain.add_argument(
+        "--allow-full-embedding",
+        action="store_true",
+        help="Opt-in for full embedding regeneration during --run-processors",
+    )
+    sub_maintain.add_argument(
+        "--allow-all-linkers",
+        action="store_true",
+        help="Opt-in for all-linker rerun during --run-processors",
+    )
+    sub_maintain.add_argument(
+        "--allow-broad-llm",
+        action="store_true",
+        help="Opt-in for broad LLM processors during --run-processors",
+    )
+    deploy_parser = subparsers.add_parser("deploy", help="Phase 9 Arnold-side deployment sequence")
     deploy_parser.add_argument("--dry-run", action="store_true", help="Pre-flight only")
     deploy_parser.add_argument(
         "--skip-to",
@@ -1110,6 +1209,18 @@ def main() -> None:
     if args.command == "linker":
         rc = _linker_cli.dispatch(args)
         raise SystemExit(rc)
+    if args.command == "gates":
+        rc = _gates_cli.dispatch(args)
+        raise SystemExit(rc)
+    if args.command == "source-updaters":
+        rc = _source_updaters_cli.dispatch(args)
+        raise SystemExit(rc)
+    if args.command == "processors":
+        rc = _processors_cli.dispatch(args)
+        raise SystemExit(rc)
+    if args.command == "corpus-hygiene":
+        rc = _corpus_hygiene_cli.dispatch(args)
+        raise SystemExit(rc)
     if args.command == "health":
         from .health import run_health_checks
 
@@ -1121,7 +1232,25 @@ def main() -> None:
 
         try:
             store = resolve_store()
-            report = run_maintenance(store=store, logger=_cli_log, dry_run=args.dry_run)
+            report = run_maintenance(
+                store=store,
+                logger=_cli_log,
+                dry_run=args.dry_run,
+                record_source_status=getattr(args, "record_source_status", False),
+                record_processor_status=getattr(args, "record_processor_status", False),
+                run_source_updaters=getattr(args, "run_source_updaters", False),
+                source_updater_keys=list(getattr(args, "source_updater_keys", None) or []),
+                apply_source_updaters=getattr(args, "apply_source_updaters", False),
+                source_updater_max_items=getattr(args, "source_updater_max_items", None),
+                source_updater_catch_up=getattr(args, "source_updater_catch_up", False),
+                run_processors=getattr(args, "run_processors", False),
+                apply_processors=getattr(args, "apply_processors", False),
+                dirty_uids_path=str(getattr(args, "dirty_uids", "") or ""),
+                processor_keys=list(getattr(args, "processor_keys", None) or []),
+                allow_full_embedding=getattr(args, "allow_full_embedding", False),
+                allow_all_linkers=getattr(args, "allow_all_linkers", False),
+                allow_broad_llm=getattr(args, "allow_broad_llm", False),
+            )
             _print_json(report.to_dict())
         except PpaError as exc:
             _cli_fail(exc)
@@ -1883,7 +2012,15 @@ def main() -> None:
         except PpaError as exc:
             _cli_fail(exc)
         return
+    if args.command == "readiness":
+        from archive_cli.status.cli import dispatch as _readiness_dispatch
+
+        raise SystemExit(_readiness_dispatch(args))
     if args.command == "status":
+        if getattr(args, "format", None):
+            from archive_cli.status.cli import cmd_status
+
+            raise SystemExit(cmd_status(args))
         try:
             store = resolve_store()
             out = status_cmd.status_json(store=store, logger=_cli_log)
@@ -2367,7 +2504,7 @@ def main() -> None:
     if args.command == "serve" and getattr(args, "tunnel", ""):
         from .tunnel import TunnelManager
 
-        local_port = int(os.environ.get("PPA_TUNNEL_PORT", "5433"))
+        local_port = int(os.environ.get("PPA_TUNNEL_PORT", "58471"))
         remote_port = int(os.environ.get("PPA_TUNNEL_REMOTE_PORT", "5432"))
         tunnel_mgr = TunnelManager(args.tunnel, local_port=local_port, remote_port=remote_port)
         tunnel_mgr.start()

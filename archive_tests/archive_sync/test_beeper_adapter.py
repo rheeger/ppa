@@ -6,8 +6,11 @@ import json
 import sqlite3
 from pathlib import Path
 
-from archive_sync.adapters.beeper import BeeperAdapter
-from archive_vault.vault import read_note
+from archive_sync.adapters.base import deterministic_provenance
+from archive_sync.adapters.beeper import BeeperAdapter, ParticipantRecord
+from archive_sync.source_updaters.runner import _install_dirty_uid_tracker
+from archive_vault.schema import PersonCard
+from archive_vault.vault import read_note, write_card
 
 
 def _normalize_items(items: list[dict]) -> list[tuple]:
@@ -361,7 +364,9 @@ def test_ingest_resumes_by_thread_cursor_and_writes_notes(tmp_vault, tmp_path):
     assert first_result.created == 3
 
     sync_state = json.loads((tmp_vault / "_meta" / "sync-state.json").read_text(encoding="utf-8"))
-    assert sync_state["beeper:single:all"]["last_completed_thread_id"] == "!room-1:beeper.local"
+    assert sync_state["beeper:single:all:excl=bluebubble+bluebubbles+imessage"][
+        "last_completed_thread_id"
+    ] == "!room-1:beeper.local"
 
     second_result = adapter.ingest(
         str(tmp_vault),
@@ -373,7 +378,9 @@ def test_ingest_resumes_by_thread_cursor_and_writes_notes(tmp_vault, tmp_path):
     assert second_result.created == 3
 
     sync_state = json.loads((tmp_vault / "_meta" / "sync-state.json").read_text(encoding="utf-8"))
-    assert sync_state["beeper:single:all"]["last_completed_thread_id"] == "!room-2:beeper.local"
+    assert sync_state["beeper:single:all:excl=bluebubble+bluebubbles+imessage"][
+        "last_completed_thread_id"
+    ] == "!room-2:beeper.local"
 
     thread_files = sorted((tmp_vault / "BeeperThreads").rglob("*.md"))
     message_files = sorted((tmp_vault / "Beeper").rglob("*.md"))
@@ -541,3 +548,209 @@ def test_fetch_batches_resolves_sender_person_from_provider_handle_and_name(tmp_
     assert len(person_items) == 1
     assert thread_items[0]["people"] == ["[[Pedro Yan]]"]
     assert message_items[0]["sender_person"] == "[[Pedro Yan]]"
+
+
+def test_fetch_batches_excludes_imessage_and_bluebubbles_by_default(tmp_vault, tmp_path):
+    db_path, media_root = _create_index_db(tmp_path / "beeper-index-imessage-excl")
+    _insert_thread(
+        db_path,
+        room_id="!room-imessage:beeper.local",
+        account_id="imessage",
+        timestamp_ms=1712000000000,
+        title="iMessage chat",
+    )
+    _insert_message(
+        db_path,
+        room_id="!room-imessage:beeper.local",
+        event_id="$event-imessage-1",
+        sender_id="@imsg:beeper.local",
+        timestamp_ms=1712000000000,
+        message_type="TEXT",
+        is_sent_by_me=False,
+        text="imessage via beeper",
+    )
+    _insert_thread(
+        db_path,
+        room_id="!room-bb:beeper.local",
+        account_id="bluebubbles.0",
+        timestamp_ms=1712000001000,
+        title="BlueBubbles chat",
+    )
+    _insert_message(
+        db_path,
+        room_id="!room-bb:beeper.local",
+        event_id="$event-bb-1",
+        sender_id="@bb:beeper.local",
+        timestamp_ms=1712000001000,
+        message_type="TEXT",
+        is_sent_by_me=False,
+        text="bluebubbles via beeper",
+    )
+    _insert_thread(
+        db_path,
+        room_id="!room-discord:beeper.local",
+        account_id="discordgo",
+        timestamp_ms=1712000002000,
+        title="Discord chat",
+    )
+    _insert_message(
+        db_path,
+        room_id="!room-discord:beeper.local",
+        event_id="$event-discord-keep",
+        sender_id="@other:beeper.local",
+        timestamp_ms=1712000002000,
+        message_type="TEXT",
+        is_sent_by_me=False,
+        text="keep me",
+    )
+
+    batches = list(
+        BeeperAdapter().fetch_batches(
+            str(tmp_vault),
+            {},
+            db_path=str(db_path),
+            media_root=str(media_root),
+            max_threads=5,
+            batch_size=5,
+        )
+    )
+    rooms = {
+        item.get("room_id")
+        for batch in batches
+        for item in batch.items
+        if item.get("kind") in {"thread", "message"}
+    }
+    assert "!room-discord:beeper.local" in rooms
+    assert "!room-imessage:beeper.local" not in rooms
+    assert "!room-bb:beeper.local" not in rooms
+
+    included = list(
+        BeeperAdapter().fetch_batches(
+            str(tmp_vault),
+            {},
+            db_path=str(db_path),
+            media_root=str(media_root),
+            exclude_account_prefixes=[],
+            max_threads=5,
+            batch_size=5,
+        )
+    )
+    included_rooms = {
+        item.get("room_id")
+        for batch in included
+        for item in batch.items
+        if item.get("kind") in {"thread", "message"}
+    }
+    assert "!room-imessage:beeper.local" in included_rooms
+
+
+def _seed_discord_dm(db_path: Path) -> None:
+    _insert_thread(
+        db_path,
+        room_id="!room-dirty:beeper.local",
+        account_id="discordgo",
+        timestamp_ms=1710001000000,
+    )
+    _insert_participant(
+        db_path,
+        account_id="discordgo",
+        room_id="!room-dirty:beeper.local",
+        participant_id="@me:beeper.local",
+        full_name="Me",
+        is_self=True,
+    )
+    _insert_participant(
+        db_path,
+        account_id="discordgo",
+        room_id="!room-dirty:beeper.local",
+        participant_id="@friend:beeper.local",
+        full_name="Beeper Friend",
+        is_self=False,
+        identifiers=[("username", "beeperfriend")],
+    )
+    _insert_message(
+        db_path,
+        room_id="!room-dirty:beeper.local",
+        event_id="$event-dirty",
+        sender_id="@friend:beeper.local",
+        timestamp_ms=1710001000000,
+        message_type="TEXT",
+        is_sent_by_me=False,
+        text="hello",
+    )
+
+
+def _beeper_incoming_person(adapter: BeeperAdapter) -> tuple[PersonCard, Path]:
+    participant = ParticipantRecord(
+        participant_id="@friend:beeper.local",
+        full_name="Beeper Friend",
+        is_self=False,
+        identifiers=[("username", "beeperfriend")],
+    )
+    item = adapter._participant_person_item(
+        account_id="discordgo",
+        protocol="discord",
+        participant=participant,
+    )
+    assert item is not None
+    card, _, _ = adapter.to_card(item)
+    assert isinstance(card, PersonCard)
+    return card, adapter._beeper_person_rel_path(card)
+
+
+def test_beeper_person_create_dirties_created_uid(tmp_vault, tmp_path):
+    db_path, media_root = _create_index_db(tmp_path / "beeper-dirty-create")
+    _seed_discord_dm(db_path)
+    adapter = BeeperAdapter()
+    incoming, _rel_path = _beeper_incoming_person(adapter)
+    dirty: list[str] = []
+    restore = _install_dirty_uid_tracker(adapter, dirty)
+    try:
+        result = adapter.ingest(
+            str(tmp_vault),
+            db_path=str(db_path),
+            media_root=str(media_root),
+            max_threads=1,
+            batch_size=1,
+        )
+    finally:
+        restore()
+    assert result.created >= 1
+    assert incoming.uid in dirty
+
+
+def test_beeper_person_merge_dirties_host_uid_not_incoming(tmp_vault, tmp_path):
+    db_path, media_root = _create_index_db(tmp_path / "beeper-dirty-merge")
+    _seed_discord_dm(db_path)
+    adapter = BeeperAdapter()
+    incoming, rel_path = _beeper_incoming_person(adapter)
+    host_uid = "hfa-person-beeperhost01"
+    host = PersonCard(
+        uid=host_uid,
+        type="person",
+        source=["contacts.apple"],
+        source_id="host@example.com",
+        created="2026-01-01",
+        updated="2026-01-01",
+        summary="Host Person",
+        emails=["host@example.com"],
+    )
+    write_card(tmp_vault, str(rel_path), host, provenance=deterministic_provenance(host, "contacts.apple"))
+    dirty: list[str] = []
+    restore = _install_dirty_uid_tracker(adapter, dirty)
+    try:
+        result = adapter.ingest(
+            str(tmp_vault),
+            db_path=str(db_path),
+            media_root=str(media_root),
+            max_threads=1,
+            batch_size=1,
+        )
+    finally:
+        restore()
+    assert result.merged >= 1
+    assert host_uid in dirty
+    assert incoming.uid not in dirty
+    frontmatter, _, _ = read_note(tmp_vault, str(rel_path))
+    assert frontmatter["uid"] == host_uid
+

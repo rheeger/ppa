@@ -30,6 +30,7 @@ from .index_config import (
     get_rebuild_verify_hash,
     get_rebuild_workers,
     get_seed_frozen_enabled,
+    get_statement_timeout_ms,
     manifest_cache_disabled,
 )
 from .materializer import (
@@ -54,6 +55,21 @@ from .vault_cache import VaultScanCache
 logger = logging.getLogger("ppa.loader")
 
 PERSON_ESCALATION_THRESHOLD = 5000
+
+
+def resolve_uid_allowlist_rebuild(
+    allowlist: set[str] | frozenset[str] | list[str],
+    present_uids: set[str],
+) -> tuple[str, set[str], set[str]]:
+    """Force incremental rematerialize of *allowlist* UIDs; never escalate to full-scan.
+
+    Returns ``(rebuild_mode, materialize_uids, missing_uids)``.
+    """
+    wanted = {str(uid).strip() for uid in allowlist if str(uid).strip()}
+    present = {str(uid).strip() for uid in present_uids if str(uid).strip()}
+    materialize = wanted & present
+    missing = wanted - present
+    return ("incremental" if materialize else "noop", materialize, missing)
 
 
 def _compute_run_id(vault_manifest_hash: str) -> str:
@@ -534,17 +550,27 @@ class LoaderMixin:
             )
         return out
 
-    def _replace_note_manifest(self, conn, entries: list[NoteManifestRow]) -> None:
-        """Reconcile ``note_manifest`` to ``entries`` via UPSERT + targeted prune.
+    def _replace_note_manifest(
+        self,
+        conn,
+        entries: list[NoteManifestRow],
+        *,
+        prune_missing: bool = True,
+    ) -> None:
+        """Reconcile ``note_manifest`` via UPSERT. Optionally prune paths not in *entries*.
 
         Previous implementation was DELETE-then-INSERT, which left the table
         empty if the INSERT failed mid-way and forced the next rebuild to
         full-scan everything. Switched to UPSERT + ``DELETE WHERE rel_path
         NOT IN (...)`` so the manifest is always non-empty + consistent
         across partial failures.
+
+        Dirty-UID rematerialize passes ``prune_missing=False`` so other cards
+        keep their manifest rows.
         """
         if not entries:
-            conn.execute(f"DELETE FROM {self.schema}.note_manifest")
+            if prune_missing:
+                conn.execute(f"DELETE FROM {self.schema}.note_manifest")
             return
         sql = f"""
             INSERT INTO {self.schema}.note_manifest (
@@ -592,11 +618,12 @@ class LoaderMixin:
         ]
         with conn.cursor() as cur:
             cur.executemany(sql, batch)
-        live_paths = [e.rel_path for e in entries]
-        conn.execute(
-            f"DELETE FROM {self.schema}.note_manifest WHERE rel_path <> ALL(%s)",
-            (live_paths,),
-        )
+        if prune_missing:
+            live_paths = [e.rel_path for e in entries]
+            conn.execute(
+                f"DELETE FROM {self.schema}.note_manifest WHERE rel_path <> ALL(%s)",
+                (live_paths,),
+            )
 
     def _delete_manifest_paths(self, conn, rel_paths: set[str]) -> None:
         if not rel_paths:
@@ -1226,6 +1253,7 @@ class LoaderMixin:
         force_full: bool | None = None,
         disable_manifest_cache: bool | None = None,
         no_cache: bool | None = None,
+        uid_allowlist: set[str] | frozenset[str] | list[str] | None = None,
     ) -> RebuildRunResult:
         if os.environ.get("PPA_FORBID_REBUILD", "").strip().lower() in {
             "1",
@@ -1245,6 +1273,16 @@ class LoaderMixin:
         executor_kind = (executor_kind or get_rebuild_executor()).strip().lower()
         force_full = get_force_full_rebuild() if force_full is None else bool(force_full)
         disable_manifest = manifest_cache_disabled() if disable_manifest_cache is None else bool(disable_manifest_cache)
+        allowlist: set[str] | None = None
+        if uid_allowlist:
+            allowlist = {str(uid).strip() for uid in uid_allowlist if str(uid).strip()}
+            if not allowlist:
+                allowlist = None
+        if allowlist is not None and force_full:
+            logger.warning(
+                "rebuild uid_allowlist=%s ignores force_full to avoid full-scan truncate",
+                len(allowlist),
+            )
         staging_mode = get_rebuild_staging_mode()
         versions = (
             INDEX_SCHEMA_VERSION,
@@ -1301,7 +1339,8 @@ class LoaderMixin:
         deleted_paths: set[str] = set()
 
         with self._connect() as conn:
-            conn.execute("SET statement_timeout = '300s'")
+            timeout_ms = max(get_statement_timeout_ms(), 300_000)
+            conn.execute(f"SET statement_timeout = {timeout_ms}")
             conn.execute("SET synchronous_commit = off")
             conn.commit()
             self._create_schema(conn, recreate_typed=False, ensure_indexes=False)
@@ -1330,7 +1369,33 @@ class LoaderMixin:
                 and int(meta.get("chunk_schema_version", 0)) == versions[1]
                 and int(meta.get("projection_registry_version", 0)) == versions[2]
             )
-            if incremental_ok:
+            if allowlist is not None:
+                present_uids = {str(row.card.uid).strip() for row in rows if str(row.card.uid).strip()}
+                rebuild_mode, materialize_uids, missing_uids = resolve_uid_allowlist_rebuild(
+                    allowlist, present_uids
+                )
+                purge_uids = set()
+                deleted_paths = set()
+                manifest_counters = {
+                    "new": 0,
+                    "changed": len(materialize_uids),
+                    "unchanged": 0,
+                    "deleted": 0,
+                }
+                logger.info(
+                    "rebuild uid_allowlist mode=%s requested=%s materialize=%s missing=%s",
+                    rebuild_mode,
+                    len(allowlist),
+                    len(materialize_uids),
+                    len(missing_uids),
+                )
+                if missing_uids:
+                    logger.warning(
+                        "rebuild uid_allowlist missing_from_vault count=%s sample=%s",
+                        len(missing_uids),
+                        sorted(missing_uids)[:8],
+                    )
+            elif incremental_ok:
                 verify_hash = get_rebuild_verify_hash()
                 rebuild_mode, materialize_uids, purge_uids, manifest_counters = _classify_manifest_rebuild_delta(
                     rows,
@@ -1444,7 +1509,12 @@ class LoaderMixin:
                         f"unchanged={manifest_counters.get('unchanged', 0)} deleted={manifest_counters.get('deleted', 0)}"
                     ),
                 )
-                _log_rebuild_step(4, 6, "prepare schema", f"mode=incremental schema={self.schema}")
+                _log_rebuild_step(
+                    4,
+                    6,
+                    "prepare schema",
+                    f"mode=incremental schema={self.schema} allowlist={len(allowlist) if allowlist else 0}",
+                )
                 step4_started_at = time.time()
                 self._create_schema(conn, recreate_typed=False, ensure_indexes=False)
                 conn.commit()
@@ -1456,8 +1526,9 @@ class LoaderMixin:
                     )
                 if deleted_paths:
                     self._delete_manifest_paths(conn, deleted_paths)
-                conn.execute(f"TRUNCATE TABLE {self.schema}.duplicate_uid_rows")
-                self._copy_rows(conn, "duplicate_uid_rows", duplicate_uid_rows)
+                if allowlist is None:
+                    conn.execute(f"TRUNCATE TABLE {self.schema}.duplicate_uid_rows")
+                    self._copy_rows(conn, "duplicate_uid_rows", duplicate_uid_rows)
                 conn.commit()
                 rows_to_process = [r for r in rows if str(r.card.uid) in materialize_uids]
                 _log_rebuild_step(
@@ -1490,19 +1561,32 @@ class LoaderMixin:
                     rebuild_mode="incremental",
                 )
                 ensure_indexes_started_at = time.time()
-                _log_rebuild_step(6, 6, "ensure indexes", "ensure_indexes=1 recreate_typed=0")
-                self._create_schema(conn, recreate_typed=False, ensure_indexes=True)
-                conn.commit()
-                _log_rebuild_step(
-                    6,
-                    6,
-                    "ensure indexes complete",
-                    f"elapsed={round(time.time() - ensure_indexes_started_at, 3)}s",
-                )
+                if allowlist is not None:
+                    _log_rebuild_step(
+                        6,
+                        6,
+                        "ensure indexes",
+                        "skipped=allowlist incremental (do not rebuild ivfflat)",
+                    )
+                else:
+                    _log_rebuild_step(6, 6, "ensure indexes", "ensure_indexes=1 recreate_typed=0")
+                    self._create_schema(conn, recreate_typed=False, ensure_indexes=True)
+                    conn.commit()
+                    _log_rebuild_step(
+                        6,
+                        6,
+                        "ensure indexes complete",
+                        f"elapsed={round(time.time() - ensure_indexes_started_at, 3)}s",
+                    )
+                manifest_source = rows_to_process if allowlist is not None else rows
                 manifest_entries = _build_manifest_rows_from_canonical(
-                    rows, self.vault, file_stats, versions, cache=_vault_cache
+                    manifest_source, self.vault, file_stats, versions, cache=_vault_cache
                 )
-                self._replace_note_manifest(conn, manifest_entries)
+                self._replace_note_manifest(
+                    conn,
+                    manifest_entries,
+                    prune_missing=allowlist is None,
+                )
                 conn.commit()
                 self._log_embedding_preservation_summary(conn, pre_count=pre_embedding_count)
                 final_counts = self._projection_table_counts(conn)
@@ -1546,7 +1630,7 @@ class LoaderMixin:
                         "rebuild_executor": executor_kind,
                         "rebuild_batch_size": str(batch_size),
                         "rebuild_commit_interval": str(commit_interval),
-                        "rebuild_last_mode": "incremental",
+                        "rebuild_last_mode": "incremental_allowlist" if allowlist is not None else "incremental",
                         **{
                             f"{table_name}_count": str(final_counts.get(table_name, 0))
                             for table_name in PROJECTION_NAMES
@@ -1572,7 +1656,8 @@ class LoaderMixin:
                     "executor": executor_kind,
                     "batch_size": batch_size,
                     "commit_interval": commit_interval,
-                    "rebuild_mode": "incremental",
+                    "rebuild_mode": "incremental_allowlist" if allowlist is not None else "incremental",
+                    "allowlist_count": len(allowlist) if allowlist is not None else 0,
                     "rows_per_second": round(len(rows_to_process) / max(total_seconds, 0.001), 3),
                 }
                 return RebuildRunResult(counts=final_counts, metrics=metrics)

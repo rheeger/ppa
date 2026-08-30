@@ -60,6 +60,7 @@ from .index_config import (  # noqa: F401 — re-exported for backward compat
     DEFAULT_EMBED_PROGRESS_EVERY,
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_EMBEDDING_VERSION,
+    DEFAULT_GMAIL_API_WORKERS,
     DEFAULT_POSTGRES_SCHEMA,
     DEFAULT_REBUILD_BATCH_SIZE,
     DEFAULT_REBUILD_COMMIT_INTERVAL,
@@ -98,6 +99,7 @@ from .index_config import (  # noqa: F401 — re-exported for backward compat
     get_embed_progress_every,
     get_embed_write_batch_size,
     get_force_full_rebuild,
+    get_gmail_api_workers,
     get_index_dsn,
     get_index_schema,
     get_rebuild_batch_size,
@@ -128,8 +130,9 @@ from .loader import (  # noqa: F401 — re-exported for backward compat
     _RebuildProgressReporter,
     _sanitize_copy_value,
     get_rebuild_flush_caps,
+    resolve_uid_allowlist_rebuild,
 )
-from .materializer import (  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat  # noqa: F401 — re-exported for backward compat
+from .materializer import (  # noqa: F401 — re-exported for backward compat
     EXTERNAL_ID_TARGET_PREFIX,
     _append_edge,
     _body_wikilinks,

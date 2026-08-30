@@ -42,6 +42,7 @@ DEFAULT_EMBED_BATCH_SIZE = 32
 DEFAULT_EMBED_MAX_RETRIES = 3
 DEFAULT_EMBED_CONCURRENCY = 4
 DEFAULT_EMBED_PROGRESS_EVERY = 0
+DEFAULT_GMAIL_API_WORKERS = 24
 DEFAULT_REBUILD_WORKERS = max(os.cpu_count() or 4, 1)
 DEFAULT_REBUILD_BATCH_SIZE = 1000
 DEFAULT_REBUILD_COMMIT_INTERVAL = 5000
@@ -169,6 +170,12 @@ def get_embed_max_retries() -> int:
 
 def get_embed_concurrency() -> int:
     v = _ppa_env_int("PPA_EMBED_CONCURRENCY", default=DEFAULT_EMBED_CONCURRENCY)
+    return max(v, 1)
+
+
+def get_gmail_api_workers() -> int:
+    """Provider-bound Gmail HTTP workers. Default 24 (CardEnrichmentRunner-class I/O)."""
+    v = _ppa_env_int("PPA_GMAIL_API_WORKERS", default=DEFAULT_GMAIL_API_WORKERS)
     return max(v, 1)
 
 

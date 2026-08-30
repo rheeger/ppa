@@ -1,10 +1,12 @@
 # Section C Execution Plan - Future Gmail Sync Promotion
 
+**Status (Aug 2026, HEAD `5980464`):** Adapter gate is on. **Product fork (locked):** suppressed inbound does **not** emit cards (ledger only). Quarantine inbound **writes** labeled cards (`emit_cards=True`, `retrieval_weight=0.35`). Written C3 (“quarantine = compact review, no cards”) is superseded. This seed is the living corpus; Arnold is not the home.
+
 ## Objective
 
 Specify how future Gmail syncs should classify and promote records before creating active PPA cards.
 
-This plan makes the Gmail adapter lifecycle use the same `EmailPromotionPolicy` defined in Section A and the same decision store defined in Section B. The goal is to prevent future sync from reintroducing marketing/bulk/noise email into the active corpus after Arnold is cleaned.
+This plan makes the Gmail adapter lifecycle use the same `EmailPromotionPolicy` defined in Section A and the same decision store defined in Section B. The goal is to prevent future sync from reintroducing marketing/bulk/noise email into the active corpus after this seed is cleaned.
 
 ## Non-Goals
 
@@ -12,7 +14,7 @@ This plan makes the Gmail adapter lifecycle use the same `EmailPromotionPolicy` 
 - Do not remove the existing Gmail adapter.
 - Do not require Gmail History API migration before any improvement can ship; page-token scanning can remain a fallback.
 - Do not silently demote already-active cards during routine sync.
-- Do not physically delete suppressed email from Gmail or the local vault.
+- Do not physically delete suppressed email from **Gmail**. Local-vault suppressed marketing is deleted by Section B hygiene (already applied on this seed). Quarantine stays as labeled cards.
 - Do not create a new classifier separate from the current LLM enrichment classifier.
 
 ## Existing Code and Docs to Inspect Before Implementation
@@ -48,7 +50,8 @@ Likely implementation files:
 
 Required first tests:
 
-- suppressed Gmail thread creates ledger/decision record but no cards.
+- suppressed Gmail thread creates ledger/decision record but no cards (`emit_cards=False`).
+- quarantined Gmail thread writes labeled cards (`emit_cards=True`, `retrieval_weight=0.35`).
 - active Gmail thread still writes cards through existing path.
 - cursor advances only after ledger/card writes persist.
 - previously suppressed thread can be promoted after owner action.
@@ -153,10 +156,11 @@ When policy returns `suppressed`:
 
 ### Quarantine
 
-When policy returns `quarantine`:
+When policy returns `quarantine` (**locked fork; compact-review-only is superseded**):
 
-- Do not create active cards.
-- Write a compact review record with classification and signal metadata.
+- Write labeled `email_thread` / `email_message` / `email_attachment` cards (`emit_cards=True`).
+- Keep those cards in the vault with `retrieval_weight=0.35`.
+- Write/update the decision record.
 - Do not embed, link, or enrich by default.
 - Mark the source batch with `quarantined += 1`.
 
@@ -251,7 +255,7 @@ Active promotion should emit enough dirty data for Section E:
   - `embedding` for all active cards/chunks.
   - `linkers` for active cards only.
 
-Suppressed and quarantine decisions should not enqueue embeddings, linkers, or enrichment by default.
+Suppressed and quarantine decisions should not enqueue embeddings, linkers, or enrichment by default. Quarantine still **writes cards**; suppressed does not.
 
 ## C10. Tests and Validation
 
