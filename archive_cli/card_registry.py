@@ -194,9 +194,7 @@ CARD_TYPE_REGISTRATIONS: tuple[CardTypeRegistration, ...] = (
             _json("details_json", source_field="details_json", default="{}"),
         ),
         person_edge_type="mentions_person",
-        edge_rules=(
-            DeclEdgeRule("provider_name", "record_has_provider", "person", ("provider_name",), multi=False),
-        ),
+        edge_rules=(DeclEdgeRule("provider_name", "record_has_provider", "person", ("provider_name",), multi=False),),
         chunk_builder_name=None,
         chunk_types=(),
     ),

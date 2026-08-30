@@ -143,7 +143,9 @@ def test_person_linking_idempotent(tmp_path):
 
     assert fm1.get("people") == fm2.get("people"), "Second run should not duplicate wikilinks"
     if out1.get("apply_person_links"):
-        assert out2.get("apply_person_links", {}).get("cards_already_linked", 0) >= out1["apply_person_links"].get("cards_linked", 0)
+        assert out2.get("apply_person_links", {}).get("cards_already_linked", 0) >= out1["apply_person_links"].get(
+            "cards_linked", 0
+        )
 
 
 @pytest.mark.integration

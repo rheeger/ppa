@@ -129,7 +129,9 @@ def test_imessage_thread_summary_enrichment_tracks_message_content_hash(tmp_vaul
             "sent_at": ProvenanceEntry("imessage.message", "2026-03-08", "deterministic"),
         },
     )
-    monkeypatch.setattr("archive_vault.imessage_enrichment.compute_imessage_thread_body_sha", compute_imessage_thread_body_sha)
+    monkeypatch.setattr(
+        "archive_vault.imessage_enrichment.compute_imessage_thread_body_sha", compute_imessage_thread_body_sha
+    )
     thread.thread_body_sha = compute_imessage_thread_body_sha(thread, tmp_vault)
     assert step.should_run(thread, "", existing_provenance, str(tmp_vault)) is True
 

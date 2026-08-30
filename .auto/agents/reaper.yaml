@@ -1,0 +1,4 @@
+imports:
+  - "@auto/reaper@latest/agents/reaper.yaml"
+variables:
+  repoFullName: rheeger/ppa

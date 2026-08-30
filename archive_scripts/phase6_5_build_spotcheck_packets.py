@@ -19,7 +19,6 @@ from __future__ import annotations
 import argparse
 import json
 import random
-import sys
 from collections import Counter
 from datetime import date
 from pathlib import Path
@@ -33,9 +32,9 @@ SEED = 20260427
 # Tiers that auto-promote (deterministic_score - risk_penalty >= 0.80).
 AUTO_PROMOTE_TIERS = {
     "RECONCILE_TIER_SOURCE_EMAIL",  # 0.98 -> 0.98
-    "RECONCILE_TIER_HIGH",          # 0.90 -> 0.90
-    "TRIP_TIER_ACCOM_FLIGHT",       # 0.92 -> 0.92
-    "TRIP_TIER_ACCOM_CARRENTAL",    # 0.90 -> 0.90
+    "RECONCILE_TIER_HIGH",  # 0.90 -> 0.90
+    "TRIP_TIER_ACCOM_FLIGHT",  # 0.92 -> 0.92
+    "TRIP_TIER_ACCOM_CARRENTAL",  # 0.90 -> 0.90
     # meetingArtifact: only Tier 1 (ical_uid) auto-promotes; Tier 2/3 are review-only.
 }
 
@@ -76,11 +75,26 @@ def _read_card_summary(vault: Path, rel_path: str) -> dict[str, str]:
         key, _, val = line.partition(":")
         key = key.strip()
         val = val.strip().strip("'\"")
-        if key in {"summary", "title", "amount", "total", "fare", "vendor",
-                  "merchant", "counterparty", "service", "address",
-                  "destination_airport", "pickup_location",
-                  "subject", "sent_at", "start_at", "check_in", "arrival_at",
-                  "pickup_at"}:
+        if key in {
+            "summary",
+            "title",
+            "amount",
+            "total",
+            "fare",
+            "vendor",
+            "merchant",
+            "counterparty",
+            "service",
+            "address",
+            "destination_airport",
+            "pickup_location",
+            "subject",
+            "sent_at",
+            "start_at",
+            "check_in",
+            "arrival_at",
+            "pickup_at",
+        }:
             if key in out:
                 continue
             out[key] = val[:80]
@@ -118,7 +132,7 @@ def _write_finance_packet(
     lines.append(f"**Tier population:** {len(tier_rows)} candidates on the full seed")
     lines.append(f"**Sample size:** {len(sample)} (stratified by signal-count, seed {SEED})")
     lines.append(f"**Auto-promote:** {'YES' if tier in AUTO_PROMOTE_TIERS else 'NO (review-only)'}")
-    lines.append(f"**Standard:** `archive_docs/runbooks/linker-quality-gates.md`")
+    lines.append("**Standard:** `archive_docs/runbooks/linker-quality-gates.md`")
     lines.append("")
 
     # Programmatic histogram on the full tier population.
@@ -155,7 +169,9 @@ def _write_finance_packet(
     lines.append("")
     lines.append(f"## Sample (n={len(sample)})")
     lines.append("")
-    lines.append("| # | finance counterparty | merchant_norm_finance / other | other type | amount/total | Δdays | sigs | finance summary | other summary | TP/FP/unclear |")
+    lines.append(
+        "| # | finance counterparty | merchant_norm_finance / other | other type | amount/total | Δdays | sigs | finance summary | other summary | TP/FP/unclear |"
+    )
     lines.append("|--:|---|---|---|---|---:|---|---|---|---|")
     for i, r in enumerate(sample, 1):
         feat = r["features"]
@@ -163,7 +179,7 @@ def _write_finance_packet(
         oth_meta = _read_card_summary(vault, r["target_rel_path"])
         fin_cp = (fin_meta.get("counterparty") or "")[:30]
         oth_type = r["target_rel_path"].split("/")[1].split("/")[0] if "/" in r["target_rel_path"] else "?"
-        merch_pair = f'{feat.get("merchant_norm_finance","")}/{feat.get("merchant_norm_other","")}'.replace("|", ":")
+        merch_pair = f"{feat.get('merchant_norm_finance', '')}/{feat.get('merchant_norm_other', '')}".replace("|", ":")
         amt = fin_meta.get("amount") or fin_meta.get("total") or fin_meta.get("fare") or ""
         oth_amt = oth_meta.get("total") or oth_meta.get("amount") or oth_meta.get("fare") or ""
         sigs = feat.get("corroborating_signal_count", "?")
@@ -177,8 +193,10 @@ def _write_finance_packet(
     lines.append("")
     lines.append("## Audit trail")
     lines.append("")
-    lines.append(f"- Source data: `_artifacts/_linkers-fullseed-dryrun/financeReconcileLinker/calibration/candidates-{date.today().isoformat()}.jsonl`")
-    lines.append(f"- Linker code: `archive_cli/linker_modules/finance_reconcile.py`")
+    lines.append(
+        f"- Source data: `_artifacts/_linkers-fullseed-dryrun/financeReconcileLinker/calibration/candidates-{date.today().isoformat()}.jsonl`"
+    )
+    lines.append("- Linker code: `archive_cli/linker_modules/finance_reconcile.py`")
     lines.append("")
     lines.append("## Verdict")
     lines.append("")
@@ -218,11 +236,13 @@ def _write_trip_packet(
     lines.append(f"**Tier population:** {len(tier_rows)} candidates")
     lines.append(f"**Sample size:** {len(sample)} (seed {SEED})")
     lines.append(f"**Auto-promote:** {'YES' if tier in AUTO_PROMOTE_TIERS else 'NO (review-only)'}")
-    lines.append(f"**Standard:** `archive_docs/runbooks/linker-quality-gates.md`")
+    lines.append("**Standard:** `archive_docs/runbooks/linker-quality-gates.md`")
     lines.append("")
     lines.append(f"## Sample (n={len(sample)})")
     lines.append("")
-    lines.append("| # | accommodation address (city) | flight_city or carrental_city | match strength | airport | offset_h | accom rel_path | other rel_path | TP/FP/unclear |")
+    lines.append(
+        "| # | accommodation address (city) | flight_city or carrental_city | match strength | airport | offset_h | accom rel_path | other rel_path | TP/FP/unclear |"
+    )
     lines.append("|--:|---|---|---|---|---:|---|---|---|")
     for i, r in enumerate(sample, 1):
         feat = r["features"]
@@ -240,7 +260,9 @@ def _write_trip_packet(
     lines.append("")
     lines.append("## Audit trail")
     lines.append("")
-    lines.append(f"- Source data: `_artifacts/_linkers-fullseed-dryrun/tripClusterLinker/calibration/candidates-{date.today().isoformat()}.jsonl`")
+    lines.append(
+        f"- Source data: `_artifacts/_linkers-fullseed-dryrun/tripClusterLinker/calibration/candidates-{date.today().isoformat()}.jsonl`"
+    )
     lines.append("")
     lines.append("## Verdict")
     lines.append("")
@@ -291,9 +313,7 @@ def _write_meeting_packet(
         ev_title = (ev_meta.get("title") or "")[:40].replace("|", ":")
         shared = feat.get("shared_participant_count", "?")
         delta = feat.get("time_delta_minutes", feat.get("delta_min", "?"))
-        lines.append(
-            f"| {i} | {tr_title} | {ev_title} | {shared} | {delta} | __ |"
-        )
+        lines.append(f"| {i} | {tr_title} | {ev_title} | {shared} | {delta} | __ |")
     lines.append("")
     lines.append("## Verdict")
     lines.append("")
@@ -324,36 +344,21 @@ def _main(argv: list[str] | None = None) -> int:
     today = date.today().isoformat()
 
     # financeReconcileLinker — write one packet per non-empty tier.
-    fr_rows = _load_jsonl(
-        DRYRUN_ROOT / "financeReconcileLinker" / "calibration" / f"candidates-{today}.jsonl"
-    )
+    fr_rows = _load_jsonl(DRYRUN_ROOT / "financeReconcileLinker" / "calibration" / f"candidates-{today}.jsonl")
     fr_tiers = sorted({r["tier"] for r in fr_rows})
     summaries: list[dict[str, Any]] = []
     for tier in fr_tiers:
-        out_path = (
-            ARTIFACT_ROOT / "financeReconcileLinker" / "calibration"
-            / f"spotcheck-{tier.lower()}-{today}.md"
-        )
+        out_path = ARTIFACT_ROOT / "financeReconcileLinker" / "calibration" / f"spotcheck-{tier.lower()}-{today}.md"
         summaries.append(_write_finance_packet(fr_rows, tier, vault, out_path))
 
-    tc_rows = _load_jsonl(
-        DRYRUN_ROOT / "tripClusterLinker" / "calibration" / f"candidates-{today}.jsonl"
-    )
+    tc_rows = _load_jsonl(DRYRUN_ROOT / "tripClusterLinker" / "calibration" / f"candidates-{today}.jsonl")
     for tier in sorted({r["tier"] for r in tc_rows}):
-        out_path = (
-            ARTIFACT_ROOT / "tripClusterLinker" / "calibration"
-            / f"spotcheck-{tier.lower()}-{today}.md"
-        )
+        out_path = ARTIFACT_ROOT / "tripClusterLinker" / "calibration" / f"spotcheck-{tier.lower()}-{today}.md"
         summaries.append(_write_trip_packet(tc_rows, tier, vault, out_path))
 
-    ma_rows = _load_jsonl(
-        DRYRUN_ROOT / "meetingArtifactLinker" / "calibration" / f"candidates-{today}.jsonl"
-    )
+    ma_rows = _load_jsonl(DRYRUN_ROOT / "meetingArtifactLinker" / "calibration" / f"candidates-{today}.jsonl")
     for tier in sorted({r["tier"] for r in ma_rows}):
-        out_path = (
-            ARTIFACT_ROOT / "meetingArtifactLinker" / "calibration"
-            / f"spotcheck-{tier.lower()}-{today}.md"
-        )
+        out_path = ARTIFACT_ROOT / "meetingArtifactLinker" / "calibration" / f"spotcheck-{tier.lower()}-{today}.md"
         summaries.append(_write_meeting_packet(ma_rows, tier, vault, out_path))
 
     # Index
@@ -362,7 +367,7 @@ def _main(argv: list[str] | None = None) -> int:
         f"# Phase 6.5 Step 21 — precision spot-check packet index ({today})",
         "",
         f"**Vault:** `{vault}`",
-        f"**Standard:** `archive_docs/runbooks/linker-quality-gates.md`",
+        "**Standard:** `archive_docs/runbooks/linker-quality-gates.md`",
         "",
         "Each row links to a stratified sample for one tier. Auto-promote tiers must reach",
         "≥95% precision per the runbook. Review-only tiers help calibrate downstream review.",

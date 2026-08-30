@@ -1,9 +1,9 @@
 ---
-uid: fx-dd-compact-1
+uid: hfa-email-fx-dd-compact-1
 type: email_message
 from_email: noreply@doordash.com
 subject: DoorDash Order Confirmation
-sent_at: 2026-01-15T12:00:00-08:00
+sent_at: "2026-01-15T12:00:00-08:00"
 summary: DoorDash Order Confirmation
 source: [gmail]
 source_id: gmail.dd-compact

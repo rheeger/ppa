@@ -1,9 +1,9 @@
 ---
-uid: fx-ua-1
+uid: hfa-email-fx-ua-1
 type: email_message
 from_email: notifications@united.com
 subject: Your trip confirmation
-sent_at: 2024-03-10T08:00:00-06:00
+sent_at: "2024-03-10T08:00:00-06:00"
 summary: Confirmation
 source: [gmail]
 source_id: gmail.ua1

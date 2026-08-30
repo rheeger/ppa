@@ -70,11 +70,7 @@ def _resolve_api_key() -> str:
 
 
 def _base_url() -> str:
-    return (
-        _ppa_env("PPA_OPENAI_BASE_URL")
-        or os.environ.get("OPENAI_BASE_URL")
-        or DEFAULT_OPENAI_BASE_URL
-    ).rstrip("/")
+    return (_ppa_env("PPA_OPENAI_BASE_URL") or os.environ.get("OPENAI_BASE_URL") or DEFAULT_OPENAI_BASE_URL).rstrip("/")
 
 
 def _timeout() -> int:
@@ -146,9 +142,7 @@ def _http_download_to_file(
                     fh.write(block)
                     written += len(block)
             if expected is not None and written != expected:
-                raise ConnectionError(
-                    f"short download: wrote {written} bytes, server advertised {expected}"
-                )
+                raise ConnectionError(f"short download: wrote {written} bytes, server advertised {expected}")
             return written
         except (error.URLError, http.client.IncompleteRead, TimeoutError, ConnectionError) as exc:
             last_exc = exc
@@ -181,10 +175,14 @@ def upload_input_file(local_path: Path, *, api_key: str, base_url: str) -> str:
     boundary = f"----ppa-batch-{uuid.uuid4().hex}"
     data = local_path.read_bytes()
     body = (
-        f'--{boundary}\r\nContent-Disposition: form-data; name="purpose"\r\n\r\nbatch\r\n'
-        f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{local_path.name}"\r\n'
-        f"Content-Type: application/jsonl\r\n\r\n"
-    ).encode("utf-8") + data + f"\r\n--{boundary}--\r\n".encode("utf-8")
+        (
+            f'--{boundary}\r\nContent-Disposition: form-data; name="purpose"\r\n\r\nbatch\r\n'
+            f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{local_path.name}"\r\n'
+            f"Content-Type: application/jsonl\r\n\r\n"
+        ).encode("utf-8")
+        + data
+        + f"\r\n--{boundary}--\r\n".encode("utf-8")
+    )
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": f"multipart/form-data; boundary={boundary}",
@@ -787,9 +785,7 @@ def _ingest_one_batch(
         )
     else:
         if not api_key:
-            raise RuntimeError(
-                f"OPENAI_API_KEY required to download batch {batch_id} (no local file at {out_path})"
-            )
+            raise RuntimeError(f"OPENAI_API_KEY required to download batch {batch_id} (no local file at {out_path})")
         size = download_file(file_id=output_file_id, dest_path=out_path, api_key=api_key, base_url=base_url)
         logger_.info(
             "ingest_downloaded batch=%s bytes=%d elapsed=%.1fs path=%s",
@@ -809,9 +805,7 @@ def _ingest_one_batch(
             (batch_id,),
         ).fetchall()
     id_to_chunk = {
-        str(r["custom_id"] if isinstance(r, dict) else r[0]): str(
-            r["chunk_key"] if isinstance(r, dict) else r[1]
-        )
+        str(r["custom_id"] if isinstance(r, dict) else r[0]): str(r["chunk_key"] if isinstance(r, dict) else r[1])
         for r in map_rows
     }
 

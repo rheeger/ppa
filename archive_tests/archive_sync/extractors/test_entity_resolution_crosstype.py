@@ -70,7 +70,13 @@ def test_org_merging_across_extractors(extractor_vault):
 
 def test_report_json_written(extractor_vault, tmp_path):
     cards = [
-        {"uid": "m1", "type": "meal_order", "service": "DoorDash", "restaurant": "R", "delivery_address": "Brooklyn, NY"},
+        {
+            "uid": "m1",
+            "type": "meal_order",
+            "service": "DoorDash",
+            "restaurant": "R",
+            "delivery_address": "Brooklyn, NY",
+        },
     ]
     from archive_sync.extractors.entity_resolution import OrgResolver, PlaceResolver
 
@@ -87,7 +93,13 @@ def test_report_json_written(extractor_vault, tmp_path):
 
 def test_report_spot_check_written(extractor_vault, tmp_path):
     cards = [
-        {"uid": "m1", "type": "meal_order", "service": "DoorDash", "restaurant": "R", "delivery_address": "Brooklyn, NY"},
+        {
+            "uid": "m1",
+            "type": "meal_order",
+            "service": "DoorDash",
+            "restaurant": "R",
+            "delivery_address": "Brooklyn, NY",
+        },
     ]
     from archive_sync.extractors.entity_resolution import OrgResolver, PlaceResolver
 
@@ -130,8 +142,12 @@ def test_validate_no_duplicate_place_keys(extractor_vault):
         first_seen=today,
         last_seen=today,
     )
-    write_card(extractor_vault, f"Entities/Places/{today[:7]}/{uid1}.md", p1, "# a\n", deterministic_provenance(p1, "test"))
-    write_card(extractor_vault, f"Entities/Places/{today[:7]}/{uid2}.md", p2, "# b\n", deterministic_provenance(p2, "test"))
+    write_card(
+        extractor_vault, f"Entities/Places/{today[:7]}/{uid1}.md", p1, "# a\n", deterministic_provenance(p1, "test")
+    )
+    write_card(
+        extractor_vault, f"Entities/Places/{today[:7]}/{uid2}.md", p2, "# b\n", deterministic_provenance(p2, "test")
+    )
     errs = validate_entities(extractor_vault)
     assert any("duplicate place key" in e for e in errs)
 

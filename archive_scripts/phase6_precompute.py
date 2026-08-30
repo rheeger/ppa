@@ -59,11 +59,16 @@ LLM_WORKERS = int(os.environ.get("PHASE6_LLM_WORKERS", "12"))
 
 def _sketch_from_row(r: dict[str, Any]) -> SeedCardSketch:
     return SeedCardSketch(
-        uid=r["uid"], rel_path=r["rel_path"],
+        uid=r["uid"],
+        rel_path=r["rel_path"],
         slug=r.get("slug") or r["rel_path"].split("/")[-1].removesuffix(".md"),
-        card_type=r["type"], summary=r.get("summary") or "",
-        frontmatter={}, body="", content_hash=r.get("content_hash") or "",
-        activity_at="", wikilinks=[],
+        card_type=r["type"],
+        summary=r.get("summary") or "",
+        frontmatter={},
+        body="",
+        content_hash=r.get("content_hash") or "",
+        activity_at="",
+        wikilinks=[],
     )
 
 
@@ -77,14 +82,26 @@ def _build_catalog(conn, schema: str, source_uids: list[str]) -> SeedLinkCatalog
     for sk in by_uid.values():
         by_type.setdefault(sk.card_type, []).append(sk)
     return SeedLinkCatalog(
-        cards_by_uid=by_uid, cards_by_exact_slug={}, cards_by_slug={},
+        cards_by_uid=by_uid,
+        cards_by_exact_slug={},
+        cards_by_slug={},
         cards_by_type=by_type,
-        person_by_email={}, person_by_phone={}, person_by_handle={}, person_by_alias={},
-        email_threads_by_thread_id={}, email_messages_by_thread_id={},
-        email_messages_by_message_id={}, email_attachments_by_message_id={},
-        email_attachments_by_thread_id={}, imessage_threads_by_chat_id={},
-        imessage_messages_by_chat_id={}, calendar_events_by_event_id={},
-        calendar_events_by_ical_uid={}, media_by_day={}, events_by_day={}, path_buckets={},
+        person_by_email={},
+        person_by_phone={},
+        person_by_handle={},
+        person_by_alias={},
+        email_threads_by_thread_id={},
+        email_messages_by_thread_id={},
+        email_messages_by_message_id={},
+        email_attachments_by_message_id={},
+        email_attachments_by_thread_id={},
+        imessage_threads_by_chat_id={},
+        imessage_messages_by_chat_id={},
+        calendar_events_by_event_id={},
+        calendar_events_by_ical_uid={},
+        media_by_day={},
+        events_by_day={},
+        path_buckets={},
     )
 
 
@@ -92,7 +109,7 @@ def _hydrate(conn, schema: str, catalog: SeedLinkCatalog, target_uids: list[str]
     missing = [u for u in target_uids if u not in catalog.cards_by_uid]
     if not missing:
         return
-    for chunk in [missing[i:i+500] for i in range(0, len(missing), 500)]:
+    for chunk in [missing[i : i + 500] for i in range(0, len(missing), 500)]:
         rows = conn.execute(
             f"SELECT uid, rel_path, slug, type, summary, content_hash FROM {schema}.cards WHERE uid = ANY(%s)",
             (chunk,),
@@ -168,7 +185,7 @@ def main() -> None:
     with psycopg.connect(dsn, row_factory=dict_row) as conn:
         _log(f"[precompute] building catalog for {len(uids)} source uids…")
         catalog = _build_catalog(conn, schema, uids)
-        _log(f"[precompute] catalog ready ({len(catalog.cards_by_uid)} sketches) in {int(time.time()-t0)}s")
+        _log(f"[precompute] catalog ready ({len(catalog.cards_by_uid)} sketches) in {int(time.time() - t0)}s")
         # Phase A: kNN sweep — collect every (source, target) pair we need to judge.
         # Apply the production-grade filters here so the cache reflects what
         # _generate_semantic_candidates would actually surface.
@@ -219,11 +236,13 @@ def main() -> None:
                     continue
                 pending.append((key, {"src_uid": uid, "knn": r}))
             if (i + 1) % 100 == 0:
-                _log(f"[precompute] kNN swept {i+1}/{len(uids)} | pending={len(pending)} "
-                     f"skipped src(type/class/elig)={skipped_src_type}/{skipped_src_class}/{skipped_src_eligible} "
-                     f"tgt(elig/class)={skipped_tgt_eligible}/{skipped_tgt_class} "
-                     f"same_type={skipped_same_type} edge={skipped_existing_edge} cand={skipped_existing_cand}")
-        _log(f"[precompute] kNN complete in {int(time.time()-t0)}s | {len(pending)} pairs queued for LLM judge")
+                _log(
+                    f"[precompute] kNN swept {i + 1}/{len(uids)} | pending={len(pending)} "
+                    f"skipped src(type/class/elig)={skipped_src_type}/{skipped_src_class}/{skipped_src_eligible} "
+                    f"tgt(elig/class)={skipped_tgt_eligible}/{skipped_tgt_class} "
+                    f"same_type={skipped_same_type} edge={skipped_existing_edge} cand={skipped_existing_cand}"
+                )
+        _log(f"[precompute] kNN complete in {int(time.time() - t0)}s | {len(pending)} pairs queued for LLM judge")
 
         # Phase B: parallel LLM judge with ThreadPoolExecutor.
         def _judge_pair(payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -235,28 +254,48 @@ def main() -> None:
                 return None
             cand = SeedLinkCandidate(
                 module_name=MODULE_SEMANTIC,
-                source_card_uid=uid, source_rel_path=src.rel_path,
-                target_card_uid=r["target_uid"], target_rel_path=r["target_rel_path"],
-                target_kind="card", proposed_link_type=LINK_TYPE_SEMANTICALLY_RELATED,
+                source_card_uid=uid,
+                source_rel_path=src.rel_path,
+                target_card_uid=r["target_uid"],
+                target_rel_path=r["target_rel_path"],
+                target_kind="card",
+                proposed_link_type=LINK_TYPE_SEMANTICALLY_RELATED,
                 candidate_group="",
-                input_hash=compute_input_hash({"s": uid, "t": r["target_uid"], "m": MODULE_SEMANTIC, "v": SEED_LINKER_VERSION}),
+                input_hash=compute_input_hash(
+                    {"s": uid, "t": r["target_uid"], "m": MODULE_SEMANTIC, "v": SEED_LINKER_VERSION}
+                ),
                 evidence_hash="cache",
                 features={
                     "embedding_similarity": round(float(r["similarity"]), 6),
                     "deterministic_hits": [],
                     "ambiguous_target_count": 0,
                 },
-                evidences=[LinkEvidence("embedding_similarity", "pgvector_knn", "cosine_similarity",
-                                         f"{r['similarity']:.6f}", float(r["similarity"]), {})],
-                surface="derived_only", promotion_target="derived_edge",
+                evidences=[
+                    LinkEvidence(
+                        "embedding_similarity",
+                        "pgvector_knn",
+                        "cosine_similarity",
+                        f"{r['similarity']:.6f}",
+                        float(r["similarity"]),
+                        {},
+                    )
+                ],
+                surface="derived_only",
+                promotion_target="derived_edge",
             )
             llm_score, llm_model, llm_payload = llm_judge_candidate(vault, cand, src, tgt)
             verdict = str((llm_payload or {}).get("link", "")).upper()
             return {
-                "source_uid": uid, "source_rel_path": src.rel_path, "source_type": src.card_type,
-                "target_uid": r["target_uid"], "target_rel_path": r["target_rel_path"], "target_type": tgt.card_type,
+                "source_uid": uid,
+                "source_rel_path": src.rel_path,
+                "source_type": src.card_type,
+                "target_uid": r["target_uid"],
+                "target_rel_path": r["target_rel_path"],
+                "target_type": tgt.card_type,
                 "embedding_similarity": float(r["similarity"]),
-                "llm_verdict": verdict, "llm_score": float(llm_score), "llm_model": llm_model,
+                "llm_verdict": verdict,
+                "llm_score": float(llm_score),
+                "llm_model": llm_model,
             }
 
         with ThreadPoolExecutor(max_workers=LLM_WORKERS) as pool:
@@ -275,8 +314,10 @@ def main() -> None:
                 if (j + 1) % 50 == 0:
                     elapsed = int(time.time() - t0)
                     eta = (elapsed / max(j + 1, 1)) * (len(pending) - j - 1)
-                    _log(f"[precompute] judged {j+1}/{len(pending)} pairs | {len(cache)} cache | "
-                         f"{elapsed}s | ~{int(eta)}s ETA")
+                    _log(
+                        f"[precompute] judged {j + 1}/{len(pending)} pairs | {len(cache)} cache | "
+                        f"{elapsed}s | ~{int(eta)}s ETA"
+                    )
                     CACHE_PATH.write_text(json.dumps(cache, indent=2))
 
     CACHE_PATH.write_text(json.dumps(cache, indent=2))

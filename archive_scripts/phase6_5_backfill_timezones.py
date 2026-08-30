@@ -8,9 +8,7 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
-from archive_sync.adapters.datetime_canon import (AUDITED_TIMESTAMP_FIELDS,
-                                                  classify_timestamp,
-                                                  to_utc_z_iso)
+from archive_sync.adapters.datetime_canon import AUDITED_TIMESTAMP_FIELDS, classify_timestamp, to_utc_z_iso
 from archive_vault.provenance import ProvenanceEntry, merge_provenance
 from archive_vault.schema import validate_card_strict
 from archive_vault.vault import read_note, write_card

@@ -13,8 +13,7 @@ from typing import Any
 from archive_auth import account_name_from_email, build_google_cli_token_manager
 from archive_vault.identity import IdentityCache
 from archive_vault.schema import CalendarEventCard
-from archive_vault.thread_hash import \
-    compute_calendar_event_body_sha_from_payload
+from archive_vault.thread_hash import compute_calendar_event_body_sha_from_payload
 from archive_vault.uid import generate_uid
 from .base import BaseAdapter, FetchedBatch, deterministic_provenance
 from .datetime_canon import to_utc_z_iso

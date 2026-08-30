@@ -1,9 +1,9 @@
 ---
-uid: fx-ly-1
+uid: hfa-email-fx-ly-1
 type: email_message
 from_email: receipts@lyft.com
 subject: Your Lyft ride receipt
-sent_at: 2024-01-15T22:00:00-05:00
+sent_at: "2024-01-15T22:00:00-05:00"
 summary: Receipt
 source: [gmail]
 source_id: gmail.ly1

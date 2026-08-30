@@ -7,6 +7,7 @@ Writes:
   _artifacts/_staging/template-era-scan.md
 
 Run from repo root: ``.venv/bin/python scripts/phase3_step8_verification.py``"""
+
 from __future__ import annotations
 
 import json
@@ -156,7 +157,9 @@ def dedup_notes(by_type: dict[str, list[tuple[Path, dict[str, Any]]]]) -> str:
         if not dup_groups:
             lines.append("*(no duplicate keys for this type)*")
             lines.append("")
-    lines.insert(4, f"**Overall duplicate-suspect card count:** {suspects} / {total} " f"({100.0 * suspects / max(1, total):.1f}%)")
+    lines.insert(
+        4, f"**Overall duplicate-suspect card count:** {suspects} / {total} ({100.0 * suspects / max(1, total):.1f}%)"
+    )
     lines.insert(5, "")
     return "\n".join(lines)
 

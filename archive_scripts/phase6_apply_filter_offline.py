@@ -53,7 +53,7 @@ def main() -> None:
     # Pull classifications for every unique uid
     classifications: dict[str, str] = {}
     with psycopg.connect(args.dsn, row_factory=dict_row) as conn:
-        for chunk in [list(uids)[i:i+500] for i in range(0, len(uids), 500)]:
+        for chunk in [list(uids)[i : i + 500] for i in range(0, len(uids), 500)]:
             rows = conn.execute(
                 f"SELECT card_uid, classification FROM {args.schema}.card_classifications WHERE card_uid = ANY(%s)",
                 (chunk,),
@@ -61,8 +61,10 @@ def main() -> None:
             for r in rows:
                 classifications[str(r["card_uid"])] = str(r["classification"]).strip().lower()
 
-    print(f"[filter] {len(classifications)} of {len(uids)} cards have a classification "
-          f"({len(classifications) / max(len(uids), 1) * 100:.1f}%)")
+    print(
+        f"[filter] {len(classifications)} of {len(uids)} cards have a classification "
+        f"({len(classifications) / max(len(uids), 1) * 100:.1f}%)"
+    )
     cat_dist = Counter(classifications.values())
     for cat, n in cat_dist.most_common():
         marker = "  SKIP" if cat in skip_set else "  KEEP"

@@ -52,8 +52,7 @@ def _source_field_has_values(conn: Any, schema: str, table_name: str, column_nam
 def _check_embedding_coverage(conn: Any, schema: str) -> dict[str, Any]:
     """Report how many chunks have embeddings for the default model/version."""
     try:
-        from ..index_config import (get_default_embedding_model,
-                                    get_default_embedding_version)
+        from ..index_config import get_default_embedding_model, get_default_embedding_version
 
         chunk_row = conn.execute(f"SELECT COUNT(*) AS count FROM {schema}.chunks").fetchone()
         chunk_count = int(chunk_row["count"] if isinstance(chunk_row, dict) else chunk_row[0])
@@ -295,9 +294,7 @@ def run_deployment_checks(conn: Any, schema: str, vault_path: str | Path | None 
         c = int(row["c"] if isinstance(row, dict) else row[1])
         type_counts[t] = c
     report.card_type_coverage = type_counts
-    report.missing_types = [
-        t for t in CARD_TYPES if t not in PHASE9_SKIPPED_CARD_TYPES and type_counts.get(t, 0) == 0
-    ]
+    report.missing_types = [t for t in CARD_TYPES if t not in PHASE9_SKIPPED_CARD_TYPES and type_counts.get(t, 0) == 0]
     if report.missing_types:
         report.ok = False
 
@@ -342,7 +339,9 @@ def run_deployment_checks(conn: Any, schema: str, vault_path: str | Path | None 
                 report.vault_file_count = len(archive_crate.walk_vault(str(vault)))
             except Exception:
                 report.vault_file_count = sum(1 for _ in vault.rglob("*.md"))
-            duplicate_count = _row_first_int(conn.execute(f"SELECT COUNT(*) FROM {schema}.duplicate_uid_rows").fetchone())
+            duplicate_count = _row_first_int(
+                conn.execute(f"SELECT COUNT(*) FROM {schema}.duplicate_uid_rows").fetchone()
+            )
             expected_card_count = report.vault_file_count - duplicate_count
             tolerance = max(1, int(expected_card_count * 0.001))
             report.card_count_match = abs(report.index_card_count - expected_card_count) <= tolerance

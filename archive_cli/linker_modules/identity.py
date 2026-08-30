@@ -10,16 +10,22 @@ from __future__ import annotations
 from typing import Any
 
 from archive_cli import linker_framework as lf
-from archive_cli.seed_links import (CARD_TYPE_MODULES,
-                                    LINK_TYPE_POSSIBLE_SAME_PERSON,
-                                    MODULE_IDENTITY, SeedCardSketch,
-                                    SeedLinkCandidate, SeedLinkCatalog,
-                                    _append_candidate, _clean_text,
-                                    _make_evidence, _name_similarity,
-                                    _normalize_alias,
-                                    _person_matches_for_identifiers,
-                                    _shared_people_names,
-                                    get_link_surface_policies)
+from archive_cli.seed_links import (
+    CARD_TYPE_MODULES,
+    LINK_TYPE_POSSIBLE_SAME_PERSON,
+    MODULE_IDENTITY,
+    SeedCardSketch,
+    SeedLinkCandidate,
+    SeedLinkCatalog,
+    _append_candidate,
+    _clean_text,
+    _make_evidence,
+    _name_similarity,
+    _normalize_alias,
+    _person_matches_for_identifiers,
+    _shared_people_names,
+    get_link_surface_policies,
+)
 
 
 def _generate_identity_candidates(catalog: SeedLinkCatalog, source: SeedCardSketch) -> list[SeedLinkCandidate]:
@@ -80,7 +86,6 @@ def _generate_identity_candidates(catalog: SeedLinkCatalog, source: SeedCardSket
     return results
 
 
-
 def _score_identity_features(
     features: dict[str, Any],
 ) -> tuple[float, float, float, float, float]:
@@ -99,8 +104,7 @@ def _score_identity_features(
     )
     lexical_score = min(
         1.0,
-        float(features.get("name_similarity", 0.0)) * 0.75
-        + (0.25 if int(features.get("shared_company", 0)) else 0.0),
+        float(features.get("name_similarity", 0.0)) * 0.75 + (0.25 if int(features.get("shared_company", 0)) else 0.0),
     )
     graph_score = min(1.0, min(int(features.get("shared_people_names", 0)), 3) * 0.2)
     if int(features.get("ambiguous_target_count", 0)) > 1:
@@ -116,7 +120,6 @@ def _score_identity_features(
     )
 
 
-
 def _policies() -> tuple:
     return tuple(p for p in get_link_surface_policies() if p.module_name == MODULE_IDENTITY)
 
@@ -125,17 +128,19 @@ def _source_types() -> tuple[str, ...]:
     return tuple(ct for ct, mods in CARD_TYPE_MODULES.items() if MODULE_IDENTITY in mods)
 
 
-lf.register_linker(lf.LinkerSpec(
-    module_name=MODULE_IDENTITY,
-    source_card_types=_source_types(),
-    emits_link_types=(LINK_TYPE_POSSIBLE_SAME_PERSON,),
-    generator=_generate_identity_candidates,
-    scoring_fn=_score_identity_features,
-    scoring_mode="weighted",
-    policies=_policies(),
-    requires_llm_judge=True,
-    lifecycle_state="active",
-    phase_owner="phase_2.875",
-    post_promotion_action="frontmatter_delta",
-    description="Identity resolution -- merges duplicate persons via exact contact identifiers + name/company similarity.",
-))
+lf.register_linker(
+    lf.LinkerSpec(
+        module_name=MODULE_IDENTITY,
+        source_card_types=_source_types(),
+        emits_link_types=(LINK_TYPE_POSSIBLE_SAME_PERSON,),
+        generator=_generate_identity_candidates,
+        scoring_fn=_score_identity_features,
+        scoring_mode="weighted",
+        policies=_policies(),
+        requires_llm_judge=True,
+        lifecycle_state="active",
+        phase_owner="phase_2.875",
+        post_promotion_action="frontmatter_delta",
+        description="Identity resolution -- merges duplicate persons via exact contact identifiers + name/company similarity.",
+    )
+)

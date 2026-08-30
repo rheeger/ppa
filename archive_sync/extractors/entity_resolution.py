@@ -16,12 +16,10 @@ from archive_cli.ppa_engine import ppa_engine
 from archive_sync.adapters.base import deterministic_provenance
 from archive_vault.identity import IdentityCache
 from archive_vault.identity_resolver import PersonIndex, ResolveResult
-from archive_vault.identity_resolver import \
-    resolve_person_batch as resolve_person_batch_python
+from archive_vault.identity_resolver import resolve_person_batch as resolve_person_batch_python
 from archive_vault.schema import OrganizationCard, PlaceCard
 from archive_vault.uid import generate_uid
-from archive_vault.vault import (iter_parsed_notes,
-                                 iter_parsed_notes_for_card_types, write_card)
+from archive_vault.vault import iter_parsed_notes, iter_parsed_notes_for_card_types, write_card
 
 log = logging.getLogger("ppa.extractor.entity_resolution")
 
@@ -103,7 +101,8 @@ def iter_derived_card_dicts(
                 import archive_crate
 
                 rows = archive_crate.frontmatter_dicts_from_cache(
-                    str(cache_path), types=list(types_set),
+                    str(cache_path),
+                    types=list(types_set),
                 )
                 out: list[dict[str, Any]] = []
                 for row in rows:
@@ -848,8 +847,7 @@ def apply_person_links(
     """Write ``people`` wikilinks onto vault cards for merge :class:`ResolveResult` rows."""
 
     from archive_vault.provenance import ProvenanceEntry
-    from archive_vault.schema import (validate_card_permissive,
-                                      validate_card_strict)
+    from archive_vault.schema import validate_card_permissive, validate_card_strict
     from archive_vault.vault import read_note, write_card
 
     today = date.today().isoformat()
@@ -923,8 +921,18 @@ def _build_disambiguate_prompt(
         f"- type: {ct}",
         f"- rel_path: {card_rel}",
     ]
-    for k in ("counterparty", "driver_name", "provider_name", "summary", "amount", "currency",
-              "service", "vendor", "restaurant", "airline"):
+    for k in (
+        "counterparty",
+        "driver_name",
+        "provider_name",
+        "summary",
+        "amount",
+        "currency",
+        "service",
+        "vendor",
+        "restaurant",
+        "airline",
+    ):
         v = card_fm.get(k)
         if v:
             lines.append(f"- {k}: {v}")
@@ -932,8 +940,7 @@ def _build_disambiguate_prompt(
     lines.append("## Candidate PersonCard")
     lines.append(f"- wikilink: {candidate_wikilink}")
     if candidate_data:
-        for k in ("summary", "first_name", "last_name", "emails", "phones", "companies",
-                   "title", "aliases"):
+        for k in ("summary", "first_name", "last_name", "emails", "phones", "companies", "title", "aliases"):
             v = candidate_data.get(k)
             if v:
                 lines.append(f"- {k}: {v}")
@@ -970,12 +977,14 @@ def disambiguate_conflicts(
 
     details = []
     for rel_path, rr in conflicts:
-        details.append({
-            "rel_path": rel_path,
-            "wikilink": rr.wikilink,
-            "confidence": rr.confidence,
-            "reasons": rr.reasons,
-        })
+        details.append(
+            {
+                "rel_path": rel_path,
+                "wikilink": rr.wikilink,
+                "confidence": rr.confidence,
+                "reasons": rr.reasons,
+            }
+        )
 
     if not provider:
         log.info("disambiguate_conflicts: %d conflicts logged (no provider configured)", len(conflicts))
@@ -1019,6 +1028,7 @@ def disambiguate_conflicts(
         if person_slug:
             try:
                 from archive_vault.schema import validate_card_permissive
+
                 person_fm, _, _ = read_note(vault_path, f"People/{person_slug}.md")
                 candidate_data = validate_card_permissive(person_fm).model_dump(mode="python")
             except Exception:
@@ -1038,12 +1048,17 @@ def disambiguate_conflicts(
             parsed = resp.parsed_json
             if parsed and isinstance(parsed.get("choice"), int) and parsed["choice"] >= 1:
                 resolved += 1
-                resolved_merges.append((rel_path, ResolveResult(
-                    action="merge",
-                    wikilink=rr.wikilink,
-                    confidence=rr.confidence,
-                    reasons=rr.reasons + [f"llm_disambiguated:{parsed.get('reason', '')}"],
-                )))
+                resolved_merges.append(
+                    (
+                        rel_path,
+                        ResolveResult(
+                            action="merge",
+                            wikilink=rr.wikilink,
+                            confidence=rr.confidence,
+                            reasons=rr.reasons + [f"llm_disambiguated:{parsed.get('reason', '')}"],
+                        ),
+                    )
+                )
                 log.info("disambiguate: %s → %s (LLM choice=%d)", rel_path, rr.wikilink, parsed["choice"])
             else:
                 skipped += 1
@@ -1116,11 +1131,7 @@ def run_person_linking(
 
     apply_payload: dict[str, Any] | None = None
     if not dry_run and rr_list:
-        rows = [
-            (rel, rr)
-            for rel, rr in zip(meta, rr_list)
-            if rel and rr.action == "merge" and rr.wikilink
-        ]
+        rows = [(rel, rr) for rel, rr in zip(meta, rr_list) if rel and rr.action == "merge" and rr.wikilink]
         apply_payload = apply_person_links(
             vault_path,
             rows,
@@ -1129,11 +1140,7 @@ def run_person_linking(
         )
 
     conflict_payload: dict[str, Any] | None = None
-    conflict_rows = [
-        (rel, rr)
-        for rel, rr in zip(meta, rr_list)
-        if rel and rr.action == "conflict"
-    ] if rr_list else []
+    conflict_rows = [(rel, rr) for rel, rr in zip(meta, rr_list) if rel and rr.action == "conflict"] if rr_list else []
     if conflict_rows:
         conflict_payload = disambiguate_conflicts(
             vault_path,

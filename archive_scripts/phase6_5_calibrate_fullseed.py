@@ -36,7 +36,8 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("--vault", required=True)
     parser.add_argument("--module", action="append", default=[])
     parser.add_argument(
-        "--artifact-root", default="_artifacts/_linkers-fullseed-dryrun",
+        "--artifact-root",
+        default="_artifacts/_linkers-fullseed-dryrun",
     )
     args = parser.parse_args(argv)
 
@@ -119,7 +120,11 @@ def _main(argv: list[str] | None = None) -> int:
 
         log.info(
             "[%s] sources=%d total=%d tiers=%s -> %s",
-            module, len(sources), total, tier_counts, jsonl_path,
+            module,
+            len(sources),
+            total,
+            tier_counts,
+            jsonl_path,
         )
         summary[module] = {
             "sources": len(sources),
@@ -134,7 +139,7 @@ def _main(argv: list[str] | None = None) -> int:
         f"# Phase 6.5 Step 21 — full-seed dry-run calibration ({today})",
         "",
         f"**Vault:** `{vault}`",
-        f"**Cache tier:** 2",
+        "**Cache tier:** 2",
         "",
         "| module | sources | candidates | tier histogram |",
         "|---|---:|---:|---|",

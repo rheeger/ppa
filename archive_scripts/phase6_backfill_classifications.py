@@ -232,8 +232,7 @@ def main() -> None:
     p.add_argument("--schema", required=True)
     p.add_argument("--dsn", default=os.environ.get("PPA_INDEX_DSN", ""))
     p.add_argument("--dry-run", action="store_true")
-    p.add_argument("--skip-frontmatter", action="store_true",
-                   help="Only write to Postgres; leave .md files untouched")
+    p.add_argument("--skip-frontmatter", action="store_true", help="Only write to Postgres; leave .md files untouched")
     args = p.parse_args()
     if not args.dsn:
         raise SystemExit("PPA_INDEX_DSN env or --dsn required")

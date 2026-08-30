@@ -137,7 +137,7 @@ def _format_source_types(spec: lf.LinkerSpec) -> str:
         return "(any)"
     types = list(spec.source_card_types)
     if len(types) > 3:
-        return f"{', '.join(types[:3])} (+{len(types)-3} more)"
+        return f"{', '.join(types[:3])} (+{len(types) - 3} more)"
     return ", ".join(types)
 
 
@@ -146,7 +146,7 @@ def _format_emits(spec: lf.LinkerSpec) -> str:
         return "-"
     types = list(spec.emits_link_types)
     if len(types) > 2:
-        return f"{', '.join(types[:2])} (+{len(types)-2})"
+        return f"{', '.join(types[:2])} (+{len(types) - 2})"
     return ", ".join(types)
 
 
@@ -173,16 +173,18 @@ def cmd_list(args: argparse.Namespace) -> int:
         return 0
     # Plain text table; no rich dependency so the base CLI stays minimal.
     rows = [
-        (sp.module_name, sp.lifecycle_state, sp.scoring_mode,
-         _format_source_types(sp), _format_emits(sp),
-         str(s.SEED_LINK_POLICY_VERSION))
+        (
+            sp.module_name,
+            sp.lifecycle_state,
+            sp.scoring_mode,
+            _format_source_types(sp),
+            _format_emits(sp),
+            str(s.SEED_LINK_POLICY_VERSION),
+        )
         for sp in specs
     ]
     header = ("MODULE", "STATE", "SCORING", "SOURCE TYPES", "EMITS", "POLICY")
-    widths = [
-        max(len(r[i]) for r in [header, *rows])
-        for i in range(len(header))
-    ]
+    widths = [max(len(r[i]) for r in [header, *rows]) for i in range(len(header))]
     line = "  ".join(h.ljust(w) for h, w in zip(header, widths))
     print(line)
     print("  ".join("-" * w for w in widths))
@@ -207,8 +209,7 @@ def cmd_info(args: argparse.Namespace) -> int:
         "post_promotion_action": spec.post_promotion_action,
         "description": spec.description,
         "catalog_indexes": [
-            {"name": idx.name, "source_card_types": list(idx.source_card_types)}
-            for idx in spec.catalog_indexes
+            {"name": idx.name, "source_card_types": list(idx.source_card_types)} for idx in spec.catalog_indexes
         ],
         "policies": [
             {
@@ -276,8 +277,7 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
     # index mode
     from archive_cli.commands import seed_links as seed_cmd
     from archive_cli.commands._resolve import resolve_index
-    from archive_cli.errors import (IndexUnavailableError,
-                                    SeedLinksDisabledError, VaultNotFoundError)
+    from archive_cli.errors import IndexUnavailableError, SeedLinksDisabledError, VaultNotFoundError
 
     log = logging.getLogger("ppa.cli.linker.calibrate")
     if not log.handlers:
@@ -357,8 +357,7 @@ def cmd_replay(args: argparse.Namespace) -> int:
                 reviewed[tier] = reviewed.get(tier, 0) + 1
     print(f"{'TIER':40s}  {'CANDIDATES':>10s}  {'AUTO-PROMOTE':>12s}  {'REVIEW':>8s}")
     for tier in sorted(tiers.keys()):
-        print(f"{tier:40s}  {tiers[tier]:>10d}  "
-              f"{promoted.get(tier, 0):>12d}  {reviewed.get(tier, 0):>8d}")
+        print(f"{tier:40s}  {tiers[tier]:>10d}  {promoted.get(tier, 0):>12d}  {reviewed.get(tier, 0):>8d}")
     return 0
 
 
@@ -370,8 +369,7 @@ def cmd_health(args: argparse.Namespace) -> int:
     print("-" * 120)
     for sp in specs:
         desc = sp.description[:60] + ("..." if len(sp.description) > 60 else "")
-        print(f"{sp.module_name:40s}  {sp.lifecycle_state:12s}  "
-              f"{sp.phase_owner:12s}  {desc}")
+        print(f"{sp.module_name:40s}  {sp.lifecycle_state:12s}  {sp.phase_owner:12s}  {desc}")
     return 0
 
 
@@ -408,19 +406,14 @@ def cmd_impact(args: argparse.Namespace) -> int:
             seen_anchors.add(uid)
     if not anchors:
         print(
-            "No anchor UIDs resolved (no manifest graph_queries overlap emits_link_types); "
-            "pass --anchors uid1,uid2",
+            "No anchor UIDs resolved (no manifest graph_queries overlap emits_link_types); pass --anchors uid1,uid2",
             file=sys.stderr,
         )
         return 2
 
     unf = index.fetch_graph_neighbors_for_uids(anchors)
     filt_types = list(spec.emits_link_types)
-    filtered = (
-        index.fetch_graph_neighbors_for_uids(anchors, edge_type_filter=filt_types)
-        if filt_types
-        else dict(unf)
-    )
+    filtered = index.fetch_graph_neighbors_for_uids(anchors, edge_type_filter=filt_types) if filt_types else dict(unf)
     only_unf = sorted(set(unf.keys()) - set(filtered.keys()))
 
     behavioral = health_check_cmd.run_behavioral_checks(index, manifest)
@@ -440,9 +433,7 @@ def cmd_impact(args: argparse.Namespace) -> int:
         },
     }
     out_path = (
-        Path(args.output)
-        if args.output
-        else Path("_artifacts/_linkers") / spec.module_name / "impact-report.json"
+        Path(args.output) if args.output else Path("_artifacts/_linkers") / spec.module_name / "impact-report.json"
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -478,7 +469,7 @@ def _cmd_lifecycle_override(state: str, args: argparse.Namespace) -> int:
         return 2
     lf.set_lifecycle_override(args.module, state)  # type: ignore[arg-type]
     print(f"Wrote lifecycle override: {args.module} -> {state}")
-    print(f"Takes effect on next process start.")
+    print("Takes effect on next process start.")
     return 0
 
 
@@ -499,8 +490,7 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
     sub = p.add_subparsers(dest="linker_command", required=True)
 
     p_list = sub.add_parser("list", help="List registered linkers")
-    p_list.add_argument("--lifecycle", choices=["all", "active", "deprecated", "retired"],
-                        default="all")
+    p_list.add_argument("--lifecycle", choices=["all", "active", "deprecated", "retired"], default="all")
     p_list.add_argument("--json", action="store_true")
     p_list.set_defaults(func=cmd_list)
 
@@ -607,7 +597,9 @@ def dispatch(args: argparse.Namespace) -> int:
     """Entry point invoked from __main__.py when args.command == 'linker'."""
     func = getattr(args, "func", None)
     if func is None:
-        print("Usage: ppa linker {list|info|calibrate|replay|health|impact|scaffold|"
-              "deprecate|retire|revive}", file=sys.stderr)
+        print(
+            "Usage: ppa linker {list|info|calibrate|replay|health|impact|scaffold|deprecate|retire|revive}",
+            file=sys.stderr,
+        )
         return 2
     return int(func(args))

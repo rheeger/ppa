@@ -73,7 +73,6 @@ def test_stable_json_matches_frontmatter_hash_payload() -> None:
     ru = archive_crate.stable_json_from_yaml_frontmatter(fm_yaml)
     assert ru == py
 
-
     y = _yaml()
     fm_dict = y.load(fm_yaml.strip())
     expected_hash = _frontmatter_hash_stable(fm_dict)

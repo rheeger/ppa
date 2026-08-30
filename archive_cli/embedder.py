@@ -399,6 +399,7 @@ class EmbedderMixin:
                 ).fetchone()
                 if row is None:
                     raise RuntimeError(f"schema '{schema}' does not have an embeddings table")
+
             def _scalar(row: Any) -> int:
                 if row is None:
                     return 0
@@ -406,9 +407,7 @@ class EmbedderMixin:
                     return int(next(iter(row.values())))
                 return int(row[0])
 
-            target_chunks = _scalar(
-                conn.execute(f"SELECT COUNT(*) AS n FROM {self.schema}.chunks").fetchone()
-            )
+            target_chunks = _scalar(conn.execute(f"SELECT COUNT(*) AS n FROM {self.schema}.chunks").fetchone())
             already = _scalar(
                 conn.execute(
                     f"""
@@ -449,8 +448,15 @@ class EmbedderMixin:
         logger.info(
             "copy_embeddings_from_schema source=%s -> %s model=%s v%d "
             "chunks_in_target=%d already_embedded=%d copied=%d no_source=%d elapsed=%.1fs",
-            source_schema, self.schema, embedding_model, embedding_version,
-            target_chunks, already, inserted, no_source, elapsed,
+            source_schema,
+            self.schema,
+            embedding_model,
+            embedding_version,
+            target_chunks,
+            already,
+            inserted,
+            no_source,
+            elapsed,
         )
         return {
             "source_schema": source_schema,
@@ -491,9 +497,7 @@ class EmbedderMixin:
                     (schema,),
                 ).fetchone()
                 if row is None:
-                    raise RuntimeError(
-                        f"schema '{schema}' does not have a card_classifications table"
-                    )
+                    raise RuntimeError(f"schema '{schema}' does not have a card_classifications table")
 
             def _scalar(row: Any) -> int:
                 if row is None:
@@ -502,14 +506,8 @@ class EmbedderMixin:
                     return int(next(iter(row.values())))
                 return int(row[0])
 
-            target_cards = _scalar(
-                conn.execute(f"SELECT COUNT(*) AS n FROM {self.schema}.cards").fetchone()
-            )
-            already = _scalar(
-                conn.execute(
-                    f"SELECT COUNT(*) AS n FROM {self.schema}.card_classifications"
-                ).fetchone()
-            )
+            target_cards = _scalar(conn.execute(f"SELECT COUNT(*) AS n FROM {self.schema}.cards").fetchone())
+            already = _scalar(conn.execute(f"SELECT COUNT(*) AS n FROM {self.schema}.card_classifications").fetchone())
             t0 = time.time()
             inserted_rows = conn.execute(
                 f"""
@@ -525,16 +523,18 @@ class EmbedderMixin:
             ).fetchall()
             inserted = len(inserted_rows)
             conn.commit()
-            after = _scalar(
-                conn.execute(
-                    f"SELECT COUNT(*) AS n FROM {self.schema}.card_classifications"
-                ).fetchone()
-            )
+            after = _scalar(conn.execute(f"SELECT COUNT(*) AS n FROM {self.schema}.card_classifications").fetchone())
         elapsed = time.time() - t0
         logger.info(
             "copy_classifications_from_schema source=%s -> %s "
             "cards_in_target=%d already_present=%d copied=%d total_after=%d elapsed=%.1fs",
-            source_schema, self.schema, target_cards, already, inserted, after, elapsed,
+            source_schema,
+            self.schema,
+            target_cards,
+            already,
+            inserted,
+            after,
+            elapsed,
         )
         return {
             "source_schema": source_schema,
@@ -576,7 +576,9 @@ class EmbedderMixin:
                 size = str(row["size"] if isinstance(row, dict) else row[0])
         logger.info(
             "build_vector_index schema=%s elapsed=%.1fs size=%s",
-            self.schema, elapsed, size,
+            self.schema,
+            elapsed,
+            size,
         )
         return {
             "schema": self.schema,

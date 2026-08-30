@@ -1,9 +1,9 @@
 ---
-uid: fx-ue-1
+uid: hfa-email-fx-ue-1
 type: email_message
 from_email: ubereats@uber.com
 subject: Receipt for your Uber Eats order
-sent_at: 2020-12-31T18:30:00-08:00
+sent_at: "2020-12-31T18:30:00-08:00"
 summary: Receipt
 source: [gmail]
 source_id: gmail.ue1

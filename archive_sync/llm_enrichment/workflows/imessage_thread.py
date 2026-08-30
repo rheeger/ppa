@@ -225,11 +225,7 @@ def build_outputs_from_conversations(
         field_updates["thread_summary"] = summary
 
     entities: list[EntityMention] = []
-    wf = (
-        "beeper_thread_enrichment"
-        if source_card_type == "beeper_thread"
-        else "imessage_thread_enrichment"
-    )
+    wf = "beeper_thread_enrichment" if source_card_type == "beeper_thread" else "imessage_thread_enrichment"
     for c in conversations:
         ctx_base: dict[str, Any] = {
             "conversation_summary": str(c.get("summary") or "").strip(),

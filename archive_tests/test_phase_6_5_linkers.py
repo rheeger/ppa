@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
 from archive_cli import linker_framework as lf
 from archive_cli import seed_links as s
 from archive_cli.linker_modules import finance_reconcile as fr_mod
@@ -101,17 +100,20 @@ def _run_hooks(cat: s.SeedLinkCatalog) -> None:
 
 
 class TestMeetingArtifact:
-
     def test_tier_ical_uid_exact_match(self):
         transcript = _make_sketch(
-            "hfa-meeting-transcript-1", "meeting_transcript",
+            "hfa-meeting-transcript-1",
+            "meeting_transcript",
             frontmatter={"ical_uid": "abc-123", "start_at": "2024-06-01T10:00:00Z"},
-            summary="Q3 planning", activity_at="2024-06-01T10:00:00Z",
+            summary="Q3 planning",
+            activity_at="2024-06-01T10:00:00Z",
         )
         event = _make_sketch(
-            "hfa-calendar-event-1", "calendar_event",
+            "hfa-calendar-event-1",
+            "calendar_event",
             frontmatter={"ical_uid": "abc-123", "start_at": "2024-06-01T10:00:00Z"},
-            summary="Q3 planning", activity_at="2024-06-01T10:00:00Z",
+            summary="Q3 planning",
+            activity_at="2024-06-01T10:00:00Z",
         )
         cat = _populate_catalog([transcript, event])
         _run_hooks(cat)
@@ -123,12 +125,14 @@ class TestMeetingArtifact:
 
     def test_tier_title_time_within_15_min(self):
         transcript = _make_sketch(
-            "hfa-meeting-transcript-2", "meeting_transcript",
+            "hfa-meeting-transcript-2",
+            "meeting_transcript",
             frontmatter={"start_at": "2024-06-01T10:00:00Z"},
             summary="Product Review",
         )
         event = _make_sketch(
-            "hfa-calendar-event-2", "calendar_event",
+            "hfa-calendar-event-2",
+            "calendar_event",
             frontmatter={"start_at": "2024-06-01T10:14:00Z"},
             summary="Product Review",
         )
@@ -140,12 +144,14 @@ class TestMeetingArtifact:
 
     def test_tier_title_time_outside_window_rejected(self):
         transcript = _make_sketch(
-            "hfa-meeting-transcript-3", "meeting_transcript",
+            "hfa-meeting-transcript-3",
+            "meeting_transcript",
             frontmatter={"start_at": "2024-06-01T10:00:00Z"},
             summary="Product Review",
         )
         event = _make_sketch(
-            "hfa-calendar-event-3", "calendar_event",
+            "hfa-calendar-event-3",
+            "calendar_event",
             frontmatter={"start_at": "2024-06-01T10:20:00Z"},
             summary="Product Review",
         )
@@ -158,13 +164,15 @@ class TestMeetingArtifact:
         """A generic title like 'Meeting' should NOT match at Tier 2 even
         with a 2-minute drift; it should fall to Tier 3 (participant-based)."""
         transcript = _make_sketch(
-            "hfa-meeting-transcript-4", "meeting_transcript",
+            "hfa-meeting-transcript-4",
+            "meeting_transcript",
             frontmatter={"start_at": "2024-06-01T10:00:00Z"},
             summary="Meeting",
             participant_emails={"alice@x.com", "bob@x.com", "carol@x.com"},
         )
         event = _make_sketch(
-            "hfa-calendar-event-4", "calendar_event",
+            "hfa-calendar-event-4",
+            "calendar_event",
             frontmatter={"start_at": "2024-06-01T10:02:00Z"},
             summary="Meeting",
             participant_emails={"alice@x.com", "bob@x.com"},
@@ -179,13 +187,15 @@ class TestMeetingArtifact:
 
     def test_insufficient_participant_overlap(self):
         transcript = _make_sketch(
-            "hfa-meeting-transcript-5", "meeting_transcript",
+            "hfa-meeting-transcript-5",
+            "meeting_transcript",
             frontmatter={"start_at": "2024-06-01T10:00:00Z"},
             summary="1:1",
             participant_emails={"alice@x.com"},
         )
         event = _make_sketch(
-            "hfa-calendar-event-5", "calendar_event",
+            "hfa-calendar-event-5",
+            "calendar_event",
             frontmatter={"start_at": "2024-06-01T10:20:00Z"},
             summary="1:1",
             participant_emails={"alice@x.com"},
@@ -196,12 +206,14 @@ class TestMeetingArtifact:
 
     def test_negative_control_unrelated_events_same_day(self):
         transcript = _make_sketch(
-            "hfa-meeting-transcript-neg", "meeting_transcript",
+            "hfa-meeting-transcript-neg",
+            "meeting_transcript",
             frontmatter={"ical_uid": "XYZ-1"},
             summary="Board meeting",
         )
         event_unrelated = _make_sketch(
-            "hfa-calendar-event-neg", "calendar_event",
+            "hfa-calendar-event-neg",
+            "calendar_event",
             frontmatter={"ical_uid": "DIFFERENT"},
             summary="Team lunch",
         )
@@ -216,10 +228,10 @@ class TestMeetingArtifact:
 
 
 class TestTripCluster:
-
     def test_accommodation_flight_same_city_date_window(self):
         accom = _make_sketch(
-            "hfa-accommodation-1", "accommodation",
+            "hfa-accommodation-1",
+            "accommodation",
             frontmatter={
                 "address": "123 Market St, San Francisco, CA 94105",
                 "check_in": "2024-06-10T15:00:00Z",
@@ -228,7 +240,8 @@ class TestTripCluster:
             activity_at="2024-06-10T15:00:00Z",
         )
         flight = _make_sketch(
-            "hfa-flight-1", "flight",
+            "hfa-flight-1",
+            "flight",
             frontmatter={
                 "destination_airport": "SFO",
                 "arrival_at": "2024-06-10T13:00:00Z",
@@ -245,7 +258,8 @@ class TestTripCluster:
 
     def test_flight_wrong_city_rejected(self):
         accom = _make_sketch(
-            "hfa-accommodation-2", "accommodation",
+            "hfa-accommodation-2",
+            "accommodation",
             frontmatter={
                 "address": "1 Main, Seattle, WA",
                 "check_in": "2024-06-10T15:00:00Z",
@@ -253,7 +267,8 @@ class TestTripCluster:
             },
         )
         flight = _make_sketch(
-            "hfa-flight-2", "flight",
+            "hfa-flight-2",
+            "flight",
             frontmatter={
                 "destination_airport": "LAX",  # wrong city
                 "arrival_at": "2024-06-10T13:00:00Z",
@@ -265,7 +280,8 @@ class TestTripCluster:
 
     def test_flight_outside_date_window_rejected(self):
         accom = _make_sketch(
-            "hfa-accommodation-3", "accommodation",
+            "hfa-accommodation-3",
+            "accommodation",
             frontmatter={
                 "address": "1 Main, San Francisco, CA",
                 "check_in": "2024-06-10T15:00:00Z",
@@ -273,7 +289,8 @@ class TestTripCluster:
             },
         )
         flight = _make_sketch(
-            "hfa-flight-3", "flight",
+            "hfa-flight-3",
+            "flight",
             frontmatter={
                 "destination_airport": "SFO",
                 "arrival_at": "2024-07-01T13:00:00Z",  # way outside window
@@ -285,7 +302,8 @@ class TestTripCluster:
 
     def test_car_rental_match(self):
         accom = _make_sketch(
-            "hfa-accommodation-4", "accommodation",
+            "hfa-accommodation-4",
+            "accommodation",
             frontmatter={
                 "address": "1 Main, New York, NY",
                 "check_in": "2024-06-10T15:00:00Z",
@@ -293,7 +311,8 @@ class TestTripCluster:
             },
         )
         cr = _make_sketch(
-            "hfa-car-rental-4", "car_rental",
+            "hfa-car-rental-4",
+            "car_rental",
             frontmatter={
                 "pickup_location": "New York, NY",
                 "pickup_at": "2024-06-10T12:00:00Z",
@@ -308,7 +327,8 @@ class TestTripCluster:
 
     def test_unknown_iata_code_skips(self):
         accom = _make_sketch(
-            "hfa-accommodation-5", "accommodation",
+            "hfa-accommodation-5",
+            "accommodation",
             frontmatter={
                 "address": "1 Main, San Francisco, CA",
                 "check_in": "2024-06-10T15:00:00Z",
@@ -316,7 +336,8 @@ class TestTripCluster:
             },
         )
         flight = _make_sketch(
-            "hfa-flight-5", "flight",
+            "hfa-flight-5",
+            "flight",
             frontmatter={
                 "destination_airport": "ZZZ",  # not in bundled CSV
                 "arrival_at": "2024-06-10T13:00:00Z",
@@ -333,10 +354,10 @@ class TestTripCluster:
 
 
 class TestFinanceReconcile:
-
     def test_tier_source_email_primary_key_match(self):
         fin = _make_sketch(
-            "hfa-finance-1", "finance",
+            "hfa-finance-1",
+            "finance",
             frontmatter={
                 "amount": 42.17,
                 "currency": "USD",
@@ -346,7 +367,8 @@ class TestFinanceReconcile:
             activity_at="2024-06-10T00:00:00Z",
         )
         purchase = _make_sketch(
-            "hfa-purchase-1", "purchase",
+            "hfa-purchase-1",
+            "purchase",
             frontmatter={
                 "total": 42.17,
                 "currency": "USD",
@@ -365,7 +387,8 @@ class TestFinanceReconcile:
 
     def test_tier_high_amount_date_merchant(self):
         fin = _make_sketch(
-            "hfa-finance-2", "finance",
+            "hfa-finance-2",
+            "finance",
             frontmatter={
                 "amount": 42.17,
                 "currency": "USD",
@@ -374,7 +397,8 @@ class TestFinanceReconcile:
             activity_at="2024-06-10T00:00:00Z",
         )
         purchase = _make_sketch(
-            "hfa-purchase-2", "purchase",
+            "hfa-purchase-2",
+            "purchase",
             frontmatter={
                 "total": 42.17,
                 "currency": "USD",
@@ -391,7 +415,8 @@ class TestFinanceReconcile:
 
     def test_cross_currency_rejected(self):
         fin = _make_sketch(
-            "hfa-finance-3", "finance",
+            "hfa-finance-3",
+            "finance",
             frontmatter={
                 "amount": 100.00,
                 "currency": "USD",
@@ -400,7 +425,8 @@ class TestFinanceReconcile:
             activity_at="2024-06-10T00:00:00Z",
         )
         sub = _make_sketch(
-            "hfa-subscription-3", "subscription",
+            "hfa-subscription-3",
+            "subscription",
             frontmatter={
                 "price": 100.00,
                 "currency": "GBP",  # different
@@ -417,7 +443,8 @@ class TestFinanceReconcile:
         candidate. A LOW-tier (review-only) candidate is acceptable because
         amount + date alone legitimately warrants human review."""
         fin = _make_sketch(
-            "hfa-finance-4", "finance",
+            "hfa-finance-4",
+            "finance",
             frontmatter={
                 "amount": 42.17,
                 "currency": "USD",
@@ -426,7 +453,8 @@ class TestFinanceReconcile:
             activity_at="2024-06-10T00:00:00Z",
         )
         purchase = _make_sketch(
-            "hfa-purchase-4", "purchase",
+            "hfa-purchase-4",
+            "purchase",
             frontmatter={
                 "total": 42.17,
                 "currency": "USD",
@@ -444,7 +472,8 @@ class TestFinanceReconcile:
 
     def test_refund_with_extended_window(self):
         fin = _make_sketch(
-            "hfa-finance-5", "finance",
+            "hfa-finance-5",
+            "finance",
             frontmatter={
                 "amount": -30.00,
                 "currency": "USD",
@@ -454,7 +483,8 @@ class TestFinanceReconcile:
             activity_at="2024-07-15T00:00:00Z",
         )
         purchase = _make_sketch(
-            "hfa-purchase-5", "purchase",
+            "hfa-purchase-5",
+            "purchase",
             frontmatter={
                 "total": 30.00,
                 "currency": "USD",
@@ -471,7 +501,8 @@ class TestFinanceReconcile:
 
     def test_tier_low_amount_date_only(self):
         fin = _make_sketch(
-            "hfa-finance-6", "finance",
+            "hfa-finance-6",
+            "finance",
             frontmatter={
                 "amount": 42.17,
                 "currency": "USD",
@@ -480,7 +511,8 @@ class TestFinanceReconcile:
             activity_at="2024-06-10T00:00:00Z",
         )
         purchase = _make_sketch(
-            "hfa-purchase-6", "purchase",
+            "hfa-purchase-6",
+            "purchase",
             frontmatter={
                 "total": 42.17,
                 "currency": "USD",
@@ -498,28 +530,32 @@ class TestFinanceReconcile:
         """Regression guard: ride card's amount field is 'fare' (+ 'tip'),
         not the (non-existent) 'fare_amount'. Phase 6.5 plan review fixed this."""
         ride = _make_sketch(
-            "hfa-ride-regression", "ride",
+            "hfa-ride-regression",
+            "ride",
             frontmatter={"fare": 15.00, "tip": 3.00, "service": "Uber"},
         )
         assert fr_mod._amount_for(ride) == 18.00
 
     def test_payroll_uses_net_amount(self):
         paycheck = _make_sketch(
-            "hfa-payroll-regression", "payroll",
+            "hfa-payroll-regression",
+            "payroll",
             frontmatter={"gross_amount": 5000.0, "net_amount": 3200.0},
         )
         assert fr_mod._amount_for(paycheck) == 3200.0
 
     def test_subscription_zero_price_skipped(self):
         free_trial = _make_sketch(
-            "hfa-subscription-trial", "subscription",
+            "hfa-subscription-trial",
+            "subscription",
             frontmatter={"price": 0.0},
         )
         assert fr_mod._amount_for(free_trial) == 0.0
 
     def test_zero_amount_source_skipped(self):
         fin = _make_sketch(
-            "hfa-finance-zero", "finance",
+            "hfa-finance-zero",
+            "finance",
             frontmatter={"amount": 0.0, "counterparty": "ATM"},
         )
         cat = _populate_catalog([fin])
@@ -542,7 +578,8 @@ class TestFinanceSourceEmailCorroboration:
 
     def test_two_corroborating_signals_promotes(self):
         fin = _make_sketch(
-            "hfa-finance-corr-2", "finance",
+            "hfa-finance-corr-2",
+            "finance",
             frontmatter={
                 "amount": 42.17,
                 "currency": "USD",
@@ -552,7 +589,8 @@ class TestFinanceSourceEmailCorroboration:
             activity_at="2024-06-10T00:00:00Z",
         )
         purchase = _make_sketch(
-            "hfa-purchase-corr-2", "purchase",
+            "hfa-purchase-corr-2",
+            "purchase",
             frontmatter={
                 "total": 42.17,
                 "currency": "USD",
@@ -574,7 +612,8 @@ class TestFinanceSourceEmailCorroboration:
         merchant mismatch -> only 1 corroborating signal (date) -> WEAK
         tier with score below auto_promote_floor."""
         fin = _make_sketch(
-            "hfa-finance-corr-1", "finance",
+            "hfa-finance-corr-1",
+            "finance",
             frontmatter={
                 "amount": 42.17,
                 "currency": "USD",
@@ -584,7 +623,8 @@ class TestFinanceSourceEmailCorroboration:
             activity_at="2024-06-10T00:00:00Z",
         )
         purchase = _make_sketch(
-            "hfa-purchase-corr-1", "purchase",
+            "hfa-purchase-corr-1",
+            "purchase",
             frontmatter={
                 "total": 99.99,  # amount mismatch
                 "currency": "USD",
@@ -611,7 +651,8 @@ class TestFinanceSourceEmailCorroboration:
         upstream resolver is LLM-driven and bare wikilinks are a known
         false-positive source."""
         fin = _make_sketch(
-            "hfa-finance-bare", "finance",
+            "hfa-finance-bare",
+            "finance",
             frontmatter={
                 "amount": 42.17,
                 "currency": "USD",
@@ -621,7 +662,8 @@ class TestFinanceSourceEmailCorroboration:
             activity_at="2024-06-10T00:00:00Z",
         )
         purchase = _make_sketch(
-            "hfa-purchase-bare", "purchase",
+            "hfa-purchase-bare",
+            "purchase",
             frontmatter={
                 "total": 999.99,  # amount mismatch
                 "currency": "USD",
@@ -647,7 +689,8 @@ class TestTripClusterCityMatchStrength:
         but is not exact. Result: TRIP_TIER_ACCOM_FLIGHT_LOOSE with score
         below auto_promote_floor."""
         accom = _make_sketch(
-            "hfa-accommodation-loose", "accommodation",
+            "hfa-accommodation-loose",
+            "accommodation",
             frontmatter={
                 "address": "1 Main, San Francisco Bay Area, CA",
                 "check_in": "2024-06-10T15:00:00Z",
@@ -655,7 +698,8 @@ class TestTripClusterCityMatchStrength:
             },
         )
         flight = _make_sketch(
-            "hfa-flight-loose", "flight",
+            "hfa-flight-loose",
+            "flight",
             frontmatter={
                 "destination_airport": "SFO",  # iata_to_city -> "san francisco"
                 "arrival_at": "2024-06-10T13:00:00Z",
@@ -674,7 +718,8 @@ class TestTripClusterCityMatchStrength:
 
     def test_exact_city_match_auto_promotes(self):
         accom = _make_sketch(
-            "hfa-accommodation-exact", "accommodation",
+            "hfa-accommodation-exact",
+            "accommodation",
             frontmatter={
                 "address": "1 Main, San Francisco, CA",
                 "check_in": "2024-06-10T15:00:00Z",
@@ -682,7 +727,8 @@ class TestTripClusterCityMatchStrength:
             },
         )
         flight = _make_sketch(
-            "hfa-flight-exact", "flight",
+            "hfa-flight-exact",
+            "flight",
             frontmatter={
                 "destination_airport": "SFO",
                 "arrival_at": "2024-06-10T13:00:00Z",
@@ -698,7 +744,8 @@ class TestTripClusterCityMatchStrength:
 
     def test_carrental_substring_city_demotes_to_review(self):
         accom = _make_sketch(
-            "hfa-accommodation-cr-loose", "accommodation",
+            "hfa-accommodation-cr-loose",
+            "accommodation",
             frontmatter={
                 "address": "1 Main, New York Metro, NY",
                 "check_in": "2024-06-10T15:00:00Z",
@@ -706,7 +753,8 @@ class TestTripClusterCityMatchStrength:
             },
         )
         cr = _make_sketch(
-            "hfa-car-rental-loose", "car_rental",
+            "hfa-car-rental-loose",
+            "car_rental",
             frontmatter={
                 "pickup_location": "New York, NY",
                 "pickup_at": "2024-06-10T12:00:00Z",

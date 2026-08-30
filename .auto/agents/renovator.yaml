@@ -1,0 +1,9 @@
+annotations:
+  auto.sh/onboarding-kickoff-run-id: onbrun_740adba1-5cf9-4dea-9a5c-3637f204dee0
+  auto.sh/onboarding-kickoff-correlation-key: 3238f3f2-fc08-47ce-9148-bf58b15a7652
+imports:
+  - "@auto/slopbusters@latest/agents/renovator-onboarding.yaml"
+variables:
+  repoFullName: rheeger/ppa
+  githubConnection: github-rheeger
+  onboardingRunId: onbrun_740adba1-5cf9-4dea-9a5c-3637f204dee0

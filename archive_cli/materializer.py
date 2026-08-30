@@ -15,8 +15,7 @@ from archive_vault.vault import extract_wikilinks, read_note_file
 
 from .card_registry import REGISTRATION_BY_CARD_TYPE
 from .chunking import render_chunks_for_card
-from .features import (TIMELINE_FIELDS, card_activity_at, card_activity_end_at,
-                       iter_external_ids, parse_timestamp_to_utc)
+from .features import TIMELINE_FIELDS, card_activity_at, card_activity_end_at, iter_external_ids, parse_timestamp_to_utc
 from .index_config import CHUNK_SCHEMA_VERSION
 from .ppa_engine import ppa_engine
 from .projections.base import ProjectionRowBuffer, build_projection_row
@@ -43,9 +42,7 @@ def build_target_field_index(rows: list[CanonicalRow]) -> dict[str, dict[str, st
             if rule.target_lookup_field and rule.target_card_type:
                 keys_needed.add((rule.target_card_type, rule.target_lookup_field))
 
-    index: dict[str, dict[str, str]] = {
-        target_field_index_key(ct, f): {} for ct, f in keys_needed
-    }
+    index: dict[str, dict[str, str]] = {target_field_index_key(ct, f): {} for ct, f in keys_needed}
     for row in rows:
         ct = row.card.type
         fm = row.frontmatter
@@ -333,14 +330,8 @@ def _build_edges(
                     continue
                 if rule.target == "card":
                     resolved_by_field = False
-                    if (
-                        rule.target_lookup_field
-                        and rule.target_card_type
-                        and target_field_index
-                    ):
-                        tkey = target_field_index_key(
-                            rule.target_card_type, rule.target_lookup_field
-                        )
+                    if rule.target_lookup_field and rule.target_card_type and target_field_index:
+                        tkey = target_field_index_key(rule.target_card_type, rule.target_lookup_field)
                         sub = target_field_index.get(tkey) or {}
                         raw_v = v.strip()
                         target_path = sub.get(raw_v) or sub.get(raw_v.lower())
@@ -421,9 +412,7 @@ def _materialize_row(
     activity_end_raw = card_activity_end_at(card.type, frontmatter)
     activity_end_at = parse_timestamp_to_utc(activity_end_raw)
     timeline_values = {field: str(frontmatter.get(field, "") or "") for field in TIMELINE_FIELDS}
-    quality_score, quality_flag_list = _compute_quality_score(
-        card.type, frontmatter, body=body, summary=card.summary
-    )
+    quality_score, quality_flag_list = _compute_quality_score(card.type, frontmatter, body=body, summary=card.summary)
     quality_flags_for_row: list[str] = list(quality_flag_list)
     source_adapter = str(card.source[0]).strip() if card.source else ""
 

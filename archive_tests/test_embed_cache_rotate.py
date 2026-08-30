@@ -55,9 +55,7 @@ def test_rotate_moves_files_into_new_run_dir(tmp_path: Path) -> None:
     new_run = Path(out["new_run"])
     assert new_run.exists()
     assert new_run.parent == cache
-    assert sorted(p.name for p in new_run.glob("*-out.jsonl")) == sorted(
-        f.name for f in files
-    )
+    assert sorted(p.name for p in new_run.glob("*-out.jsonl")) == sorted(f.name for f in files)
     # Manifest written.
     assert (new_run / "MANIFEST.txt").is_file()
     # Originals were moved (not copied).
@@ -73,7 +71,7 @@ def test_rotate_prunes_to_keep_n(tmp_path: Path) -> None:
         d.mkdir(parents=True)
         (d / "batch_old-out.jsonl").write_text("x", encoding="utf-8")
     _make_batch_files(art, 1)
-    out = embed_cache_rotate(
+    embed_cache_rotate(
         logger=logging.getLogger("test"),
         artifact_dir=str(art),
         cache_dir=str(cache),

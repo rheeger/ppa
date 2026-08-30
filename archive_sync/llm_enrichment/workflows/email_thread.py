@@ -58,9 +58,7 @@ def gate_email_thread_card(card: dict[str, Any]) -> bool:
 
 # Phase 2.75 classify stores categories like noise / marketing / automated / personal / transactional.
 # For enrichment we skip threads that were clearly noise or automated; keep personal + transactional.
-_CLASSIFY_INDEX_SKIP_FOR_ENRICHMENT = frozenset(
-    {"noise", "marketing", "automated", "skip"}
-)
+_CLASSIFY_INDEX_SKIP_FOR_ENRICHMENT = frozenset({"noise", "marketing", "automated", "skip"})
 
 # Gmail adapter uses inbound/outbound; older cards may use received/sent.
 _OUTBOUND_DIRECTIONS = frozenset({"sent", "outbound"})
@@ -97,9 +95,7 @@ def prefilter_email_thread(
 
     from_emails = [s.from_email for s in thread_stubs if s.from_email]
     subjects = [s.subject for s in thread_stubs if s.subject]
-    decision, _ = classify_thread_prefilter(
-        from_emails, subjects, user_domains=user_domains
-    )
+    decision, _ = classify_thread_prefilter(from_emails, subjects, user_domains=user_domains)
     if decision == "skip":
         return False, "known_noise"
 

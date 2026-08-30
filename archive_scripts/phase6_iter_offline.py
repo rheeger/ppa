@@ -108,12 +108,14 @@ def evaluate_turn(label: str, cfg: dict[str, Any], cache: dict[str, Any]) -> dic
                 decision = "review"
             else:
                 decision = "discard"
-            decisions.append({
-                **e,
-                "final_confidence": round(final, 6),
-                "decision": decision,
-                "band": _band(final),
-            })
+            decisions.append(
+                {
+                    **e,
+                    "final_confidence": round(final, 6),
+                    "decision": decision,
+                    "band": _band(final),
+                }
+            )
 
     decisions.sort(key=lambda x: -x["final_confidence"])
 
@@ -121,8 +123,14 @@ def evaluate_turn(label: str, cfg: dict[str, Any], cache: dict[str, Any]) -> dic
     surfaceable = sum(1 for d in decisions if d["final_confidence"] >= auto_review_floor)
     auto_promotable = sum(1 for d in decisions if d["final_confidence"] >= auto_promote_floor)
     cross_type = sum(1 for d in decisions if d["source_type"] != d["target_type"])
-    band_order = ["band_4_0.95+", "band_3_0.85_0.95", "band_2_0.70_0.85",
-                  "band_1_0.50_0.70", "band_a_0.30_0.50", "band_0_below_0.30"]
+    band_order = [
+        "band_4_0.95+",
+        "band_3_0.85_0.95",
+        "band_2_0.70_0.85",
+        "band_1_0.50_0.70",
+        "band_a_0.30_0.50",
+        "band_0_below_0.30",
+    ]
 
     summary = [
         f"# Iteration {label} — semantic linker offline re-eval",
@@ -177,15 +185,19 @@ def evaluate_turn(label: str, cfg: dict[str, Any], cache: dict[str, Any]) -> dic
     out_json.write_text(json.dumps(decisions, indent=2))
 
     return {
-        "label": label, "config": cfg,
-        "total": len(decisions), "surfaceable": surfaceable,
-        "auto_promotable": auto_promotable, "cross_type": cross_type,
+        "label": label,
+        "config": cfg,
+        "total": len(decisions),
+        "surfaceable": surfaceable,
+        "auto_promotable": auto_promotable,
+        "cross_type": cross_type,
         "bands": {b: band_counts.get(b, 0) for b in band_order},
     }
 
 
 def main() -> None:
     import os
+
     cache_path = Path(os.environ.get("PHASE6_CACHE", str(DEFAULT_CACHE_PATH)))
     if not cache_path.exists():
         raise SystemExit(f"cache not found at {cache_path}; run phase6_precompute.py first")

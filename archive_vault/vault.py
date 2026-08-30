@@ -120,7 +120,8 @@ def iter_parsed_notes_for_card_types(
                 import archive_crate
 
                 rows = archive_crate.notes_from_cache(
-                    str(cache_path), types=list(types_set),
+                    str(cache_path),
+                    types=list(types_set),
                 )
                 for row in rows:
                     yield ParsedNoteRecord(

@@ -43,7 +43,7 @@ def main() -> int:
         max_tokens=128,
     )
     if not r.parsed_json or r.parsed_json.get("status") != "ok":
-        print(f"chat_json did not return {{\"status\": \"ok\"}}: {r.content!r}", file=sys.stderr)
+        print(f'chat_json did not return {{"status": "ok"}}: {r.content!r}', file=sys.stderr)
         return 1
 
     tok_s = 0.0

@@ -122,7 +122,7 @@ def test_extraction_truncates_long_threads(monkeypatch: pytest.MonkeyPatch) -> N
             rel_path=f"Email/{i}.md",
             from_email="x@y.com",
             from_name="X",
-            sent_at=f"2025-01-{i+1:02d}",
+            sent_at=f"2025-01-{i + 1:02d}",
             subject="S",
             body=body,
             direction="inbound",

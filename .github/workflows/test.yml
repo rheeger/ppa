@@ -27,7 +27,52 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -e ".[dev]"
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-workspaces: archive_crate -> target
+          rustflags: ""
+      - name: Create Python virtualenv
+        run: |
+          python -m venv .venv
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
+      - name: Install Python test dependencies
+        run: python -m pip install -e ".[dev]" maturin
+      - name: Build and install archive_crate wheel
+        run: |
+          maturin build --release --locked --manifest-path archive_crate/Cargo.toml --interpreter "$VIRTUAL_ENV/bin/python" --out dist
+          python -m pip install --force-reinstall --no-deps dist/archive_crate-*.whl
+      - name: Verify archive_crate extension
+        run: |
+          python - <<'PY'
+          from importlib.machinery import EXTENSION_SUFFIXES
+          from pathlib import Path
+          import sys
+
+          import archive_crate
+
+          required = (
+              "walk_vault",
+              "BodyCache",
+              "chunk_hash",
+              "stable_json_from_yaml_frontmatter",
+          )
+          missing = [name for name in required if not hasattr(archive_crate, name)]
+          assert not missing, f"archive_crate missing expected symbols: {missing}"
+          native = sys.modules[archive_crate.walk_vault.__module__]
+          native_path = Path(native.__file__)
+          print(f"archive_crate extension: {native_path}")
+          print(f"verified symbols: {', '.join(required)}")
+          assert any(str(native_path).endswith(suffix) for suffix in EXTENSION_SUFFIXES), native_path
+          PY
+      - name: Run focused archive_crate tests
+        run: |
+          python -m pytest \
+            archive_tests/test_archive_crate_smoke.py \
+            archive_tests/test_archive_crate_cache.py \
+            archive_tests/test_chunk_hash_parity.py \
+            archive_tests/test_json_parity_frontmatter.py \
+            -v --tb=short
       - run: python -m pytest archive_tests/ -v --tb=short -m "not integration and not slow"
         env:
           PPA_INDEX_DSN: "postgresql://unused:unused@localhost/unused"
@@ -46,16 +91,65 @@ jobs:
         ports:
           - 5432:5432
         options: >-
+          --shm-size=512m
           --health-cmd="pg_isready -U archive"
           --health-interval=5s
           --health-timeout=5s
           --health-retries=10
     steps:
       - uses: actions/checkout@v4
+      - name: Apply PostgreSQL test contract
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          docker cp archive_tests/docker/postgres-test.conf "$POSTGRES_CONTAINER:/tmp/postgres-test.conf"
+          docker exec "$POSTGRES_CONTAINER" sh -ceu \
+            'printf "\ninclude = '\''/tmp/postgres-test.conf'\''\n" >> "$PGDATA/postgresql.conf"'
+          docker restart "$POSTGRES_CONTAINER"
+          until docker exec "$POSTGRES_CONTAINER" pg_isready -U archive -d archive; do
+            sleep 1
+          done
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -e ".[dev]"
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-workspaces: archive_crate -> target
+          rustflags: ""
+      - name: Create Python virtualenv
+        run: |
+          python -m venv .venv
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
+      - name: Install Python test dependencies
+        run: python -m pip install -e ".[dev]" maturin
+      - name: Build and install archive_crate wheel
+        run: |
+          maturin build --release --locked --manifest-path archive_crate/Cargo.toml --interpreter "$VIRTUAL_ENV/bin/python" --out dist
+          python -m pip install --force-reinstall --no-deps dist/archive_crate-*.whl
+      - name: Verify archive_crate extension
+        run: |
+          python - <<'PY'
+          from importlib.machinery import EXTENSION_SUFFIXES
+          from pathlib import Path
+          import sys
+
+          import archive_crate
+
+          required = (
+              "walk_vault",
+              "BodyCache",
+              "chunk_hash",
+              "stable_json_from_yaml_frontmatter",
+          )
+          missing = [name for name in required if not hasattr(archive_crate, name)]
+          assert not missing, f"archive_crate missing expected symbols: {missing}"
+          native = sys.modules[archive_crate.walk_vault.__module__]
+          native_path = Path(native.__file__)
+          print(f"archive_crate extension: {native_path}")
+          print(f"verified symbols: {', '.join(required)}")
+          assert any(str(native_path).endswith(suffix) for suffix in EXTENSION_SUFFIXES), native_path
+          PY
       - name: Prepare CI vault
         run: |
           VAULT="${RUNNER_TEMP}/ppa-ci-vault"
@@ -97,7 +191,7 @@ jobs:
           PPA_EMBEDDING_PROVIDER: hash
           PPA_EMBEDDING_MODEL: archive-hash-dev
           PPA_EMBEDDING_VERSION: "1"
-        run: chmod +x scripts/ppa-smoke-test.sh && ./scripts/ppa-smoke-test.sh
+        run: chmod +x archive_scripts/ppa-smoke-test.sh && ./archive_scripts/ppa-smoke-test.sh
 
   slice-verify:
     runs-on: ubuntu-latest
@@ -122,9 +216,19 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e ".[dev]"
-      - name: Prepare slice from fixtures
+      - name: Prepare fixture vault
         run: |
-          python -m archive_cli slice-seed --config archive_archive_tests/slice_config.json --output /tmp/ppa-test-slice --source-vault archive_archive_tests/fixtures
+          python - <<'PY'
+          from pathlib import Path
+          import shutil
+          from archive_tests.fixtures import load_fixture_vault
+
+          dest = Path("/tmp/ppa-test-slice")
+          if dest.exists():
+              shutil.rmtree(dest)
+          vault = load_fixture_vault(dest, include_graphs=True)
+          print(f"prepared fixture vault at {vault}")
+          PY
       - name: Bootstrap, rebuild, and verify
         env:
           PPA_INDEX_DSN: postgresql://archive:archive@localhost:5432/archive
@@ -136,7 +240,14 @@ jobs:
         run: |
           python -m archive_cli bootstrap-postgres
           python -m archive_cli rebuild-indexes
-          python -m archive_cli health-check --manifest tests/slice_manifest_fixture.json --report-format both --report-dir /tmp/
+          # health-check structural gate requires embeddings for all chunks
+          python -m archive_cli embed-pending --limit 0 --embedding-model archive-hash-dev --embedding-version 1
+          python -m archive_cli health-check --manifest archive_tests/slice_manifest_fixture.json --report-format both --report-dir /tmp/ || {
+            echo "health-check failed; dumping reports" >&2
+            cat /tmp/health-report.md 2>/dev/null || true
+            cat /tmp/health-report.json 2>/dev/null || true
+            exit 1
+          }
 
   benchmark-nightly:
     runs-on: ubuntu-latest

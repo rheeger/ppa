@@ -184,9 +184,7 @@ def test_ingest_logs_conflicts(tmp_vault):
         ]
     )
     result = adapter.ingest(str(tmp_vault))
-    assert result.conflicted + result.merged >= 1, (
-        f"Expected conflict or merge for Robert/Robbie Heeger, got {result}"
-    )
+    assert result.conflicted + result.merged >= 1, f"Expected conflict or merge for Robert/Robbie Heeger, got {result}"
 
 
 def test_ingest_dry_run_writes_nothing(tmp_vault):

@@ -310,9 +310,7 @@ def run_sender_census(
     if top_subject_shapes > 0 and shape_counter:
         lines.append(f"## Most common subject shapes (normalized; top {top_subject_shapes})")
         lines.append("")
-        lines.append(
-            "Digits collapsed to `#` / `[date]` / `[time]` to surface template patterns."
-        )
+        lines.append("Digits collapsed to `#` / `[date]` / `[time]` to surface template patterns.")
         lines.append("")
         lines.append("| Count | Shape |")
         lines.append("|------:|-------|")
@@ -358,9 +356,7 @@ def run_sender_census(
         for e in rows_c:
             sd = (e.get("sent_at") or "")[:10] or "—"
             fe = _md_cell(e.get("from_email", ""), 56)
-            lines.append(
-                f"| {e.get('uid', '')} | `{fe}` | {_md_cell(e.get('subject', ''), 100)} | {sd} |"
-            )
+            lines.append(f"| {e.get('uid', '')} | `{fe}` | {_md_cell(e.get('subject', ''), 100)} | {sd} |")
         lines.append("")
 
     text = "\n".join(lines).strip() + "\n"

@@ -1,9 +1,9 @@
 ---
-uid: fx-ic-1
+uid: hfa-email-fx-ic-1
 type: email_message
 from_email: customers@instacartemail.com
 subject: Your order from Wegmans was delivered
-sent_at: 2025-10-23T16:30:00-04:00
+sent_at: "2025-10-23T16:30:00-04:00"
 summary: Delivered
 source: [gmail]
 source_id: gmail.ic1

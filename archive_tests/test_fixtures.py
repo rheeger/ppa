@@ -49,9 +49,7 @@ def test_graph_zero_orphans() -> None:
         for p in paths:
             note = read_note_file(p, vault_root=FIXTURES_DIR)
             for wikilink_slug in extract_wikilinks(note.body):
-                assert wikilink_slug in slugs, (
-                    f"Graph {graph_name}: orphaned wikilink [[{wikilink_slug}]] in {p.name}"
-                )
+                assert wikilink_slug in slugs, f"Graph {graph_name}: orphaned wikilink [[{wikilink_slug}]] in {p.name}"
 
 
 def test_graph_edge_rules_fire() -> None:

@@ -1,9 +1,9 @@
 ---
-uid: fx-rc-1
+uid: hfa-email-fx-rc-1
 type: email_message
 from_email: email@nationalcar.com
 subject: Your reservation is confirmed
-sent_at: 2025-12-20T09:00:00-08:00
+sent_at: "2025-12-20T09:00:00-08:00"
 summary: Reservation
 source: [gmail]
 source_id: gmail.rc1

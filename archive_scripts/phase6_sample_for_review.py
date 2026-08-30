@@ -56,18 +56,20 @@ def _apply_production_gate(cache_path: Path) -> list[dict[str, Any]]:
         if score < AUTO_REVIEW_FLOOR:
             continue
         decision = "auto_promote" if score >= AUTO_PROMOTE_FLOOR else "review"
-        surfaced.append({
-            **v,
-            "final_confidence": round(score, 6),
-            "decision": decision,
-        })
+        surfaced.append(
+            {
+                **v,
+                "final_confidence": round(score, 6),
+                "decision": decision,
+            }
+        )
     return surfaced
 
 
 def _hydrate(dsn: str, schema: str, uids: list[str]) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
     with psycopg.connect(dsn, row_factory=dict_row) as conn:
-        for chunk in [uids[i:i+500] for i in range(0, len(uids), 500)]:
+        for chunk in [uids[i : i + 500] for i in range(0, len(uids), 500)]:
             rows = conn.execute(
                 f"SELECT uid, rel_path, type, summary FROM {schema}.cards WHERE uid = ANY(%s)",
                 (chunk,),
@@ -175,11 +177,32 @@ def _summary_line(card_type: str, fm: dict[str, Any], body: str, summary: str) -
             bits.append(f"name={(first + ' ' + last).strip()}")
         if emails:
             bits.append(f"emails={_truncate(','.join(emails[:2]), 60)}")
-    elif card_type in {"finance", "purchase", "meal_order", "grocery_order", "ride", "flight",
-                        "accommodation", "car_rental", "subscription", "event_ticket",
-                        "shipment", "payroll"}:
-        for fld in ("merchant", "vendor", "service_provider", "title", "amount",
-                    "venue", "destination", "origin", "transaction_date", "start_at"):
+    elif card_type in {
+        "finance",
+        "purchase",
+        "meal_order",
+        "grocery_order",
+        "ride",
+        "flight",
+        "accommodation",
+        "car_rental",
+        "subscription",
+        "event_ticket",
+        "shipment",
+        "payroll",
+    }:
+        for fld in (
+            "merchant",
+            "vendor",
+            "service_provider",
+            "title",
+            "amount",
+            "venue",
+            "destination",
+            "origin",
+            "transaction_date",
+            "start_at",
+        ):
             v = fm.get(fld)
             if v:
                 bits.append(f"{fld}={_truncate(v, 60)}")
@@ -218,6 +241,7 @@ def _summary_line(card_type: str, fm: dict[str, Any], body: str, summary: str) -
 
 def _structural_link(src_uid: str, src_fm: dict, tgt_uid: str, tgt_fm: dict) -> str:
     """Return a short tag if there's an obvious frontmatter link; '' otherwise."""
+
     def _refs(fm: dict, fields: tuple[str, ...]) -> set[str]:
         refs: set[str] = set()
         for f in fields:
@@ -230,8 +254,15 @@ def _structural_link(src_uid: str, src_fm: dict, tgt_uid: str, tgt_fm: dict) -> 
                     refs.add(s.strip())
         return refs
 
-    container_fields = ("messages", "attachments", "calendar_events", "people",
-                         "source_messages", "source_threads", "meeting_transcripts")
+    container_fields = (
+        "messages",
+        "attachments",
+        "calendar_events",
+        "people",
+        "source_messages",
+        "source_threads",
+        "meeting_transcripts",
+    )
     src_refs = _refs(src_fm, container_fields)
     tgt_refs = _refs(tgt_fm, container_fields)
     if tgt_uid in src_refs:
@@ -301,7 +332,7 @@ def main() -> None:
         "- gate: production policy v5 — dual-tier formula. Same-type pairs require"
         " `verdict=YES, llm>=0.90, emb>=0.85`. Cross-type pairs require"
         " `verdict=YES, llm>=0.70, emb>=0.55`. Floor: 0.50 auto-promote / 0.40 review.",
-        f"- surfaced total: **{len(surf)}** (auto={sum(1 for d in surf if d['decision']=='auto_promote')}, review={len(surf) - sum(1 for d in surf if d['decision']=='auto_promote')})",
+        f"- surfaced total: **{len(surf)}** (auto={sum(1 for d in surf if d['decision'] == 'auto_promote')}, review={len(surf) - sum(1 for d in surf if d['decision'] == 'auto_promote')})",
         f"- sampled: **{len(sample)}** ({len(pick_cross)} cross-type + {len(pick_same)} same-type)",
         "",
         "## How to read this",
@@ -334,9 +365,11 @@ def main() -> None:
         if src_class or tgt_class:
             class_tag = f"  · src.class={src_class or '-'}  tgt.class={tgt_class or '-'}"
 
-        md.append(f"### {i}. {d['source_type']} → {d['target_type']}  "
-                  f"emb={d['embedding_similarity']:.2f} llm={d['llm_score']:.2f} "
-                  f"final={d['final_confidence']:.2f}  decision=`{d['decision']}`")
+        md.append(
+            f"### {i}. {d['source_type']} → {d['target_type']}  "
+            f"emb={d['embedding_similarity']:.2f} llm={d['llm_score']:.2f} "
+            f"final={d['final_confidence']:.2f}  decision=`{d['decision']}`"
+        )
         md.append(f"- **S** `{d['source_rel_path']}`  ·  {src_line}")
         md.append(f"- **T** `{d['target_rel_path']}`  ·  {tgt_line}")
         if link_tag:
@@ -346,20 +379,22 @@ def main() -> None:
         md.append(f"- **Verdict {i}:** __  (TP / FP / Unclear)")
         md.append("")
 
-    md.extend([
-        "---",
-        "",
-        "## Tally (fill in after review)",
-        "",
-        "- Cross-type TP / FP / Unclear: __ / __ / __",
-        "- Same-type TP / FP / Unclear: __ / __ / __",
-        "- Overall precision (TP / (TP+FP)): __",
-        "",
-        "**Calibration response:**",
-        "- ≥0.95 → loosen gate (e.g. `auto_promote_floor=0.80`)",
-        "- 0.90–0.95 → keep current gate",
-        "- <0.90 → tighten (e.g. `min_llm=0.95`, `auto_promote_floor=0.90`)",
-    ])
+    md.extend(
+        [
+            "---",
+            "",
+            "## Tally (fill in after review)",
+            "",
+            "- Cross-type TP / FP / Unclear: __ / __ / __",
+            "- Same-type TP / FP / Unclear: __ / __ / __",
+            "- Overall precision (TP / (TP+FP)): __",
+            "",
+            "**Calibration response:**",
+            "- ≥0.95 → loosen gate (e.g. `auto_promote_floor=0.80`)",
+            "- 0.90–0.95 → keep current gate",
+            "- <0.90 → tighten (e.g. `min_llm=0.95`, `auto_promote_floor=0.90`)",
+        ]
+    )
     out_path.write_text("\n".join(md) + "\n")
     print(f"wrote {out_path}  ({sum(1 for _ in open(out_path))} lines)")
 

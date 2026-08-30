@@ -11,7 +11,9 @@ from archive_tests.archive_sync.extractors.conftest import write_email_to_vault
 
 def _load_verify():
     root = Path(__file__).resolve().parents[3]
-    spec = importlib.util.spec_from_file_location("verify_ground_truth", root / "archive_scripts" / "verify_ground_truth.py")
+    spec = importlib.util.spec_from_file_location(
+        "verify_ground_truth", root / "archive_scripts" / "verify_ground_truth.py"
+    )
     mod = importlib.util.module_from_spec(spec)
     assert spec.loader
     spec.loader.exec_module(mod)

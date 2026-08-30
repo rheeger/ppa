@@ -37,6 +37,7 @@ def _mock_provider(category: str, confidence: float, card_types: list[str] | Non
 # render_classify_input
 # ---------------------------------------------------------------------------
 
+
 def test_render_classify_input_includes_subject() -> None:
     text = render_classify_input("Order Confirmation", "shop@amazon.com", "Your order has shipped", 1)
     assert "Subject: Order Confirmation" in text
@@ -60,6 +61,7 @@ def test_render_classify_input_handles_empty() -> None:
 # ---------------------------------------------------------------------------
 # _result_from_raw
 # ---------------------------------------------------------------------------
+
 
 def test_result_transactional_high_confidence() -> None:
     r = _result_from_raw({"category": "transactional", "confidence": 0.95}, cache_hit=False)
@@ -100,6 +102,7 @@ def test_result_preserves_cache_hit() -> None:
 # classify_thread (mocked LLM)
 # ---------------------------------------------------------------------------
 
+
 def test_classify_transactional() -> None:
     prov = _mock_provider("transactional", 0.95)
     r = classify_thread(prov, "Subject: Your Uber receipt")
@@ -118,8 +121,12 @@ def test_classify_noise_on_empty_response() -> None:
     prov = MagicMock()
     prov.model = "m"
     prov.chat_json.return_value = LLMResponse(
-        content="", parsed_json=None, model="m",
-        prompt_tokens=0, completion_tokens=0, latency_ms=1.0,
+        content="",
+        parsed_json=None,
+        model="m",
+        prompt_tokens=0,
+        completion_tokens=0,
+        latency_ms=1.0,
     )
     r = classify_thread(prov, "Subject: test")
     assert r.category == "noise"
@@ -155,6 +162,7 @@ def test_result_transactional_missing_confidence_defaults_high() -> None:
 # ---------------------------------------------------------------------------
 # Cache integration
 # ---------------------------------------------------------------------------
+
 
 def test_classify_cache_hit_skips_llm() -> None:
     prov = _mock_provider("transactional", 0.9)

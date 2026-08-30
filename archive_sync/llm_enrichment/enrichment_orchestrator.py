@@ -12,12 +12,9 @@ from pathlib import Path
 from typing import Any
 
 from archive_sync.llm_enrichment.cache import InferenceCache
-from archive_sync.llm_enrichment.card_enrichment_runner import \
-    CardEnrichmentRunner
-from archive_sync.llm_enrichment.defaults import \
-    DEFAULT_ENRICH_CARD_GEMINI_MODEL
-from archive_sync.llm_enrichment.document_text_extractor import \
-    run_document_text_extraction
+from archive_sync.llm_enrichment.card_enrichment_runner import CardEnrichmentRunner
+from archive_sync.llm_enrichment.defaults import DEFAULT_ENRICH_CARD_GEMINI_MODEL
+from archive_sync.llm_enrichment.document_text_extractor import run_document_text_extraction
 from archive_sync.llm_enrichment.enrich_runner import LlmEnrichmentRunner
 
 log = logging.getLogger("ppa.enrichment_orchestrator")
@@ -168,14 +165,10 @@ class EnrichmentOrchestrator:
         if self.manifest_path.is_file():
             m = EnrichmentManifest.load(self.manifest_path)
             if m.run_id != self.run_id:
-                raise ValueError(
-                    f"manifest run_id mismatch: file has {m.run_id!r}, expected {self.run_id!r}"
-                )
+                raise ValueError(f"manifest run_id mismatch: file has {m.run_id!r}, expected {self.run_id!r}")
             vp = Path(m.vault_path).resolve()
             if vp != self.vault_path:
-                raise ValueError(
-                    f"manifest vault_path mismatch: file has {vp}, this run uses {self.vault_path}"
-                )
+                raise ValueError(f"manifest vault_path mismatch: file has {vp}, this run uses {self.vault_path}")
             for s in m.steps:
                 if s.status == "running":
                     s.status = "pending"

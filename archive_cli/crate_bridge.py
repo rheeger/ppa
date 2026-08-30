@@ -1,8 +1,4 @@
-"""Python implementations invoked from ``archive_crate`` (Phase 2.9 delegation).
-
-Steps 10, 13–14, 18: ``rebuild_index``, ``build_person_index``, ``resolve_person_batch`` bridge
-here so Rust can call a single stable module path without circular imports at import time.
-"""
+"""Python implementation invoked from ``archive_crate`` for Phase 2.9 Step 18."""
 
 from __future__ import annotations
 
@@ -37,22 +33,3 @@ def rebuild_index(
         no_cache=no_cache,
         uid_allowlist=uid_allowlist,
     )
-
-
-def build_person_index(vault_path: str, cache_path: str | None = None) -> Any:
-    """Return :class:`archive_crate.PersonResolutionIndex` (Rust Step 13).
-
-    For Python-only :class:`hfa.identity_resolver.PersonIndex`, construct it directly.
-    """
-
-    import archive_crate
-
-    return archive_crate.build_person_index(vault_path, cache_path)
-
-
-def resolve_person_batch(vault_path: str, identifiers_list: list[dict[str, Any]]) -> Any:
-    """Batch person resolution — Rust (Step 14) via :func:`archive_crate.resolve_person_batch`."""
-
-    import archive_crate
-
-    return archive_crate.resolve_person_batch(vault_path, identifiers_list)

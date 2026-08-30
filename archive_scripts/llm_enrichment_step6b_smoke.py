@@ -124,7 +124,9 @@ def main() -> int:
                 out.append(f"- {w}\n")
             out.append("\n")
     if doc is not None:
-        out.append(_md_block("Thread meta", f"- message_count: {doc.message_count}\n- content_hash: `{doc.content_hash}`\n"))
+        out.append(
+            _md_block("Thread meta", f"- message_count: {doc.message_count}\n- content_hash: `{doc.content_hash}`\n")
+        )
 
     print("".join(out))
     print(

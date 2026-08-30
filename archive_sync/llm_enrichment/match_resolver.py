@@ -9,15 +9,11 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
-from archive_cli.vault_cache import (VaultScanCache,
-                                     refresh_stored_vault_fingerprint)
-from archive_sync.llm_enrichment.cache import (InferenceCache,
-                                               build_inference_cache_key)
+from archive_cli.vault_cache import VaultScanCache, refresh_stored_vault_fingerprint
+from archive_sync.llm_enrichment.cache import InferenceCache, build_inference_cache_key
 from archive_sync.llm_enrichment.staging_types import MatchCandidate
-from archive_vault.llm_provider import (GeminiProvider, LLMResponse,
-                                        OllamaProvider)
-from archive_vault.provenance import (ProvenanceEntry, compute_input_hash,
-                                      merge_provenance)
+from archive_vault.llm_provider import GeminiProvider, LLMResponse, OllamaProvider
+from archive_vault.provenance import ProvenanceEntry, compute_input_hash, merge_provenance
 from archive_vault.schema import DETERMINISTIC_ONLY, validate_card_strict
 from archive_vault.vault import read_note, write_card
 
@@ -44,6 +40,7 @@ _MATCH_PROMPT_VERSION = "v1"
 
 def _utc_today() -> str:
     from datetime import datetime, timezone
+
     return datetime.now(timezone.utc).date().isoformat()
 
 
@@ -196,11 +193,7 @@ class MatchResolver:
         self.provider = provider
         self.cache = cache
         self.match_threshold = match_threshold
-        self.finance_match_threshold = (
-            float(finance_match_threshold)
-            if finance_match_threshold is not None
-            else 0.47
-        )
+        self.finance_match_threshold = float(finance_match_threshold) if finance_match_threshold is not None else 0.47
         self.ambiguity_margin = ambiguity_margin
         self.dry_run = dry_run
         self.run_id = run_id
@@ -233,12 +226,7 @@ class MatchResolver:
         target_attendees = target_fm.get("attendee_emails") or []
         email_score = _email_jaccard(attendee_emails, target_attendees)
 
-        return (
-            0.20 * kw_score
-            + 0.15 * title_fuzz
-            + 0.35 * date_score
-            + 0.30 * email_score
-        )
+        return 0.20 * kw_score + 0.15 * title_fuzz + 0.35 * date_score + 0.30 * email_score
 
     def _score_finance_email(
         self,
@@ -317,7 +305,11 @@ class MatchResolver:
                 {"role": "user", "content": user_msg},
             ]
             resp: LLMResponse = self.provider.chat_json(
-                messages, model=self.model, temperature=0.0, seed=42, max_tokens=512,
+                messages,
+                model=self.model,
+                temperature=0.0,
+                seed=42,
+                max_tokens=512,
             )
             parsed = resp.parsed_json
             if self.cache is not None and parsed is not None:
@@ -375,9 +367,12 @@ class MatchResolver:
         card = validate_card_strict(fm)
 
         from archive_vault.provenance import PROVENANCE_EXEMPT_FIELDS
+
         if field not in PROVENANCE_EXEMPT_FIELDS:
             method = "deterministic" if field in DETERMINISTIC_ONLY else "llm"
-            ih = compute_input_hash({"run_id": self.run_id, "resolution_method": resolution_method, "target": target_slug})
+            ih = compute_input_hash(
+                {"run_id": self.run_id, "resolution_method": resolution_method, "target": target_slug}
+            )
             incoming = {
                 field: ProvenanceEntry(
                     source="match_resolution",
@@ -406,7 +401,9 @@ class MatchResolver:
         log.info("match_resolver loaded %d candidates from %d files", len(candidates), len(candidates_jsonl_paths))
 
         scan_cache = VaultScanCache.build_or_load(
-            self.vault_path, tier=2, progress_every=vault_cache_progress_every,
+            self.vault_path,
+            tier=2,
+            progress_every=vault_cache_progress_every,
         )
         uid_to_rel = scan_cache.uid_to_rel_path()
         note_count = scan_cache.note_count()
@@ -429,11 +426,15 @@ class MatchResolver:
         cal_date_idx = _build_date_index(target_fm_cache.get("calendar_event", {}), "start_at")
         email_date_idx = _build_date_index(target_fm_cache.get("email_message", {}), "sent_at")
         email_kw_idx = _build_keyword_index(
-            target_fm_cache.get("email_message", {}), ["subject", "snippet"],
+            target_fm_cache.get("email_message", {}),
+            ["subject", "snippet"],
         )
         log.info(
             "match_resolver built pre-filter indexes in %.1fs (cal_dates=%d email_dates=%d email_kw_tokens=%d)",
-            time.perf_counter() - t_idx, len(cal_date_idx), len(email_date_idx), len(email_kw_idx),
+            time.perf_counter() - t_idx,
+            len(cal_date_idx),
+            len(email_date_idx),
+            len(email_kw_idx),
         )
 
         stats: dict[str, int] = {
@@ -458,8 +459,12 @@ class MatchResolver:
             if progress_every > 0 and (i + 1) % progress_every == 0:
                 log.info(
                     "match_resolver Phase A %d/%d confident=%d ambiguous=%d no_match=%d errors=%d",
-                    i + 1, len(candidates),
-                    stats["confident"], len(ambiguous_queue), stats["no_match"], stats["errors"],
+                    i + 1,
+                    len(candidates),
+                    stats["confident"],
+                    len(ambiguous_queue),
+                    stats["no_match"],
+                    stats["errors"],
                 )
 
             source_rel = uid_to_rel.get(mc.source_card_uid, "")
@@ -497,7 +502,8 @@ class MatchResolver:
                 range_center = _parse_iso_day(date_range[0]) if date_range else None
                 date_uids = _date_window_uids(email_date_idx, range_center, days=21)
                 kw_uids = _keyword_filter_uids(
-                    email_kw_idx, eff_signals.get("counterparty_keywords") or [],
+                    email_kw_idx,
+                    eff_signals.get("counterparty_keywords") or [],
                 )
                 candidate_uids = date_uids | kw_uids
                 if not candidate_uids:
@@ -515,7 +521,9 @@ class MatchResolver:
                     score = self._score_thread_calendar(mc, target_fm)
                 elif mc.target_card_type == "email_message":
                     score = self._score_finance_email(
-                        mc, target_fm, signals=eff_finance_signals,
+                        mc,
+                        target_fm,
+                        signals=eff_finance_signals,
                     )
                 else:
                     continue
@@ -524,11 +532,7 @@ class MatchResolver:
 
             scored.sort(key=lambda x: x[1], reverse=True)
 
-            thresh = (
-                self.finance_match_threshold
-                if mc.target_card_type == "email_message"
-                else self.match_threshold
-            )
+            thresh = self.finance_match_threshold if mc.target_card_type == "email_message" else self.match_threshold
             if not scored or scored[0][1] < thresh:
                 stats["no_match"] += 1
                 continue
@@ -545,7 +549,10 @@ class MatchResolver:
 
         log.info(
             "match_resolver Phase A complete: confident=%d ambiguous=%d no_match=%d errors=%d elapsed=%.1fs",
-            stats["confident"], len(ambiguous_queue), stats["no_match"], stats["errors"],
+            stats["confident"],
+            len(ambiguous_queue),
+            stats["no_match"],
+            stats["errors"],
             time.perf_counter() - t0,
         )
 
@@ -555,7 +562,10 @@ class MatchResolver:
             from concurrent.futures import ThreadPoolExecutor, as_completed
 
             llm_lock = threading.Lock()
-            log.info("match_resolver Phase B: LLM disambiguation of %d ambiguous candidates with parallel workers", len(ambiguous_queue))
+            log.info(
+                "match_resolver Phase B: LLM disambiguation of %d ambiguous candidates with parallel workers",
+                len(ambiguous_queue),
+            )
 
             def _resolve_one_llm(item: AmbiguousItem) -> tuple[MatchCandidate, str, str | None, str]:
                 mc_item, scored_top5, src_rel = item
@@ -578,7 +588,8 @@ class MatchResolver:
                     if progress_every > 0 and done_count % progress_every == 0:
                         log.info(
                             "match_resolver Phase B LLM progress %d/%d",
-                            done_count, len(ambiguous_queue),
+                            done_count,
+                            len(ambiguous_queue),
                         )
 
             for mc_item, src_rel, chosen_uid, method in llm_results:
@@ -620,8 +631,11 @@ class MatchResolver:
 
             try:
                 wrote = self._write_wikilink(
-                    mc_w.source_card_uid, source_rel_w,
-                    mc_w.field_to_write, target_slug, method_w,
+                    mc_w.source_card_uid,
+                    source_rel_w,
+                    mc_w.field_to_write,
+                    target_slug,
+                    method_w,
                 )
                 if wrote:
                     stats["written"] += 1
@@ -631,8 +645,11 @@ class MatchResolver:
                 if mc_w.target_card_type == "calendar_event" and mc_w.field_to_write == "calendar_events":
                     source_slug = Path(source_rel_w).stem
                     self._write_wikilink(
-                        chosen_uid_w, target_rel,
-                        "source_threads", source_slug, method_w,
+                        chosen_uid_w,
+                        target_rel,
+                        "source_threads",
+                        source_slug,
+                        method_w,
                     )
             except Exception as exc:
                 stats["errors"] += 1
@@ -642,8 +659,14 @@ class MatchResolver:
         log.info(
             "match_resolver complete total=%d confident=%d llm=%d no_match=%d "
             "written=%d already_linked=%d errors=%d elapsed=%.1fs",
-            stats["total"], stats["confident"], stats["llm"], stats["no_match"],
-            stats["written"], stats["already_linked"], stats["errors"], elapsed,
+            stats["total"],
+            stats["confident"],
+            stats["llm"],
+            stats["no_match"],
+            stats["written"],
+            stats["already_linked"],
+            stats["errors"],
+            elapsed,
         )
 
         return {
@@ -675,9 +698,7 @@ def run_match_resolution(
         provider = OllamaProvider(base_url=base_url)
 
     if not provider.health_check():
-        raise RuntimeError(
-            "LLM health_check failed — for gemini set GEMINI_API_KEY; for ollama ensure model is pulled"
-        )
+        raise RuntimeError("LLM health_check failed — for gemini set GEMINI_API_KEY; for ollama ensure model is pulled")
 
     cache: InferenceCache | None = None
     if cache_db is not None:
