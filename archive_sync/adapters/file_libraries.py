@@ -125,7 +125,21 @@ INCLUDED_EXTENSIONS = {
     ".vcf",
 }
 PACKAGE_EXTENSIONS = {".pages", ".key"}
-TEXT_EXTENSIONS = {".txt", ".md", ".rtf", ".json", ".csv", ".xml", ".html", ".htm"}
+TEXT_EXTENSIONS = {".txt", ".md", ".json", ".csv", ".xml"}
+HTML_EXTENSIONS = {".html", ".htm"}
+# Local anydoc (firecrawl-anydoc) formats already in INCLUDED_EXTENSIONS.
+# .odt/.ods/.odp/.epub are supported by anydoc but not ingested today.
+ANYDOC_EXTENSIONS = {
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".rtf",
+    ".ppt",
+    ".pptx",
+    ".xls",
+    ".xlsx",
+    ".csv",
+}
 TEXTUTIL_EXTENSIONS = {".doc", ".docx", ".pages", ".rtf"}
 XML_SPREADSHEET_EXTENSIONS = {".xlsx"}
 XML_PRESENTATION_EXTENSIONS = {".pptx"}
@@ -564,6 +578,17 @@ def _iter_plain_rows(text: str, *, delimiter: str) -> list[str]:
     return rows
 
 
+def _html_to_markdown(raw: str) -> str:
+    import html2text
+
+    converter = html2text.HTML2Text()
+    converter.ignore_links = False
+    converter.ignore_images = True
+    converter.body_width = 0
+    converter.ignore_tables = False
+    return converter.handle(raw)
+
+
 def _extract_text_file(path: Path) -> tuple[str, str]:
     if _path_size(path) > MAX_TEXT_FILE_BYTES:
         return "", "metadata_only"
@@ -571,6 +596,74 @@ def _extract_text_file(path: Path) -> tuple[str, str]:
     if path.suffix.lower() == ".csv":
         return "\n".join(_iter_plain_rows(raw, delimiter=",")), "csv"
     return _trim_text(raw), "plain"
+
+
+def _extract_html(path: Path) -> dict[str, Any]:
+    if _path_size(path) > MAX_TEXT_FILE_BYTES:
+        return {
+            "title": _filename_title(path),
+            "document_type": path.suffix.lower().lstrip("."),
+            "text": "",
+            "text_source": "metadata_only",
+            "quality_flags": ["metadata_only", "title_from_filename"],
+        }
+    raw = path.read_text(encoding="utf-8", errors="ignore")
+    try:
+        text = _trim_text(_html_to_markdown(raw))
+        text_source = "html2text"
+    except Exception:
+        text = _trim_text(_strip_html(raw))
+        text_source = "html_stripped"
+    title, title_from_filename = _derive_title(path, text)
+    return {
+        "title": title,
+        "description": _preview_description(text, title=title),
+        "document_date": _detect_date(text[:4000]) or _detect_date(_path_text(path)),
+        "document_type": path.suffix.lower().lstrip("."),
+        "text": text,
+        "text_source": text_source,
+        "quality_flags": ["title_from_filename"] if title_from_filename else [],
+    }
+
+
+def _anydoc_document_type(suffix: str) -> str:
+    if suffix in {".csv", ".xlsx", ".xls"}:
+        return "spreadsheet"
+    if suffix in {".pptx", ".ppt"}:
+        return "presentation"
+    return suffix.lstrip(".")
+
+
+def _try_anydoc(path: Path) -> dict[str, Any] | None:
+    """Convert via local anydoc. Never enables hosted OCR. None = fall back."""
+
+    try:
+        import anydoc
+    except ImportError:
+        return None
+    try:
+        raw = anydoc.to_markdown(str(path), ocr="reject")
+    except Exception as exc:
+        name = type(exc).__name__
+        if name in {"NeedsOcrError", "EncryptedError", "UnsupportedError"}:
+            logger.debug("anydoc skip path=%s err=%s", path.name, exc)
+        else:
+            logger.warning("anydoc failed path=%s err=%s", path, exc)
+        return None
+    text = _trim_text(str(raw or "").strip())
+    if not text:
+        return None
+    suffix = path.suffix.lower()
+    title, title_from_filename = _derive_title(path, text)
+    return {
+        "title": title,
+        "description": _preview_description(text, title=title),
+        "document_date": _detect_date(text[:4000]) or _detect_date(_path_text(path)),
+        "document_type": _anydoc_document_type(suffix),
+        "text": text,
+        "text_source": "anydoc",
+        "quality_flags": ["title_from_filename"] if title_from_filename else [],
+    }
 
 
 def _extract_email(path: Path) -> dict[str, Any]:
@@ -960,6 +1053,12 @@ def _extract_generic_metadata(path: Path) -> dict[str, Any]:
 
 def _extract_payload(path: Path) -> dict[str, Any]:
     suffix = path.suffix.lower()
+    if suffix in HTML_EXTENSIONS:
+        return _extract_html(path)
+    if suffix in ANYDOC_EXTENSIONS:
+        payload = _try_anydoc(path)
+        if payload is not None:
+            return payload
     if suffix in TEXT_EXTENSIONS:
         text, text_source = _extract_text_file(path)
         title, title_from_filename = _derive_title(path, text)

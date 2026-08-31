@@ -1,4 +1,4 @@
-"""Re-extract document body text with markitdown when ingestion left garbled/plain binary text."""
+"""Re-extract document body text when ingestion left garbled/plain binary text."""
 
 from __future__ import annotations
 
@@ -26,13 +26,15 @@ _RICH_EXTENSIONS = frozenset(
         "htm",
     }
 )
+_DONE_TEXT_SOURCES = frozenset({"markitdown", "anydoc", "html2text"})
+_ANYDOC_EXTENSIONS = frozenset({".pdf", ".doc", ".docx", ".rtf", ".ppt", ".pptx", ".xls", ".xlsx", ".csv"})
 
 
 def needs_markitdown_extraction(card_fm: dict[str, Any]) -> bool:
-    """Whether this card should be run through markitdown (idempotent for already-markitdown text)."""
+    """Whether this card should be run through markitdown (idempotent for already-converted text)."""
 
     ts = str(card_fm.get("text_source") or "").strip().lower()
-    if ts == "markitdown":
+    if ts in _DONE_TEXT_SOURCES:
         return False
     ext = str(card_fm.get("extension") or "").strip().lower().lstrip(".")
     if ts == "plain" and ext in _RICH_EXTENSIONS:
@@ -59,14 +61,46 @@ def resolve_source_file(library_root: str, relative_path: str) -> Path | None:
 
 
 def extract_markdown_text(source_path: Path) -> str:
-    """Convert a file to markdown/plain text using markitdown."""
+    """Convert a file to markdown/plain text (anydoc, then html2text, then markitdown)."""
 
+    text, _source = convert_document_to_markdown(source_path)
+    return text
+
+
+def convert_document_to_markdown(source_path: Path) -> tuple[str, str]:
+    """Return (markdown, text_source). Prefers local anydoc; never enables hosted OCR."""
+
+    suffix = source_path.suffix.lower()
+    if suffix in _ANYDOC_EXTENSIONS:
+        try:
+            import anydoc
+
+            text = str(anydoc.to_markdown(str(source_path), ocr="reject") or "").strip()
+            if text:
+                return text, "anydoc"
+        except Exception as exc:
+            log.debug("anydoc reextract failed path=%s err=%s", source_path, exc)
+    if suffix in {".html", ".htm"}:
+        try:
+            import html2text
+
+            converter = html2text.HTML2Text()
+            converter.ignore_links = False
+            converter.ignore_images = True
+            converter.body_width = 0
+            converter.ignore_tables = False
+            raw = source_path.read_text(encoding="utf-8", errors="ignore")
+            text = converter.handle(raw).strip()
+            if text:
+                return text, "html2text"
+        except Exception as exc:
+            log.debug("html2text reextract failed path=%s err=%s", source_path, exc)
     from markitdown import MarkItDown
 
     md = MarkItDown()
     result = md.convert(str(source_path))
     text = getattr(result, "text_content", None) or getattr(result, "text", None) or ""
-    return str(text).strip()
+    return str(text).strip(), "markitdown"
 
 
 def _body_sha256(body: str) -> str:
@@ -95,9 +129,9 @@ def reextract_one_card(
         return {"rel_path": rel_path, "status": "skipped", "reason": "source_missing"}
 
     try:
-        new_body = extract_markdown_text(src)
+        new_body, text_source = convert_document_to_markdown(src)
     except Exception as exc:
-        log.warning("markitdown failed rel_path=%s src=%s err=%s", rel_path, src, exc)
+        log.warning("document convert failed rel_path=%s src=%s err=%s", rel_path, src, exc)
         return {"rel_path": rel_path, "status": "error", "reason": str(exc)}
 
     if not new_body:
@@ -110,10 +144,11 @@ def reextract_one_card(
             "dry_run": True,
             "bytes_out": len(new_body.encode("utf-8")),
             "source": str(src),
+            "text_source": text_source,
         }
 
     field_updates: dict[str, Any] = {
-        "text_source": "markitdown",
+        "text_source": text_source,
         "extracted_text_sha": _body_sha256(new_body),
     }
     merged = {**fm, **field_updates}
@@ -124,7 +159,7 @@ def reextract_one_card(
             source="document_text_extractor",
             date=datetime.now(timezone.utc).date().isoformat(),
             method="deterministic",
-            model=model,
+            model=text_source if model == "markitdown" else model,
             input_hash=field_updates["extracted_text_sha"][:16],
         )
     prov = merge_provenance(existing_prov, incoming)
