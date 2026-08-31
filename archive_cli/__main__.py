@@ -2551,12 +2551,8 @@ def main() -> None:
     if args.command == "serve" and want_http:
         from .http_serve import DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT, resolve_http_auth_token, run_http
 
-        host = str(getattr(args, "bind", "") or "").strip() or os.environ.get(
-            "PPA_MCP_HTTP_HOST", DEFAULT_HTTP_HOST
-        )
-        port = int(getattr(args, "port", 0) or 0) or int(
-            os.environ.get("PPA_MCP_HTTP_PORT", str(DEFAULT_HTTP_PORT))
-        )
+        host = str(getattr(args, "bind", "") or "").strip() or os.environ.get("PPA_MCP_HTTP_HOST", DEFAULT_HTTP_HOST)
+        port = int(getattr(args, "port", 0) or 0) or int(os.environ.get("PPA_MCP_HTTP_PORT", str(DEFAULT_HTTP_PORT)))
         token = resolve_http_auth_token()
         if not token:
             print(

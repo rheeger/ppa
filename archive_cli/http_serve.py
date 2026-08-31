@@ -13,9 +13,8 @@ from collections.abc import Awaitable, Callable, MutableMapping
 from pathlib import Path
 from typing import Any
 
-from starlette.responses import JSONResponse
-
 from mcp.server.transport_security import TransportSecuritySettings
+from starlette.responses import JSONResponse
 
 _log = logging.getLogger("ppa.http")
 
@@ -82,8 +81,7 @@ class BearerAuthASGI:
                 await self.app(scope, receive, send)
                 return
             headers = {
-                key.decode("latin-1").lower(): value.decode("latin-1")
-                for key, value in scope.get("headers") or []
+                key.decode("latin-1").lower(): value.decode("latin-1") for key, value in scope.get("headers") or []
             }
             if not bearer_authorized(headers.get("authorization", ""), self._token):
                 response = JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
@@ -106,15 +104,13 @@ def run_http(mcp: Any, *, host: str, port: int, token: str) -> None:
     """Serve streamable HTTP with bearer auth. Blocks."""
     if not token:
         raise RuntimeError(
-            "HTTP MCP requires PPA_MCP_AUTH_TOKEN or a token file at "
-            f"{DEFAULT_TOKEN_FILE} (or PPA_MCP_AUTH_TOKEN_FILE)"
+            f"HTTP MCP requires PPA_MCP_AUTH_TOKEN or a token file at {DEFAULT_TOKEN_FILE} (or PPA_MCP_AUTH_TOKEN_FILE)"
         )
-
-    from starlette.requests import Request
-    from starlette.responses import JSONResponse as StarletteJSON
 
     import anyio
     import uvicorn
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse as StarletteJSON
 
     @mcp.custom_route("/health", methods=["GET"])
     async def health(_request: Request) -> StarletteJSON:

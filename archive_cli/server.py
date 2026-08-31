@@ -81,6 +81,7 @@ def _tool(name: str):
 
     return deco
 
+
 _TOOL_PROFILES: dict[str, set[str] | None] = {
     "full": None,
     "read-only": {
