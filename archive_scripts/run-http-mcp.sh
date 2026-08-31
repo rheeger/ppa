@@ -3,6 +3,8 @@
 # Token: PPA_MCP_AUTH_TOKEN or ~/.ppa/mcp-http-token
 # Publish: this script also runs `tailscale serve --bg` when PPA_MCP_TAILSCALE_SERVE=1 (default).
 set -euo pipefail
+# launchd PATH is minimal — Tailscale and Homebrew must be explicit.
+export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:${PATH:-}"
 
 SCRIPT_DIR="${0:A:h}"
 PPA_ROOT="${SCRIPT_DIR:h}"
@@ -16,7 +18,7 @@ export PPA_MCP_HTTP=1
 if [[ -z "${PPA_MCP_HTTP_HOST:-}" ]]; then
   # Prefer the Tailscale address so Arnold can reach us without Tailscale Serve.
   if command -v tailscale >/dev/null 2>&1; then
-    export PPA_MCP_HTTP_HOST="$(tailscale ip -4 2>/dev/null | head -1)"
+    export PPA_MCP_HTTP_HOST="$(command tailscale ip -4 2>/dev/null | head -1)"
   fi
   export PPA_MCP_HTTP_HOST="${PPA_MCP_HTTP_HOST:-127.0.0.1}"
 fi

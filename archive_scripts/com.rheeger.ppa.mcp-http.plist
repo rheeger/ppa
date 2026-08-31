@@ -25,6 +25,8 @@
 	<dict>
 		<key>PPA_MCP_TAILSCALE_SERVE</key>
 		<string>0</string>
+		<key>PATH</key>
+		<string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
 	</dict>
 </dict>
 </plist>
