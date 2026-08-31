@@ -37,10 +37,16 @@ def read_many(
     return result
 
 
-def parse_paths_json(paths_json: str) -> list[str]:
-    """Parse MCP ``paths_json`` parameter into a list of strings."""
+def parse_paths_json(paths_json: str | list) -> list[str]:
+    """Parse MCP ``paths_json`` into a list of strings.
+
+    mcporter JSON-coerces a stringified array into a real list before the
+    tool runs, so accept both a JSON string and an already-decoded list.
+    """
     import json
 
+    if isinstance(paths_json, list):
+        return [str(p) for p in paths_json]
     try:
         paths = json.loads(paths_json)
     except json.JSONDecodeError as exc:
