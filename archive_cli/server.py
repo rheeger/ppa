@@ -81,6 +81,7 @@ def _tool(name: str):
 
     return deco
 
+
 _TOOL_PROFILES: dict[str, set[str] | None] = {
     "full": None,
     "read-only": {
@@ -1262,7 +1263,7 @@ def archive_hybrid_search_json(
 
 
 @_tool("archive_read_many")
-def archive_read_many(paths_json: str) -> str:
+def archive_read_many(paths_json: str | list[str]) -> str:
     """Read multiple notes by rel path or card uid. `paths_json` is a JSON array of strings."""
 
     profile_error = _tool_profile_error("archive_read_many")

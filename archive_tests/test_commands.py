@@ -93,6 +93,13 @@ def test_parse_paths_json_wrong_type_raises() -> None:
         read_cmd.parse_paths_json('{"a": 1}')
 
 
+def test_parse_paths_json_accepts_already_decoded_list() -> None:
+    assert read_cmd.parse_paths_json(["Email/2025/x.md", "Documents/y.md"]) == [
+        "Email/2025/x.md",
+        "Documents/y.md",
+    ]
+
+
 def test_resolve_store_raises_vault_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(resolve_mod, "get_vault", lambda: Path("/nonexistent/ppa/vault"))
     with pytest.raises(VaultNotFoundError):

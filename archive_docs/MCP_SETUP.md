@@ -8,10 +8,29 @@
 
 ## Local vs remote (Arnold)
 
-- **Local:** Postgres on this machine (Docker or native); `PPA_INDEX_DSN` points at `127.0.0.1` on the Postgres port.
-- **Remote:** Postgres on another host reachable via SSH. Either run `scripts/ppa-tunnel.sh` manually or use `ppa serve --tunnel user@host` so the tunnel is a child of the MCP process (dies when the client stops the server). Point `PPA_INDEX_DSN` at `127.0.0.1:PPA_TUNNEL_PORT` (default `5433`).
+- **Local stdio:** Postgres on this machine (Docker or native); `PPA_INDEX_DSN` points at `127.0.0.1` on the Postgres port. Cursor uses `archive_scripts/run-local-seed-mcp.sh`.
+- **Remote Postgres (legacy):** SSH tunnel to another host's Postgres. `ppa serve --tunnel user@host` or `scripts/ppa-tunnel.sh`.
+- **Arnold client (canonical):** Arnold does **not** host a vault copy. Ginger serves streamable HTTP on loopback; Tailscale Serve publishes it on the personal tailnet. Arnold calls it through the passkey gate with `PPA_MCP_TOKEN`.
 
-See the template [ppa.mcp-example.json](examples/ppa.mcp-example.json) for both patterns.
+```
+Arnold --tailnet--> http://ginger-m4-max.tail0c38c5.ts.net:8765/mcp
+                 Authorization: Bearer <PPA_MCP_TOKEN>
+                 token lives in op://Arnold-Passkey-Gate/PPA_MCP_TOKEN/credential
+```
+
+The listener binds Ginger's Tailscale IPv4 (not LAN, not public wifi). When this laptop sleeps, Arnold gets connection errors. That is the accepted tradeoff.
+
+### Enable the HTTP listener on Ginger
+
+```bash
+archive_scripts/install-mcp-http-launchd.sh --install
+# stores token at ~/.ppa/mcp-http-token (0600)
+# persist the same value in 1Password: op://Arnold-Passkey-Gate/PPA_MCP_TOKEN/credential
+```
+
+`run-http-mcp.sh` binds the Tailscale IP on `:8765` with `PPA_MCP_TOOL_PROFILE=read-only`. Health (no auth): `GET /health`. MCP path: `/mcp`. Optional HTTPS via Tailscale Serve is `PPA_MCP_TAILSCALE_SERVE=1` (this tailnet has Serve off).
+
+See the template [ppa.mcp-example.json](examples/ppa.mcp-example.json) for stdio patterns.
 
 ## Optional env for generated config
 
@@ -19,3 +38,5 @@ See the template [ppa.mcp-example.json](examples/ppa.mcp-example.json) for both 
 | ---------------------------- | ------------------------------------------------------------------------ |
 | `PPA_MCP_CONFIG_SERVER_NAME` | Name of the server block (default `ppa`)                                 |
 | `PPA_MCP_TUNNEL_HOST`        | If set, `ppa mcp-config` adds `"args": ["serve", "--tunnel", "<value>"]` |
+| `PPA_MCP_HTTP_URL`           | If set, `ppa mcp-config` emits a URL + bearer-header client block        |
+| `PPA_MCP_HTTP=1`             | `ppa mcp-config` adds `"args": ["serve", "--http"]`                      |
