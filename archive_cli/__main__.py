@@ -81,15 +81,28 @@ def _emit_mcp_config() -> None:
     tunnel = os.environ.get("PPA_MCP_TUNNEL_HOST", "").strip()
     if tunnel:
         args.extend(["--tunnel", tunnel])
-    block = {
-        "mcpServers": {
-            server_name: {
-                "command": "ppa",
-                "args": args,
-                "env": env,
+    http_url = os.environ.get("PPA_MCP_HTTP_URL", "").strip()
+    if http_url:
+        block = {
+            "mcpServers": {
+                server_name: {
+                    "url": http_url,
+                    "headers": {"Authorization": "Bearer ${PPA_MCP_AUTH_TOKEN}"},
+                }
             }
         }
-    }
+    else:
+        if os.environ.get("PPA_MCP_HTTP", "").strip() in {"1", "true", "yes"}:
+            args.append("--http")
+        block = {
+            "mcpServers": {
+                server_name: {
+                    "command": "ppa",
+                    "args": args,
+                    "env": env,
+                }
+            }
+        }
     print(json.dumps(block, indent=2))
 
 
@@ -130,12 +143,30 @@ def main() -> None:
     )
     subparsers = parser.add_subparsers(dest="command")
 
-    serve_parser = subparsers.add_parser("serve", help="Start MCP server (stdio)")
+    serve_parser = subparsers.add_parser("serve", help="Start MCP server (stdio or HTTP)")
     serve_parser.add_argument(
         "--tunnel",
         default="",
         metavar="USER@HOST",
         help="Manage SSH tunnel: localhost:PPA_TUNNEL_PORT -> remote 127.0.0.1:5432",
+    )
+    serve_parser.add_argument(
+        "--http",
+        action="store_true",
+        help="Serve streamable HTTP (requires PPA_MCP_AUTH_TOKEN). Default bind 127.0.0.1:8765",
+    )
+    serve_parser.add_argument(
+        "--bind",
+        default="",
+        metavar="HOST",
+        help="HTTP bind address (default PPA_MCP_HTTP_HOST or 127.0.0.1)",
+    )
+    serve_parser.add_argument(
+        "--port",
+        type=int,
+        default=0,
+        metavar="PORT",
+        help="HTTP port (default PPA_MCP_HTTP_PORT or 8765)",
     )
     subparsers.add_parser(
         "mcp-config",
@@ -1196,6 +1227,9 @@ def main() -> None:
     args = parser.parse_args()
     if args.command == "serve" and not hasattr(args, "tunnel"):
         args.tunnel = ""
+        args.http = False
+        args.bind = ""
+        args.port = 0
     # Stderr-only logging for all subcommands; keep stdout for MCP JSON-RPC / CLI JSON. See archive_cli/log.py.
     configure_logging(verbose=args.verbose)
     log_file = str(getattr(args, "log_file", "") or "").strip()
@@ -2509,6 +2543,29 @@ def main() -> None:
         tunnel_mgr = TunnelManager(args.tunnel, local_port=local_port, remote_port=remote_port)
         tunnel_mgr.start()
         atexit.register(tunnel_mgr.stop)
+    want_http = bool(getattr(args, "http", False)) or os.environ.get("PPA_MCP_HTTP", "").strip() in {
+        "1",
+        "true",
+        "yes",
+    }
+    if args.command == "serve" and want_http:
+        from .http_serve import DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT, resolve_http_auth_token, run_http
+
+        host = str(getattr(args, "bind", "") or "").strip() or os.environ.get(
+            "PPA_MCP_HTTP_HOST", DEFAULT_HTTP_HOST
+        )
+        port = int(getattr(args, "port", 0) or 0) or int(
+            os.environ.get("PPA_MCP_HTTP_PORT", str(DEFAULT_HTTP_PORT))
+        )
+        token = resolve_http_auth_token()
+        if not token:
+            print(
+                "HTTP MCP requires PPA_MCP_AUTH_TOKEN or ~/.ppa/mcp-http-token",
+                file=sys.stderr,
+            )
+            raise SystemExit(2)
+        run_http(mcp, host=host, port=port, token=token)
+        return
     mcp.run()
 
 

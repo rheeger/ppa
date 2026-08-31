@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.rheeger.ppa.mcp-http</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/zsh</string>
+		<string>__PPA_REPO__/archive_scripts/run-http-mcp.sh</string>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>__PPA_REPO__</string>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>StandardOutPath</key>
+	<string>__PPA_REPO__/logs/ppa-http-mcp-launchd.out.log</string>
+	<key>StandardErrorPath</key>
+	<string>__PPA_REPO__/logs/ppa-http-mcp-launchd.err.log</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PPA_MCP_TAILSCALE_SERVE</key>
+		<string>1</string>
+	</dict>
+</dict>
+</plist>

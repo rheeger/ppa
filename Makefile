@@ -580,6 +580,18 @@ install-nightly-maintain:
 uninstall-nightly-maintain:
 	$(PYTHON) archive_scripts/ppa-maintain-nightly.py --uninstall
 
+# Loopback HTTP MCP + Tailscale Serve for Arnold. Token at ~/.ppa/mcp-http-token.
+install-http-mcp:
+	zsh archive_scripts/install-mcp-http-launchd.sh --install
+
+uninstall-http-mcp:
+	zsh archive_scripts/install-mcp-http-launchd.sh --uninstall
+
+http-mcp-status:
+	zsh archive_scripts/install-mcp-http-launchd.sh --status
+
+.PHONY: install-http-mcp uninstall-http-mcp http-mcp-status
+
 # Remove Phase-3 email-derived cards from seed or slice vaults (MealOrders, Rides, …; Entities/Places, Organizations).
 # Default is dry-run + manifest. Pass APPLY=1 to actually delete (and PPA_ALLOW_PROD_VAULT_DELETE=1
 # if the target is the canonical seed vault). See archive_scripts/clean-phase3-derived-dirs.sh --help.
