@@ -20,6 +20,7 @@ def test_needs_markitdown_idempotent() -> None:
     assert needs_markitdown_extraction({"text_source": "anydoc", "extension": "pdf"}) is False
     assert needs_markitdown_extraction({"text_source": "anydoc_hosted", "extension": "pdf"}) is False
     assert needs_markitdown_extraction({"text_source": "html2text", "extension": "htm"}) is False
+    assert needs_markitdown_extraction({"text_source": "plain", "extension": "txt"}) is False
 
 
 def test_needs_extraction_for_legacy_pdf() -> None:

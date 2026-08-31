@@ -33,6 +33,7 @@ from archive_sync.document_extract import (
     bytes_sha256,
     extract_from_bytes,
     extract_from_path,
+    is_extractable,
     is_lockfile,
     is_skippable_non_doc,
     is_suppressed_classification,
@@ -299,10 +300,23 @@ def extract_jobs(
     worker_count = workers if workers is not None else get_gmail_api_workers()
     worker_count = min(max(1, worker_count), max(1, len(jobs)))
     if worker_count <= 1 or len(jobs) <= 1:
-        return [extract_job(vault, job, fetch_bytes=fetch_bytes) for job in jobs]
+        results = []
+        for idx, job in enumerate(jobs, start=1):
+            item = extract_job(vault, job, fetch_bytes=fetch_bytes)
+            if idx == 1 or idx % 25 == 0 or idx == len(jobs):
+                log.info(
+                    "extract-attachment-text job %s/%s uid=%s status=%s",
+                    idx,
+                    len(jobs),
+                    job.uid,
+                    item.status,
+                )
+            results.append(item)
+        return results
     by_uid: dict[str, AttachmentExtraction] = {}
     with ThreadPoolExecutor(max_workers=worker_count) as pool:
         futures = {pool.submit(extract_job, vault, job, fetch_bytes=fetch_bytes): job for job in jobs}
+        done = 0
         for future in as_completed(futures):
             job = futures[future]
             try:
@@ -311,6 +325,15 @@ def extract_jobs(
                 log.warning("attachment job failed uid=%s err=%s", job.uid, exc)
                 by_uid[job.uid] = AttachmentExtraction(
                     status=STATUS_FAILED, filename=job.filename, uid=job.uid, reason=str(exc)
+                )
+            done += 1
+            if done == 1 or done % 25 == 0 or done == len(jobs):
+                log.info(
+                    "extract-attachment-text job %s/%s uid=%s status=%s",
+                    done,
+                    len(jobs),
+                    job.uid,
+                    by_uid[job.uid].status,
                 )
     return [by_uid[job.uid] for job in jobs]
 
@@ -545,6 +568,9 @@ def run_attachment_text_extraction(
         mime = str(fm.get("mime_type") or "").strip()
         size_bytes = int(fm.get("size_bytes") or 0)
         is_inline = bool(fm.get("is_inline", False))
+        if not filename or filename.startswith("ANGjd") or not is_extractable(filename, mime):
+            skipped_missing += 1
+            continue
         if is_skippable_non_doc(filename, mime):
             continue
         if is_tiny_image(filename, size_bytes, mime) and (is_inline or size_bytes <= TINY_IMAGE_BYTES):
@@ -592,7 +618,15 @@ def run_attachment_text_extraction(
         extracted = extract_jobs(vault, [job for _, job in jobs], fetch_bytes=fetch_bytes, workers=workers)
 
     results: list[dict[str, Any]] = []
-    for (rel_path, job), result in zip(jobs, extracted, strict=True):
+    for idx, ((rel_path, job), result) in enumerate(zip(jobs, extracted, strict=True), start=1):
+        if idx == 1 or idx % 25 == 0 or idx == len(jobs):
+            log.info(
+                "extract-attachment-text write %s/%s status=%s uid=%s",
+                idx,
+                len(jobs),
+                result.status,
+                job.uid,
+            )
         out = _write_attachment_extraction(vault, rel_path, result, dry_run=dry_run)
         out["uid"] = job.uid
         results.append(out)

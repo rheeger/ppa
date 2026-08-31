@@ -133,8 +133,40 @@ SKIP_EXTENSIONS = frozenset(
         ".ics",
         ".vcf",
         ".dat",
+        ".eml",
+        ".msg",
+        ".key",
+        ".pages",
+        ".numbers",
+        ".psd",
+        ".ai",
+        ".eps",
+        ".svg",
+        ".heic",
     }
 )
+
+# Types we will actually convert. Anything else is a quiet skip.
+EXTRACTABLE_EXTENSIONS = ANYDOC_EXTENSIONS | {".html", ".htm", ".txt", ".md"}
+PLAIN_TEXT_EXTENSIONS = frozenset({".txt", ".md"})
+
+
+class UnsupportedExtract(Exception):
+    """File type is outside the anydoc / html / plain extract set."""
+
+
+def is_extractable(filename: str, mime_type: str = "") -> bool:
+    """True only for types we convert. Nameless Gmail tokens are not."""
+
+    raw = (filename or "").strip()
+    if not raw or raw.startswith("ANGjd"):
+        return False
+    if is_skippable_non_doc(raw, mime_type):
+        return False
+    suffix = Path(safe_filename(raw)).suffix.lower()
+    if not suffix:
+        suffix = Path(raw).suffix.lower()
+    return suffix in EXTRACTABLE_EXTENSIONS
 SKIP_MIME_PREFIXES = ("audio/", "video/")
 SKIP_MIME_TYPES = frozenset(
     {
@@ -176,6 +208,10 @@ def safe_filename(filename: str) -> str:
     name = Path(filename or "").name.strip()
     if not name or name in {".", ".."}:
         return "attachment"
+    if len(name) > 120:
+        suffix = Path(name).suffix.lower()[:12]
+        digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:12]
+        return f"att-{digest}{suffix}"
     return name
 
 
@@ -255,7 +291,11 @@ def convert_document_to_markdown(
     allow_hosted: bool = True,
     data: bytes | None = None,
 ) -> tuple[str, str]:
-    """Return ``(markdown, text_source)``. Local anydoc first; hosted only on NeedsOcr."""
+    """Return ``(markdown, text_source)``. Local anydoc first; hosted only on NeedsOcr.
+
+    Unsupported types raise ``UnsupportedExtract`` — callers skip quietly.
+    MarkItDown is not used as a fallback (it floods WARNING on unknown types).
+    """
 
     suffix = source_path.suffix.lower()
     if suffix in ANYDOC_EXTENSIONS:
@@ -268,40 +308,39 @@ def convert_document_to_markdown(
         except Exception as exc:
             if is_needs_ocr(exc):
                 raise
+            name = type(exc).__name__
+            if name in {"UnsupportedError", "EncryptedError"} or "not supported" in str(exc).lower():
+                raise UnsupportedExtract(str(exc)) from exc
             log.debug("anydoc convert failed path=%s err=%s", source_path, exc)
+            raise
     if suffix in {".html", ".htm"}:
-        try:
-            import html2text
+        import html2text
 
-            converter = html2text.HTML2Text()
-            converter.ignore_links = False
-            converter.ignore_images = True
-            converter.body_width = 0
-            converter.ignore_tables = False
-            raw = (
-                data.decode("utf-8", errors="ignore")
-                if data is not None
-                else source_path.read_text(encoding="utf-8", errors="ignore")
-            )
-            text = converter.handle(raw).strip()
-            if text:
-                return text, "html2text"
-        except Exception as exc:
-            log.debug("html2text convert failed path=%s err=%s", source_path, exc)
-    from markitdown import MarkItDown
-
-    md = MarkItDown()
-    if data is not None:
-        import tempfile
-
-        with tempfile.NamedTemporaryFile(suffix=suffix or ".bin", delete=True) as tmp:
-            tmp.write(data)
-            tmp.flush()
-            result = md.convert(tmp.name)
-    else:
-        result = md.convert(str(source_path))
-    text = getattr(result, "text_content", None) or getattr(result, "text", None) or ""
-    return str(text).strip(), "markitdown"
+        converter = html2text.HTML2Text()
+        converter.ignore_links = False
+        converter.ignore_images = True
+        converter.body_width = 0
+        converter.ignore_tables = False
+        raw = (
+            data.decode("utf-8", errors="ignore")
+            if data is not None
+            else source_path.read_text(encoding="utf-8", errors="ignore")
+        )
+        text = converter.handle(raw).strip()
+        if text:
+            return text, "html2text"
+        raise UnsupportedExtract("empty html2text output")
+    if suffix in PLAIN_TEXT_EXTENSIONS:
+        raw = (
+            data.decode("utf-8", errors="ignore")
+            if data is not None
+            else source_path.read_text(encoding="utf-8", errors="ignore")
+        )
+        text = raw.strip()
+        if text:
+            return text, "plain"
+        raise UnsupportedExtract("empty plain text")
+    raise UnsupportedExtract(f"unsupported suffix {suffix or '(none)'}")
 
 
 def extract_from_path(
@@ -322,6 +361,8 @@ def extract_from_path(
         return ExtractResult(status=STATUS_SUPPRESSED, filename=name, reason="suppressed")
     if is_lockfile(name):
         return ExtractResult(status=STATUS_LOCKFILE, filename=name, reason="lockfile")
+    if not is_extractable(filename or path.name, mime_type):
+        return ExtractResult(status=STATUS_NON_DOC, filename=name, reason="unsupported")
     try:
         size = path.stat().st_size
     except OSError:
@@ -366,8 +407,8 @@ def extract_from_bytes(
         return ExtractResult(status=STATUS_SUPPRESSED, filename=name, reason="suppressed")
     if is_lockfile(name):
         return ExtractResult(status=STATUS_LOCKFILE, filename=name, reason="lockfile")
-    if is_skippable_non_doc(name, mime_type):
-        return ExtractResult(status=STATUS_NON_DOC, filename=name, reason="non_doc")
+    if is_skippable_non_doc(name, mime_type) or not is_extractable(filename, mime_type):
+        return ExtractResult(status=STATUS_NON_DOC, filename=name, reason="unsupported")
     if len(data) > MAX_FILE_BYTES:
         return ExtractResult(
             status=STATUS_TOO_LARGE,
@@ -408,6 +449,17 @@ def extract_from_bytes(
                 filename=name,
                 extracted_text_sha=sha,
                 reason="needs_ocr",
+            )
+        if isinstance(exc, UnsupportedExtract) or type(exc).__name__ in {
+            "UnsupportedError",
+            "EncryptedError",
+        }:
+            log.debug("document extract skip filename=%s err=%s", name, exc)
+            return ExtractResult(
+                status=STATUS_NON_DOC,
+                filename=name,
+                extracted_text_sha=sha,
+                reason="unsupported",
             )
         log.warning("document extract failed filename=%s err=%s", name, exc)
         return ExtractResult(

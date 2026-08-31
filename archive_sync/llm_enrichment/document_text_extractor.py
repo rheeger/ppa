@@ -47,6 +47,8 @@ def needs_markitdown_extraction(card_fm: dict[str, Any]) -> bool:
     if ts in DONE_TEXT_SOURCES:
         return False
     ext = str(card_fm.get("extension") or "").strip().lower().lstrip(".")
+    if ts == "plain" and ext in {"txt", "md", "json"}:
+        return False
     suffix = f".{ext}" if ext else ""
     if suffix in CONVERTIBLE_EXTENSIONS or suffix in ANYDOC_EXTENSIONS:
         return True

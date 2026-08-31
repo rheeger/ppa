@@ -115,6 +115,59 @@ def test_needs_ocr_without_key(tmp_path: Path, monkeypatch) -> None:
     assert result.status == STATUS_NEEDS_OCR
 
 
+def test_safe_filename_truncates_gmail_tokens() -> None:
+    from archive_sync.document_extract import safe_filename
+
+    token = "ANGjdJ9" + ("x" * 200) + ".pdf"
+    name = safe_filename(token)
+    assert len(name) < 80
+    assert name.endswith(".pdf")
+    assert name.startswith("att-")
+
+
 def test_mp3_is_non_doc() -> None:
     result = extract_from_bytes(b"ID3", filename="voicemail.mp3", mime_type="audio/mpeg")
     assert result.status == STATUS_NON_DOC
+
+
+def test_unsupported_types_skip_quietly(monkeypatch) -> None:
+    from archive_sync.document_extract import is_extractable
+
+    called = {"n": 0}
+
+    def _boom(*_args, **_kwargs):
+        called["n"] += 1
+        raise AssertionError("should not convert unsupported types")
+
+    monkeypatch.setattr(
+        "archive_sync.document_extract.convert_document_to_markdown",
+        _boom,
+    )
+    for name, mime in (
+        ("invite.ics", "text/calendar"),
+        ("logo.psd", "image/vnd.adobe.photoshop"),
+        ("note.eml", "message/rfc822"),
+        ("ANGjdJ9xxxxxxxxxxxxxxxx", "application/octet-stream"),
+        ("", "application/pdf"),
+    ):
+        assert is_extractable(name, mime) is False
+        result = extract_from_bytes(b"xxxx", filename=name, mime_type=mime)
+        assert result.status == STATUS_NON_DOC
+        assert result.reason in {"unsupported", "non_doc"}
+    assert called["n"] == 0
+
+
+def test_convert_does_not_call_markitdown_for_unknown(tmp_path: Path, monkeypatch) -> None:
+    from archive_sync.document_extract import UnsupportedExtract, convert_document_to_markdown
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("markitdown should not run")
+
+    monkeypatch.setattr("markitdown.MarkItDown", _boom)
+    mystery = tmp_path / "file.psd"
+    mystery.write_bytes(b"8BPS")
+    try:
+        convert_document_to_markdown(mystery)
+        raise AssertionError("expected UnsupportedExtract")
+    except UnsupportedExtract:
+        pass
