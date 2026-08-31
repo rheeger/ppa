@@ -13,6 +13,8 @@ _SEED="${PPA_SEED_VAULT:-$HOME/Archive/seed/hf-archives-seed-20260307-235127}"
 export PPA_PATH="${PPA_PATH:-$_SEED}"
 export PPA_INDEX_SCHEMA="${PPA_INDEX_SCHEMA:-ppa}"
 export PPA_MCP_TOOL_PROFILE="${PPA_MCP_TOOL_PROFILE:-read-only}"
+# Hybrid search over ~1.4M cards exceeds the 30s query default.
+export PPA_STATEMENT_TIMEOUT_MS="${PPA_STATEMENT_TIMEOUT_MS:-180000}"
 export PPA_MCP_HTTP_PORT="${PPA_MCP_HTTP_PORT:-8765}"
 export PPA_MCP_HTTP=1
 if [[ -z "${PPA_MCP_HTTP_HOST:-}" ]]; then
