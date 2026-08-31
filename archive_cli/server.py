@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 
 try:
@@ -37,6 +36,7 @@ from .commands._resolve import resolve_index, resolve_store
 from .errors import InvalidInputError, PpaError, SeedLinksDisabledError
 from .index_config import get_seed_links_enabled
 from .index_store import get_default_embedding_model, get_default_embedding_version
+from .mcp_instructions import TOOL_DESCRIPTIONS, build_server_instructions
 
 _SEED_LINKS_DISABLED_MSG = "Seed links are not enabled. Set PPA_SEED_LINKS_ENABLED=1 to enable."
 
@@ -64,33 +64,8 @@ def _log_tool_return_error(tool_name: str, message: str) -> str:
     return message
 
 
-_instance_name = os.environ.get("PPA_INSTANCE_NAME", "Personal Private Archives").strip()
-_server_instructions = (
-    f"{_instance_name}\n\n"
-    "When answering questions about the archive owner's life:\n\n"
-    '1. For factual lookups ("who is X", "what is Y"):\n'
-    "   -> archive_person or archive_read\n\n"
-    '2. For aggregations ("what restaurants do I order from", "where do I shop most"):\n'
-    "   -> archive_query with type_filter and aggregate client-side\n\n"
-    '3. For temporal questions ("what was I doing on Dec 27", "last Tuesday"):\n'
-    "   -> archive_temporal_neighbors with parsed timestamp\n\n"
-    '4. For recall ("where did I get that banh mi", "that flight to NYC"):\n'
-    "   -> archive_hybrid_search with the query\n\n"
-    '5. For analytics ("how much do I spend on rides per month"):\n'
-    "   -> archive_query with type_filter=ride and aggregate, or archive_hybrid_search\n\n"
-    '6. For exploration ("tell me about my relationship with Sarah"):\n'
-    "   -> archive_person for the PersonCard, "
-    "then archive_graph for connected cards\n\n"
-    "Prefer archive_hybrid_search for open-ended queries; "
-    "prefer archive_query when you know the card type. "
-    "The PPA is a retrieval engine -- agents do the reasoning over returned cards. "
-    "Check the confidence field in responses -- "
-    "low confidence means the archive may not have enough data. "
-    "archive_knowledge exists but currently only returns lexical search fallback "
-    "(no pre-computed knowledge cache in v2).\n"
-    "Prefer _json tool variants when available."
-)
-mcp = FastMCP("ppa", _server_instructions)
+_server_instructions = build_server_instructions()
+mcp = FastMCP("ppa", instructions=_server_instructions)
 
 _TOOL_PROFILES: dict[str, set[str] | None] = {
     "full": None,
@@ -167,7 +142,7 @@ def _ppa_err(tool: str, exc: BaseException) -> str:
     return str(exc)
 
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["archive_search"])
 def archive_search(query: str, limit: int = 20) -> str:
     """Full-text search across all notes."""
 
@@ -189,7 +164,7 @@ def archive_search(query: str, limit: int = 20) -> str:
         raise
 
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["archive_read"])
 def archive_read(path_or_uid: str) -> str:
     """Read note by relative path or UID."""
 
@@ -212,7 +187,7 @@ def archive_read(path_or_uid: str) -> str:
         raise
 
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["archive_query"])
 def archive_query(
     type_filter: str = "",
     source_filter: str = "",
@@ -255,7 +230,7 @@ def archive_query(
         raise
 
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["archive_graph"])
 def archive_graph(note_path: str, hops: int = 2) -> str:
     """Get notes linked from the given note via wikilinks and discovered relationships.
 
@@ -291,7 +266,7 @@ def archive_graph(note_path: str, hops: int = 2) -> str:
         return _ppa_err("archive_graph", exc)
 
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["archive_person"])
 def archive_person(name: str) -> str:
     """Get person profile by slug."""
 
@@ -311,7 +286,7 @@ def archive_person(name: str) -> str:
         return _ppa_err("archive_person", exc)
 
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["archive_timeline"])
 def archive_timeline(start_date: str = "", end_date: str = "", limit: int = 20) -> str:
     """Notes in date range."""
 
@@ -336,7 +311,7 @@ def archive_timeline(start_date: str = "", end_date: str = "", limit: int = 20) 
         return _ppa_err("archive_timeline", exc)
 
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["archive_temporal_neighbors"])
 def archive_temporal_neighbors(
     timestamp: str,
     direction: str = "both",
@@ -369,7 +344,7 @@ def archive_temporal_neighbors(
         return _ppa_err("archive_temporal_neighbors", exc)
 
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["archive_knowledge"])
 def archive_knowledge(domain: str, fallback_query: str = "", limit: int = 5) -> str:
     """Freshest non-stale knowledge card for a domain, or lexical search fallback."""
 
@@ -392,7 +367,7 @@ def archive_knowledge(domain: str, fallback_query: str = "", limit: int = 5) -> 
         return _ppa_err("archive_knowledge", exc)
 
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["archive_stats"])
 def archive_stats() -> str:
     """Vault health metrics."""
 
@@ -1056,7 +1031,7 @@ def archive_link_quality_gate() -> str:
         return _ppa_err("archive_link_quality_gate", exc)
 
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["archive_vector_search"])
 def archive_vector_search(
     query: str,
     limit: int = 20,
@@ -1146,7 +1121,7 @@ def archive_retrieval_explain(
         return _ppa_err("archive_retrieval_explain", exc)
 
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["archive_hybrid_search"])
 def archive_hybrid_search(
     query: str,
     limit: int = 20,
@@ -1198,7 +1173,7 @@ def archive_hybrid_search(
         raise
 
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["archive_search_json"])
 def archive_search_json(query: str, limit: int = 20) -> str:
     """Lexical search results as JSON (paths + summaries, no embedding)."""
 
@@ -1220,7 +1195,7 @@ def archive_search_json(query: str, limit: int = 20) -> str:
         return str(exc)
 
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["archive_hybrid_search_json"])
 def archive_hybrid_search_json(
     query: str,
     limit: int = 20,
@@ -1272,7 +1247,7 @@ def archive_hybrid_search_json(
         return str(exc)
 
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["archive_read_many"])
 def archive_read_many(paths_json: str) -> str:
     """Read multiple notes by rel path or card uid. `paths_json` is a JSON array of strings."""
 
@@ -1339,7 +1314,7 @@ def archive_fetch_attachment(
         return str(exc)
 
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["archive_status_json"])
 def archive_status_json() -> str:
     """Index + runtime status as JSON."""
 

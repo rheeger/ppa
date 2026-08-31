@@ -110,4 +110,5 @@ def test_sparse_results_log_gap(command_store: DefaultArchiveStore, fake_index: 
 def test_server_instructions_updated() -> None:
     assert "archive_temporal_neighbors" in _server_instructions
     assert "confidence" in _server_instructions.lower()
-    assert "archive_knowledge" in _server_instructions
+    assert "archive_hybrid_search" in _server_instructions
+    assert "email_message" in _server_instructions
