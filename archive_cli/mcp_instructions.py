@@ -23,9 +23,7 @@ TYPE_FILTER_HINT = (
     "Never hyphens (email-message matches nothing)."
 )
 
-SOURCE_FILTER_HINT = (
-    "source_filter examples: gmail, google-calendar, otter, notion, imessage, beeper."
-)
+SOURCE_FILTER_HINT = "source_filter examples: gmail, google-calendar, otter, notion, imessage, beeper."
 
 FILTER_HINT = (
     f"{TYPE_FILTER_HINT} {SOURCE_FILTER_HINT} "

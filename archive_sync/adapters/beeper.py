@@ -30,9 +30,9 @@ from archive_vault.sync_state import load_sync_state, update_cursor
 from archive_vault.uid import generate_uid
 from archive_vault.vault import read_note, write_card
 
-logger = logging.getLogger("ppa.beeper")
-
 from .base import BaseAdapter, FetchedBatch, IngestResult, deterministic_provenance
+
+logger = logging.getLogger("ppa.beeper")
 
 THREAD_SOURCE = "beeper.thread"
 MESSAGE_SOURCE = "beeper.message"

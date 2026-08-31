@@ -66,13 +66,7 @@ def write_promotion_report(
     new_llm_call_count: int,
 ) -> GmailPromotionRunReport:
     t0 = time.perf_counter()
-    run_dir = (
-        repo_root
-        / "logs"
-        / VALIDATION_GATE_LOG_ROOT
-        / f"gate-{report.gate}"
-        / report.run_id
-    )
+    run_dir = repo_root / "logs" / VALIDATION_GATE_LOG_ROOT / f"gate-{report.gate}" / report.run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     report.report_path = str(run_dir / "report.json")
     report.summary_path = str(run_dir / "summary.md")

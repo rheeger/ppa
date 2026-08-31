@@ -290,8 +290,11 @@ def cmd_record_run(args: argparse.Namespace) -> int:
         return resolved
     _store, archive_instance, state_store = resolved
 
-    from archive_sync.source_updaters.batch import SourceUpdaterBatchSummary, SourceUpdaterRunReport
-    from archive_sync.source_updaters.batch import commit_cursor_after_persisted
+    from archive_sync.source_updaters.batch import (
+        SourceUpdaterBatchSummary,
+        SourceUpdaterRunReport,
+        commit_cursor_after_persisted,
+    )
 
     batch = SourceUpdaterBatchSummary(
         observed=args.observed,

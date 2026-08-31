@@ -176,6 +176,7 @@ def resolve_correspondents_list_query(
         return derived, "incremental"
     return None, "full"
 
+
 AUTOMATED_LOCAL_PREFIXES = {
     "alert",
     "alerts",
@@ -462,9 +463,7 @@ class GmailCorrespondentsAdapter(BaseAdapter):
         if args[:4] == ["gmail", "users", "messages", "get"]:
             message_id = urllib.parse.quote(str(params.get("id", "")).strip(), safe="")
             query_params = [
-                (key, value)
-                for key, value in params.items()
-                if key not in {"id", "userId"} and value not in (None, "")
+                (key, value) for key, value in params.items() if key not in {"id", "userId"} and value not in (None, "")
             ]
             if str(params.get("format") or "").lower() == "metadata":
                 query_params.append(("fields", _GMAIL_GET_FIELDS))
@@ -507,7 +506,9 @@ class GmailCorrespondentsAdapter(BaseAdapter):
                     time.sleep(delay)
                     continue
                 raise RuntimeError(message) from exc
-        raise RuntimeError(_http_error_message(last_exc) if isinstance(last_exc, urllib.error.HTTPError) else str(last_exc))
+        raise RuntimeError(
+            _http_error_message(last_exc) if isinstance(last_exc, urllib.error.HTTPError) else str(last_exc)
+        )
 
     def _parse_batch_response(self, content_type: str, raw: bytes) -> list[tuple[int, int, dict[str, Any]]]:
         header = f"Content-Type: {content_type}\r\n\r\n".encode("utf-8")

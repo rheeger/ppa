@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from .batch import ProcessorPlanItem, ProcessorPlanSummary, ProcessorRunReport
+from .batch import ProcessorPlanItem, ProcessorRunReport
 from .constants import (
     BROAD_LLM_PROCESSOR_KEYS,
     EXPENSIVE_PROCESSOR_KEYS,
@@ -541,7 +541,7 @@ def run_processors(
         enriched.append(snap)
 
     plan = build_processor_plan(enriched, processor_keys=processor_keys)
-    proc_key = (processor_keys[0] if processor_keys and len(processor_keys) == 1 else "all")
+    proc_key = processor_keys[0] if processor_keys and len(processor_keys) == 1 else "all"
     decl = declaration_for_key(proc_key) if proc_key != "all" else None
     report = ProcessorRunReport(
         run_id=run_id or f"processor-run-{proc_key}",
@@ -749,9 +749,7 @@ def run_processors(
             elif result.status == INPUT_STATUS_SKIPPED:
                 report.skipped_count += 1
                 if result.skip_reason:
-                    report.skip_reasons[result.skip_reason] = (
-                        report.skip_reasons.get(result.skip_reason, 0) + 1
-                    )
+                    report.skip_reasons[result.skip_reason] = report.skip_reasons.get(result.skip_reason, 0) + 1
 
     report.output_count = completed
     if failed and completed:

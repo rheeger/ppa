@@ -29,14 +29,13 @@ def thread_record_from_gmail_items(
             from_emails.append(fe)
     participants = tuple(str(x).strip().lower() for x in thread_record.get("participants", []) if str(x).strip())
     owner_sent = any(
-        str(msg.get("direction", "")).strip() == "outbound" or str(msg.get("from_email", "")).strip().lower() in own_emails
+        str(msg.get("direction", "")).strip() == "outbound"
+        or str(msg.get("from_email", "")).strip().lower() in own_emails
         for msg in message_records
     )
     owner_replied = owner_sent or any(str(msg.get("in_reply_to", "")).strip() for msg in message_records)
     message_uids = tuple(
-        str(msg.get("message_id", "")).strip()
-        for msg in message_records
-        if str(msg.get("message_id", "")).strip()
+        str(msg.get("message_id", "")).strip() for msg in message_records if str(msg.get("message_id", "")).strip()
     )
     # UIDs are computed by adapter helpers at ingest; use deterministic placeholders for ledger.
     from archive_sync.adapters.gmail_messages import _attachment_uid, _message_uid, _thread_uid

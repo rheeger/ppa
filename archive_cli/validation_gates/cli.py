@@ -50,7 +50,9 @@ def cmd_gate_status(args: argparse.Namespace) -> int:
     with store.index._connect() as conn:
         registry = GateRegistry(conn, store.index.schema)
         registry.ensure_table()
-        runs = registry.list_runs(archive_instance=archive_instance if not args.all_instances else None, limit=args.limit)
+        runs = registry.list_runs(
+            archive_instance=archive_instance if not args.all_instances else None, limit=args.limit
+        )
     payload = {
         "archive_instance": archive_instance,
         "engine_mode": ppa_engine(),
@@ -141,7 +143,11 @@ def cmd_guard_production_apply(args: argparse.Namespace) -> int:
     except GateRefusalError as exc:
         print(json.dumps({"refused": True, "reason": exc.reason, "message": str(exc)}, indent=2))
         return EXIT_REFUSED
-    print(json.dumps({"refused": False, "archive_instance": archive_instance, "decision_run_id": args.decision_run_id}, indent=2))
+    print(
+        json.dumps(
+            {"refused": False, "archive_instance": archive_instance, "decision_run_id": args.decision_run_id}, indent=2
+        )
+    )
     return EXIT_SUCCESS
 
 

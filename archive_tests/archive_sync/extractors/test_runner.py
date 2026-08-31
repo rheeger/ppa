@@ -212,9 +212,7 @@ def test_idempotency_skips_existing(extractor_vault, sample_email_card, tmp_path
     assert r2.extracted_cards == 0
 
 
-def test_uid_allowlist_skips_full_email_message_iter(
-    extractor_vault, sample_email_card, monkeypatch
-):
+def test_uid_allowlist_skips_full_email_message_iter(extractor_vault, sample_email_card, monkeypatch):
     _write_email(
         extractor_vault,
         sample_email_card,

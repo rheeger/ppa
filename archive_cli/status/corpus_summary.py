@@ -67,19 +67,13 @@ def query_corpus_summary(conn: Any, schema: str) -> dict[str, Any]:
     email_threads = 0
     if decision_summary is not None:
         last_apply_run_id = str(
-            decision_summary["decision_run_id"]
-            if isinstance(decision_summary, dict)
-            else decision_summary[0]
+            decision_summary["decision_run_id"] if isinstance(decision_summary, dict) else decision_summary[0]
         )
         email_threads = int(
-            decision_summary["thread_count"]
-            if isinstance(decision_summary, dict)
-            else decision_summary[1]
+            decision_summary["thread_count"] if isinstance(decision_summary, dict) else decision_summary[1]
         )
         last_apply_at = (
-            decision_summary["last_applied_at"]
-            if isinstance(decision_summary, dict)
-            else decision_summary[2]
+            decision_summary["last_applied_at"] if isinstance(decision_summary, dict) else decision_summary[2]
         )
 
     reason_rows = conn.execute(
@@ -132,9 +126,7 @@ def query_email_hygiene_summary(conn: Any, schema: str) -> dict[str, Any]:
 
     total_threads = int(corpus.get("email_threads_evaluated") or 0)
     classified = sum(
-        count
-        for source, count in classification_sources.items()
-        if source not in ("missing", "new_llm") and count > 0
+        count for source, count in classification_sources.items() if source not in ("missing", "new_llm") and count > 0
     )
     coverage = round(classified / total_threads, 4) if total_threads else 0.0
 

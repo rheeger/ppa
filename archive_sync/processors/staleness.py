@@ -9,7 +9,6 @@ from .constants import (
     CORPUS_ACTIVE,
     CORPUS_QUARANTINE,
     CORPUS_SUPPRESSED,
-    SKIP_ACTIVE_ONLY,
     SKIP_NOT_APPLICABLE,
     SKIP_QUARANTINE,
     SKIP_SUPPRESSED,
@@ -148,15 +147,9 @@ def evaluate_staleness(
         reasons.append(STALE_DIRTY_INPUT)
     if snapshot.recorded_input_hash and snapshot.recorded_input_hash != current_input_hash:
         reasons.append(STALE_INPUT_HASH)
-    if (
-        snapshot.recorded_processor_version
-        and snapshot.recorded_processor_version != decl.processor_version
-    ):
+    if snapshot.recorded_processor_version and snapshot.recorded_processor_version != decl.processor_version:
         reasons.append(STALE_PROCESSOR_VERSION)
-    if (
-        snapshot.recorded_corpus_state
-        and snapshot.recorded_corpus_state != snapshot.corpus_state
-    ):
+    if snapshot.recorded_corpus_state and snapshot.recorded_corpus_state != snapshot.corpus_state:
         reasons.append(STALE_CORPUS_STATE)
     if (
         snapshot.upstream_output_hash

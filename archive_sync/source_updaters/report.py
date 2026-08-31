@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
 
 from .batch import SourceUpdaterRunReport
 from .constants import SECTION_D_COMPLETION_STATE, SOURCE_UPDATER_LOG_ROOT
@@ -12,7 +11,6 @@ from .constants import SECTION_D_COMPLETION_STATE, SOURCE_UPDATER_LOG_ROOT
 
 def write_source_updater_report(repo_root: Path, report: SourceUpdaterRunReport) -> dict[str, str]:
     run_id = report.run_id or "unknown"
-    gate = report.ladder_gate or "synthetic_fixtures"
     base = repo_root / "logs" / SOURCE_UPDATER_LOG_ROOT / f"source-{report.source_key.replace(':', '_')}" / run_id
     base.mkdir(parents=True, exist_ok=True)
     report_path = base / "report.json"

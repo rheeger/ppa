@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .batch import SourceUpdaterBatchSummary, SourceUpdaterRunReport
+from .batch import SourceUpdaterRunReport
 from .constants import RUN_STATUS_SUCCESS, STALENESS_NEVER_SYNCED
 from .staleness import compute_staleness_state
 

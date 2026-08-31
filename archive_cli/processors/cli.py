@@ -27,7 +27,11 @@ from archive_sync.processors.constants import (
     SECTION_E_COMPLETION_STATE,
     SECTION_E_EXECUTION_STATE,
 )
-from archive_sync.processors.declarations import declaration_for_key, iter_processor_declarations, validate_all_declarations
+from archive_sync.processors.declarations import (
+    declaration_for_key,
+    iter_processor_declarations,
+    validate_all_declarations,
+)
 from archive_sync.processors.runner import run_processors
 from archive_sync.processors.state_store import ProcessorStateStore
 from archive_sync.processors.status import status_payload

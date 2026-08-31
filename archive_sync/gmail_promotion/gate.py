@@ -136,10 +136,7 @@ class GmailPromotionGate:
         corpus = policy_decision.corpus_decision.value
         dirty: tuple[str, ...] = ()
 
-        if (
-            vault_has_active_card
-            and corpus in {CorpusDecision.SUPPRESSED.value, CorpusDecision.QUARANTINE.value}
-        ):
+        if vault_has_active_card and corpus in {CorpusDecision.SUPPRESSED.value, CorpusDecision.QUARANTINE.value}:
             self.metrics.demotion_recommended += 1
             signals = tuple(record.decision_signals) + (
                 "routine_sync_keep_active",

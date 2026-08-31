@@ -20,8 +20,8 @@ from .declarations import (
     declaration_for_adapter_source_id,
     expand_declarations,
     iter_declaration_templates,
-    validate_declaration,
     validate_all_declarations,
+    validate_declaration,
 )
 from .runner import run_source_updater, run_source_updaters
 from .state_store import SourceUpdaterStateStore

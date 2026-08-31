@@ -88,12 +88,9 @@ def test_maintain_failed_detects_updater_errors() -> None:
     mod = _load_mod()
     assert mod.maintain_failed({}) is None
     assert mod.maintain_failed({"errors": [{"step": "x", "error": "boom"}]})
-    assert mod.maintain_failed(
-        {"source_updater_reports": [{"source_key": "gmail-messages:x", "status": "blocked"}]}
-    )
+    assert mod.maintain_failed({"source_updater_reports": [{"source_key": "gmail-messages:x", "status": "blocked"}]})
     assert (
-        mod.maintain_failed({"source_updater_reports": [{"source_key": "imessage:local", "status": "success"}]})
-        is None
+        mod.maintain_failed({"source_updater_reports": [{"source_key": "imessage:local", "status": "success"}]}) is None
     )
 
 

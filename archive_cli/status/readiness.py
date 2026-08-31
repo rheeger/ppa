@@ -47,9 +47,7 @@ class V3ReadinessResult:
             "failed_checks": list(self.failed_checks),
             "blocking_reasons": list(self.blocking_reasons),
             "gate_readiness": self.gate_readiness.to_dict() if self.gate_readiness else None,
-            "suppression_visibility": (
-                self.suppression_visibility.to_dict() if self.suppression_visibility else None
-            ),
+            "suppression_visibility": (self.suppression_visibility.to_dict() if self.suppression_visibility else None),
             "engine_mode": self.engine_mode,
             "rollback_decision_run_ids": list(self.rollback_decision_run_ids),
             "details": dict(self.details),

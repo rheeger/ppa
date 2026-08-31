@@ -603,7 +603,11 @@ def restore_otter_mcp_tokens(
     if _otter_tokens_from_mcporter_payload(payload) is not None:
         return True
     entry_key = next(
-        (key for key, value in entries.items() if isinstance(value, dict) and value.get("serverName") == "otter_meeting_mcp"),
+        (
+            key
+            for key, value in entries.items()
+            if isinstance(value, dict) and value.get("serverName") == "otter_meeting_mcp"
+        ),
         "otter_meeting_mcp",
     )
     existing_entry = entries.get(entry_key) if isinstance(entries.get(entry_key), dict) else {}
@@ -826,7 +830,12 @@ class OtterMcpClient:
             return discovered
 
     def _pick_user_info(self, _pick, _pick_alias) -> str:
-        return _pick_alias(_OTTER_USER_INFO_TOOL_ALIASES) or _pick("get_user_info") or _pick("user", "info") or _pick("get", "user")
+        return (
+            _pick_alias(_OTTER_USER_INFO_TOOL_ALIASES)
+            or _pick("get_user_info")
+            or _pick("user", "info")
+            or _pick("get", "user")
+        )
 
     def _call_tool(self, tool_name: str, **kwargs: Any) -> dict[str, Any]:
         args = [f"{key}={_coerce_cli_value(value)}" for key, value in kwargs.items() if value not in (None, [])]
@@ -837,11 +846,7 @@ class OtterMcpClient:
         if self._user_info is not None:
             return self._user_info
         tools = self._discover_tools()
-        tool_names = [
-            name
-            for name in [tools.get("user_info"), "otter_get_user_info", "get_user_info"]
-            if name
-        ]
+        tool_names = [name for name in [tools.get("user_info"), "otter_get_user_info", "get_user_info"] if name]
         last_error: Exception | None = None
         for tool_name in dict.fromkeys(tool_names):
             try:
@@ -925,7 +930,9 @@ class OtterMcpClient:
                 params[end_before_arg] = formatted_end
             elif end_before_arg not in params:
                 params[end_before_arg] = date.today().strftime("%Y/%m/%d")
-        return self._call_tool(tools["list"], **{key: value for key, value in params.items() if value not in (None, "")})
+        return self._call_tool(
+            tools["list"], **{key: value for key, value in params.items() if value not in (None, "")}
+        )
 
     def get_meeting_detail(self, meeting_id: str) -> dict[str, Any]:
         cached = self._detail_cache.get(meeting_id)

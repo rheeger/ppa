@@ -74,13 +74,9 @@ def validate_decision_records(
         raise ValueError("decision records are empty")
     for rec in records:
         if rec.decision_run_id != decision_run_id:
-            raise ValueError(
-                f"decision_run_id mismatch: record {rec.thread_uid} has {rec.decision_run_id}"
-            )
+            raise ValueError(f"decision_run_id mismatch: record {rec.thread_uid} has {rec.decision_run_id}")
         if rec.policy_version != expected_policy_version:
-            raise ValueError(
-                f"policy_version mismatch for {rec.thread_uid}: {rec.policy_version}"
-            )
+            raise ValueError(f"policy_version mismatch for {rec.thread_uid}: {rec.policy_version}")
         if not rec.corpus_decision:
             raise ValueError(f"missing corpus_decision for {rec.thread_uid}")
         if not rec.processor_decision:

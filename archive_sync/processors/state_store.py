@@ -241,9 +241,7 @@ class ProcessorStateStore:
     def list_state(self) -> list[ProcessorStateRecord]:
         if self._conn is not None:
             self.ensure_tables()
-            rows = self._conn.execute(
-                f"SELECT * FROM {self._schema}.processor_state ORDER BY processor_key"
-            ).fetchall()
+            rows = self._conn.execute(f"SELECT * FROM {self._schema}.processor_state ORDER BY processor_key").fetchall()
             return [_row_to_state(r) for r in rows]
         return [_row_to_state(item) for item in self._load_meta().get("state", [])]
 

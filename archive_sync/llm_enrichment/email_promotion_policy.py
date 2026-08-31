@@ -65,9 +65,7 @@ SUPPRESS_CONFIDENCE_MIN = 0.75
 PROMOTE_TRANSACTIONAL_MIN = 0.50
 QUARANTINE_BELOW = 0.50
 
-CANONICAL_CATEGORIES = frozenset(
-    {"transactional", "personal", "marketing", "automated", "noise", "unknown"}
-)
+CANONICAL_CATEGORIES = frozenset({"transactional", "personal", "marketing", "automated", "noise", "unknown"})
 
 _CATEGORY_ALIASES: dict[str, str] = {
     "transactional": "transactional",
@@ -252,11 +250,8 @@ def _has_back_and_forth(inp: EmailPromotionInput) -> bool:
     """
 
     participants = {e.strip().lower() for e in inp.participant_emails if e.strip()}
-    return (
-        inp.message_count >= 2
-        and len(participants) >= 2
-        and _has_owner_participation(inp)
-    )
+    return inp.message_count >= 2 and len(participants) >= 2 and _has_owner_participation(inp)
+
 
 def _is_high_confidence_noise(canonical: str, confidence: float) -> bool:
     return canonical == "noise" and confidence >= SUPPRESS_CONFIDENCE_MIN
@@ -457,11 +452,7 @@ class EmailPromotionPolicy:
                 signals.copy(),
             )
 
-        if (
-            card_types
-            and inp.confidence >= PROMOTE_TRANSACTIONAL_MIN
-            and canonical not in {"marketing", "noise"}
-        ):
+        if card_types and inp.confidence >= PROMOTE_TRANSACTIONAL_MIN and canonical not in {"marketing", "noise"}:
             signals.append("extractable_card_types")
             return _RuleOutcome(
                 CorpusDecision.ACTIVE,
@@ -862,7 +853,7 @@ def write_section_a_gate_artifacts(
         "",
         f"**Completion state:** `{SECTION_A_COMPLETION_STATE}`",
         f"**Validation gate framework:** `{SECTION_G_FRAMEWORK_STATE}`",
-        f"**Section B apply unlocked:** no",
+        "**Section B apply unlocked:** no",
         "",
         f"- policy_version: `{EMAIL_PROMOTION_POLICY_VERSION}`",
         f"- ladder_gate: {SECTION_A_VALIDATION_MATRIX_GATE}",
@@ -884,8 +875,7 @@ def write_section_a_gate_artifacts(
     summary_lines.extend(["", "## Required examples", ""])
     for d in decisions:
         summary_lines.append(
-            f"- `{d.external_id}`: {d.corpus_decision.value} / "
-            f"{d.processor_decision.value} ({d.decision_reason})"
+            f"- `{d.external_id}`: {d.corpus_decision.value} / {d.processor_decision.value} ({d.decision_reason})"
         )
     summary_path.write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
 

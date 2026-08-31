@@ -12,7 +12,7 @@ from .constants import (
     RUN_STATUS_SUCCESS,
 )
 from .cursor_io import read_adapter_cursor, summarize_cursor_payload
-from .declarations import SourceUpdaterDeclaration, declaration_for_adapter_source_id, expand_declarations
+from .declarations import SourceUpdaterDeclaration, declaration_for_adapter_source_id
 from .state_store import SourceUpdaterStateRecord, SourceUpdaterStateStore
 
 
@@ -62,11 +62,7 @@ def resolve_status_declarations(
 ) -> list[SourceUpdaterDeclaration]:
     """Prefer concrete live keys over ``<account>`` templates."""
 
-    live_keys = [
-        key
-        for key in (states or {})
-        if key and not is_template_source_key(key)
-    ]
+    live_keys = [key for key in (states or {}) if key and not is_template_source_key(key)]
     by_adapter: dict[str, list[str]] = {}
     for key in live_keys:
         by_adapter.setdefault(adapter_id_from_source_key(key), []).append(key)

@@ -313,9 +313,7 @@ def test_gmail_promotion_batch_counts_and_cursor_safety(tmp_path: Path) -> None:
 
 def test_one_source_failure_does_not_block_others(tmp_path: Path) -> None:
     vault = _minimal_vault(tmp_path)
-    good = _FixtureCalendarAdapter(
-        [{"uid": "hfa-ok-1", "event_id": "e1", "title": "Ok", "account_email": "a@x.com"}]
-    )
+    good = _FixtureCalendarAdapter([{"uid": "hfa-ok-1", "event_id": "e1", "title": "Ok", "account_email": "a@x.com"}])
     bad = _FixtureGmailAdapter(fail=PermissionError("oauth token revoked"))
 
     def factory(adapter_source_id: str) -> BaseAdapter:
@@ -557,9 +555,7 @@ def test_adapter_ingest_kwargs_per_live_source(monkeypatch: pytest.MonkeyPatch) 
     assert "account_email" not in github
     assert "stage_dir" not in github
 
-    correspondents = adapter_ingest_kwargs(
-        resolve_declaration("gmail-correspondents:me@example.com"), apply=False
-    )
+    correspondents = adapter_ingest_kwargs(resolve_declaration("gmail-correspondents:me@example.com"), apply=False)
     assert correspondents == {"account_email": "me@example.com"}
 
 

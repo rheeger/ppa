@@ -528,8 +528,6 @@ def rollback_decision_run(conn: Any, schema: str, decision_run_id: str) -> Rollb
         """,
         (decision_run_id,),
     ).fetchone()
-    counts.threads_restored = int(
-        thread_rows["n"] if isinstance(thread_rows, dict) else thread_rows[0]
-    )
+    counts.threads_restored = int(thread_rows["n"] if isinstance(thread_rows, dict) else thread_rows[0])
     conn.commit()
     return counts

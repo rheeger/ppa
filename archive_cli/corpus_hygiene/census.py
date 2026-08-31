@@ -9,7 +9,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from archive_cli.ppa_engine import ppa_engine
 from archive_cli.validation_gates.constants import GATE_RUN_STATUS_PASSED, GATE_SYNTHETIC_FIXTURES
 from archive_cli.validation_gates.gate_registry import GateRegistry
 from archive_cli.validation_gates.report import GateRunReport, write_gate_report
