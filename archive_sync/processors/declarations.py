@@ -218,9 +218,7 @@ _PROCESSOR_DECLARATIONS: tuple[ProcessorDeclaration, ...] = (
     _entity_resolution(),
 )
 
-_DECLARATIONS_BY_KEY: dict[str, ProcessorDeclaration] = {
-    decl.processor_key: decl for decl in _PROCESSOR_DECLARATIONS
-}
+_DECLARATIONS_BY_KEY: dict[str, ProcessorDeclaration] = {decl.processor_key: decl for decl in _PROCESSOR_DECLARATIONS}
 
 
 def iter_processor_declarations() -> tuple[ProcessorDeclaration, ...]:

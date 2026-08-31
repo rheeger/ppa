@@ -27,6 +27,7 @@ from archive_vault.thread_hash import (
     compute_email_thread_body_sha_from_payload,
 )
 from archive_vault.uid import generate_uid
+
 from .base import BaseAdapter, FetchedBatch, deterministic_provenance
 from .gmail_correspondents import load_own_aliases
 
@@ -592,10 +593,7 @@ class GmailMessagesAdapter(BaseAdapter):
         normalized_account = account_email.strip().lower()
         for row in rows:
             frontmatter = dict(row.get("frontmatter") or {})
-            if (
-                normalized_account
-                and str(frontmatter.get("account_email", "")).strip().lower() != normalized_account
-            ):
+            if normalized_account and str(frontmatter.get("account_email", "")).strip().lower() != normalized_account:
                 continue
             card_type = str(frontmatter.get("type", "")).strip()
             if card_type == "email_thread":
@@ -1244,9 +1242,7 @@ class GmailMessagesAdapter(BaseAdapter):
             from archive_sync.gmail_promotion.factory import build_promotion_gate
 
             decision_run_id = str(
-                kwargs.get("promotion_decision_run_id")
-                or kwargs.get("decision_run_id")
-                or f"gmail-promotion-{account}"
+                kwargs.get("promotion_decision_run_id") or kwargs.get("decision_run_id") or f"gmail-promotion-{account}"
             ).strip()
             promotion_gate = build_promotion_gate(
                 vault_path,

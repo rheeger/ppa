@@ -20,9 +20,7 @@ def assign_review_bucket(record: EmailCorpusDecisionRecord) -> str | None:
     conf = record.confidence
     signals = set(record.decision_signals)
 
-    if record.classification_source == "missing" or (
-        canonical == "unknown" and record.corpus_decision == "quarantine"
-    ):
+    if record.classification_source == "missing" or (canonical == "unknown" and record.corpus_decision == "quarantine"):
         return "unknown_classification"
 
     if record.corpus_decision == "quarantine":
@@ -34,8 +32,7 @@ def assign_review_bucket(record: EmailCorpusDecisionRecord) -> str | None:
 
     if record.corpus_decision == "active" and (
         record.decision_reason.startswith("manual_override")
-        or record.decision_reason
-        in {"owner_participation", "starred_or_important", "back_and_forth_participation"}
+        or record.decision_reason in {"owner_participation", "starred_or_important", "back_and_forth_participation"}
     ):
         return "active_overrides"
 

@@ -364,9 +364,10 @@ def test_ingest_resumes_by_thread_cursor_and_writes_notes(tmp_vault, tmp_path):
     assert first_result.created == 3
 
     sync_state = json.loads((tmp_vault / "_meta" / "sync-state.json").read_text(encoding="utf-8"))
-    assert sync_state["beeper:single:all:excl=bluebubble+bluebubbles+imessage"][
-        "last_completed_thread_id"
-    ] == "!room-1:beeper.local"
+    assert (
+        sync_state["beeper:single:all:excl=bluebubble+bluebubbles+imessage"]["last_completed_thread_id"]
+        == "!room-1:beeper.local"
+    )
 
     second_result = adapter.ingest(
         str(tmp_vault),
@@ -378,9 +379,10 @@ def test_ingest_resumes_by_thread_cursor_and_writes_notes(tmp_vault, tmp_path):
     assert second_result.created == 3
 
     sync_state = json.loads((tmp_vault / "_meta" / "sync-state.json").read_text(encoding="utf-8"))
-    assert sync_state["beeper:single:all:excl=bluebubble+bluebubbles+imessage"][
-        "last_completed_thread_id"
-    ] == "!room-2:beeper.local"
+    assert (
+        sync_state["beeper:single:all:excl=bluebubble+bluebubbles+imessage"]["last_completed_thread_id"]
+        == "!room-2:beeper.local"
+    )
 
     thread_files = sorted((tmp_vault / "BeeperThreads").rglob("*.md"))
     message_files = sorted((tmp_vault / "Beeper").rglob("*.md"))
@@ -615,10 +617,7 @@ def test_fetch_batches_excludes_imessage_and_bluebubbles_by_default(tmp_vault, t
         )
     )
     rooms = {
-        item.get("room_id")
-        for batch in batches
-        for item in batch.items
-        if item.get("kind") in {"thread", "message"}
+        item.get("room_id") for batch in batches for item in batch.items if item.get("kind") in {"thread", "message"}
     }
     assert "!room-discord:beeper.local" in rooms
     assert "!room-imessage:beeper.local" not in rooms
@@ -636,10 +635,7 @@ def test_fetch_batches_excludes_imessage_and_bluebubbles_by_default(tmp_vault, t
         )
     )
     included_rooms = {
-        item.get("room_id")
-        for batch in included
-        for item in batch.items
-        if item.get("kind") in {"thread", "message"}
+        item.get("room_id") for batch in included for item in batch.items if item.get("kind") in {"thread", "message"}
     }
     assert "!room-imessage:beeper.local" in included_rooms
 
@@ -753,4 +749,3 @@ def test_beeper_person_merge_dirties_host_uid_not_incoming(tmp_vault, tmp_path):
     assert incoming.uid not in dirty
     frontmatter, _, _ = read_note(tmp_vault, str(rel_path))
     assert frontmatter["uid"] == host_uid
-

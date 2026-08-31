@@ -102,9 +102,7 @@ def ensure_gate_runs_table(conn: Any, schema: str) -> None:
     conn.execute(
         f"CREATE INDEX IF NOT EXISTS idx_gate_runs_gate_instance ON {schema}.gate_runs(gate, archive_instance, created_at DESC)"
     )
-    conn.execute(
-        f"CREATE INDEX IF NOT EXISTS idx_gate_runs_status ON {schema}.gate_runs(status, gate)"
-    )
+    conn.execute(f"CREATE INDEX IF NOT EXISTS idx_gate_runs_status ON {schema}.gate_runs(status, gate)")
 
 
 def _record_from_row(row: Any) -> GateRunRecord:

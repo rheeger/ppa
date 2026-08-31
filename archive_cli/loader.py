@@ -1371,9 +1371,7 @@ class LoaderMixin:
             )
             if allowlist is not None:
                 present_uids = {str(row.card.uid).strip() for row in rows if str(row.card.uid).strip()}
-                rebuild_mode, materialize_uids, missing_uids = resolve_uid_allowlist_rebuild(
-                    allowlist, present_uids
-                )
+                rebuild_mode, materialize_uids, missing_uids = resolve_uid_allowlist_rebuild(allowlist, present_uids)
                 purge_uids = set()
                 deleted_paths = set()
                 manifest_counters = {

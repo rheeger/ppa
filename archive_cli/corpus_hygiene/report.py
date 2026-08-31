@@ -22,7 +22,7 @@ def render_census_summary(result: object, report: GateRunReport) -> str:
 
     assert isinstance(result, CensusResult)
     lines = [
-        f"# Section B — email corpus hygiene dry-run",
+        "# Section B — email corpus hygiene dry-run",
         "",
         f"- decision_run_id: `{report.decision_run_id}`",
         f"- policy_version: `{report.policy_version}`",

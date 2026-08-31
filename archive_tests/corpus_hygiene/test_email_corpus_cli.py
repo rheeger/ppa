@@ -49,7 +49,9 @@ def _apply_args(**overrides: object) -> argparse.Namespace:
     return argparse.Namespace(**defaults)  # type: ignore[arg-type]
 
 
-def test_apply_missing_vault_returns_blocked_json(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+def test_apply_missing_vault_returns_blocked_json(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
     monkeypatch.setenv("PPA_PATH", "/nonexistent/ppa/vault-for-cli-test")
     monkeypatch.delenv("PPA_INDEX_DSN", raising=False)
 
@@ -63,7 +65,9 @@ def test_apply_missing_vault_returns_blocked_json(monkeypatch: pytest.MonkeyPatc
     assert payload["reason"] == "vault_not_found"
 
 
-def test_rollback_missing_vault_returns_blocked_json(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+def test_rollback_missing_vault_returns_blocked_json(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
     monkeypatch.setenv("PPA_PATH", "/nonexistent/ppa/vault-for-cli-test")
     monkeypatch.delenv("PPA_INDEX_DSN", raising=False)
 
@@ -86,7 +90,7 @@ def test_apply_unknown_decision_run_returns_refused_json(
 ) -> None:
     vault = _minimal_vault(tmp_path)
     schema = "ppa_corpus_cli_apply"
-    idx = _bootstrap_schema(pgvector_dsn, vault, schema)
+    _bootstrap_schema(pgvector_dsn, vault, schema)
     monkeypatch.setenv("PPA_PATH", str(vault))
     monkeypatch.setenv("PPA_INDEX_DSN", pgvector_dsn)
     monkeypatch.setenv("PPA_INDEX_SCHEMA", schema)

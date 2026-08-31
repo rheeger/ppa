@@ -12,9 +12,9 @@ from typing import Any
 from archive_auth.token_manager import (
     CALENDAR_READONLY_SCOPES,
     CALENDAR_SCOPES,
+    _should_retry_mint_without_scopes,
     mint_access_token,
     resolve_scopes,
-    _should_retry_mint_without_scopes,
 )
 
 

@@ -8,7 +8,7 @@ from typing import Iterable
 from .batch import ProcessorPlanItem, ProcessorPlanSummary
 from .declarations import ProcessorDeclaration, iter_processor_declarations, topological_order
 from .input_hash import compute_input_hash, format_output_identity
-from .staleness import ProcessorInputSnapshot, evaluate_staleness, input_matches_filters
+from .staleness import ProcessorInputSnapshot, evaluate_staleness
 
 
 def build_processor_plan(

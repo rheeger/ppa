@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from archive_cli.corpus_hygiene.decisions import EmailCorpusDecisionRecord
-from archive_cli.corpus_hygiene.state_store import CORPUS_STATE_ACTIVE, CORPUS_STATE_SUPPRESSED
+from archive_cli.corpus_hygiene.state_store import CORPUS_STATE_ACTIVE
 
 
 class PromotionLedger(Protocol):

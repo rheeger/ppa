@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from archive_cli.source_updaters.cli import cmd_record_run, cmd_status
+from archive_cli.validation_gates.constants import EXIT_BLOCKED, EXIT_REFUSED
 from archive_sync.gmail_promotion.metrics import GmailPromotionBatchMetrics
 from archive_sync.source_updaters.batch import (
     SourceUpdaterBatchSummary,
@@ -36,8 +38,6 @@ from archive_sync.source_updaters.state_store import (
     SourceUpdaterStateStore,
     record_isolated_source_results,
 )
-from archive_cli.source_updaters.cli import cmd_record_run, cmd_status
-from archive_cli.validation_gates.constants import EXIT_BLOCKED, EXIT_REFUSED
 
 
 def _minimal_vault(tmp_path: Path) -> Path:
@@ -125,7 +125,6 @@ def test_cursor_patch_commits_only_after_persisted() -> None:
 
 def test_one_source_failure_does_not_block_others(tmp_path: Path) -> None:
     meta = tmp_path / "su.json"
-    store = SourceUpdaterStateStore(None, meta_path=meta)
     good = SourceUpdaterRunReport(
         run_id="run-ok",
         source_key="calendar-events:a@x.com",

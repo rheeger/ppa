@@ -520,11 +520,7 @@ def run_maintenance(
 
     report.new_cards_ingested = len(new_rows)
     created_n = sum(1 for r in new_rows if r.get("action") == "created")
-    tailed_uids = {
-        str(row.get("card_uid") or "").strip()
-        for row in new_rows
-        if str(row.get("card_uid") or "").strip()
-    }
+    tailed_uids = {str(row.get("card_uid") or "").strip() for row in new_rows if str(row.get("card_uid") or "").strip()}
     created_uids = {
         str(row.get("card_uid") or "").strip()
         for row in new_rows

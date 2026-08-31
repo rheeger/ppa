@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -10,8 +10,8 @@ from archive_cli.config import load_archive_config
 from archive_cli.ppa_engine import ppa_engine
 from archive_cli.validation_gates.constants import SECTION_F_COMPLETION_STATE
 from archive_cli.validation_gates.gate_registry import GateRegistry
-from archive_sync.processors.status import status_payload as processor_status_payload
 from archive_sync.processors.state_store import ProcessorStateStore
+from archive_sync.processors.status import status_payload as processor_status_payload
 from archive_sync.source_updaters.declarations import iter_declaration_templates
 from archive_sync.source_updaters.snapshot import status_payload_for_declarations
 from archive_sync.source_updaters.state_store import SourceUpdaterStateStore
@@ -146,13 +146,21 @@ def build_production_status(
 
     meta_path_sources = Path(vault_path) / "_meta" / "source-updaters.json"
     meta_path_processors = Path(vault_path) / "_meta" / "processors.json"
-    source_store = SourceUpdaterStateStore(conn, schema, meta_path=meta_path_sources) if conn else SourceUpdaterStateStore(
-        None,
-        meta_path=meta_path_sources,
+    source_store = (
+        SourceUpdaterStateStore(conn, schema, meta_path=meta_path_sources)
+        if conn
+        else SourceUpdaterStateStore(
+            None,
+            meta_path=meta_path_sources,
+        )
     )
-    processor_store = ProcessorStateStore(conn, schema, meta_path=meta_path_processors) if conn else ProcessorStateStore(
-        None,
-        meta_path=meta_path_processors,
+    processor_store = (
+        ProcessorStateStore(conn, schema, meta_path=meta_path_processors)
+        if conn
+        else ProcessorStateStore(
+            None,
+            meta_path=meta_path_processors,
+        )
     )
     if conn is not None:
         try:
@@ -288,7 +296,9 @@ def build_production_status(
         "linkers": linkers,
         "maintenance": maintenance,
         "validation_gates": validation_gates,
-        "v3_readiness": v3_readiness.to_dict() if v3_readiness else {"ready": False, "failed_checks": ["index_unavailable"]},
+        "v3_readiness": v3_readiness.to_dict()
+        if v3_readiness
+        else {"ready": False, "failed_checks": ["index_unavailable"]},
         "errors": errors,
         "warnings": warnings,
     }

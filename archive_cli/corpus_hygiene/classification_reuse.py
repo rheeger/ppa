@@ -130,8 +130,7 @@ def stage0_classification(
 
     work_domains = user_domains or frozenset(INTERNAL_DOMAINS)
     if from_emails and all(
-        _email_domain(fe) in work_domains or _email_domain(fe) in {"gmail.com", "googlemail.com"}
-        for fe in from_emails
+        _email_domain(fe) in work_domains or _email_domain(fe) in {"gmail.com", "googlemail.com"} for fe in from_emails
     ):
         return _hit("personal", 0.75, (), "stage0")
 

@@ -261,13 +261,15 @@ def test_decision_records_include_required_fields() -> None:
 
 
 def test_review_bucket_high_confidence_marketing() -> None:
-    threads = [_thread(
-        thread_uid="uid-mkt",
-        gmail_thread_id="g-mkt",
-        label_ids=("CATEGORY_PROMOTIONS",),
-        triage_classification="marketing",
-        triage_confidence=0.91,
-    )]
+    threads = [
+        _thread(
+            thread_uid="uid-mkt",
+            gmail_thread_id="g-mkt",
+            label_ids=("CATEGORY_PROMOTIONS",),
+            triage_classification="marketing",
+            triage_confidence=0.91,
+        )
+    ]
     result = run_email_census_dry_run(threads, context=CensusContext(decision_run_id=_FIXTURE_RUN_ID))
     buckets = bucket_samples(result.records)
     assert buckets["high_confidence_marketing"]
@@ -275,13 +277,15 @@ def test_review_bucket_high_confidence_marketing() -> None:
 
 
 def test_review_bucket_quarantine_conflicts() -> None:
-    threads = [_thread(
-        thread_uid="uid-star",
-        gmail_thread_id="g-star",
-        label_ids=("CATEGORY_PROMOTIONS", "STARRED"),
-        triage_classification="marketing",
-        triage_confidence=0.91,
-    )]
+    threads = [
+        _thread(
+            thread_uid="uid-star",
+            gmail_thread_id="g-star",
+            label_ids=("CATEGORY_PROMOTIONS", "STARRED"),
+            triage_classification="marketing",
+            triage_confidence=0.91,
+        )
+    ]
     result = run_email_census_dry_run(threads, context=CensusContext(decision_run_id=_FIXTURE_RUN_ID))
     rec = result.records[0]
     assert rec.corpus_decision == "quarantine"
@@ -290,14 +294,16 @@ def test_review_bucket_quarantine_conflicts() -> None:
 
 
 def test_review_bucket_suppressed_with_derived_cards() -> None:
-    threads = [_thread(
-        thread_uid="uid-derived",
-        gmail_thread_id="g-derived",
-        label_ids=("CATEGORY_PROMOTIONS",),
-        triage_classification="marketing",
-        triage_confidence=0.91,
-        derived_uids=("meal-order-1",),
-    )]
+    threads = [
+        _thread(
+            thread_uid="uid-derived",
+            gmail_thread_id="g-derived",
+            label_ids=("CATEGORY_PROMOTIONS",),
+            triage_classification="marketing",
+            triage_confidence=0.91,
+            derived_uids=("meal-order-1",),
+        )
+    ]
     result = run_email_census_dry_run(threads, context=CensusContext(decision_run_id=_FIXTURE_RUN_ID))
     rec = result.records[0]
     assert rec.corpus_decision == "quarantine"
@@ -464,8 +470,8 @@ def test_load_threads_resolves_wikilink_message_outbound(tmp_path: Path) -> None
                 "type: email_thread",
                 "source: [gmail]",
                 "source_id: gmail.thread.wl",
-                "created: \"2025-06-15\"",
-                "updated: \"2025-06-15\"",
+                'created: "2025-06-15"',
+                'updated: "2025-06-15"',
                 "gmail_thread_id: thread_wl",
                 "account_email: owner@example.com",
                 "subject: Outbound reply",
@@ -487,8 +493,8 @@ def test_load_threads_resolves_wikilink_message_outbound(tmp_path: Path) -> None
                 "type: email_message",
                 "source: [gmail]",
                 "source_id: gmail.msg.out",
-                "created: \"2025-06-15\"",
-                "updated: \"2025-06-15\"",
+                'created: "2025-06-15"',
+                'updated: "2025-06-15"',
                 "gmail_message_id: msg_out",
                 "gmail_thread_id: thread_wl",
                 "account_email: owner@example.com",
@@ -508,8 +514,8 @@ def test_load_threads_resolves_wikilink_message_outbound(tmp_path: Path) -> None
                 "type: email_message",
                 "source: [gmail]",
                 "source_id: gmail.msg.in",
-                "created: \"2025-06-15\"",
-                "updated: \"2025-06-15\"",
+                'created: "2025-06-15"',
+                'updated: "2025-06-15"',
                 "gmail_message_id: msg_in",
                 "gmail_thread_id: thread_wl",
                 "account_email: owner@example.com",

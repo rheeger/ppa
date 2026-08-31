@@ -158,8 +158,7 @@ def resolve_python(*, env: dict[str, str] | None = None) -> Path:
     if explicit:
         raise FileNotFoundError(f"PPA_PYTHON cannot import archive_cli: {explicit}")
     raise FileNotFoundError(
-        "No working Python for nightly maintain. "
-        f"Set PPA_PYTHON or restore {REPO_ROOT / '.venv' / 'bin' / 'python'}."
+        f"No working Python for nightly maintain. Set PPA_PYTHON or restore {REPO_ROOT / '.venv' / 'bin' / 'python'}."
     )
 
 

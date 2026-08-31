@@ -543,10 +543,7 @@ class GitHubHistoryAdapter(BaseAdapter):
         sleep_seconds = max(0.0, (reset_dt - now).total_seconds()) + 1.0
         if sleep_seconds > 0:
             wait = min(sleep_seconds, float(MAX_RATE_LIMIT_SLEEP_SECONDS))
-            print(
-                f"[github-history] graphql rate-limit remaining={remaining} "
-                f"wait={wait:.0f}s reset={reset_at}"
-            )
+            print(f"[github-history] graphql rate-limit remaining={remaining} wait={wait:.0f}s reset={reset_at}")
             time.sleep(wait)
 
     def _list_visible_repositories(self, *, max_repos: int | None = None) -> list[dict[str, Any]]:

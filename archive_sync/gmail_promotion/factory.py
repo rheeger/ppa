@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from archive_cli.corpus_hygiene.classification_reuse import open_classify_index
+
 from .classification_resolve import GmailClassificationResolver, load_card_classifications_from_index_rows
 from .gate import GmailPromotionGate
 from .ledger import (

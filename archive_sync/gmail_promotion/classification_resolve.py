@@ -9,8 +9,6 @@ from archive_cli.corpus_hygiene.classification_reuse import (
     EmailThreadRecord,
     ReusedClassification,
     _hit,
-    _parse_card_types,
-    stage0_classification,
 )
 from archive_cli.corpus_hygiene.decisions import EmailCorpusDecisionRecord
 from archive_sync.llm_enrichment.classify_index import ClassifyIndex

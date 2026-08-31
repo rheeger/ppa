@@ -6,8 +6,8 @@ import json
 import sqlite3
 from pathlib import Path
 
-from archive_cli.corpus_hygiene.classification_reuse import EmailThreadRecord
 from archive_cli.corpus_hygiene.census import CensusContext, run_email_census_dry_run
+from archive_cli.corpus_hygiene.classification_reuse import EmailThreadRecord
 from archive_cli.corpus_hygiene.restore_quarantine import (
     drop_quarantine_from_ledger,
     rel_paths_from_scan_cache,

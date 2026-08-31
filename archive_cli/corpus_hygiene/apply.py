@@ -268,9 +268,7 @@ def append_promotion_ledger(vault_path: Path, records: list[EmailCorpusDecisionR
     """
 
     matching = [
-        rec
-        for rec in records
-        if rec.corpus_decision == CORPUS_STATE_SUPPRESSED and rec.gmail_thread_id.strip()
+        rec for rec in records if rec.corpus_decision == CORPUS_STATE_SUPPRESSED and rec.gmail_thread_id.strip()
     ]
     if not matching:
         return 0

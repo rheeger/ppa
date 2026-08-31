@@ -38,9 +38,7 @@ def guard_prior_gate_evidence(
     required_gates: Iterable[str] = GATES_REQUIRED_BEFORE_PRODUCTION_APPLY,
 ) -> None:
     missing = [
-        gate
-        for gate in required_gates
-        if not registry.has_passed_gate(gate=gate, archive_instance=archive_instance)
+        gate for gate in required_gates if not registry.has_passed_gate(gate=gate, archive_instance=archive_instance)
     ]
     if missing:
         refuse(

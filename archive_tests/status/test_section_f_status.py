@@ -8,13 +8,13 @@ from pathlib import Path
 
 import pytest
 
+from archive_cli.corpus_hygiene.decisions import EmailCorpusDecisionRecord
 from archive_cli.corpus_hygiene.state_store import (
     CORPUS_STATE_ACTIVE,
     CORPUS_STATE_SUPPRESSED,
     apply_decision_records,
     ensure_corpus_hygiene_tables,
 )
-from archive_cli.corpus_hygiene.decisions import EmailCorpusDecisionRecord
 from archive_cli.index_store import PostgresArchiveIndex
 from archive_cli.migrate import MigrationRunner
 from archive_cli.status.aggregate import build_blocked_status, build_production_status
@@ -25,22 +25,16 @@ from archive_cli.status.text import format_status_text
 from archive_cli.validation_gates.constants import (
     EXIT_BLOCKED,
     EXIT_VALIDATION_FAILED,
-    GATE_PRODUCTION_DRY_RUN,
-    GATE_PRODUCTION_REVIEWED_APPLY,
-    GATE_PRODUCTION_SOAK,
     GATE_SYNTHETIC_FIXTURES,
-    GATES_REQUIRED_BEFORE_PRODUCTION_APPLY,
-    PRODUCTION_INSTANCE_ROLE,
 )
 from archive_cli.validation_gates.gate_registry import GateRegistry
 from archive_cli.validation_gates.instance_identity import derive_archive_instance
 from archive_sync.processors.state_store import ProcessorStateRecord, ProcessorStateStore
-from archive_sync.source_updaters.constants import STALENESS_FAILED
-from archive_sync.source_updaters.state_store import SourceUpdaterStateRecord, SourceUpdaterStateStore
-from archive_sync.source_updaters.snapshot import status_payload_for_declarations
-from archive_sync.source_updaters.declarations import iter_declaration_templates
 from archive_sync.processors.status import status_payload as processor_status_payload
-
+from archive_sync.source_updaters.constants import STALENESS_FAILED
+from archive_sync.source_updaters.declarations import iter_declaration_templates
+from archive_sync.source_updaters.snapshot import status_payload_for_declarations
+from archive_sync.source_updaters.state_store import SourceUpdaterStateRecord, SourceUpdaterStateStore
 
 _FIXTURES = Path(__file__).resolve().parent.parent / "fixtures" / "status"
 _REPO = Path(__file__).resolve().parents[1]
@@ -87,36 +81,6 @@ def _make_store(vault: Path, idx: PostgresArchiveIndex):
             return {}
 
     return _Store()
-    for gate in GATES_REQUIRED_BEFORE_PRODUCTION_APPLY:
-        record = registry.create_run(
-            gate=gate,
-            archive_instance=archive_instance,
-            vault_path=vault,
-            index_schema=schema,
-            engine_mode="rust",
-        )
-        registry.complete_run(
-            record.run_id,
-            status="passed",
-            reviewed=True,
-            approved=True,
-        )
-    soak = registry.create_run(
-        gate=GATE_PRODUCTION_SOAK,
-        archive_instance=archive_instance,
-        vault_path=vault,
-        index_schema=schema,
-        engine_mode="rust",
-    )
-    registry.complete_run(soak.run_id, status="passed", reviewed=True, approved=True)
-    apply = registry.create_run(
-        gate=GATE_PRODUCTION_REVIEWED_APPLY,
-        archive_instance=archive_instance,
-        vault_path=vault,
-        index_schema=schema,
-        engine_mode="rust",
-    )
-    registry.complete_run(apply.run_id, status="passed", reviewed=True, approved=True, applied=True)
 
 
 REQUIRED_TOP_LEVEL_KEYS = frozenset(
@@ -147,8 +111,18 @@ def test_json_status_shape_blocked() -> None:
 def test_human_readable_status_golden_lines() -> None:
     golden = json.loads((_FIXTURES / "status_text_golden.json").read_text(encoding="utf-8"))
     payload = {
-        "archive": {"status": "degraded", "instance": "fixture:test", "vault_path": "/tmp/v", "schema": "ppa", "engine_mode": "rust"},
-        "v3_readiness": {"ready": False, "failed_checks": ["validation_gates"], "blocking_reasons": ["synthetic_fixtures"]},
+        "archive": {
+            "status": "degraded",
+            "instance": "fixture:test",
+            "vault_path": "/tmp/v",
+            "schema": "ppa",
+            "engine_mode": "rust",
+        },
+        "v3_readiness": {
+            "ready": False,
+            "failed_checks": ["validation_gates"],
+            "blocking_reasons": ["synthetic_fixtures"],
+        },
         "sources": [],
         "errors": [],
         "warnings": [{"category": "sources", "message": "stale"}],
@@ -163,7 +137,6 @@ def test_readiness_fails_without_gate_evidence(pgvector_dsn: str, tmp_path: Path
     schema = "section_f_readiness_missing_gates"
     idx = _bootstrap_schema(pgvector_dsn, vault, schema)
     archive_instance = _archive_instance(pgvector_dsn, vault, schema)
-    store = _make_store(vault, idx)
 
     with idx._connect() as conn:
         registry = GateRegistry(conn, schema)
@@ -282,7 +255,6 @@ def test_suppressed_visibility_failure_blocks_readiness(pgvector_dsn: str, tmp_p
     vault = _minimal_vault(tmp_path)
     schema = "section_f_suppression_vis"
     idx = _bootstrap_schema(pgvector_dsn, vault, schema)
-    archive_instance = _archive_instance(pgvector_dsn, vault, schema)
 
     records = [
         EmailCorpusDecisionRecord(
@@ -346,7 +318,7 @@ def test_cli_missing_vault_returns_exit_blocked(tmp_path: Path, monkeypatch: pyt
 def test_cli_readiness_not_ready_exit_code(pgvector_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     vault = _minimal_vault(tmp_path)
     schema = "section_f_cli_readiness"
-    idx = _bootstrap_schema(pgvector_dsn, vault, schema)
+    _bootstrap_schema(pgvector_dsn, vault, schema)
     monkeypatch.setenv("PPA_VAULT_PATH", str(vault))
     monkeypatch.setenv("PPA_INDEX_DSN", pgvector_dsn)
     monkeypatch.setenv("PPA_INDEX_SCHEMA", schema)
@@ -376,9 +348,7 @@ def test_status_does_not_mutate_stores(pgvector_dsn: str, tmp_path: Path) -> Non
         ensure_corpus_hygiene_tables(conn, schema)
         su_before = SourceUpdaterStateStore(conn, schema, meta_path=meta_su).list_state()
         ps_before = ProcessorStateStore(conn, schema, meta_path=meta_ps).list_state()
-        row_before = conn.execute(
-            f"SELECT COUNT(*) AS n FROM {schema}.card_corpus_state"
-        ).fetchone()
+        row_before = conn.execute(f"SELECT COUNT(*) AS n FROM {schema}.card_corpus_state").fetchone()
         build_production_status(
             store=store,
             archive_instance=archive_instance,
@@ -388,9 +358,7 @@ def test_status_does_not_mutate_stores(pgvector_dsn: str, tmp_path: Path) -> Non
         )
         su_after = SourceUpdaterStateStore(conn, schema, meta_path=meta_su).list_state()
         ps_after = ProcessorStateStore(conn, schema, meta_path=meta_ps).list_state()
-        row_after = conn.execute(
-            f"SELECT COUNT(*) AS n FROM {schema}.card_corpus_state"
-        ).fetchone()
+        row_after = conn.execute(f"SELECT COUNT(*) AS n FROM {schema}.card_corpus_state").fetchone()
     assert su_before == su_after
     assert ps_before == ps_after
     assert row_before == row_after
@@ -430,7 +398,7 @@ def test_partial_failures_not_hidden_by_green_summary(pgvector_dsn: str, tmp_pat
 
 def test_freshness_uses_live_keys_not_templates() -> None:
     from archive_cli.status.readiness import _source_health_ok
-    from archive_sync.source_updaters.declarations import _gmail_template, _photos_template, _health_template
+    from archive_sync.source_updaters.declarations import _gmail_template, _health_template, _photos_template
     from archive_sync.source_updaters.snapshot import resolve_status_declarations
     from archive_sync.source_updaters.state_store import SourceUpdaterStateRecord
 
@@ -457,7 +425,11 @@ def test_freshness_uses_live_keys_not_templates() -> None:
             },
             {
                 "declaration": {"source_key": "gmail-messages:rheeger@gmail.com", "enabled": True},
-                "state": {"source_key": "gmail-messages:rheeger@gmail.com", "staleness_state": "fresh", "enabled": True},
+                "state": {
+                    "source_key": "gmail-messages:rheeger@gmail.com",
+                    "staleness_state": "fresh",
+                    "enabled": True,
+                },
             },
             {
                 "declaration": {"source_key": "photos:local", "enabled": True},

@@ -211,6 +211,4 @@ def test_migration_discovers_validation_gate_runs_migration() -> None:
 
 def test_gate_artifact_dir_matches_readme_convention() -> None:
     path = gate_artifact_dir(_REPO_ROOT, gate=GATE_SYNTHETIC_FIXTURES, run_id="gate-test-001")
-    assert path.as_posix().endswith(
-        f"logs/{VALIDATION_GATE_LOG_ROOT}/gate-synthetic_fixtures/gate-test-001"
-    )
+    assert path.as_posix().endswith(f"logs/{VALIDATION_GATE_LOG_ROOT}/gate-synthetic_fixtures/gate-test-001")

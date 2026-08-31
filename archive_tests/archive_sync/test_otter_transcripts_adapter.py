@@ -331,6 +331,7 @@ def test_otter_mcp_client_uses_otter_prefixed_tools(monkeypatch):
     assert any(arg.startswith("page_size=") for arg in search_args)
     assert any(arg.startswith("username=Robbie") for arg in search_args)
 
+
 def test_build_client_prefers_mcp_when_requested(monkeypatch):
     monkeypatch.setenv("OTTER_FETCH_MODE", "mcp")
     adapter = OtterTranscriptsAdapter()

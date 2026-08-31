@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from archive_cli.corpus_hygiene.decisions import EmailCorpusDecisionRecord
 from archive_sync.adapters.base import FetchedBatch
 from archive_sync.adapters.gmail_messages import GmailMessagesAdapter
 from archive_sync.gmail_promotion.classification_resolve import GmailClassificationResolver
@@ -14,7 +15,6 @@ from archive_sync.gmail_promotion.ledger import FailingLedger, FilePromotionLedg
 from archive_sync.gmail_promotion.metrics import GmailPromotionBatchMetrics
 from archive_sync.gmail_promotion.thread_record import thread_record_from_gmail_items
 from archive_sync.llm_enrichment.classify_index import ClassifyIndex
-from archive_cli.corpus_hygiene.decisions import EmailCorpusDecisionRecord
 from archive_sync.llm_enrichment.email_promotion_policy import EMAIL_PROMOTION_POLICY_VERSION
 
 
@@ -435,7 +435,6 @@ def test_ingest_cursor_advances_after_suppressed_ledger_persist(tmp_path, monkey
         raise AssertionError(args)
 
     monkeypatch.setattr(adapter, "_gws_with_retry", fake_gws)
-    cursor: dict = {}
     adapter.ingest(
         str(tmp_path),
         dry_run=False,

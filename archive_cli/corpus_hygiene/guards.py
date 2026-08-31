@@ -11,7 +11,7 @@ from archive_cli.validation_gates.constants import (
     GATE_SYNTHETIC_FIXTURES,
 )
 from archive_cli.validation_gates.gate_registry import GateRegistry, GateRunRecord
-from archive_cli.validation_gates.guards import GateRefusalError, guard_production_apply, refuse
+from archive_cli.validation_gates.guards import guard_production_apply, refuse
 from archive_cli.validation_gates.instance_identity import is_production_instance
 
 from .constants import SECTION_B_CENSUS_ARTIFACT_GATE
