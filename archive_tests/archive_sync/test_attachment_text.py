@@ -12,7 +12,9 @@ from archive_sync.attachment_text import (
     ATTACHMENTS_LIST_SENTINEL,
     ATTACHMENTS_SECTION_HEADING,
     ATTACHMENTS_SECTION_SENTINEL,
+    STATUS_ALREADY_CACHED,
     STATUS_EXTRACTED,
+    STATUS_FETCHED,
     STATUS_MISSING,
     STATUS_NON_DOC,
     AttachmentExtraction,
@@ -26,6 +28,7 @@ from archive_sync.attachment_text import (
     preserve_message_attachments_section,
     render_attachments_section,
     resolve_local_attachment,
+    run_attachment_fetch,
     run_attachment_text_extraction,
     strip_attachments_section,
     strip_ocr_dump_section,
@@ -513,3 +516,101 @@ def test_successful_fetch_persists_bytes(tmp_path: Path, monkeypatch) -> None:
     cached = resolve_local_attachment(tmp_path, "hfa-email-attachment-okfetch", "ok.pdf")
     assert cached is not None
     assert cached.read_bytes() == data
+
+
+def test_fetch_only_writes_bytes_without_extract(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "archive_sync.document_extract.convert_document_to_markdown",
+        lambda path, **kwargs: (_ for _ in ()).throw(AssertionError("must not extract")),
+    )
+    data = b"%PDF-1.4 fetch-only"
+    result = extract_job(
+        tmp_path,
+        AttachmentJob(
+            uid="hfa-email-attachment-fetchonly",
+            filename="ok.pdf",
+            mime_type="application/pdf",
+            message_id="m1",
+            attachment_id="a1",
+            account_email="me@example.com",
+        ),
+        fetch_bytes=lambda *_args: data,
+        fetch_only=True,
+    )
+    assert result.status == STATUS_FETCHED
+    cached = resolve_local_attachment(tmp_path, "hfa-email-attachment-fetchonly", "ok.pdf")
+    assert cached is not None
+    assert cached.read_bytes() == data
+
+
+def test_fetch_only_skips_bytes_already_on_disk(tmp_path: Path, monkeypatch) -> None:
+    calls = {"n": 0}
+
+    def fetch(*_args):
+        calls["n"] += 1
+        raise AssertionError("should not refetch")
+
+    uid = "hfa-email-attachment-resume1"
+    cache_attachment_bytes(tmp_path, uid, "ok.pdf", b"%PDF-1.4 already")
+    result = extract_job(
+        tmp_path,
+        AttachmentJob(
+            uid=uid,
+            filename="ok.pdf",
+            mime_type="application/pdf",
+            message_id="m1",
+            attachment_id="a1",
+            account_email="me@example.com",
+        ),
+        fetch_bytes=fetch,
+        fetch_only=True,
+    )
+    assert result.status == STATUS_ALREADY_CACHED
+    assert calls["n"] == 0
+
+
+def test_run_attachment_fetch_does_not_write_cards(tmp_path: Path, monkeypatch) -> None:
+    from archive_sync.adapters.base import deterministic_provenance
+
+    uid = "hfa-email-attachment-fetchrun1"
+    att = EmailAttachmentCard(
+        uid=uid,
+        type="email_attachment",
+        source=["gmail.attachment"],
+        source_id="me@example.com:m1:a1",
+        created="2026-03-08",
+        updated="2026-03-08",
+        summary="scan.pdf",
+        gmail_message_id="m1",
+        gmail_thread_id="t1",
+        attachment_id="a1",
+        account_email="me@example.com",
+        filename="scan.pdf",
+        mime_type="application/pdf",
+        size_bytes=20,
+    )
+    rel = f"EmailAttachments/2026-03/{uid}.md"
+    write_card(tmp_path, rel, att, "", provenance=deterministic_provenance(att, "gmail.attachment"))
+    monkeypatch.setattr(
+        "archive_sync.document_extract.convert_document_to_markdown",
+        lambda path, **kwargs: (_ for _ in ()).throw(AssertionError("must not extract")),
+    )
+    out = run_attachment_fetch(
+        tmp_path,
+        fetch_bytes=lambda *_args: b"%PDF-1.4 fetched-run",
+    )
+    assert out["downloaded"] == 1
+    assert out["fetch_only"] is True
+    cached = resolve_local_attachment(tmp_path, uid, "scan.pdf")
+    assert cached is not None
+    assert cached.read_bytes() == b"%PDF-1.4 fetched-run"
+    fm, body, _ = read_note(tmp_path, rel)
+    assert not fm.get("extraction_status")
+    assert body == ""
+
+    again = run_attachment_fetch(
+        tmp_path,
+        fetch_bytes=lambda *_args: (_ for _ in ()).throw(AssertionError("resume")),
+    )
+    assert again["downloaded"] == 0
+    assert again["already_cached"] == 1

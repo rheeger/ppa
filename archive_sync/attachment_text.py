@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import re
 import threading
+import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -53,7 +54,34 @@ from archive_vault.vault import read_note, write_card
 
 log = logging.getLogger("ppa.attachment_text")
 STATUS_FETCH_DENIED = "fetch_denied"
+STATUS_FETCHED = "fetched"
+STATUS_ALREADY_CACHED = "already_cached"
 RETRYABLE_FETCH_STATUSES = frozenset({STATUS_MISSING, STATUS_FETCH_DENIED})
+RASTER_FETCH_SKIP = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".heic", ".svg"}
+
+
+def _fmt_elapsed(seconds: float) -> str:
+    total = int(round(max(0.0, seconds)))
+    m, s = divmod(total, 60)
+    return f"{m}:{s:02d}"
+
+
+def _log_progress(prefix: str, i: int, n: int, t0: float, extra: str = "") -> None:
+    elapsed = time.monotonic() - t0
+    rate = i / elapsed if elapsed > 0 else 0.0
+    remain = (n - i) / rate if rate > 0 else 0.0
+    pct = (100.0 * i / n) if n else 100.0
+    log.info(
+        "%s %s/%s (%.1f%%) elapsed=%s eta_remaining=%s rate_per_s=%.2f %s",
+        prefix,
+        i,
+        n,
+        pct,
+        _fmt_elapsed(elapsed),
+        _fmt_elapsed(remain),
+        rate,
+        extra,
+    )
 
 ATTACHMENTS_DIR = "Attachments"
 ATTACHMENTS_SECTION_HEADING = "## Attachments"
@@ -222,6 +250,7 @@ def extract_job(
     job: AttachmentJob,
     *,
     fetch_bytes: FetchBytesFn | None = None,
+    fetch_only: bool = False,
 ) -> AttachmentExtraction:
     filename = safe_filename(job.filename)
     if job.skip_extract:
@@ -291,6 +320,13 @@ def extract_job(
                 data = b""
         if data:
             cache_attachment_bytes(vault, job.uid, filename, data)
+            if fetch_only:
+                return AttachmentExtraction(
+                    status=STATUS_FETCHED,
+                    filename=filename,
+                    uid=job.uid,
+                    reason="fetched",
+                )
             result = extract_from_bytes(
                 data,
                 filename=filename,
@@ -308,6 +344,13 @@ def extract_job(
 
     if path is None:
         return AttachmentExtraction(status=STATUS_MISSING, filename=filename, uid=job.uid, reason="missing")
+    if fetch_only:
+        return AttachmentExtraction(
+            status=STATUS_ALREADY_CACHED,
+            filename=filename,
+            uid=job.uid,
+            reason="already_cached",
+        )
 
     result = extract_from_path(
         path,
@@ -331,6 +374,7 @@ def extract_jobs(
     *,
     fetch_bytes: FetchBytesFn | None = None,
     workers: int | None = None,
+    fetch_only: bool = False,
 ) -> list[AttachmentExtraction]:
     if not jobs:
         return []
@@ -347,7 +391,7 @@ def extract_jobs(
                 status=STATUS_MISSING, filename=job.filename, uid=job.uid, reason="gmail_daily_quota"
             )
         try:
-            return extract_job(vault, job, fetch_bytes=fetch_bytes)
+            return extract_job(vault, job, fetch_bytes=fetch_bytes, fetch_only=fetch_only)
         except GmailDailyQuotaExceeded as exc:
             with halt_lock:
                 halted["daily_quota"] = True
@@ -356,18 +400,14 @@ def extract_jobs(
                 status=STATUS_MISSING, filename=job.filename, uid=job.uid, reason=str(exc.reason)
             )
 
+    t0 = time.monotonic()
+    prefix = "extract-attachment-text fetch" if fetch_only else "extract-attachment-text job"
     if worker_count <= 1 or len(jobs) <= 1:
         results = []
         for idx, job in enumerate(jobs, start=1):
             item = _run(job)
             if idx == 1 or idx % 25 == 0 or idx == len(jobs):
-                log.info(
-                    "extract-attachment-text job %s/%s uid=%s status=%s",
-                    idx,
-                    len(jobs),
-                    job.uid,
-                    item.status,
-                )
+                _log_progress(prefix, idx, len(jobs), t0, extra=f"uid={job.uid} status={item.status}")
             results.append(item)
         return results
     by_uid: dict[str, AttachmentExtraction] = {}
@@ -385,12 +425,12 @@ def extract_jobs(
                 )
             done += 1
             if done == 1 or done % 25 == 0 or done == len(jobs):
-                log.info(
-                    "extract-attachment-text job %s/%s uid=%s status=%s",
+                _log_progress(
+                    prefix,
                     done,
                     len(jobs),
-                    job.uid,
-                    by_uid[job.uid].status,
+                    t0,
+                    extra=f"uid={job.uid} status={by_uid[job.uid].status}",
                 )
     return [by_uid[job.uid] for job in jobs]
 
@@ -604,6 +644,188 @@ def _yield_counts(results: list[dict[str, Any]]) -> dict[str, int]:
     }
 
 
+def _eligible_attachment_jobs(
+    vault: Path,
+    scan_cache: Any,
+    *,
+    fetch_bytes: FetchBytesFn | None,
+    fetch_only: bool,
+    limit: int | None,
+) -> tuple[list[tuple[str, AttachmentJob]], dict[str, int]]:
+    """Select document-like attachment cards. Resume = skip bytes already on disk."""
+
+    paths = sorted(scan_cache.rel_paths_by_type().get("email_attachment") or [])
+    thread_class: dict[str, str] = {}
+    if not fetch_only:
+        for rel in scan_cache.rel_paths_by_type().get("email_thread") or []:
+            tfm = scan_cache.frontmatter_for_rel_path(rel) or {}
+            thread_class[str(tfm.get("uid") or Path(rel).stem)] = str(
+                tfm.get("triage_classification") or ""
+            )
+
+    jobs: list[tuple[str, AttachmentJob]] = []
+    skipped_missing = 0
+    skipped_unsupported = 0
+    skipped_existing = 0
+    skipped_raster = 0
+    for rel_path in paths:
+        fm = scan_cache.frontmatter_for_rel_path(rel_path) or {}
+        uid = str(fm.get("uid") or Path(rel_path).stem).strip()
+        filename = str(fm.get("filename") or "").strip()
+        mime = str(fm.get("mime_type") or "").strip()
+        size_bytes = int(fm.get("size_bytes") or 0)
+        is_inline = bool(fm.get("is_inline", False))
+        if not filename or filename.startswith("ANGjd") or not is_extractable(filename, mime):
+            skipped_unsupported += 1
+            continue
+        if is_skippable_non_doc(filename, mime):
+            continue
+        if is_lockfile(filename):
+            continue
+        if size_bytes and size_bytes > MAX_FILE_BYTES:
+            continue
+        if is_tiny_image(filename, size_bytes, mime) and (is_inline or size_bytes <= TINY_IMAGE_BYTES):
+            continue
+        local = resolve_local_attachment(vault, uid, filename)
+        suffix = Path(safe_filename(filename)).suffix.lower()
+        if local is None and (fetch_bytes is not None or fetch_only) and suffix in RASTER_FETCH_SKIP:
+            skipped_raster += 1
+            continue
+        status = str(fm.get("extraction_status") or "").strip()
+        sha = str(fm.get("extracted_text_sha") or "").strip()
+        if local is not None and fetch_only:
+            skipped_existing += 1
+            continue
+        if local is None and fetch_bytes is None:
+            skipped_missing += 1
+            continue
+        if local is not None and not fetch_only:
+            try:
+                current = bytes_sha256(local.read_bytes())
+            except OSError:
+                skipped_missing += 1
+                continue
+            if sha and sha == current and status in {STATUS_EXTRACTED, *DONE_SKIP_STATUSES}:
+                continue
+        thread_slug = str(fm.get("thread") or "").strip().strip("[]")
+        skip_extract = (not fetch_only) and is_suppressed_classification(
+            thread_class.get(thread_slug, "")
+        )
+        body = ""
+        if not fetch_only and status == STATUS_EXTRACTED:
+            try:
+                _fm, body, _prov = read_note(vault, rel_path)
+            except OSError:
+                body = ""
+        jobs.append((rel_path, _job_from_attachment_card(fm, body, uid=uid, skip_extract=skip_extract)))
+        if limit is not None and len(jobs) >= limit:
+            break
+    return jobs, {
+        "total_attachment_cards": len(paths),
+        "skipped_missing": skipped_missing,
+        "skipped_unsupported": skipped_unsupported,
+        "skipped_existing": skipped_existing,
+        "skipped_raster": skipped_raster,
+    }
+
+
+def run_attachment_fetch(
+    vault: Path,
+    *,
+    fetch_bytes: FetchBytesFn,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """Download document-like attachments. Bytes only — no extract, no hosted OCR."""
+
+    from archive_cli.index_config import get_gmail_api_workers
+    from archive_cli.vault_cache import VaultScanCache
+
+    vault = Path(vault).resolve()
+    log.info("extract-attachment-text fetch-only start vault=%s", vault)
+    t0 = time.monotonic()
+    scan_cache = VaultScanCache.build_or_load(vault, tier=2, progress_every=0)
+    jobs, skip_counts = _eligible_attachment_jobs(
+        vault, scan_cache, fetch_bytes=fetch_bytes, fetch_only=True, limit=limit
+    )
+    workers = min(get_gmail_api_workers(), max(1, len(jobs)))
+    log.info(
+        "extract-attachment-text fetch-only eligible=%s/%s skipped_existing=%s "
+        "skipped_unsupported=%s skipped_raster=%s workers=%s",
+        len(jobs),
+        skip_counts["total_attachment_cards"],
+        skip_counts["skipped_existing"],
+        skip_counts["skipped_unsupported"],
+        skip_counts["skipped_raster"],
+        workers,
+    )
+    results = extract_jobs(
+        vault,
+        [job for _rel, job in jobs],
+        fetch_bytes=fetch_bytes,
+        workers=workers,
+        fetch_only=True,
+    )
+    downloaded = 0
+    already_cached = 0
+    denied = 0
+    failed = 0
+    missing = 0
+    bytes_written = 0
+    for (_rel, job), item in zip(jobs, results, strict=True):
+        if item.status == STATUS_FETCHED:
+            downloaded += 1
+            cached = resolve_local_attachment(vault, job.uid, job.filename)
+            if cached is not None:
+                try:
+                    bytes_written += cached.stat().st_size
+                except OSError:
+                    pass
+        elif item.status == STATUS_ALREADY_CACHED:
+            already_cached += 1
+        elif item.status == STATUS_FETCH_DENIED:
+            denied += 1
+        elif item.status == STATUS_FAILED:
+            failed += 1
+        else:
+            missing += 1
+    log.info(
+        "extract-attachment-text fetch-only done elapsed=%s downloaded=%s already_cached=%s "
+        "denied=%s failed=%s missing=%s bytes_written=%s",
+        _fmt_elapsed(time.monotonic() - t0),
+        downloaded,
+        already_cached + skip_counts["skipped_existing"],
+        denied,
+        failed,
+        missing,
+        bytes_written,
+    )
+    return {
+        "vault": str(vault),
+        "fetch_only": True,
+        "dry_run": False,
+        "total_attachment_cards": skip_counts["total_attachment_cards"],
+        "eligible": len(jobs),
+        "downloaded": downloaded,
+        "already_cached": already_cached + skip_counts["skipped_existing"],
+        "denied": denied,
+        "failed": failed,
+        "missing": missing,
+        "bytes_written": bytes_written,
+        "skipped_unsupported": skip_counts["skipped_unsupported"],
+        "skipped_raster": skip_counts["skipped_raster"],
+        "workers": workers,
+        "results": [
+            {
+                "uid": item.uid,
+                "status": item.status,
+                "reason": item.reason,
+                "filename": item.filename,
+            }
+            for item in results
+        ],
+    }
+
+
 def run_attachment_text_extraction(
     vault: Path,
     *,
@@ -619,69 +841,19 @@ def run_attachment_text_extraction(
     vault = Path(vault).resolve()
     log.info("extract-attachment-text start vault=%s dry_run=%s", vault, dry_run)
     scan_cache = VaultScanCache.build_or_load(vault, tier=2, progress_every=0)
-    paths = sorted(scan_cache.rel_paths_by_type().get("email_attachment") or [])
     uid_to_rel = scan_cache.uid_to_rel_path()
-    thread_class: dict[str, str] = {}
-    for rel in scan_cache.rel_paths_by_type().get("email_thread") or []:
-        tfm = scan_cache.frontmatter_for_rel_path(rel) or {}
-        thread_class[str(tfm.get("uid") or Path(rel).stem)] = str(
-            tfm.get("triage_classification") or ""
-        )
-
-    jobs: list[tuple[str, AttachmentJob]] = []
-    skipped_missing = 0
-    skipped_unsupported = 0
     seeded = seed_from_scan_cache(scan_cache)
-    for rel_path in paths:
-        fm = scan_cache.frontmatter_for_rel_path(rel_path) or {}
-        uid = str(fm.get("uid") or Path(rel_path).stem).strip()
-        filename = str(fm.get("filename") or "").strip()
-        mime = str(fm.get("mime_type") or "").strip()
-        size_bytes = int(fm.get("size_bytes") or 0)
-        is_inline = bool(fm.get("is_inline", False))
-        if not filename or filename.startswith("ANGjd") or not is_extractable(filename, mime):
-            skipped_unsupported += 1
-            continue
-        if is_skippable_non_doc(filename, mime):
-            continue
-        if is_tiny_image(filename, size_bytes, mime) and (is_inline or size_bytes <= TINY_IMAGE_BYTES):
-            continue
-        local = resolve_local_attachment(vault, uid, filename)
-        # Hosted OCR is credit-based: do not fetch raster logos/inline images.
-        if local is None and fetch_bytes is not None:
-            suffix = Path(safe_filename(filename)).suffix.lower()
-            if suffix in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".heic", ".svg"}:
-                continue
-        status = str(fm.get("extraction_status") or "").strip()
-        sha = str(fm.get("extracted_text_sha") or "").strip()
-        if local is None and fetch_bytes is None:
-            skipped_missing += 1
-            continue
-        if local is not None:
-            try:
-                current = bytes_sha256(local.read_bytes())
-            except OSError:
-                skipped_missing += 1
-                continue
-            if sha and sha == current and status in {STATUS_EXTRACTED, *DONE_SKIP_STATUSES}:
-                continue
-        thread_slug = str(fm.get("thread") or "").strip().strip("[]")
-        skip_extract = is_suppressed_classification(thread_class.get(thread_slug, ""))
-        body = ""
-        if status == STATUS_EXTRACTED:
-            try:
-                _fm, body, _prov = read_note(vault, rel_path)
-            except OSError:
-                body = ""
-        jobs.append((rel_path, _job_from_attachment_card(fm, body, uid=uid, skip_extract=skip_extract)))
-        if limit is not None and len(jobs) >= limit:
-            break
+    jobs, skip_counts = _eligible_attachment_jobs(
+        vault, scan_cache, fetch_bytes=fetch_bytes, fetch_only=False, limit=limit
+    )
+    skipped_missing = skip_counts["skipped_missing"]
+    skipped_unsupported = skip_counts["skipped_unsupported"]
 
     workers = min(get_gmail_api_workers(), max(1, len(jobs)))
     log.info(
         "extract-attachment-text eligible=%s/%s skipped_unsupported=%s cache_seeded=%s workers=%s",
         len(jobs),
-        len(paths),
+        skip_counts["total_attachment_cards"],
         skipped_unsupported,
         seeded,
         workers,
@@ -776,7 +948,7 @@ def run_attachment_text_extraction(
     return {
         "vault": str(vault),
         "dry_run": dry_run,
-        "total_attachment_cards": len(paths),
+        "total_attachment_cards": skip_counts["total_attachment_cards"],
         "processed": len(results),
         "ok": ok,
         "errors": errors,

@@ -826,6 +826,11 @@ def main() -> None:
         action="store_true",
         help="Download missing Gmail attachment bytes (document-like files only)",
     )
+    extract_att_parser.add_argument(
+        "--fetch-only",
+        action="store_true",
+        help="Download missing document-like attachments; do not extract or call hosted OCR",
+    )
 
     enrich_orch_parser = subparsers.add_parser(
         "enrich",
@@ -1695,8 +1700,10 @@ def main() -> None:
             vault_arg = str(getattr(args, "vault", "") or "").strip()
             vault = Path(vault_arg) if vault_arg else resolve_vault()
             lim = int(getattr(args, "limit", 0) or 0)
+            fetch_only = bool(getattr(args, "fetch_only", False))
+            want_fetch = fetch_only or bool(getattr(args, "fetch", False))
             fetch_bytes = None
-            if bool(getattr(args, "fetch", False)):
+            if want_fetch:
                 from archive_sync.adapters.gmail_messages import GmailMessagesAdapter
 
                 adapter = GmailMessagesAdapter()
@@ -1706,12 +1713,23 @@ def main() -> None:
                         message_id, attachment_id, account_email=account_email
                     )
 
-            out = run_attachment_text_extraction(
-                vault,
-                dry_run=bool(getattr(args, "dry_run", False)),
-                limit=(lim if lim > 0 else None),
-                fetch_bytes=fetch_bytes,
-            )
+            if fetch_only:
+                from archive_sync.attachment_text import run_attachment_fetch
+
+                if fetch_bytes is None:
+                    raise PpaError("extract-attachment-text --fetch-only requires a Gmail fetch path")
+                out = run_attachment_fetch(
+                    vault,
+                    fetch_bytes=fetch_bytes,
+                    limit=(lim if lim > 0 else None),
+                )
+            else:
+                out = run_attachment_text_extraction(
+                    vault,
+                    dry_run=bool(getattr(args, "dry_run", False)),
+                    limit=(lim if lim > 0 else None),
+                    fetch_bytes=fetch_bytes,
+                )
             _print_json(out)
         except PpaError as exc:
             _cli_fail(exc)
