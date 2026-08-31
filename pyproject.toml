@@ -22,7 +22,7 @@ ppa = "archive_cli.__main__:main"
 [project.optional-dependencies]
 dev = [
   "pytest>=7.0",
-  "ruff>=0.1",
+  "ruff==0.16.5",
 ]
 # Native extension: build explicitly with `cd archive_crate && maturin develop`.
 # Do not declare a relative direct-url optional dependency here; pip rejects
@@ -32,6 +32,8 @@ dev = [
 line-length = 120
 target-version = "py310"
 exclude = [".venv", "build", "dist"]
+# Ruff 0.16 formats Markdown fences and rewrites doc sketches (e.g. `5-tuple`).
+extend-exclude = ["**/*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
