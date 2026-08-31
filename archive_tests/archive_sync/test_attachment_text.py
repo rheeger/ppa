@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from archive_sync.extract_cache import reset_extract_cache_for_tests
 from archive_sync.adapters.gmail_messages import GmailMessagesAdapter, _attachment_uid
 from archive_sync.attachment_text import (
     ATTACHMENTS_LIST_SENTINEL,
@@ -29,6 +32,14 @@ from archive_sync.attachment_text import (
 )
 from archive_vault.schema import EmailAttachmentCard
 from archive_vault.vault import read_note, write_card
+
+
+@pytest.fixture(autouse=True)
+def _isolate_extract_cache(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("PPA_ANYDOC_EXTRACT_CACHE", str(tmp_path / "anydoc-extract-cache.sqlite"))
+    reset_extract_cache_for_tests()
+    yield
+    reset_extract_cache_for_tests()
 
 
 def test_skips_audio_video_archives() -> None:
@@ -331,3 +342,174 @@ def test_query_planner_hints_email_attachment() -> None:
 
     plan = DeterministicQueryPlanner().plan("find the email attachment for the k-1")
     assert "email_attachment" in plan.inferred.type_hints
+
+
+def test_permission_403_does_not_write_card_or_retry(tmp_path: Path) -> None:
+    from archive_sync.adapters.gmail_http_errors import GmailPermissionDenied
+    from archive_sync.attachment_text import STATUS_FETCH_DENIED, _write_attachment_extraction
+
+    calls = {"n": 0}
+
+    def fetch(_mid, _aid, _acct):
+        calls["n"] += 1
+        raise GmailPermissionDenied("Permission denied", reason="forbidden")
+
+    result = extract_job(
+        tmp_path,
+        AttachmentJob(
+            uid="hfa-email-attachment-forbid1",
+            filename="secret.pdf",
+            mime_type="application/pdf",
+            message_id="m1",
+            attachment_id="a1",
+            account_email="me@example.com",
+        ),
+        fetch_bytes=fetch,
+    )
+    assert result.status == STATUS_FETCH_DENIED
+    assert calls["n"] == 1
+    from archive_sync.adapters.base import deterministic_provenance
+    from archive_vault.schema import EmailAttachmentCard
+
+    uid = "hfa-email-attachment-forbid1"
+    card = EmailAttachmentCard(
+        uid=uid,
+        type="email_attachment",
+        source=["gmail.attachment"],
+        source_id="me@example.com:m1:a1",
+        created="2026-03-08",
+        updated="2026-03-08",
+        summary="secret.pdf",
+        gmail_message_id="m1",
+        gmail_thread_id="t1",
+        attachment_id="a1",
+        account_email="me@example.com",
+        filename="secret.pdf",
+        mime_type="application/pdf",
+    )
+    rel = f"EmailAttachments/2026-03/{uid}.md"
+    write_card(tmp_path, rel, card, "", provenance=deterministic_provenance(card, "gmail.attachment"))
+    out = _write_attachment_extraction(tmp_path, rel, result, dry_run=False)
+    assert out.get("written") is False
+    fm, body, _ = read_note(tmp_path, rel)
+    assert not fm.get("extraction_status")
+    assert body == ""
+    from archive_sync.extract_cache import get_extract_cache
+
+    assert get_extract_cache().stats()["puts"] == 0
+
+
+def test_incremental_write_before_batch_ends(tmp_path: Path, monkeypatch) -> None:
+    """First card is on disk before a later extract fails — SIGTERM-safe."""
+
+    import threading
+
+    from archive_sync.adapters.base import deterministic_provenance
+    from archive_vault.schema import EmailAttachmentCard, EmailMessageCard
+
+    first_written = threading.Event()
+    release_second = threading.Event()
+
+    def _convert(path, **kwargs):
+        name = Path(path).name
+        if name == "second.pdf":
+            assert first_written.wait(timeout=5)
+            raise RuntimeError("simulated crash after first write")
+        return "# First OCR", "anydoc_hosted"
+
+    monkeypatch.setattr("archive_sync.document_extract.convert_document_to_markdown", _convert)
+    monkeypatch.setattr("archive_cli.index_config.get_gmail_api_workers", lambda: 2)
+
+    cards = []
+    for i, filename in enumerate(("first.pdf", "second.pdf"), start=1):
+        uid = f"hfa-email-attachment-incr{i}"
+        msg_uid = f"hfa-email-message-incr{i}"
+        att = EmailAttachmentCard(
+            uid=uid,
+            type="email_attachment",
+            source=["gmail.attachment"],
+            source_id=f"me@example.com:m{i}:a{i}",
+            created="2026-03-08",
+            updated="2026-03-08",
+            summary=filename,
+            gmail_message_id=f"m{i}",
+            gmail_thread_id=f"t{i}",
+            attachment_id=f"a{i}",
+            account_email="me@example.com",
+            message=f"[[{msg_uid}]]",
+            filename=filename,
+            mime_type="application/pdf",
+            size_bytes=20,
+        )
+        write_card(
+            tmp_path,
+            f"EmailAttachments/2026-03/{uid}.md",
+            att,
+            body="",
+            provenance=deterministic_provenance(att, "gmail.attachment"),
+        )
+        msg = EmailMessageCard(
+            uid=msg_uid,
+            type="email_message",
+            source=["gmail.message"],
+            source_id=f"me@example.com:m{i}",
+            created="2026-03-08",
+            updated="2026-03-08",
+            summary=filename,
+            gmail_message_id=f"m{i}",
+            gmail_thread_id=f"t{i}",
+            account_email="me@example.com",
+            subject=filename,
+            attachments=[f"[[{uid}]]"],
+            has_attachments=True,
+        )
+        write_card(
+            tmp_path,
+            f"Email/2026-03/{msg_uid}.md",
+            msg,
+            body="see attached",
+            provenance=deterministic_provenance(msg, "gmail.message"),
+        )
+        cache_attachment_bytes(tmp_path, uid, filename, b"%PDF-1.4 " + filename.encode())
+        cards.append((uid, filename))
+
+    orig_write = write_card
+
+    def _spy_write(vault, rel_path, card, body="", provenance=None, **kwargs):
+        out = orig_write(vault, rel_path, card, body, provenance=provenance, **kwargs)
+        if "incr1" in str(rel_path) and body:
+            first_written.set()
+            release_second.set()
+        return out
+
+    monkeypatch.setattr("archive_sync.attachment_text.write_card", _spy_write)
+    out = run_attachment_text_extraction(tmp_path, dry_run=False)
+    fm, body, _ = read_note(tmp_path, "EmailAttachments/2026-03/hfa-email-attachment-incr1.md")
+    assert fm["extraction_status"] == STATUS_EXTRACTED
+    assert "First OCR" in body
+    assert out["ok"] >= 1
+    assert first_written.is_set()
+
+
+def test_successful_fetch_persists_bytes(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "archive_sync.document_extract.convert_document_to_markdown",
+        lambda path, **kwargs: ("# Fetched", "anydoc"),
+    )
+    data = b"%PDF-1.4 fetched"
+    result = extract_job(
+        tmp_path,
+        AttachmentJob(
+            uid="hfa-email-attachment-okfetch",
+            filename="ok.pdf",
+            mime_type="application/pdf",
+            message_id="m1",
+            attachment_id="a1",
+            account_email="me@example.com",
+        ),
+        fetch_bytes=lambda *_args: data,
+    )
+    assert result.status == STATUS_EXTRACTED
+    cached = resolve_local_attachment(tmp_path, "hfa-email-attachment-okfetch", "ok.pdf")
+    assert cached is not None
+    assert cached.read_bytes() == data

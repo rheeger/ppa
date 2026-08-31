@@ -20,6 +20,7 @@ from archive_sync.document_extract import (
     extract_from_path,
     is_lockfile,
 )
+from archive_sync.extract_cache import get_extract_cache, seed_from_scan_cache
 from archive_vault.provenance import ProvenanceEntry, merge_provenance
 from archive_vault.schema import validate_card_strict
 from archive_vault.vault import read_note, write_card
@@ -142,6 +143,7 @@ def reextract_one_card(
             "bytes_out": len(new_body.encode("utf-8")),
             "source": str(src),
             "text_source": text_source,
+            "reason": result.reason,
         }
 
     field_updates: dict[str, Any] = {
@@ -167,6 +169,7 @@ def reextract_one_card(
         "status": "ok",
         "bytes_out": len(new_body.encode("utf-8")),
         "text_source": text_source,
+        "reason": result.reason,
     }
 
 
@@ -184,6 +187,7 @@ def run_document_text_extraction(
     vault = Path(vault).resolve()
     log.info("extract-document-text start vault=%s dry_run=%s", vault, dry_run)
     scan_cache = VaultScanCache.build_or_load(vault, tier=2, progress_every=0)
+    seeded = seed_from_scan_cache(scan_cache)
     paths = sorted(scan_cache.rel_paths_by_type().get("document") or [])
     eligible: list[str] = []
     for rel_path in paths:
@@ -196,9 +200,10 @@ def run_document_text_extraction(
 
     workers = min(get_rebuild_workers(), max(1, len(eligible)))
     log.info(
-        "extract-document-text eligible=%s/%s workers=%s",
+        "extract-document-text eligible=%s/%s cache_seeded=%s workers=%s",
         len(eligible),
         len(paths),
+        seeded,
         workers,
     )
     results: list[dict[str, Any]] = []
@@ -219,13 +224,17 @@ def run_document_text_extraction(
     errors = sum(1 for out in results if out.get("status") not in {"ok", "skipped"})
     local_ok = sum(1 for out in results if out.get("status") == "ok" and out.get("text_source") != "anydoc_hosted")
     hosted_ok = sum(1 for out in results if out.get("status") == "ok" and out.get("text_source") == "anydoc_hosted")
+    hash_reuse = sum(1 for out in results if out.get("reason") == "hash_reuse")
+    cache_stats = get_extract_cache().stats()
     log.info(
-        "extract-document-text done processed=%s local_ok=%s hosted_ok=%s skipped=%s failed=%s",
+        "extract-document-text done processed=%s local_ok=%s hosted_ok=%s hash_reuse=%s skipped=%s failed=%s cache_hits=%s",
         len(results),
         local_ok,
         hosted_ok,
+        hash_reuse,
         skipped,
         errors,
+        cache_stats["hits"],
     )
 
     return {
@@ -238,5 +247,7 @@ def run_document_text_extraction(
         "errors": errors,
         "local_ok": local_ok,
         "hosted_ok": hosted_ok,
+        "hash_reuse": hash_reuse,
+        "cache": cache_stats,
         "results": results,
     }

@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from archive_sync.anydoc_ocr import is_needs_ocr, to_markdown_local_first
+from archive_sync.extract_cache import CachedExtract, get_extract_cache
 
 log = logging.getLogger("ppa.document_extract")
 
@@ -167,6 +168,8 @@ def is_extractable(filename: str, mime_type: str = "") -> bool:
     if not suffix:
         suffix = Path(raw).suffix.lower()
     return suffix in EXTRACTABLE_EXTENSIONS
+
+
 SKIP_MIME_PREFIXES = ("audio/", "video/")
 SKIP_MIME_TYPES = frozenset(
     {
@@ -428,6 +431,26 @@ def extract_from_bytes(
     if reused is not None:
         return reused
 
+    def _from_cached(cached: CachedExtract) -> ExtractResult:
+        return ExtractResult(
+            status=STATUS_EXTRACTED,
+            text=cached.markdown,
+            text_source=cached.text_source,
+            extracted_text_sha=sha,
+            filename=name,
+            reason="hash_reuse",
+        )
+
+    cached = get_extract_cache().get(sha)
+    if cached is not None and cached.markdown.strip():
+        log.debug(
+            "document extract hash-reuse sha=%s source=%s filename=%s",
+            sha[:12],
+            cached.text_source,
+            name,
+        )
+        return _from_cached(cached)
+
     tiny = is_tiny_image(name, len(data), mime_type)
     if tiny and is_inline:
         return ExtractResult(
@@ -438,46 +461,50 @@ def extract_from_bytes(
         )
     allow_hosted = not skip_hosted and not tiny
     path = source_path if source_path is not None else Path(name)
-    try:
-        text, text_source = convert_document_to_markdown(
-            path, allow_hosted=allow_hosted, data=data if source_path is None else None
-        )
-    except Exception as exc:
-        if is_needs_ocr(exc):
+    with get_extract_cache().inflight(sha) as inflight_hit:
+        if inflight_hit is not None and inflight_hit.markdown.strip():
+            return _from_cached(inflight_hit)
+        try:
+            text, text_source = convert_document_to_markdown(
+                path, allow_hosted=allow_hosted, data=data if source_path is None else None
+            )
+        except Exception as exc:
+            if is_needs_ocr(exc):
+                return ExtractResult(
+                    status=STATUS_NEEDS_OCR,
+                    filename=name,
+                    extracted_text_sha=sha,
+                    reason="needs_ocr",
+                )
+            if isinstance(exc, UnsupportedExtract) or type(exc).__name__ in {
+                "UnsupportedError",
+                "EncryptedError",
+            }:
+                log.debug("document extract skip filename=%s err=%s", name, exc)
+                return ExtractResult(
+                    status=STATUS_NON_DOC,
+                    filename=name,
+                    extracted_text_sha=sha,
+                    reason="unsupported",
+                )
+            log.warning("document extract failed filename=%s err=%s", name, exc)
             return ExtractResult(
-                status=STATUS_NEEDS_OCR,
+                status=STATUS_FAILED, filename=name, extracted_text_sha=sha, reason=str(exc)
+            )
+        text = trim_text(str(text or "").strip())
+        if not text:
+            status = STATUS_NEEDS_OCR if tiny else STATUS_FAILED
+            return ExtractResult(
+                status=status,
                 filename=name,
                 extracted_text_sha=sha,
-                reason="needs_ocr",
+                reason="empty_output",
             )
-        if isinstance(exc, UnsupportedExtract) or type(exc).__name__ in {
-            "UnsupportedError",
-            "EncryptedError",
-        }:
-            log.debug("document extract skip filename=%s err=%s", name, exc)
-            return ExtractResult(
-                status=STATUS_NON_DOC,
-                filename=name,
-                extracted_text_sha=sha,
-                reason="unsupported",
-            )
-        log.warning("document extract failed filename=%s err=%s", name, exc)
+        get_extract_cache().put(sha, text, text_source, STATUS_EXTRACTED)
         return ExtractResult(
-            status=STATUS_FAILED, filename=name, extracted_text_sha=sha, reason=str(exc)
-        )
-    text = trim_text(str(text or "").strip())
-    if not text:
-        status = STATUS_NEEDS_OCR if tiny else STATUS_FAILED
-        return ExtractResult(
-            status=status,
-            filename=name,
+            status=STATUS_EXTRACTED,
+            text=text,
+            text_source=text_source,
             extracted_text_sha=sha,
-            reason="empty_output",
+            filename=name,
         )
-    return ExtractResult(
-        status=STATUS_EXTRACTED,
-        text=text,
-        text_source=text_source,
-        extracted_text_sha=sha,
-        filename=name,
-    )

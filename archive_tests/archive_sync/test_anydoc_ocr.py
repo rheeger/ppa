@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from archive_sync.extract_cache import reset_extract_cache_for_tests
 from archive_sync.anydoc_ocr import (
     anydoc_hosted_ocr_kwargs,
     anydoc_ocr_kwargs,
@@ -26,7 +27,11 @@ def _isolate_firecrawl_key(monkeypatch, tmp_path: Path) -> None:
     key_file = tmp_path / "firecrawl_key.txt"
     monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
     monkeypatch.setattr("archive_sync.anydoc_ocr.firecrawl_key_path", lambda: key_file)
+    monkeypatch.setenv("PPA_ANYDOC_EXTRACT_CACHE", str(tmp_path / "anydoc-extract-cache.sqlite"))
+    reset_extract_cache_for_tests()
     reset_ocr_reject_log()
+    yield
+    reset_extract_cache_for_tests()
 
 
 def test_ocr_reject_when_key_absent() -> None:

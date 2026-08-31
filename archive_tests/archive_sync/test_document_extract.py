@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from archive_sync.extract_cache import reset_extract_cache_for_tests
 from archive_sync.document_extract import (
     STATUS_EXTRACTED,
     STATUS_NEEDS_OCR,
@@ -21,6 +24,14 @@ from archive_sync.document_extract import (
 
 class _NeedsOcrError(Exception):
     pass
+
+
+@pytest.fixture(autouse=True)
+def _isolate_extract_cache(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("PPA_ANYDOC_EXTRACT_CACHE", str(tmp_path / "anydoc-extract-cache.sqlite"))
+    reset_extract_cache_for_tests()
+    yield
+    reset_extract_cache_for_tests()
 
 
 def test_skips_audio_video_archives() -> None:

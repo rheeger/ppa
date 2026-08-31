@@ -12,6 +12,7 @@ import os
 import re
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from archive_vault.schema import DETERMINISTIC_ONLY, LLM_ELIGIBLE
@@ -177,6 +178,14 @@ def get_gmail_api_workers() -> int:
     """Provider-bound Gmail HTTP workers. Default 24 (CardEnrichmentRunner-class I/O)."""
     v = _ppa_env_int("PPA_GMAIL_API_WORKERS", default=DEFAULT_GMAIL_API_WORKERS)
     return max(v, 1)
+
+
+def get_anydoc_extract_cache_path() -> Path:
+    """SHA-256 extract reuse cache (documents + attachments). Machine-wide SQLite."""
+    raw = _ppa_env("PPA_ANYDOC_EXTRACT_CACHE")
+    if raw:
+        return Path(raw)
+    return Path.home() / ".ppa" / "anydoc-extract-cache.sqlite"
 
 
 def get_embed_write_batch_size() -> int:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -16,6 +17,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from archive_sync.adapters.gmail_http_errors import (
+    GmailDailyQuotaExceeded,
+    GmailPermissionDenied,
+    classify_gmail_error,
+)
+from archive_sync.extract_cache import get_extract_cache, seed_from_scan_cache
 from archive_sync.document_extract import (
     DONE_SKIP_STATUSES,
     MAX_FILE_BYTES,
@@ -45,6 +52,8 @@ from archive_vault.schema import validate_card_strict
 from archive_vault.vault import read_note, write_card
 
 log = logging.getLogger("ppa.attachment_text")
+STATUS_FETCH_DENIED = "fetch_denied"
+RETRYABLE_FETCH_STATUSES = frozenset({STATUS_MISSING, STATUS_FETCH_DENIED})
 
 ATTACHMENTS_DIR = "Attachments"
 ATTACHMENTS_SECTION_HEADING = "## Attachments"
@@ -241,15 +250,47 @@ def extract_job(
         if not data and fetch_bytes is not None and job.message_id and job.attachment_id:
             try:
                 data = fetch_bytes(job.message_id, job.attachment_id, job.account_email)
-            except Exception as exc:
+            except GmailDailyQuotaExceeded:
+                raise
+            except GmailPermissionDenied as exc:
                 log.warning(
-                    "attachment fetch failed uid=%s message_id=%s err=%s",
+                    "attachment fetch denied uid=%s account=%s reason=%s",
+                    job.uid,
+                    job.account_email,
+                    exc.reason,
+                )
+                return AttachmentExtraction(
+                    status=STATUS_FETCH_DENIED,
+                    filename=filename,
+                    uid=job.uid,
+                    reason=f"forbidden:{exc.reason}",
+                )
+            except Exception as exc:
+                kind = classify_gmail_error(str(exc))
+                if kind == "daily_quota":
+                    raise GmailDailyQuotaExceeded(str(exc)) from exc
+                if kind == "permission":
+                    log.warning(
+                        "attachment fetch denied uid=%s account=%s reason=forbidden",
+                        job.uid,
+                        job.account_email,
+                    )
+                    return AttachmentExtraction(
+                        status=STATUS_FETCH_DENIED,
+                        filename=filename,
+                        uid=job.uid,
+                        reason="forbidden",
+                    )
+                log.warning(
+                    "attachment fetch failed uid=%s message_id=%s kind=%s err=%s",
                     job.uid,
                     job.message_id,
+                    kind,
                     exc,
                 )
                 data = b""
         if data:
+            cache_attachment_bytes(vault, job.uid, filename, data)
             result = extract_from_bytes(
                 data,
                 filename=filename,
@@ -261,8 +302,6 @@ def extract_job(
                 existing_text=job.existing_text,
                 existing_text_source=job.existing_text_source,
             )
-            if result.status == STATUS_EXTRACTED and result.reason != "unchanged":
-                cache_attachment_bytes(vault, job.uid, filename, data)
             out = AttachmentExtraction.from_result(result, uid=job.uid)
             out.filename = filename
             return out
@@ -299,10 +338,28 @@ def extract_jobs(
 
     worker_count = workers if workers is not None else get_gmail_api_workers()
     worker_count = min(max(1, worker_count), max(1, len(jobs)))
+    halt_lock = threading.Lock()
+    halted = {"daily_quota": False}
+
+    def _run(job: AttachmentJob) -> AttachmentExtraction:
+        if halted["daily_quota"]:
+            return AttachmentExtraction(
+                status=STATUS_MISSING, filename=job.filename, uid=job.uid, reason="gmail_daily_quota"
+            )
+        try:
+            return extract_job(vault, job, fetch_bytes=fetch_bytes)
+        except GmailDailyQuotaExceeded as exc:
+            with halt_lock:
+                halted["daily_quota"] = True
+            log.error("gmail daily quota exceeded; stopping attachment fetches for this run")
+            return AttachmentExtraction(
+                status=STATUS_MISSING, filename=job.filename, uid=job.uid, reason=str(exc.reason)
+            )
+
     if worker_count <= 1 or len(jobs) <= 1:
         results = []
         for idx, job in enumerate(jobs, start=1):
-            item = extract_job(vault, job, fetch_bytes=fetch_bytes)
+            item = _run(job)
             if idx == 1 or idx % 25 == 0 or idx == len(jobs):
                 log.info(
                     "extract-attachment-text job %s/%s uid=%s status=%s",
@@ -315,7 +372,7 @@ def extract_jobs(
         return results
     by_uid: dict[str, AttachmentExtraction] = {}
     with ThreadPoolExecutor(max_workers=worker_count) as pool:
-        futures = {pool.submit(extract_job, vault, job, fetch_bytes=fetch_bytes): job for job in jobs}
+        futures = {pool.submit(_run, job): job for job in jobs}
         done = 0
         for future in as_completed(futures):
             job = futures[future]
@@ -427,6 +484,14 @@ def _write_attachment_extraction(
     fm, old_body, existing_prov = read_note(vault, rel_path)
     if str(fm.get("type") or "") != "email_attachment":
         return {"rel_path": rel_path, "status": "skipped", "reason": "not_attachment"}
+    if result.status in RETRYABLE_FETCH_STATUSES and not result.text:
+        # Leave the card retryable — do not stamp skipped_missing forever.
+        return {
+            "rel_path": rel_path,
+            "status": result.status,
+            "reason": result.reason,
+            "written": False,
+        }
     field_updates = {
         "extraction_status": result.status,
         "text_source": result.text_source,
@@ -511,9 +576,12 @@ def _yield_counts(results: list[dict[str, Any]]) -> dict[str, int]:
     skipped = 0
     failed = 0
     needs_ocr = 0
+    hash_reuse = 0
     for out in results:
         status = str(out.get("status") or "")
         source = str(out.get("text_source") or "")
+        if str(out.get("reason") or "") == "hash_reuse":
+            hash_reuse += 1
         if status == STATUS_EXTRACTED and source == "anydoc_hosted":
             hosted_ok += 1
         elif status == STATUS_EXTRACTED:
@@ -532,6 +600,7 @@ def _yield_counts(results: list[dict[str, Any]]) -> dict[str, int]:
         "skipped": skipped,
         "failed": failed,
         "needs_ocr": needs_ocr,
+        "hash_reuse": hash_reuse,
     }
 
 
@@ -561,6 +630,8 @@ def run_attachment_text_extraction(
 
     jobs: list[tuple[str, AttachmentJob]] = []
     skipped_missing = 0
+    skipped_unsupported = 0
+    seeded = seed_from_scan_cache(scan_cache)
     for rel_path in paths:
         fm = scan_cache.frontmatter_for_rel_path(rel_path) or {}
         uid = str(fm.get("uid") or Path(rel_path).stem).strip()
@@ -569,7 +640,7 @@ def run_attachment_text_extraction(
         size_bytes = int(fm.get("size_bytes") or 0)
         is_inline = bool(fm.get("is_inline", False))
         if not filename or filename.startswith("ANGjd") or not is_extractable(filename, mime):
-            skipped_missing += 1
+            skipped_unsupported += 1
             continue
         if is_skippable_non_doc(filename, mime):
             continue
@@ -608,50 +679,99 @@ def run_attachment_text_extraction(
 
     workers = min(get_gmail_api_workers(), max(1, len(jobs)))
     log.info(
-        "extract-attachment-text eligible=%s/%s workers=%s",
+        "extract-attachment-text eligible=%s/%s skipped_unsupported=%s cache_seeded=%s workers=%s",
         len(jobs),
         len(paths),
+        skipped_unsupported,
+        seeded,
         workers,
     )
-    extracted = [extract_job(vault, job, fetch_bytes=fetch_bytes) for _, job in jobs] if workers <= 1 else []
-    if workers > 1 and jobs:
-        extracted = extract_jobs(vault, [job for _, job in jobs], fetch_bytes=fetch_bytes, workers=workers)
+    write_lock = threading.Lock()
+    halt_lock = threading.Lock()
+    halted = {"daily_quota": False}
+    results_by_uid: dict[str, dict[str, Any]] = {}
+    done = {"n": 0}
 
-    results: list[dict[str, Any]] = []
-    for idx, ((rel_path, job), result) in enumerate(zip(jobs, extracted, strict=True), start=1):
-        if idx == 1 or idx % 25 == 0 or idx == len(jobs):
-            log.info(
-                "extract-attachment-text write %s/%s status=%s uid=%s",
-                idx,
-                len(jobs),
-                result.status,
-                job.uid,
+    def _extract_and_write(rel_path: str, job: AttachmentJob) -> dict[str, Any]:
+        if halted["daily_quota"]:
+            result = AttachmentExtraction(
+                status=STATUS_MISSING, filename=job.filename, uid=job.uid, reason="gmail_daily_quota"
             )
-        out = _write_attachment_extraction(vault, rel_path, result, dry_run=dry_run)
-        out["uid"] = job.uid
-        results.append(out)
-        if not dry_run:
-            fm = scan_cache.frontmatter_for_rel_path(rel_path) or {}
-            _write_message_attachment_list(
-                vault,
-                str(fm.get("message") or ""),
-                job.uid,
-                job.filename,
-                dry_run=dry_run,
-                uid_to_rel=uid_to_rel,
+            with write_lock:
+                out = _write_attachment_extraction(vault, rel_path, result, dry_run=dry_run)
+                out["uid"] = job.uid
+                out.setdefault("reason", result.reason)
+                return out
+        try:
+            result = extract_job(vault, job, fetch_bytes=fetch_bytes)
+        except GmailDailyQuotaExceeded as exc:
+            with halt_lock:
+                halted["daily_quota"] = True
+            log.error("gmail daily quota exceeded; stopping attachment fetches for this run")
+            result = AttachmentExtraction(
+                status=STATUS_MISSING, filename=job.filename, uid=job.uid, reason=str(exc.reason)
             )
+        with write_lock:
+            out = _write_attachment_extraction(vault, rel_path, result, dry_run=dry_run)
+            out["uid"] = job.uid
+            out.setdefault("reason", result.reason)
+            if not dry_run:
+                fm = scan_cache.frontmatter_for_rel_path(rel_path) or {}
+                _write_message_attachment_list(
+                    vault,
+                    str(fm.get("message") or ""),
+                    job.uid,
+                    job.filename,
+                    dry_run=dry_run,
+                    uid_to_rel=uid_to_rel,
+                )
+            done["n"] += 1
+            n = done["n"]
+            if n == 1 or n % 25 == 0 or n == len(jobs):
+                log.info(
+                    "extract-attachment-text write %s/%s status=%s uid=%s",
+                    n,
+                    len(jobs),
+                    result.status,
+                    job.uid,
+                )
+        return out
+
+    if not jobs:
+        results: list[dict[str, Any]] = []
+    elif workers <= 1:
+        results = [_extract_and_write(rel_path, job) for rel_path, job in jobs]
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(_extract_and_write, rel_path, job): job for rel_path, job in jobs}
+            for future in as_completed(futures):
+                job = futures[future]
+                try:
+                    results_by_uid[job.uid] = future.result()
+                except Exception as exc:
+                    log.warning("attachment extract+write failed uid=%s err=%s", job.uid, exc)
+                    results_by_uid[job.uid] = {
+                        "uid": job.uid,
+                        "status": STATUS_FAILED,
+                        "reason": str(exc),
+                    }
+        results = [results_by_uid[job.uid] for _, job in jobs]
 
     counts = _yield_counts(results)
     ok = counts["local_ok"] + counts["hosted_ok"]
     errors = counts["failed"]
+    cache_stats = get_extract_cache().stats()
     log.info(
-        "extract-attachment-text done processed=%s local_ok=%s hosted_ok=%s needs_ocr=%s skipped=%s failed=%s",
+        "extract-attachment-text done processed=%s local_ok=%s hosted_ok=%s hash_reuse=%s "
+        "needs_ocr=%s skipped=%s failed=%s cache_hits=%s",
         len(results),
         counts["local_ok"],
         counts["hosted_ok"],
+        counts["hash_reuse"],
         counts["needs_ocr"],
         counts["skipped"],
         counts["failed"],
+        cache_stats["hits"],
     )
     return {
         "vault": str(vault),
@@ -662,5 +782,7 @@ def run_attachment_text_extraction(
         "errors": errors,
         **counts,
         "skipped_missing": skipped_missing,
+        "skipped_unsupported": skipped_unsupported,
+        "cache": cache_stats,
         "results": results,
     }

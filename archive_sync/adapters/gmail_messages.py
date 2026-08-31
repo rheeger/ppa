@@ -5,11 +5,14 @@ from __future__ import annotations
 import base64
 import html
 import json
+import logging
 import os
 import random
 import re
 import subprocess
+import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -30,6 +33,16 @@ from archive_vault.uid import generate_uid
 
 from .base import BaseAdapter, FetchedBatch, deterministic_provenance
 from .gmail_correspondents import load_own_aliases
+from .gmail_http_errors import (
+    GmailDailyQuotaExceeded,
+    GmailPermissionDenied,
+    classify_gmail_error,
+    gmail_error_reason,
+    raise_classified_gmail_error,
+    retry_after_seconds,
+)
+
+log = logging.getLogger("ppa.gmail_messages")
 
 THREAD_SOURCE = "gmail.thread"
 MESSAGE_SOURCE = "gmail.message"
@@ -399,35 +412,61 @@ class GmailMessagesAdapter(BaseAdapter):
     source_id = "gmail-messages"
     preload_existing_uid_index = False
 
-    def _ensure_token_manager(self, account_email: str) -> None:
+    def _token_lock(self) -> threading.RLock:
+        lock = getattr(self, "_token_managers_lock", None)
+        if lock is None:
+            lock = threading.RLock()
+            self._token_managers_lock = lock
+        return lock
+
+    def _token_manager_for(self, account_email: str):
+        """Return a per-account token manager. Safe under concurrent fetch workers."""
+
         account = account_email.strip().lower()
-        token_key = ("gmail", account)
-        if getattr(self, "_token_manager_key", None) == token_key:
-            return
-        try:
-            self._token_manager = build_google_cli_token_manager(
-                account_email=account,
-                services=["gmail"],
-            )
-        except RuntimeError:
-            self._token_manager = None
-        self._token_manager_key = token_key
+        if not account:
+            return getattr(self, "_token_manager", None)
+        key = ("gmail", account)
+        with self._token_lock():
+            cache = getattr(self, "_token_managers", None)
+            if cache is None:
+                cache = {}
+                self._token_managers = cache
+            if key not in cache:
+                try:
+                    cache[key] = build_google_cli_token_manager(
+                        account_email=account,
+                        services=["gmail"],
+                    )
+                except RuntimeError:
+                    cache[key] = None
+            self._token_manager = cache[key]
+            self._token_manager_key = key
+            return cache[key]
+
+    def _ensure_token_manager(self, account_email: str) -> None:
+        self._token_manager_for(account_email)
 
     def get_cursor_key(self, **kwargs) -> str:
         account_email = str(kwargs.get("account_email", "")).strip().lower()
         return f"{self.source_id}:{account_email}" if account_email else self.source_id
 
-    def _gws(self, args: list[str]) -> dict[str, Any]:
-        env = None
-        token_manager = getattr(self, "_token_manager", None)
+    def _active_token_manager(self, token_manager=None):
         if token_manager is not None:
-            env = token_manager.build_env()
+            return token_manager
+        tls = getattr(self, "_token_tls", None)
+        if tls is not None and getattr(tls, "token_manager", None) is not None:
+            return tls.token_manager
+        return getattr(self, "_token_manager", None)
+
+    def _gws(self, args: list[str]) -> dict[str, Any]:
+        tm = self._active_token_manager()
+        env = tm.build_env() if tm is not None else None
         proc = subprocess.run(["gws", *args], capture_output=True, text=True, check=False, env=env)
         if proc.returncode != 0:
             message = proc.stderr.strip() or proc.stdout.strip() or "gws command failed"
             if self._should_fallback_to_http(message, args):
-                return self._gmail_http_json(args)
-            raise RuntimeError(message)
+                return self._gmail_http_json(args, token_manager=tm)
+            raise_classified_gmail_error(message)
         try:
             return json.loads(proc.stdout)
         except json.JSONDecodeError as exc:
@@ -447,15 +486,15 @@ class GmailMessagesAdapter(BaseAdapter):
             )
         )
 
-    def _gmail_http_json(self, args: list[str]) -> dict[str, Any]:
-        token_manager = getattr(self, "_token_manager", None)
-        if token_manager is None:
+    def _gmail_http_json(self, args: list[str], *, token_manager=None) -> dict[str, Any]:
+        tm = token_manager if token_manager is not None else getattr(self, "_token_manager", None)
+        if tm is None:
             raise RuntimeError("Gmail HTTP fallback requires a token manager")
         params = json.loads(args[-1]) if args[-2:] and args[-2] == "--params" else {}
         if args[:4] == ["gmail", "users", "threads", "list"]:
             query = urllib.parse.urlencode({key: value for key, value in params.items() if value not in (None, "")})
             url = f"https://gmail.googleapis.com/gmail/v1/users/me/threads?{query}"
-            return self._gmail_http_request_json(url, token_manager=token_manager)
+            return self._gmail_http_request_json(url, token_manager=tm)
         if args[:4] == ["gmail", "users", "threads", "get"]:
             thread_id = urllib.parse.quote(str(params.get("id", "")).strip(), safe="")
             query = urllib.parse.urlencode(
@@ -464,15 +503,15 @@ class GmailMessagesAdapter(BaseAdapter):
             url = f"https://gmail.googleapis.com/gmail/v1/users/me/threads/{thread_id}"
             if query:
                 url = f"{url}?{query}"
-            return self._gmail_http_request_json(url, token_manager=token_manager)
+            return self._gmail_http_request_json(url, token_manager=tm)
         if args[:4] == ["gmail", "users", "messages", "attachments"]:
             message_id = urllib.parse.quote(str(params.get("messageId", "")).strip(), safe="")
             attachment_id = urllib.parse.quote(str(params.get("id", "")).strip(), safe="")
             url = f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}/attachments/{attachment_id}"
-            return self._gmail_http_request_json(url, token_manager=token_manager)
+            return self._gmail_http_request_json(url, token_manager=tm)
         raise RuntimeError("Unsupported Gmail HTTP fallback command")
 
-    def _gmail_http_request_json(self, url: str, *, token_manager) -> dict[str, Any]:
+    def _gmail_http_request_json(self, url: str, *, token_manager, attempts: int = 8) -> dict[str, Any]:
         def _request(force_refresh: bool = False) -> dict[str, Any]:
             token = token_manager.get_access_token(force_refresh=force_refresh)
             req = urllib.request.Request(url)
@@ -480,30 +519,74 @@ class GmailMessagesAdapter(BaseAdapter):
             with urllib.request.urlopen(req, timeout=30) as resp:
                 return json.loads(resp.read().decode("utf-8"))
 
-        try:
-            return _request()
-        except urllib.error.HTTPError as exc:
-            if exc.code == 401:
-                return _request(force_refresh=True)
-            raise RuntimeError(exc.read().decode("utf-8") or str(exc)) from exc
+        last_exc: Exception | None = None
+        for attempt in range(1, max(1, attempts) + 1):
+            try:
+                return _request()
+            except urllib.error.HTTPError as exc:
+                last_exc = exc
+                body = exc.read().decode("utf-8") or str(exc)
+                if exc.code == 401:
+                    try:
+                        return _request(force_refresh=True)
+                    except urllib.error.HTTPError as retry_exc:
+                        raise_classified_gmail_error(
+                            retry_exc.read().decode("utf-8") or str(retry_exc),
+                            status=retry_exc.code,
+                        )
+                kind = classify_gmail_error(body, exc.code)
+                if kind == "daily_quota":
+                    raise GmailDailyQuotaExceeded(body)
+                if kind == "permission":
+                    raise GmailPermissionDenied(body, reason=gmail_error_reason(body) or "forbidden")
+                if kind == "rate_limit" and attempt < attempts:
+                    header = ""
+                    if exc.headers is not None:
+                        header = str(exc.headers.get("Retry-After") or "")
+                    sleep_seconds = retry_after_seconds(header, attempt)
+                    log.warning(
+                        "retrying 403 rate-limit attempt=%s/%s sleep=%.1fs",
+                        attempt,
+                        attempts,
+                        sleep_seconds,
+                    )
+                    time.sleep(sleep_seconds)
+                    continue
+                if kind == "transient" and attempt < attempts:
+                    time.sleep(min(8.0, 0.5 * (2 ** (attempt - 1))) + random.uniform(0.0, 0.25))
+                    continue
+                raise_classified_gmail_error(body, status=exc.code)
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("gmail http request failed without an exception")
 
-    def _gws_with_retry(self, args: list[str], *, attempts: int = 8) -> dict[str, Any]:
+    def _gws_with_retry(self, args: list[str], *, attempts: int = 8, token_manager=None) -> dict[str, Any]:
+        with self._token_lock():
+            tls = getattr(self, "_token_tls", None)
+            if tls is None:
+                tls = threading.local()
+                self._token_tls = tls
+        prev = getattr(tls, "token_manager", None)
+        if token_manager is not None:
+            tls.token_manager = token_manager
+        try:
+            return self._gws_with_retry_loop(args, attempts=attempts)
+        finally:
+            tls.token_manager = prev
+
+    def _gws_with_retry_loop(self, args: list[str], *, attempts: int = 8) -> dict[str, Any]:
         last_exc: Exception | None = None
         for attempt in range(1, max(1, attempts) + 1):
             try:
                 return self._gws(args)
+            except GmailDailyQuotaExceeded:
+                raise
+            except GmailPermissionDenied:
+                raise
             except Exception as exc:
                 last_exc = exc
                 message = str(exc)
-                is_quota_error = any(
-                    marker in message
-                    for marker in (
-                        "rateLimitExceeded",
-                        "Quota exceeded",
-                        "quota metric",
-                        '"code": 403',
-                    )
-                )
+                kind = classify_gmail_error(message)
                 is_failed_precondition = any(
                     marker in message
                     for marker in (
@@ -511,13 +594,21 @@ class GmailMessagesAdapter(BaseAdapter):
                         "Precondition check failed",
                     )
                 )
-                is_transient = (
-                    bool(TRANSIENT_GMAIL_STATUS_RE.search(message)) or is_quota_error or is_failed_precondition
-                )
-                if attempt >= attempts or not is_transient:
+                retryable = kind in {"rate_limit", "transient"} or is_failed_precondition
+                if attempt >= attempts or not retryable:
+                    if kind == "daily_quota":
+                        raise GmailDailyQuotaExceeded(message) from exc
+                    if kind == "permission":
+                        raise GmailPermissionDenied(message) from exc
                     raise
-                if is_quota_error:
-                    sleep_seconds = min(90.0, 5.0 * (2 ** (attempt - 1))) + random.uniform(0.0, 0.5)
+                if kind == "rate_limit":
+                    sleep_seconds = retry_after_seconds(None, attempt)
+                    log.warning(
+                        "retrying 403 rate-limit attempt=%s/%s sleep=%.1fs",
+                        attempt,
+                        attempts,
+                        sleep_seconds,
+                    )
                 elif is_failed_precondition:
                     sleep_seconds = min(45.0, 3.0 * (2 ** (attempt - 1))) + random.uniform(0.0, 0.5)
                 else:
@@ -795,8 +886,7 @@ class GmailMessagesAdapter(BaseAdapter):
         Gmail without UTF-8 coercion.
         """
 
-        if account_email:
-            self._ensure_token_manager(account_email)
+        token_manager = self._token_manager_for(account_email) if account_email else getattr(self, "_token_manager", None)
         if not message_id or not attachment_id:
             return b""
         payload = self._gws_with_retry(
@@ -808,7 +898,8 @@ class GmailMessagesAdapter(BaseAdapter):
                 "get",
                 "--params",
                 json.dumps({"userId": "me", "messageId": message_id, "id": attachment_id}),
-            ]
+            ],
+            token_manager=token_manager,
         )
         return _decode_body_bytes(str(payload.get("data", "")))
 

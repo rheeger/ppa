@@ -4,11 +4,22 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from archive_sync.extract_cache import reset_extract_cache_for_tests
 from archive_sync.llm_enrichment.document_text_extractor import (
     extract_markdown_text,
     needs_markitdown_extraction,
     resolve_source_file,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_extract_cache(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("PPA_ANYDOC_EXTRACT_CACHE", str(tmp_path / "anydoc-extract-cache.sqlite"))
+    reset_extract_cache_for_tests()
+    yield
+    reset_extract_cache_for_tests()
 
 
 def test_needs_markitdown_plain_rtf() -> None:

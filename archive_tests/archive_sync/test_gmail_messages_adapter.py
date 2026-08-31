@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import time
+import urllib.error
 from pathlib import Path
 
 from archive_sync.adapters.base import deterministic_provenance
@@ -795,23 +797,48 @@ def test_gws_with_retry_retries_rate_limit_errors(monkeypatch):
     adapter = GmailMessagesAdapter()
     calls = {"count": 0}
 
-    def flaky(args):
+    def flaky(args, *, token_manager=None):
         calls["count"] += 1
         if calls["count"] == 1:
             raise RuntimeError('{"error":{"code":403,"reason":"rateLimitExceeded","message":"Quota exceeded"}}')
         return {"ok": True}
 
     monkeypatch.setattr(adapter, "_gws", flaky)
+    monkeypatch.setattr("archive_sync.adapters.gmail_messages.time.sleep", lambda *_args, **_kwargs: None)
     result = adapter._gws_with_retry(["gmail", "users", "threads", "list", "--params", "{}"], attempts=2)
     assert result == {"ok": True}
     assert calls["count"] == 2
+
+
+def test_gws_with_retry_does_not_retry_permission_denied(monkeypatch):
+    from archive_sync.adapters.gmail_http_errors import GmailPermissionDenied
+
+    adapter = GmailMessagesAdapter()
+    calls = {"count": 0}
+    body = (
+        '{"error":{"code":403,"message":"Permission denied",'
+        '"errors":[{"reason":"forbidden","message":"Permission denied"}],'
+        '"status":"PERMISSION_DENIED"}}'
+    )
+
+    def always_forbidden(args, *, token_manager=None):
+        calls["count"] += 1
+        raise GmailPermissionDenied(body, reason="forbidden")
+
+    monkeypatch.setattr(adapter, "_gws", always_forbidden)
+    try:
+        adapter._gws_with_retry(["gmail", "users", "messages", "attachments", "get", "--params", "{}"], attempts=8)
+        raise AssertionError("expected permission denied")
+    except GmailPermissionDenied:
+        pass
+    assert calls["count"] == 1
 
 
 def test_gws_with_retry_retries_failed_precondition_errors(monkeypatch):
     adapter = GmailMessagesAdapter()
     calls = {"count": 0}
 
-    def flaky(args):
+    def flaky(args, *, token_manager=None):
         calls["count"] += 1
         if calls["count"] == 1:
             raise RuntimeError(
@@ -820,6 +847,7 @@ def test_gws_with_retry_retries_failed_precondition_errors(monkeypatch):
         return {"ok": True}
 
     monkeypatch.setattr(adapter, "_gws", flaky)
+    monkeypatch.setattr("archive_sync.adapters.gmail_messages.time.sleep", lambda *_args, **_kwargs: None)
     result = adapter._gws_with_retry(["gmail", "users", "threads", "get", "--params", "{}"], attempts=2)
     assert result == {"ok": True}
     assert calls["count"] == 2
@@ -850,10 +878,39 @@ def test_gws_falls_back_to_http_for_project_permission_errors(monkeypatch):
         )()
 
     monkeypatch.setattr("archive_sync.adapters.gmail_messages.subprocess.run", fake_run)
-    monkeypatch.setattr(adapter, "_gmail_http_json", lambda args: {"threads": [{"id": "t1"}]})
+    monkeypatch.setattr(adapter, "_gmail_http_json", lambda args, token_manager=None: {"threads": [{"id": "t1"}]})
 
     result = adapter._gws(["gmail", "users", "threads", "list", "--params", '{"userId":"me","maxResults":1}'])
     assert result == {"threads": [{"id": "t1"}]}
+
+
+def test_http_retries_rate_limit_then_succeeds(monkeypatch):
+    adapter = GmailMessagesAdapter()
+    calls = {"n": 0}
+
+    class DummyManager:
+        def get_access_token(self, *, force_refresh=False):
+            return "token"
+
+    def fake_urlopen(req, timeout=30):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise urllib.error.HTTPError(
+                req.full_url,
+                403,
+                "Forbidden",
+                {"Retry-After": "0"},
+                io.BytesIO(
+                    b'{"error":{"code":403,"message":"Quota exceeded","errors":[{"reason":"rateLimitExceeded"}]}}'
+                ),
+            )
+        return io.BytesIO(b'{"data":"ok"}')
+
+    monkeypatch.setattr("archive_sync.adapters.gmail_messages.time.sleep", lambda *_a, **_k: None)
+    monkeypatch.setattr("archive_sync.adapters.gmail_messages.urllib.request.urlopen", fake_urlopen)
+    out = adapter._gmail_http_request_json("https://example.test/att", token_manager=DummyManager())
+    assert out == {"data": "ok"}
+    assert calls["n"] == 2
 
 
 def test_attachment_cap_does_not_leave_orphaned_attachment_links(tmp_vault):

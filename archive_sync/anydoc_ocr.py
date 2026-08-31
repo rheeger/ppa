@@ -18,10 +18,11 @@ cannot skip the local attempt.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 log = logging.getLogger("ppa.anydoc_ocr")
 
@@ -105,7 +106,57 @@ def to_markdown_local_first(
 
     import anydoc
 
+    from archive_sync.extract_cache import get_extract_cache
+
     path_str = str(path)
+    sha = ""
+    try:
+        sha = hashlib.sha256(data if data is not None else Path(path_str).read_bytes()).hexdigest()
+    except OSError:
+        sha = ""
+    cache = get_extract_cache()
+    if sha:
+        hit = cache.get(sha)
+        if hit is not None and hit.markdown.strip():
+            log.debug("anydoc extract-cache hit sha=%s source=%s", sha[:12], hit.text_source)
+            return hit.markdown, hit.text_source
+        with cache.inflight(sha) as inflight_hit:
+            if inflight_hit is not None and inflight_hit.markdown.strip():
+                log.debug(
+                    "anydoc extract-cache inflight-hit sha=%s source=%s",
+                    sha[:12],
+                    inflight_hit.text_source,
+                )
+                return inflight_hit.markdown, inflight_hit.text_source
+            return _convert_local_then_hosted(
+                path_str,
+                sha=sha,
+                allow_hosted=allow_hosted,
+                data=data,
+                anydoc=anydoc,
+                cache=cache,
+            )
+    return _convert_local_then_hosted(
+        path_str,
+        sha=sha,
+        allow_hosted=allow_hosted,
+        data=data,
+        anydoc=anydoc,
+        cache=cache,
+    )
+
+
+def _convert_local_then_hosted(
+    path_str: str,
+    *,
+    sha: str,
+    allow_hosted: bool,
+    data: bytes | None,
+    anydoc: Any,
+    cache: Any,
+) -> tuple[str, str]:
+    """Local ``ocr=reject`` first. Hosted only on NeedsOcr after a cache re-check."""
+
     local_exc: BaseException | None = None
     try:
         if data is not None:
@@ -113,6 +164,8 @@ def to_markdown_local_first(
         else:
             raw = anydoc.to_markdown(path_str, ocr="reject")
         text = str(raw or "").strip()
+        if sha and text:
+            cache.put(sha, text, "anydoc")
         return text, "anydoc"
     except Exception as exc:
         if not is_needs_ocr(exc):
@@ -123,12 +176,18 @@ def to_markdown_local_first(
         assert local_exc is not None
         raise local_exc
 
+    if sha:
+        hit = cache.get(sha)
+        if hit is not None and hit.markdown.strip():
+            log.debug("anydoc extract-cache hit-before-hosted sha=%s", sha[:12])
+            return hit.markdown, hit.text_source
+
     hosted = anydoc_hosted_ocr_kwargs()
     if hosted is None:
         assert local_exc is not None
         raise local_exc
 
-    log.info("anydoc NeedsOcr; hosted retry path=%s", path_str)
+    log.info("anydoc NeedsOcr; hosted retry path=%s sha=%s", path_str, sha[:12] if sha else "")
     try:
         if data is not None:
             raw = anydoc.to_markdown_bytes(data, ocr="hosted", api_key=hosted["api_key"])
@@ -137,7 +196,10 @@ def to_markdown_local_first(
     except Exception:
         assert local_exc is not None
         raise local_exc
-    return str(raw or "").strip(), "anydoc_hosted"
+    text = str(raw or "").strip()
+    if sha and text:
+        cache.put(sha, text, "anydoc_hosted")
+    return text, "anydoc_hosted"
 
 
 def reset_ocr_reject_log() -> None:
