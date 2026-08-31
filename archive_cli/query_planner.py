@@ -33,6 +33,8 @@ _TYPE_HINT_MAP: tuple[tuple[str, str], ...] = (
     ("person", "person"),
     ("contact", "person"),
     ("document", "document"),
+    ("email attachment", "email_attachment"),
+    ("pdf attachment", "email_attachment"),
     ("medical", "medical_record"),
     ("commit", "git_commit"),
     ("pull request", "git_thread"),

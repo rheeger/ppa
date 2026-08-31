@@ -1749,6 +1749,7 @@ class GmailMessagesAdapter(BaseAdapter):
                     existing_text=existing_text,
                     existing_text_source=existing_text_source,
                     inline_bytes=inline,
+                    is_inline=bool(record.get("is_inline", False)),
                 )
             )
 

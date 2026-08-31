@@ -1,4 +1,4 @@
-"""Email-attachment anydoc extraction. Never calls Firecrawl."""
+"""Email-attachment extract. Markdown stays on the attachment card. Never calls Firecrawl."""
 
 from __future__ import annotations
 
@@ -6,11 +6,13 @@ from pathlib import Path
 
 from archive_sync.adapters.gmail_messages import GmailMessagesAdapter, _attachment_uid
 from archive_sync.attachment_text import (
+    ATTACHMENTS_LIST_SENTINEL,
     ATTACHMENTS_SECTION_HEADING,
     ATTACHMENTS_SECTION_SENTINEL,
     STATUS_EXTRACTED,
     STATUS_MISSING,
     STATUS_NON_DOC,
+    AttachmentExtraction,
     AttachmentJob,
     bytes_sha256,
     cache_attachment_bytes,
@@ -23,6 +25,7 @@ from archive_sync.attachment_text import (
     resolve_local_attachment,
     run_attachment_text_extraction,
     strip_attachments_section,
+    strip_ocr_dump_section,
 )
 from archive_vault.schema import EmailAttachmentCard
 from archive_vault.vault import read_note, write_card
@@ -39,9 +42,7 @@ def test_skips_audio_video_archives() -> None:
     assert is_skippable_non_doc("notes.html", "text/html") is False
 
 
-def test_message_section_roundtrip() -> None:
-    from archive_sync.attachment_text import AttachmentExtraction
-
+def test_message_section_is_filename_list_only() -> None:
     raw = "Hello from the email.\n\nMore body."
     section = render_attachments_section(
         [
@@ -55,26 +56,23 @@ def test_message_section_roundtrip() -> None:
     )
     merged = merge_message_body(raw, section)
     assert ATTACHMENTS_SECTION_HEADING in merged
-    assert ATTACHMENTS_SECTION_SENTINEL in merged
-    assert "Total $12" in merged
+    assert ATTACHMENTS_LIST_SENTINEL in merged
+    assert "[[hfa-email-attachment-abc]] receipt.pdf" in merged
+    assert "Total $12" not in merged
+    assert "# Receipt" not in merged
     assert strip_attachments_section(merged) == raw
-    preserved = preserve_message_attachments_section("Hello from the email.\n\nMore body.", merged)
-    assert "Total $12" in preserved
-    replaced = preserve_message_attachments_section(
-        merge_message_body("new body", render_attachments_section(
-            [
-                AttachmentExtraction(
-                    status=STATUS_EXTRACTED,
-                    text="updated",
-                    filename="receipt.pdf",
-                    uid="hfa-email-attachment-abc",
-                )
-            ]
-        )),
-        merged,
+
+
+def test_strips_legacy_ocr_dump() -> None:
+    dump = (
+        "Please see attached.\n\n"
+        f"{ATTACHMENTS_SECTION_SENTINEL}\n{ATTACHMENTS_SECTION_HEADING}\n\n"
+        "### receipt.pdf\n\n# Receipt\n\nTotal $12"
     )
-    assert "updated" in replaced
-    assert "Total $12" not in replaced
+    assert "Total $12" not in strip_ocr_dump_section(dump)
+    preserved = preserve_message_attachments_section("Please see attached.", dump)
+    assert "Total $12" not in preserved
+    assert "Please see attached." in preserved
 
 
 def test_extract_html_local_no_anydoc(tmp_path: Path) -> None:
@@ -98,14 +96,12 @@ def test_extract_skips_unchanged_sha(tmp_path: Path, monkeypatch) -> None:
     data = b"%PDF-1.4 tiny"
     cache_attachment_bytes(tmp_path, uid, "scan.pdf", data)
     sha = bytes_sha256(data)
-    called = {"n": 0}
 
-    def _boom(path: Path):
-        called["n"] += 1
+    def _boom(*_args, **_kwargs):
         raise AssertionError("should not convert")
 
     monkeypatch.setattr(
-        "archive_sync.attachment_text.convert_document_to_markdown",
+        "archive_sync.document_extract.convert_document_to_markdown",
         _boom,
     )
     result = extract_job(
@@ -123,16 +119,15 @@ def test_extract_skips_unchanged_sha(tmp_path: Path, monkeypatch) -> None:
     assert result.status == STATUS_EXTRACTED
     assert result.text == "already extracted"
     assert result.reason == "unchanged"
-    assert called["n"] == 0
 
 
-def test_extract_pdf_uses_convert_document(tmp_path: Path, monkeypatch) -> None:
+def test_extract_pdf_uses_shared_convert(tmp_path: Path, monkeypatch) -> None:
     uid = "hfa-email-attachment-pdf001"
     data = b"%PDF-1.4 fixture"
     cache_attachment_bytes(tmp_path, uid, "scan.pdf", data)
     monkeypatch.setattr(
-        "archive_sync.attachment_text.convert_document_to_markdown",
-        lambda path: ("# Scanned page\n\nHello", "anydoc"),
+        "archive_sync.document_extract.convert_document_to_markdown",
+        lambda path, **kwargs: ("# Scanned page\n\nHello", "anydoc"),
     )
     result = extract_job(
         tmp_path,
@@ -166,8 +161,8 @@ def test_extract_mp3_is_non_doc(tmp_path: Path) -> None:
 
 def test_extract_jobs_concurrent(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(
-        "archive_sync.attachment_text.convert_document_to_markdown",
-        lambda path: (f"text for {path.name}", "anydoc"),
+        "archive_sync.document_extract.convert_document_to_markdown",
+        lambda path, **kwargs: (f"text for {Path(path).name}", "anydoc"),
     )
     jobs = []
     for i in range(3):
@@ -179,12 +174,12 @@ def test_extract_jobs_concurrent(tmp_path: Path, monkeypatch) -> None:
     assert {item.filename for item in results} == {"f0.pdf", "f1.pdf", "f2.pdf"}
 
 
-def test_run_backfill_writes_message_section(tmp_path: Path, monkeypatch) -> None:
+def test_run_backfill_writes_attachment_not_message_ocr(tmp_path: Path, monkeypatch) -> None:
     from archive_sync.adapters.base import deterministic_provenance
 
     monkeypatch.setattr(
-        "archive_sync.attachment_text.convert_document_to_markdown",
-        lambda path: ("# Gift agreement excerpt", "anydoc"),
+        "archive_sync.document_extract.convert_document_to_markdown",
+        lambda path, **kwargs: ("# Gift agreement excerpt", "anydoc"),
     )
     uid = "hfa-email-attachment-backfill1"
     msg_uid = "hfa-email-message-backfill1"
@@ -246,24 +241,24 @@ def test_run_backfill_writes_message_section(tmp_path: Path, monkeypatch) -> Non
     assert "Gift agreement" in att_body
     _msg_fm, msg_body, _ = read_note(tmp_path, f"Email/2026-03/{msg_uid}.md")
     assert "Please see attached." in msg_body
-    assert ATTACHMENTS_SECTION_HEADING in msg_body
-    assert "Gift agreement" in msg_body
+    assert f"[[{uid}]] scan.pdf" in msg_body
+    assert "Gift agreement" not in msg_body
+    assert ATTACHMENTS_SECTION_SENTINEL not in msg_body
 
-    # Incremental: same bytes must not convert again.
     monkeypatch.setattr(
-        "archive_sync.attachment_text.convert_document_to_markdown",
-        lambda path: (_ for _ in ()).throw(AssertionError("re-ocr")),
+        "archive_sync.document_extract.convert_document_to_markdown",
+        lambda path, **kwargs: (_ for _ in ()).throw(AssertionError("re-ocr")),
     )
     again = run_attachment_text_extraction(tmp_path, dry_run=False)
     assert again["processed"] == 0
 
 
-def test_gmail_apply_uses_local_file(tmp_vault: Path, monkeypatch) -> None:
+def test_gmail_apply_does_not_dump_ocr_on_email(tmp_vault: Path, monkeypatch) -> None:
     from archive_tests.archive_sync.test_gmail_messages_adapter import _message, _thread
 
     monkeypatch.setattr(
-        "archive_sync.attachment_text.convert_document_to_markdown",
-        lambda path: ("# Contract markdown", "anydoc"),
+        "archive_sync.document_extract.convert_document_to_markdown",
+        lambda path, **kwargs: ("# Contract markdown", "anydoc"),
     )
     uid = _attachment_uid("me@example.com", "m1", "a1")
     cache_attachment_bytes(tmp_vault, uid, "contract.pdf", b"%PDF-1.4 contract")
@@ -302,8 +297,8 @@ def test_gmail_apply_uses_local_file(tmp_vault: Path, monkeypatch) -> None:
     msg_rel = next((tmp_vault / "Email").rglob("*.md")).relative_to(tmp_vault)
     _msg_fm, msg_body, _ = read_note(tmp_vault, str(msg_rel))
     assert "see attached" in msg_body
-    assert ATTACHMENTS_SECTION_HEADING in msg_body
-    assert "Contract markdown" in msg_body
+    assert "Contract markdown" not in msg_body
+    assert "[[%s]] contract.pdf" % uid in msg_body
 
 
 def test_to_card_passes_extraction_fields() -> None:
@@ -329,3 +324,10 @@ def test_to_card_passes_extraction_fields() -> None:
     assert card.text_source == "anydoc"
     assert card.extracted_text_sha == "abc123"
     assert body == "# Extracted"
+
+
+def test_query_planner_hints_email_attachment() -> None:
+    from archive_cli.query_planner import DeterministicQueryPlanner
+
+    plan = DeterministicQueryPlanner().plan("find the email attachment for the k-1")
+    assert "email_attachment" in plan.inferred.type_hints

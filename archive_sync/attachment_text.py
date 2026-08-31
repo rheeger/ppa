@@ -1,22 +1,12 @@
-"""Extract email-attachment files via the document anydoc / hosted-OCR stack.
+"""Extract email-attachment files via the shared document extract library.
 
-Gmail attachment cards are metadata-only (bytes live in Gmail or vault
-``Attachments/``). When a file is local — or just downloaded during apply —
-this module converts it with ``convert_document_to_markdown`` and writes:
-
-- extracted markdown on the **attachment card body** (retriever does not
-  chunk ``email_attachment`` today)
-- a ``## Attachments`` section on the **email message card** (already chunked
-  as ``message_body``)
-- frontmatter ``extraction_status`` / ``text_source`` / ``extracted_text_sha``
-  (sha of **source bytes**, used to skip re-OCR)
-
-Do not dump extracted text into YAML.
+Extracted markdown lives **only** on the attachment card body. Email message
+cards get a filename + wikilink list — never an OCR/markdown dump into
+``message_body``.
 """
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import re
 from collections.abc import Callable
@@ -26,8 +16,28 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from archive_sync.adapters.file_libraries import MAX_EXTRACT_CHARS, MAX_FILE_BYTES, _trim_text
-from archive_sync.llm_enrichment.document_text_extractor import convert_document_to_markdown
+from archive_sync.document_extract import (
+    DONE_SKIP_STATUSES,
+    MAX_FILE_BYTES,
+    STATUS_EXTRACTED,
+    STATUS_FAILED,
+    STATUS_LOCKFILE,
+    STATUS_MISSING,
+    STATUS_NEEDS_OCR,
+    STATUS_NON_DOC,
+    STATUS_SUPPRESSED,
+    STATUS_TINY_IMAGE,
+    STATUS_TOO_LARGE,
+    ExtractResult,
+    bytes_sha256,
+    extract_from_bytes,
+    extract_from_path,
+    is_lockfile,
+    is_skippable_non_doc,
+    is_suppressed_classification,
+    is_tiny_image,
+    safe_filename,
+)
 from archive_vault.provenance import ProvenanceEntry, merge_provenance
 from archive_vault.schema import validate_card_strict
 from archive_vault.vault import read_note, write_card
@@ -36,93 +46,17 @@ log = logging.getLogger("ppa.attachment_text")
 
 ATTACHMENTS_DIR = "Attachments"
 ATTACHMENTS_SECTION_HEADING = "## Attachments"
+ATTACHMENTS_LIST_SENTINEL = "<!-- ppa-attachment-list -->"
+# Legacy OCR dump written by 535679b — strip on sight, never re-emit.
 ATTACHMENTS_SECTION_SENTINEL = "<!-- ppa-attachment-text -->"
-_SECTION_RE = re.compile(
+_OCR_DUMP_RE = re.compile(
     rf"\n*{re.escape(ATTACHMENTS_SECTION_SENTINEL)}\n{re.escape(ATTACHMENTS_SECTION_HEADING)}\n.*\Z",
     re.DOTALL,
 )
-
-# Images are scans we still want OCR on when anydoc accepts them.
-CONVERTIBLE_EXTENSIONS = frozenset(
-    {
-        ".pdf",
-        ".doc",
-        ".docx",
-        ".rtf",
-        ".ppt",
-        ".pptx",
-        ".xls",
-        ".xlsx",
-        ".csv",
-        ".html",
-        ".htm",
-        ".txt",
-        ".md",
-        ".png",
-        ".jpg",
-        ".jpeg",
-        ".tif",
-        ".tiff",
-        ".webp",
-        ".gif",
-        ".bmp",
-    }
+_LIST_RE = re.compile(
+    rf"\n*{re.escape(ATTACHMENTS_LIST_SENTINEL)}\n{re.escape(ATTACHMENTS_SECTION_HEADING)}\n.*\Z",
+    re.DOTALL,
 )
-SKIP_EXTENSIONS = frozenset(
-    {
-        ".mp3",
-        ".m4a",
-        ".wav",
-        ".aac",
-        ".flac",
-        ".ogg",
-        ".wma",
-        ".opus",
-        ".mp4",
-        ".mov",
-        ".avi",
-        ".mkv",
-        ".webm",
-        ".m4v",
-        ".wmv",
-        ".zip",
-        ".tar",
-        ".gz",
-        ".tgz",
-        ".rar",
-        ".7z",
-        ".bz2",
-        ".exe",
-        ".dmg",
-        ".pkg",
-        ".iso",
-        ".ics",
-        ".vcf",
-        ".dat",
-    }
-)
-SKIP_MIME_PREFIXES = ("audio/", "video/")
-SKIP_MIME_TYPES = frozenset(
-    {
-        "application/zip",
-        "application/x-tar",
-        "application/x-7z-compressed",
-        "application/x-rar-compressed",
-        "application/gzip",
-        "application/x-gzip",
-        "application/octet-stream",
-        "application/ms-tnef",
-        "text/calendar",
-        "application/ics",
-    }
-)
-STATUS_EXTRACTED = "content_extracted"
-STATUS_TOO_LARGE = "skipped_too_large"
-STATUS_NON_DOC = "skipped_non_doc"
-STATUS_MISSING = "skipped_missing"
-STATUS_LOCKFILE = "skipped_lockfile"
-STATUS_FAILED = "failed"
-_DONE_SKIP_STATUSES = frozenset({STATUS_TOO_LARGE, STATUS_NON_DOC, STATUS_LOCKFILE})
 
 FetchBytesFn = Callable[[str, str, str], bytes]
 
@@ -136,6 +70,18 @@ class AttachmentExtraction:
     filename: str = ""
     uid: str = ""
     reason: str = ""
+
+    @classmethod
+    def from_result(cls, result: ExtractResult, *, uid: str = "") -> AttachmentExtraction:
+        return cls(
+            status=result.status,
+            text=result.text,
+            text_source=result.text_source,
+            extracted_text_sha=result.extracted_text_sha,
+            filename=result.filename,
+            uid=uid,
+            reason=result.reason,
+        )
 
 
 @dataclass
@@ -152,17 +98,9 @@ class AttachmentJob:
     existing_text: str = ""
     existing_text_source: str = ""
     inline_bytes: bytes = field(default_factory=bytes)
-
-
-def bytes_sha256(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
-def safe_filename(filename: str) -> str:
-    name = Path(filename or "").name.strip()
-    if not name or name in {".", ".."}:
-        return "attachment"
-    return name
+    is_inline: bool = False
+    skip_hosted: bool = False
+    skip_extract: bool = False
 
 
 def vault_attachment_path(vault: Path, uid: str, filename: str) -> Path:
@@ -196,51 +134,46 @@ def cache_attachment_bytes(vault: Path, uid: str, filename: str, data: bytes) ->
     return path
 
 
-def is_lockfile(filename: str) -> bool:
-    return safe_filename(filename).startswith("~$")
+def strip_ocr_dump_section(body: str) -> str:
+    """Remove a legacy OCR dump from an email message body."""
 
-
-def is_skippable_non_doc(filename: str, mime_type: str) -> bool:
-    if is_lockfile(filename):
-        return True
-    suffix = Path(safe_filename(filename)).suffix.lower()
-    mime = (mime_type or "").strip().lower()
-    if suffix in SKIP_EXTENSIONS:
-        return True
-    if any(mime.startswith(prefix) for prefix in SKIP_MIME_PREFIXES):
-        return True
-    if mime in SKIP_MIME_TYPES and suffix not in CONVERTIBLE_EXTENSIONS:
-        return True
-    if suffix and suffix not in CONVERTIBLE_EXTENSIONS and not mime.startswith("image/"):
-        if mime.startswith("application/") and suffix not in CONVERTIBLE_EXTENSIONS:
-            return suffix not in {".pdf"}
-        if mime.startswith("text/") and suffix not in CONVERTIBLE_EXTENSIONS:
-            return suffix not in {".txt", ".md", ".html", ".htm", ".csv"}
-    return False
+    return _OCR_DUMP_RE.sub("", str(body or "")).rstrip()
 
 
 def strip_attachments_section(body: str) -> str:
-    text = str(body or "")
-    return _SECTION_RE.sub("", text).rstrip()
+    text = strip_ocr_dump_section(body)
+    return _LIST_RE.sub("", text).rstrip()
 
 
 def extract_attachments_section(body: str) -> str:
-    match = _SECTION_RE.search(str(body or ""))
+    text = strip_ocr_dump_section(body)
+    match = _LIST_RE.search(text)
     if not match:
         return ""
     return match.group(0).strip()
 
 
-def render_attachments_section(extractions: list[AttachmentExtraction]) -> str:
-    blocks: list[str] = []
-    for item in extractions:
-        if item.status != STATUS_EXTRACTED or not item.text.strip():
+def render_attachment_list(items: list[tuple[str, str]]) -> str:
+    """Filename + wikilink list only — never extracted markdown."""
+
+    lines: list[str] = []
+    seen: set[str] = set()
+    for uid, filename in items:
+        slug = str(uid or "").strip().strip("[]")
+        name = safe_filename(filename)
+        if not slug or slug in seen:
             continue
-        heading = safe_filename(item.filename) or item.uid or "attachment"
-        blocks.append(f"### {heading}\n\n{item.text.strip()}")
-    if not blocks:
+        seen.add(slug)
+        lines.append(f"- [[{slug}]] {name}")
+    if not lines:
         return ""
-    return f"{ATTACHMENTS_SECTION_SENTINEL}\n{ATTACHMENTS_SECTION_HEADING}\n\n" + "\n\n".join(blocks)
+    return f"{ATTACHMENTS_LIST_SENTINEL}\n{ATTACHMENTS_SECTION_HEADING}\n\n" + "\n".join(lines)
+
+
+def render_attachments_section(extractions: list[AttachmentExtraction]) -> str:
+    """Compatibility wrapper: list only, no OCR text."""
+
+    return render_attachment_list([(item.uid, item.filename) for item in extractions])
 
 
 def merge_message_body(raw_body: str, section: str) -> str:
@@ -254,84 +187,23 @@ def merge_message_body(raw_body: str, section: str) -> str:
 
 
 def preserve_message_attachments_section(incoming_body: str, existing_body: str) -> str:
-    """Keep an existing ``## Attachments`` block when incoming body is raw email."""
+    """Keep a filename list; drop any legacy OCR dump."""
 
-    incoming_section = extract_attachments_section(incoming_body)
+    incoming = strip_ocr_dump_section(incoming_body)
+    existing = strip_ocr_dump_section(existing_body)
+    incoming_section = extract_attachments_section(incoming)
     if incoming_section:
-        return merge_message_body(strip_attachments_section(incoming_body), incoming_section)
-    existing_section = extract_attachments_section(existing_body)
+        return merge_message_body(strip_attachments_section(incoming), incoming_section)
+    existing_section = extract_attachments_section(existing)
     if existing_section:
-        return merge_message_body(strip_attachments_section(incoming_body), existing_section)
-    return incoming_body
+        return merge_message_body(strip_attachments_section(incoming), existing_section)
+    return incoming
 
 
-def extract_local_file(path: Path) -> AttachmentExtraction:
-    """Run the shared document converter. Never calls Firecrawl unless anydoc does."""
-
-    filename = path.name
-    if is_lockfile(filename):
-        return AttachmentExtraction(status=STATUS_LOCKFILE, filename=filename, reason="lockfile")
-    try:
-        size = path.stat().st_size
-    except OSError:
-        return AttachmentExtraction(status=STATUS_MISSING, filename=filename, reason="source_missing")
-    if size > MAX_FILE_BYTES:
-        return AttachmentExtraction(status=STATUS_TOO_LARGE, filename=filename, reason="too_large")
-    try:
-        data = path.read_bytes()
-    except OSError:
-        return AttachmentExtraction(status=STATUS_MISSING, filename=filename, reason="source_missing")
-    sha = bytes_sha256(data)
-    if is_skippable_non_doc(filename, ""):
-        return AttachmentExtraction(
-            status=STATUS_NON_DOC, filename=filename, extracted_text_sha=sha, reason="non_doc"
-        )
-    try:
-        text, text_source = convert_document_to_markdown(path)
-    except Exception as exc:
-        log.warning("attachment convert failed path=%s err=%s", path, exc)
-        return AttachmentExtraction(
-            status=STATUS_FAILED, filename=filename, extracted_text_sha=sha, reason=str(exc)
-        )
-    text = _trim_text(str(text or "").strip(), limit=MAX_EXTRACT_CHARS)
-    if not text:
-        return AttachmentExtraction(
-            status=STATUS_FAILED, filename=filename, extracted_text_sha=sha, reason="empty_output"
-        )
-    return AttachmentExtraction(
-        status=STATUS_EXTRACTED,
-        text=text,
-        text_source=text_source,
-        extracted_text_sha=sha,
-        filename=filename,
+def extract_local_file(path: Path, *, skip_hosted: bool = False) -> AttachmentExtraction:
+    return AttachmentExtraction.from_result(
+        extract_from_path(path, filename=path.name, skip_hosted=skip_hosted)
     )
-
-
-def _reuse_if_unchanged(job: AttachmentJob, sha: str) -> AttachmentExtraction | None:
-    if (
-        job.existing_sha
-        and job.existing_sha == sha
-        and job.existing_status == STATUS_EXTRACTED
-        and job.existing_text.strip()
-    ):
-        return AttachmentExtraction(
-            status=STATUS_EXTRACTED,
-            text=job.existing_text,
-            text_source=job.existing_text_source,
-            extracted_text_sha=sha,
-            filename=job.filename,
-            uid=job.uid,
-            reason="unchanged",
-        )
-    if job.existing_sha and job.existing_sha == sha and job.existing_status in _DONE_SKIP_STATUSES:
-        return AttachmentExtraction(
-            status=job.existing_status,
-            extracted_text_sha=sha,
-            filename=job.filename,
-            uid=job.uid,
-            reason="unchanged",
-        )
-    return None
 
 
 def extract_job(
@@ -341,6 +213,10 @@ def extract_job(
     fetch_bytes: FetchBytesFn | None = None,
 ) -> AttachmentExtraction:
     filename = safe_filename(job.filename)
+    if job.skip_extract:
+        return AttachmentExtraction(
+            status=STATUS_SUPPRESSED, filename=filename, uid=job.uid, reason="suppressed"
+        )
     if is_lockfile(filename):
         return AttachmentExtraction(
             status=STATUS_LOCKFILE, filename=filename, uid=job.uid, reason="lockfile"
@@ -353,6 +229,9 @@ def extract_job(
         return AttachmentExtraction(
             status=STATUS_TOO_LARGE, filename=filename, uid=job.uid, reason="too_large"
         )
+    skip_hosted = job.skip_hosted or (
+        job.is_inline and is_tiny_image(filename, job.size_bytes, job.mime_type)
+    )
 
     path = resolve_local_attachment(vault, job.uid, filename)
     if path is None and (job.inline_bytes or fetch_bytes is not None):
@@ -369,33 +248,40 @@ def extract_job(
                 )
                 data = b""
         if data:
-            if len(data) > MAX_FILE_BYTES:
-                return AttachmentExtraction(
-                    status=STATUS_TOO_LARGE,
-                    filename=filename,
-                    uid=job.uid,
-                    extracted_text_sha=bytes_sha256(data),
-                    reason="too_large",
-                )
-            reused = _reuse_if_unchanged(job, bytes_sha256(data))
-            if reused is not None:
-                return reused
-            path = cache_attachment_bytes(vault, job.uid, filename, data)
+            result = extract_from_bytes(
+                data,
+                filename=filename,
+                mime_type=job.mime_type,
+                is_inline=job.is_inline,
+                skip_hosted=skip_hosted,
+                existing_sha=job.existing_sha,
+                existing_status=job.existing_status,
+                existing_text=job.existing_text,
+                existing_text_source=job.existing_text_source,
+            )
+            if result.status == STATUS_EXTRACTED and result.reason != "unchanged":
+                cache_attachment_bytes(vault, job.uid, filename, data)
+            out = AttachmentExtraction.from_result(result, uid=job.uid)
+            out.filename = filename
+            return out
 
     if path is None:
         return AttachmentExtraction(status=STATUS_MISSING, filename=filename, uid=job.uid, reason="missing")
 
-    try:
-        sha = bytes_sha256(path.read_bytes())
-    except OSError:
-        return AttachmentExtraction(status=STATUS_MISSING, filename=filename, uid=job.uid, reason="source_missing")
-    reused = _reuse_if_unchanged(job, sha)
-    if reused is not None:
-        return reused
-    result = extract_local_file(path)
-    result.uid = job.uid
-    result.filename = filename
-    return result
+    result = extract_from_path(
+        path,
+        filename=filename,
+        mime_type=job.mime_type,
+        is_inline=job.is_inline,
+        skip_hosted=skip_hosted,
+        existing_sha=job.existing_sha,
+        existing_status=job.existing_status,
+        existing_text=job.existing_text,
+        existing_text_source=job.existing_text_source,
+    )
+    out = AttachmentExtraction.from_result(result, uid=job.uid)
+    out.filename = filename
+    return out
 
 
 def extract_jobs(
@@ -433,7 +319,10 @@ def apply_extractions_to_gmail_records(
     attachment_records: list[dict[str, Any]],
     extractions: list[AttachmentExtraction],
 ) -> None:
-    """Mutate Gmail fetch records in place: attachment body + message section."""
+    """Mutate Gmail fetch records: attachment body + message filename list.
+
+    Never copies extracted markdown onto the email message card.
+    """
 
     by_uid = {item.uid: item for item in extractions if item.uid}
     persist_statuses = {
@@ -442,6 +331,9 @@ def apply_extractions_to_gmail_records(
         STATUS_TOO_LARGE,
         STATUS_LOCKFILE,
         STATUS_FAILED,
+        STATUS_TINY_IMAGE,
+        STATUS_SUPPRESSED,
+        STATUS_NEEDS_OCR,
     }
     for record in attachment_records:
         uid = str(record.get("uid") or "").strip()
@@ -453,20 +345,19 @@ def apply_extractions_to_gmail_records(
         record["extracted_text_sha"] = item.extracted_text_sha
         if item.status == STATUS_EXTRACTED:
             record["body"] = item.text
-    by_message: dict[str, list[AttachmentExtraction]] = {}
+    by_message: dict[str, list[tuple[str, str]]] = {}
     for record in attachment_records:
         uid = str(record.get("uid") or "").strip()
-        item = by_uid.get(uid)
-        if item is None:
-            continue
+        filename = str(record.get("filename") or "").strip()
         mid = str(record.get("message_id") or "").strip()
-        by_message.setdefault(mid, []).append(item)
+        if uid:
+            by_message.setdefault(mid, []).append((uid, filename))
     for message in message_records:
         mid = str(message.get("message_id") or "").strip()
-        section = render_attachments_section(by_message.get(mid) or [])
+        section = render_attachment_list(by_message.get(mid) or [])
         if not section:
             continue
-        message["body"] = merge_message_body(str(message.get("body") or ""), section)
+        message["body"] = merge_message_body(strip_ocr_dump_section(str(message.get("body") or "")), section)
 
 
 def _job_from_attachment_card(
@@ -474,6 +365,7 @@ def _job_from_attachment_card(
     body: str,
     *,
     uid: str,
+    skip_extract: bool = False,
 ) -> AttachmentJob:
     return AttachmentJob(
         uid=uid,
@@ -487,6 +379,8 @@ def _job_from_attachment_card(
         existing_status=str(fm.get("extraction_status") or "").strip(),
         existing_text=body,
         existing_text_source=str(fm.get("text_source") or "").strip(),
+        is_inline=bool(fm.get("is_inline", False)),
+        skip_extract=skip_extract,
     )
 
 
@@ -503,6 +397,7 @@ def _write_attachment_extraction(
             "status": result.status,
             "dry_run": True,
             "reason": result.reason,
+            "text_source": result.text_source,
             "bytes_out": len(result.text.encode("utf-8")),
         }
     fm, old_body, existing_prov = read_note(vault, rel_path)
@@ -535,20 +430,22 @@ def _write_attachment_extraction(
     return {
         "rel_path": rel_path,
         "status": result.status,
+        "text_source": result.text_source,
         "bytes_out": len(new_body.encode("utf-8")),
         "reason": result.reason,
     }
 
 
-def _append_section_to_message_card(
+def _write_message_attachment_list(
     vault: Path,
     message_wikilink: str,
-    extraction: AttachmentExtraction,
+    attachment_uid: str,
+    filename: str,
     *,
     dry_run: bool,
     uid_to_rel: dict[str, str],
 ) -> None:
-    if extraction.status != STATUS_EXTRACTED or dry_run:
+    if dry_run:
         return
     slug = message_wikilink.strip().strip("[]")
     if not slug:
@@ -559,35 +456,59 @@ def _append_section_to_message_card(
     fm, body, prov = read_note(vault, rel)
     if str(fm.get("type") or "") != "email_message":
         return
-    section = render_attachments_section([extraction])
-    if not section:
-        return
-    # Rebuild the whole attachments section from this one file plus any other
-    # ### headings already present for different filenames.
-    existing = extract_attachments_section(body)
-    if existing and f"### {safe_filename(extraction.filename)}" in existing:
-        merged_section = existing
-        # replace just this file's block
-        file_re = re.compile(
-            rf"### {re.escape(safe_filename(extraction.filename))}\n\n.*?(?=\n### |\Z)",
-            re.DOTALL,
-        )
-        replacement = f"### {safe_filename(extraction.filename)}\n\n{extraction.text.strip()}\n\n"
-        if file_re.search(existing):
-            merged_section = file_re.sub(replacement, existing, count=1)
-        else:
-            merged_section = existing.rstrip() + "\n\n" + replacement
-        new_body = merge_message_body(strip_attachments_section(body), merged_section)
-    elif existing:
-        extra = f"### {safe_filename(extraction.filename)}\n\n{extraction.text.strip()}"
-        merged_section = existing.rstrip() + "\n\n" + extra
-        new_body = merge_message_body(strip_attachments_section(body), merged_section)
-    else:
-        new_body = merge_message_body(body, section)
+    existing_pairs: list[tuple[str, str]] = []
+    for link in fm.get("attachments") or []:
+        att_uid = str(link).strip().strip("[]")
+        if att_uid:
+            existing_pairs.append((att_uid, ""))
+    existing_pairs.append((attachment_uid, filename))
+    # Prefer filenames already listed in the current (non-OCR) section.
+    listed = extract_attachments_section(body)
+    if listed:
+        for match in re.finditer(r"- \[\[([^\]]+)\]\](?:\s+(.+))?", listed):
+            existing_pairs.append((match.group(1), (match.group(2) or "").strip()))
+    by_uid: dict[str, str] = {}
+    for uid, name in existing_pairs:
+        if uid and (name or uid not in by_uid):
+            by_uid[uid] = name or by_uid.get(uid, "")
+    if attachment_uid:
+        by_uid[attachment_uid] = filename or by_uid.get(attachment_uid, "")
+    section = render_attachment_list(list(by_uid.items()))
+    new_body = merge_message_body(strip_attachments_section(body), section)
     if new_body == body:
         return
     card = validate_card_strict(fm)
     write_card(vault, rel, card, new_body, prov)
+
+
+def _yield_counts(results: list[dict[str, Any]]) -> dict[str, int]:
+    local_ok = 0
+    hosted_ok = 0
+    skipped = 0
+    failed = 0
+    needs_ocr = 0
+    for out in results:
+        status = str(out.get("status") or "")
+        source = str(out.get("text_source") or "")
+        if status == STATUS_EXTRACTED and source == "anydoc_hosted":
+            hosted_ok += 1
+        elif status == STATUS_EXTRACTED:
+            local_ok += 1
+        elif status == STATUS_NEEDS_OCR:
+            needs_ocr += 1
+        elif status == STATUS_FAILED:
+            failed += 1
+        elif status.startswith("skipped") or status in DONE_SKIP_STATUSES or status == STATUS_MISSING:
+            skipped += 1
+        else:
+            skipped += 1
+    return {
+        "local_ok": local_ok,
+        "hosted_ok": hosted_ok,
+        "skipped": skipped,
+        "failed": failed,
+        "needs_ocr": needs_ocr,
+    }
 
 
 def run_attachment_text_extraction(
@@ -603,9 +524,17 @@ def run_attachment_text_extraction(
     from archive_cli.vault_cache import VaultScanCache
 
     vault = Path(vault).resolve()
+    log.info("extract-attachment-text start vault=%s dry_run=%s", vault, dry_run)
     scan_cache = VaultScanCache.build_or_load(vault, tier=2, progress_every=0)
     paths = sorted(scan_cache.rel_paths_by_type().get("email_attachment") or [])
     uid_to_rel = scan_cache.uid_to_rel_path()
+    thread_class: dict[str, str] = {}
+    for rel in scan_cache.rel_paths_by_type().get("email_thread") or []:
+        tfm = scan_cache.frontmatter_for_rel_path(rel) or {}
+        thread_class[str(tfm.get("uid") or Path(rel).stem)] = str(
+            tfm.get("triage_classification") or ""
+        )
+
     jobs: list[tuple[str, AttachmentJob]] = []
     for rel_path in paths:
         fm = scan_cache.frontmatter_for_rel_path(rel_path) or {}
@@ -621,52 +550,66 @@ def run_attachment_text_extraction(
                 current = bytes_sha256(local.read_bytes())
             except OSError:
                 continue
-            if sha and sha == current and status in {STATUS_EXTRACTED, *_DONE_SKIP_STATUSES}:
+            if sha and sha == current and status in {STATUS_EXTRACTED, *DONE_SKIP_STATUSES}:
                 continue
+        thread_slug = str(fm.get("thread") or "").strip().strip("[]")
+        skip_extract = is_suppressed_classification(thread_class.get(thread_slug, ""))
         body = ""
         if status == STATUS_EXTRACTED:
             try:
                 _fm, body, _prov = read_note(vault, rel_path)
             except OSError:
                 body = ""
-        jobs.append((rel_path, _job_from_attachment_card(fm, body, uid=uid)))
+        jobs.append((rel_path, _job_from_attachment_card(fm, body, uid=uid, skip_extract=skip_extract)))
         if limit is not None and len(jobs) >= limit:
             break
 
     workers = min(get_gmail_api_workers(), max(1, len(jobs)))
-    results: list[dict[str, Any]] = []
+    log.info(
+        "extract-attachment-text eligible=%s/%s workers=%s",
+        len(jobs),
+        len(paths),
+        workers,
+    )
     extracted = [extract_job(vault, job, fetch_bytes=fetch_bytes) for _, job in jobs] if workers <= 1 else []
     if workers > 1 and jobs:
         extracted = extract_jobs(vault, [job for _, job in jobs], fetch_bytes=fetch_bytes, workers=workers)
 
+    results: list[dict[str, Any]] = []
     for (rel_path, job), result in zip(jobs, extracted, strict=True):
         out = _write_attachment_extraction(vault, rel_path, result, dry_run=dry_run)
         out["uid"] = job.uid
         results.append(out)
-        if result.status == STATUS_EXTRACTED and not dry_run:
+        if not dry_run:
             fm = scan_cache.frontmatter_for_rel_path(rel_path) or {}
-            _append_section_to_message_card(
+            _write_message_attachment_list(
                 vault,
                 str(fm.get("message") or ""),
-                result,
+                job.uid,
+                job.filename,
                 dry_run=dry_run,
                 uid_to_rel=uid_to_rel,
             )
 
-    ok = sum(1 for out in results if out.get("status") == STATUS_EXTRACTED)
-    skipped = sum(
-        1
-        for out in results
-        if str(out.get("status") or "").startswith("skipped") or out.get("status") in _DONE_SKIP_STATUSES
+    counts = _yield_counts(results)
+    ok = counts["local_ok"] + counts["hosted_ok"]
+    errors = counts["failed"]
+    log.info(
+        "extract-attachment-text done processed=%s local_ok=%s hosted_ok=%s needs_ocr=%s skipped=%s failed=%s",
+        len(results),
+        counts["local_ok"],
+        counts["hosted_ok"],
+        counts["needs_ocr"],
+        counts["skipped"],
+        counts["failed"],
     )
-    errors = sum(1 for out in results if out.get("status") == STATUS_FAILED)
     return {
         "vault": str(vault),
         "dry_run": dry_run,
         "total_attachment_cards": len(paths),
         "processed": len(results),
         "ok": ok,
-        "skipped": skipped,
         "errors": errors,
+        **counts,
         "results": results,
     }

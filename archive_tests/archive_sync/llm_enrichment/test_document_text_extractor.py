@@ -18,7 +18,12 @@ def test_needs_markitdown_plain_rtf() -> None:
 def test_needs_markitdown_idempotent() -> None:
     assert needs_markitdown_extraction({"text_source": "markitdown", "extension": "rtf"}) is False
     assert needs_markitdown_extraction({"text_source": "anydoc", "extension": "pdf"}) is False
+    assert needs_markitdown_extraction({"text_source": "anydoc_hosted", "extension": "pdf"}) is False
     assert needs_markitdown_extraction({"text_source": "html2text", "extension": "htm"}) is False
+
+
+def test_needs_extraction_for_legacy_pdf() -> None:
+    assert needs_markitdown_extraction({"text_source": "pdf", "extension": "pdf"}) is True
 
 
 def test_needs_markitdown_metadata_only() -> None:
@@ -101,4 +106,4 @@ def test_convert_document_tries_anydoc_for_images(tmp_path: Path, monkeypatch) -
     text, source = convert_document_to_markdown(img)
     assert source == "anydoc"
     assert "OCR image" in text
-    assert seen["kwargs"]["ocr"] == "hosted"
+    assert seen["kwargs"]["ocr"] == "reject"

@@ -30,7 +30,7 @@ def _ppa_env(canonical: str, default: str = "") -> str:
 # ---------------------------------------------------------------------------
 
 INDEX_SCHEMA_VERSION = 9
-CHUNK_SCHEMA_VERSION = 5
+CHUNK_SCHEMA_VERSION = 6
 MANIFEST_SCHEMA_VERSION = 2
 SCAN_MANIFEST_VERSION = 1
 DEFAULT_POSTGRES_SCHEMA = "ppa"

@@ -2,14 +2,24 @@
 
 from __future__ import annotations
 
-import hashlib
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from archive_sync.adapters.file_libraries import MAX_FILE_BYTES, resolve_library_root
+from archive_sync.adapters.file_libraries import resolve_library_root
+from archive_sync.document_extract import (
+    ANYDOC_EXTENSIONS,
+    CONVERTIBLE_EXTENSIONS,
+    DONE_TEXT_SOURCES,
+    MAX_FILE_BYTES,
+    STATUS_EXTRACTED,
+    bytes_sha256,
+    convert_document_to_markdown,
+    extract_from_path,
+    is_lockfile,
+)
 from archive_vault.provenance import ProvenanceEntry, merge_provenance
 from archive_vault.schema import validate_card_strict
 from archive_vault.vault import read_note, write_card
@@ -28,37 +38,18 @@ _RICH_EXTENSIONS = frozenset(
         "htm",
     }
 )
-_DONE_TEXT_SOURCES = frozenset({"markitdown", "anydoc", "html2text"})
-_ANYDOC_EXTENSIONS = frozenset(
-    {
-        ".pdf",
-        ".doc",
-        ".docx",
-        ".rtf",
-        ".ppt",
-        ".pptx",
-        ".xls",
-        ".xlsx",
-        ".csv",
-        ".png",
-        ".jpg",
-        ".jpeg",
-        ".tif",
-        ".tiff",
-        ".webp",
-        ".gif",
-        ".bmp",
-    }
-)
 
 
 def needs_markitdown_extraction(card_fm: dict[str, Any]) -> bool:
-    """Whether this card should be run through markitdown (idempotent for already-converted text)."""
+    """Whether this card should be run through the shared extract stack."""
 
     ts = str(card_fm.get("text_source") or "").strip().lower()
-    if ts in _DONE_TEXT_SOURCES:
+    if ts in DONE_TEXT_SOURCES:
         return False
     ext = str(card_fm.get("extension") or "").strip().lower().lstrip(".")
+    suffix = f".{ext}" if ext else ""
+    if suffix in CONVERTIBLE_EXTENSIONS or suffix in ANYDOC_EXTENSIONS:
+        return True
     if ts == "plain" and ext in _RICH_EXTENSIONS:
         return True
     flags = card_fm.get("quality_flags") or []
@@ -76,7 +67,7 @@ def resolve_source_file(library_root: str, relative_path: str) -> Path | None:
     """
 
     rel = (relative_path or "").strip()
-    if not rel or Path(rel).name.startswith("~$"):
+    if not rel or is_lockfile(Path(rel).name):
         return None
     root = resolve_library_root(library_root)
     if root is None:
@@ -90,52 +81,10 @@ def resolve_source_file(library_root: str, relative_path: str) -> Path | None:
 
 
 def extract_markdown_text(source_path: Path) -> str:
-    """Convert a file to markdown/plain text (anydoc, then html2text, then markitdown)."""
+    """Convert a file to markdown/plain text (anydoc local-first, then fallbacks)."""
 
     text, _source = convert_document_to_markdown(source_path)
     return text
-
-
-def convert_document_to_markdown(source_path: Path) -> tuple[str, str]:
-    """Return (markdown, text_source). Hosted OCR only when a Firecrawl key is present."""
-
-    suffix = source_path.suffix.lower()
-    if suffix in _ANYDOC_EXTENSIONS:
-        try:
-            import anydoc
-
-            from archive_sync.anydoc_ocr import anydoc_ocr_kwargs
-
-            text = str(anydoc.to_markdown(str(source_path), **anydoc_ocr_kwargs()) or "").strip()
-            if text:
-                return text, "anydoc"
-        except Exception as exc:
-            log.debug("anydoc reextract failed path=%s err=%s", source_path, exc)
-    if suffix in {".html", ".htm"}:
-        try:
-            import html2text
-
-            converter = html2text.HTML2Text()
-            converter.ignore_links = False
-            converter.ignore_images = True
-            converter.body_width = 0
-            converter.ignore_tables = False
-            raw = source_path.read_text(encoding="utf-8", errors="ignore")
-            text = converter.handle(raw).strip()
-            if text:
-                return text, "html2text"
-        except Exception as exc:
-            log.debug("html2text reextract failed path=%s err=%s", source_path, exc)
-    from markitdown import MarkItDown
-
-    md = MarkItDown()
-    result = md.convert(str(source_path))
-    text = getattr(result, "text_content", None) or getattr(result, "text", None) or ""
-    return str(text).strip(), "markitdown"
-
-
-def _body_sha256(body: str) -> str:
-    return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
 def reextract_one_card(
@@ -145,7 +94,7 @@ def reextract_one_card(
     dry_run: bool,
     model: str = "markitdown",
 ) -> dict[str, Any]:
-    """Re-read source file, replace card body, set text_source and extracted_text_sha. Returns a status dict."""
+    """Re-read source file, replace card body, set text_source and extracted_text_sha."""
 
     vault = Path(vault).resolve()
     fm, _old_body, existing_prov = read_note(vault, rel_path)
@@ -165,15 +114,24 @@ def reextract_one_card(
     except OSError:
         return {"rel_path": rel_path, "status": "skipped", "reason": "source_missing"}
 
-    try:
-        new_body, text_source = convert_document_to_markdown(src)
-    except Exception as exc:
-        log.warning("document convert failed rel_path=%s src=%s err=%s", rel_path, src, exc)
-        return {"rel_path": rel_path, "status": "error", "reason": str(exc)}
+    result = extract_from_path(
+        src,
+        filename=src.name,
+        existing_sha=str(fm.get("extracted_text_sha") or "").strip(),
+        existing_status=str(fm.get("extraction_status") or "").strip(),
+        existing_text=_old_body if str(fm.get("text_source") or "") in DONE_TEXT_SOURCES else "",
+        existing_text_source=str(fm.get("text_source") or "").strip(),
+    )
+    if result.status != STATUS_EXTRACTED or not result.text:
+        return {
+            "rel_path": rel_path,
+            "status": "skipped" if result.status.startswith("skipped") or result.status == "needs_ocr" else "error",
+            "reason": result.reason or result.status,
+            "text_source": result.text_source,
+        }
 
-    if not new_body:
-        return {"rel_path": rel_path, "status": "skipped", "reason": "empty_output"}
-
+    new_body = result.text
+    text_source = result.text_source
     if dry_run:
         return {
             "rel_path": rel_path,
@@ -186,7 +144,8 @@ def reextract_one_card(
 
     field_updates: dict[str, Any] = {
         "text_source": text_source,
-        "extracted_text_sha": _body_sha256(new_body),
+        "extracted_text_sha": result.extracted_text_sha or bytes_sha256(src.read_bytes()),
+        "extraction_status": STATUS_EXTRACTED,
     }
     merged = {**fm, **field_updates}
     card = validate_card_strict(merged)
@@ -197,11 +156,16 @@ def reextract_one_card(
             date=datetime.now(timezone.utc).date().isoformat(),
             method="deterministic",
             model=text_source if model == "markitdown" else model,
-            input_hash=field_updates["extracted_text_sha"][:16],
+            input_hash=str(field_updates["extracted_text_sha"])[:16],
         )
     prov = merge_provenance(existing_prov, incoming)
     write_card(vault, rel_path, card, new_body, prov)
-    return {"rel_path": rel_path, "status": "ok", "bytes_out": len(new_body.encode("utf-8"))}
+    return {
+        "rel_path": rel_path,
+        "status": "ok",
+        "bytes_out": len(new_body.encode("utf-8")),
+        "text_source": text_source,
+    }
 
 
 def run_document_text_extraction(
@@ -216,6 +180,7 @@ def run_document_text_extraction(
     from archive_cli.vault_cache import VaultScanCache
 
     vault = Path(vault).resolve()
+    log.info("extract-document-text start vault=%s dry_run=%s", vault, dry_run)
     scan_cache = VaultScanCache.build_or_load(vault, tier=2, progress_every=0)
     paths = sorted(scan_cache.rel_paths_by_type().get("document") or [])
     eligible: list[str] = []
@@ -227,8 +192,14 @@ def run_document_text_extraction(
         if limit is not None and len(eligible) >= limit:
             break
 
-    results: list[dict[str, Any]] = []
     workers = min(get_rebuild_workers(), max(1, len(eligible)))
+    log.info(
+        "extract-document-text eligible=%s/%s workers=%s",
+        len(eligible),
+        len(paths),
+        workers,
+    )
+    results: list[dict[str, Any]] = []
     if workers <= 1 or len(eligible) <= 1:
         results = [reextract_one_card(vault, rel_path, dry_run=dry_run) for rel_path in eligible]
     else:
@@ -244,6 +215,16 @@ def run_document_text_extraction(
     ok = sum(1 for out in results if out.get("status") == "ok")
     skipped = sum(1 for out in results if out.get("status") == "skipped")
     errors = sum(1 for out in results if out.get("status") not in {"ok", "skipped"})
+    local_ok = sum(1 for out in results if out.get("status") == "ok" and out.get("text_source") != "anydoc_hosted")
+    hosted_ok = sum(1 for out in results if out.get("status") == "ok" and out.get("text_source") == "anydoc_hosted")
+    log.info(
+        "extract-document-text done processed=%s local_ok=%s hosted_ok=%s skipped=%s failed=%s",
+        len(results),
+        local_ok,
+        hosted_ok,
+        skipped,
+        errors,
+    )
 
     return {
         "vault": str(vault),
@@ -253,5 +234,7 @@ def run_document_text_extraction(
         "ok": ok,
         "skipped": skipped,
         "errors": errors,
+        "local_ok": local_ok,
+        "hosted_ok": hosted_ok,
         "results": results,
     }

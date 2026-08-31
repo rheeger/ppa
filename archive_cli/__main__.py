@@ -788,7 +788,7 @@ def main() -> None:
 
     extract_doc_parser = subparsers.add_parser(
         "extract-document-text",
-        help="Re-extract document card bodies with markitdown (RTF/plain binary fixes)",
+        help="Re-extract document card bodies via local anydoc (hosted OCR only on NeedsOcr)",
     )
     extract_doc_parser.add_argument("--vault", default="", help="Vault path (default: PPA_PATH)")
     extract_doc_parser.add_argument(
@@ -806,7 +806,7 @@ def main() -> None:
 
     extract_att_parser = subparsers.add_parser(
         "extract-attachment-text",
-        help="Extract email-attachment files via anydoc (local Attachments/ cache)",
+        help="Extract email-attachment files onto attachment cards (local anydoc first)",
     )
     extract_att_parser.add_argument("--vault", default="", help="Vault path (default: PPA_PATH)")
     extract_att_parser.add_argument(

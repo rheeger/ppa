@@ -664,19 +664,25 @@ def _anydoc_document_type(suffix: str) -> str:
 
 
 def _try_anydoc(path: Path) -> dict[str, Any] | None:
-    """Convert via anydoc. Hosted OCR only when a Firecrawl key is present."""
+    """Convert via anydoc. Local ``ocr=reject`` first; hosted only on NeedsOcr."""
 
     try:
-        import anydoc
+        import anydoc  # noqa: F401
     except ImportError:
         return None
-    from archive_sync.anydoc_ocr import anydoc_ocr_kwargs
+    from archive_sync.anydoc_ocr import is_needs_ocr, to_markdown_local_first
+    from archive_sync.document_extract import is_tiny_image
 
     try:
-        raw = anydoc.to_markdown(str(path), **anydoc_ocr_kwargs())
+        size = _path_size(path)
+    except OSError:
+        return None
+    allow_hosted = not is_tiny_image(path.name, size)
+    try:
+        raw, text_source = to_markdown_local_first(path, allow_hosted=allow_hosted)
     except Exception as exc:
         name = type(exc).__name__
-        if name in {"NeedsOcrError", "EncryptedError", "UnsupportedError", "HostedError"}:
+        if is_needs_ocr(exc) or name in {"EncryptedError", "UnsupportedError", "HostedError"}:
             logger.debug("anydoc skip path=%s err=%s", path.name, exc)
         else:
             logger.warning("anydoc failed path=%s err=%s", path, exc)
@@ -692,7 +698,7 @@ def _try_anydoc(path: Path) -> dict[str, Any] | None:
         "document_date": _detect_date(text[:4000]) or _detect_date(_path_text(path)),
         "document_type": _anydoc_document_type(suffix),
         "text": text,
-        "text_source": "anydoc",
+        "text_source": text_source,
         "quality_flags": ["title_from_filename"] if title_from_filename else [],
     }
 

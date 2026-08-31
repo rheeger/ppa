@@ -306,8 +306,8 @@ CARD_TYPE_REGISTRATIONS: tuple[CardTypeRegistration, ...] = (
         ),
         person_edge_type="mentions_person",
         edge_rules=(),
-        chunk_builder_name=None,
-        chunk_types=(),
+        chunk_builder_name="email_attachment",
+        chunk_types=("attachment_filename", "attachment_body"),
     ),
     # ── imessage_thread ─────────────────────────────────────────────────
     CardTypeRegistration(
