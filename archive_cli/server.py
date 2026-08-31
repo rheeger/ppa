@@ -67,6 +67,20 @@ def _log_tool_return_error(tool_name: str, message: str) -> str:
 _server_instructions = build_server_instructions()
 mcp = FastMCP("ppa", instructions=_server_instructions)
 
+
+def _tool(name: str):
+    """Register a tool with TOOL_DESCRIPTIONS as its docstring.
+
+    Older mcp packages reject FastMCP.tool(description=...). Setting
+    ``__doc__`` before ``mcp.tool()`` keeps one source of truth.
+    """
+
+    def deco(fn):
+        fn.__doc__ = TOOL_DESCRIPTIONS[name]
+        return mcp.tool()(fn)
+
+    return deco
+
 _TOOL_PROFILES: dict[str, set[str] | None] = {
     "full": None,
     "read-only": {
@@ -142,7 +156,7 @@ def _ppa_err(tool: str, exc: BaseException) -> str:
     return str(exc)
 
 
-@mcp.tool(description=TOOL_DESCRIPTIONS["archive_search"])
+@_tool("archive_search")
 def archive_search(query: str, limit: int = 20) -> str:
     """Full-text search across all notes."""
 
@@ -164,7 +178,7 @@ def archive_search(query: str, limit: int = 20) -> str:
         raise
 
 
-@mcp.tool(description=TOOL_DESCRIPTIONS["archive_read"])
+@_tool("archive_read")
 def archive_read(path_or_uid: str) -> str:
     """Read note by relative path or UID."""
 
@@ -187,7 +201,7 @@ def archive_read(path_or_uid: str) -> str:
         raise
 
 
-@mcp.tool(description=TOOL_DESCRIPTIONS["archive_query"])
+@_tool("archive_query")
 def archive_query(
     type_filter: str = "",
     source_filter: str = "",
@@ -230,7 +244,7 @@ def archive_query(
         raise
 
 
-@mcp.tool(description=TOOL_DESCRIPTIONS["archive_graph"])
+@_tool("archive_graph")
 def archive_graph(note_path: str, hops: int = 2) -> str:
     """Get notes linked from the given note via wikilinks and discovered relationships.
 
@@ -266,7 +280,7 @@ def archive_graph(note_path: str, hops: int = 2) -> str:
         return _ppa_err("archive_graph", exc)
 
 
-@mcp.tool(description=TOOL_DESCRIPTIONS["archive_person"])
+@_tool("archive_person")
 def archive_person(name: str) -> str:
     """Get person profile by slug."""
 
@@ -286,7 +300,7 @@ def archive_person(name: str) -> str:
         return _ppa_err("archive_person", exc)
 
 
-@mcp.tool(description=TOOL_DESCRIPTIONS["archive_timeline"])
+@_tool("archive_timeline")
 def archive_timeline(start_date: str = "", end_date: str = "", limit: int = 20) -> str:
     """Notes in date range."""
 
@@ -311,7 +325,7 @@ def archive_timeline(start_date: str = "", end_date: str = "", limit: int = 20) 
         return _ppa_err("archive_timeline", exc)
 
 
-@mcp.tool(description=TOOL_DESCRIPTIONS["archive_temporal_neighbors"])
+@_tool("archive_temporal_neighbors")
 def archive_temporal_neighbors(
     timestamp: str,
     direction: str = "both",
@@ -344,7 +358,7 @@ def archive_temporal_neighbors(
         return _ppa_err("archive_temporal_neighbors", exc)
 
 
-@mcp.tool(description=TOOL_DESCRIPTIONS["archive_knowledge"])
+@_tool("archive_knowledge")
 def archive_knowledge(domain: str, fallback_query: str = "", limit: int = 5) -> str:
     """Freshest non-stale knowledge card for a domain, or lexical search fallback."""
 
@@ -367,7 +381,7 @@ def archive_knowledge(domain: str, fallback_query: str = "", limit: int = 5) -> 
         return _ppa_err("archive_knowledge", exc)
 
 
-@mcp.tool(description=TOOL_DESCRIPTIONS["archive_stats"])
+@_tool("archive_stats")
 def archive_stats() -> str:
     """Vault health metrics."""
 
@@ -1031,7 +1045,7 @@ def archive_link_quality_gate() -> str:
         return _ppa_err("archive_link_quality_gate", exc)
 
 
-@mcp.tool(description=TOOL_DESCRIPTIONS["archive_vector_search"])
+@_tool("archive_vector_search")
 def archive_vector_search(
     query: str,
     limit: int = 20,
@@ -1121,7 +1135,7 @@ def archive_retrieval_explain(
         return _ppa_err("archive_retrieval_explain", exc)
 
 
-@mcp.tool(description=TOOL_DESCRIPTIONS["archive_hybrid_search"])
+@_tool("archive_hybrid_search")
 def archive_hybrid_search(
     query: str,
     limit: int = 20,
@@ -1173,7 +1187,7 @@ def archive_hybrid_search(
         raise
 
 
-@mcp.tool(description=TOOL_DESCRIPTIONS["archive_search_json"])
+@_tool("archive_search_json")
 def archive_search_json(query: str, limit: int = 20) -> str:
     """Lexical search results as JSON (paths + summaries, no embedding)."""
 
@@ -1195,7 +1209,7 @@ def archive_search_json(query: str, limit: int = 20) -> str:
         return str(exc)
 
 
-@mcp.tool(description=TOOL_DESCRIPTIONS["archive_hybrid_search_json"])
+@_tool("archive_hybrid_search_json")
 def archive_hybrid_search_json(
     query: str,
     limit: int = 20,
@@ -1247,7 +1261,7 @@ def archive_hybrid_search_json(
         return str(exc)
 
 
-@mcp.tool(description=TOOL_DESCRIPTIONS["archive_read_many"])
+@_tool("archive_read_many")
 def archive_read_many(paths_json: str) -> str:
     """Read multiple notes by rel path or card uid. `paths_json` is a JSON array of strings."""
 
@@ -1314,7 +1328,7 @@ def archive_fetch_attachment(
         return str(exc)
 
 
-@mcp.tool(description=TOOL_DESCRIPTIONS["archive_status_json"])
+@_tool("archive_status_json")
 def archive_status_json() -> str:
     """Index + runtime status as JSON."""
 

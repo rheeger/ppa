@@ -9,7 +9,6 @@ from archive_cli.mcp_instructions import (
 )
 from archive_cli.server import _server_instructions
 
-
 REQUIRED_INSTRUCTION_NEEDLES = (
     "retrieval engine",
     "canonical",
