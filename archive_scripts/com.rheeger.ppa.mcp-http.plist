@@ -24,7 +24,7 @@
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>PPA_MCP_TAILSCALE_SERVE</key>
-		<string>1</string>
+		<string>0</string>
 	</dict>
 </dict>
 </plist>

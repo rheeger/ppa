@@ -13,12 +13,12 @@
 - **Arnold client (canonical):** Arnold does **not** host a vault copy. Ginger serves streamable HTTP on loopback; Tailscale Serve publishes it on the personal tailnet. Arnold calls it through the passkey gate with `PPA_MCP_TOKEN`.
 
 ```
-Arnold --tailnet--> https://ginger-m4-max.tail0c38c5.ts.net/mcp
+Arnold --tailnet--> http://ginger-m4-max.tail0c38c5.ts.net:8765/mcp
                  Authorization: Bearer <PPA_MCP_TOKEN>
                  token lives in op://Arnold-Passkey-Gate/PPA_MCP_TOKEN/credential
 ```
 
-When this laptop sleeps, Arnold gets connection errors. That is the accepted tradeoff.
+The listener binds Ginger's Tailscale IPv4 (not LAN, not public wifi). When this laptop sleeps, Arnold gets connection errors. That is the accepted tradeoff.
 
 ### Enable the HTTP listener on Ginger
 
@@ -28,7 +28,7 @@ archive_scripts/install-mcp-http-launchd.sh --install
 # persist the same value in 1Password: op://Arnold-Passkey-Gate/PPA_MCP_TOKEN/credential
 ```
 
-`run-http-mcp.sh` binds `127.0.0.1:8765`, uses `PPA_MCP_TOOL_PROFILE=read-only`, and runs `tailscale serve --bg`. Health (no auth): `GET /health`. MCP path: `/mcp`.
+`run-http-mcp.sh` binds the Tailscale IP on `:8765` with `PPA_MCP_TOOL_PROFILE=read-only`. Health (no auth): `GET /health`. MCP path: `/mcp`. Optional HTTPS via Tailscale Serve is `PPA_MCP_TAILSCALE_SERVE=1` (this tailnet has Serve off).
 
 See the template [ppa.mcp-example.json](examples/ppa.mcp-example.json) for stdio patterns.
 

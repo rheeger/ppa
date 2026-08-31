@@ -11,9 +11,15 @@ _SEED="${PPA_SEED_VAULT:-$HOME/Archive/seed/hf-archives-seed-20260307-235127}"
 export PPA_PATH="${PPA_PATH:-$_SEED}"
 export PPA_INDEX_SCHEMA="${PPA_INDEX_SCHEMA:-ppa}"
 export PPA_MCP_TOOL_PROFILE="${PPA_MCP_TOOL_PROFILE:-read-only}"
-export PPA_MCP_HTTP_HOST="${PPA_MCP_HTTP_HOST:-127.0.0.1}"
 export PPA_MCP_HTTP_PORT="${PPA_MCP_HTTP_PORT:-8765}"
 export PPA_MCP_HTTP=1
+if [[ -z "${PPA_MCP_HTTP_HOST:-}" ]]; then
+  # Prefer the Tailscale address so Arnold can reach us without Tailscale Serve.
+  if command -v tailscale >/dev/null 2>&1; then
+    export PPA_MCP_HTTP_HOST="$(tailscale ip -4 2>/dev/null | head -1)"
+  fi
+  export PPA_MCP_HTTP_HOST="${PPA_MCP_HTTP_HOST:-127.0.0.1}"
+fi
 
 export PPA_EMBEDDING_PROVIDER="${PPA_EMBEDDING_PROVIDER:-openai}"
 export PPA_EMBEDDING_MODEL="${PPA_EMBEDDING_MODEL:-text-embedding-3-small}"
@@ -44,9 +50,11 @@ if [[ ! -x "$PYTHON" ]]; then
   exit 1
 fi
 
-if [[ "${PPA_MCP_TAILSCALE_SERVE:-1}" == "1" ]] && command -v tailscale >/dev/null 2>&1; then
+# Optional: Tailscale Serve (HTTPS on :443). Off by default — this tailnet
+# has not enabled Serve. Binding the Tailscale IP is the LAN/tailnet path.
+if [[ "${PPA_MCP_TAILSCALE_SERVE:-0}" == "1" ]] && command -v tailscale >/dev/null 2>&1; then
   tailscale serve --bg "http://127.0.0.1:${PPA_MCP_HTTP_PORT}" >/dev/null 2>&1 || \
-    echo "run-http-mcp: tailscale serve failed (MCP still listening on loopback)" >&2
+    echo "run-http-mcp: tailscale serve failed (MCP still listening on ${PPA_MCP_HTTP_HOST})" >&2
 fi
 
 echo "ppa-http-mcp host=${PPA_MCP_HTTP_HOST} port=${PPA_MCP_HTTP_PORT} schema=${PPA_INDEX_SCHEMA} profile=${PPA_MCP_TOOL_PROFILE}" >&2
