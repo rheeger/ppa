@@ -520,7 +520,11 @@ def test_adapter_ingest_kwargs_per_live_source(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.delenv("HFA_GITHUB_STAGE_DIR", raising=False)
 
     gmail = adapter_ingest_kwargs(resolve_declaration("gmail-messages:me@example.com"), apply=False)
-    assert gmail == {"account_email": "me@example.com", "gmail_promotion_gate": True}
+    assert gmail == {
+        "account_email": "me@example.com",
+        "gmail_promotion_gate": True,
+        "extract_attachment_text": True,
+    }
 
     calendar = adapter_ingest_kwargs(resolve_declaration("calendar-events:cal@example.com"), apply=False)
     assert calendar == {"account_email": "cal@example.com", "calendar_id": "primary"}

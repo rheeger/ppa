@@ -14,6 +14,7 @@ from typing import Any
 from archive_sync.llm_enrichment.cache import InferenceCache
 from archive_sync.llm_enrichment.card_enrichment_runner import CardEnrichmentRunner
 from archive_sync.llm_enrichment.defaults import DEFAULT_ENRICH_CARD_GEMINI_MODEL
+from archive_sync.attachment_text import run_attachment_text_extraction
 from archive_sync.llm_enrichment.document_text_extractor import run_document_text_extraction
 from archive_sync.llm_enrichment.enrich_runner import LlmEnrichmentRunner
 
@@ -21,6 +22,7 @@ log = logging.getLogger("ppa.enrichment_orchestrator")
 
 STEP_ORDER: tuple[str, ...] = (
     "extract_document_text",
+    "extract_attachment_text",
     "enrich_emails",
     "enrich_email_thread",
     "enrich_imessage_thread",
@@ -202,12 +204,13 @@ class EnrichmentOrchestrator:
         if hasattr(metrics, "to_dict"):
             return metrics.to_dict()
         if isinstance(metrics, dict):
-            if step_key == "extract_document_text":
+            if step_key in {"extract_document_text", "extract_attachment_text"}:
                 return {
                     k: metrics[k]
                     for k in (
                         "vault",
                         "total_document_cards",
+                        "total_attachment_cards",
                         "processed",
                         "ok",
                         "skipped",
@@ -223,6 +226,8 @@ class EnrichmentOrchestrator:
         classify_index_db = self.run_dir / "classify_index.db"
         if step_key == "extract_document_text":
             return run_document_text_extraction(self.vault_path, dry_run=self.dry_run, limit=None)
+        if step_key == "extract_attachment_text":
+            return run_attachment_text_extraction(self.vault_path, dry_run=self.dry_run, limit=None)
 
         if step_key == "enrich_emails":
             classify_model = "gemini-2.5-flash-lite" if self.provider == "gemini" else ""

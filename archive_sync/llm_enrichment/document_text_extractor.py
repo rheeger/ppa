@@ -29,7 +29,27 @@ _RICH_EXTENSIONS = frozenset(
     }
 )
 _DONE_TEXT_SOURCES = frozenset({"markitdown", "anydoc", "html2text"})
-_ANYDOC_EXTENSIONS = frozenset({".pdf", ".doc", ".docx", ".rtf", ".ppt", ".pptx", ".xls", ".xlsx", ".csv"})
+_ANYDOC_EXTENSIONS = frozenset(
+    {
+        ".pdf",
+        ".doc",
+        ".docx",
+        ".rtf",
+        ".ppt",
+        ".pptx",
+        ".xls",
+        ".xlsx",
+        ".csv",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".tif",
+        ".tiff",
+        ".webp",
+        ".gif",
+        ".bmp",
+    }
+)
 
 
 def needs_markitdown_extraction(card_fm: dict[str, Any]) -> bool:

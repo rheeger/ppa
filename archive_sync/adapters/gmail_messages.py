@@ -389,6 +389,7 @@ def _extract_attachments(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "size_bytes": int(body.get("size", 0) or 0),
                 "content_id": content_id,
                 "is_inline": "inline" in disposition or bool(content_id),
+                "inline_b64": str(body.get("data", "")).strip(),
             }
         )
     return attachments
@@ -1013,6 +1014,7 @@ class GmailMessagesAdapter(BaseAdapter):
                 "size_bytes": attachment["size_bytes"],
                 "content_id": attachment["content_id"],
                 "is_inline": attachment["is_inline"],
+                "inline_b64": str(attachment.get("inline_b64") or "").strip(),
                 "attachment_metadata_sha": compute_email_attachment_metadata_sha_from_payload(
                     {
                         "message_id": message_record["message_id"],
@@ -1431,6 +1433,14 @@ class GmailMessagesAdapter(BaseAdapter):
                             attachment_records = []
                         commit_cursor = commit_cursor and promo_result.commit_cursor
 
+                    if attachment_records or message_records:
+                        self._enrich_gmail_attachment_text(
+                            vault_path,
+                            message_records,
+                            attachment_records,
+                            fetch_remote=bool(kwargs.get("extract_attachment_text", False)),
+                        )
+
                     if (max_threads is None or emitted_threads < max_threads) and thread_records:
                         batch_items.extend(thread_records)
                         emitted_threads += 1
@@ -1652,11 +1662,103 @@ class GmailMessagesAdapter(BaseAdapter):
                 content_id=str(item.get("content_id", "")).strip(),
                 is_inline=bool(item.get("is_inline", False)),
                 attachment_metadata_sha=str(item.get("attachment_metadata_sha", "")).strip(),
+                text_source=str(item.get("text_source", "")).strip(),
+                extracted_text_sha=str(item.get("extracted_text_sha", "")).strip(),
+                extraction_status=str(item.get("extraction_status", "")).strip(),
             )
             provenance = deterministic_provenance(card, ATTACHMENT_SOURCE)
-            return card, provenance, ""
+            return card, provenance, str(item.get("body", "")).strip()
 
         raise ValueError(f"Unsupported Gmail record kind: {kind}")
 
     def merge_card(self, vault_path, rel_path, card, body, provenance) -> None:
+        from archive_sync.attachment_text import preserve_message_attachments_section
+        from archive_vault.schema import validate_card_permissive
+        from archive_vault.vault import read_note
+
+        frontmatter, existing_body, _existing_prov = read_note(vault_path, str(rel_path))
+        existing_card = validate_card_permissive(frontmatter)
+        if getattr(card, "type", "") == "email_message":
+            body = preserve_message_attachments_section(body, existing_body)
+        if getattr(card, "type", "") == "email_attachment":
+            if not str(getattr(card, "extraction_status", "") or "").strip():
+                card.extraction_status = str(getattr(existing_card, "extraction_status", "") or "")
+            if not str(getattr(card, "text_source", "") or "").strip():
+                card.text_source = str(getattr(existing_card, "text_source", "") or "")
+            if not str(getattr(card, "extracted_text_sha", "") or "").strip():
+                card.extracted_text_sha = str(getattr(existing_card, "extracted_text_sha", "") or "")
+            if not str(body or "").strip():
+                body = existing_body
         self._replace_generic_card(vault_path, rel_path, card, body, provenance)
+
+    def _enrich_gmail_attachment_text(
+        self,
+        vault_path: str,
+        message_records: list[dict[str, Any]],
+        attachment_records: list[dict[str, Any]],
+        *,
+        fetch_remote: bool,
+    ) -> None:
+        if not attachment_records:
+            return
+        from pathlib import Path
+
+        from archive_cli.index_config import get_gmail_api_workers
+        from archive_sync.attachment_text import (
+            AttachmentJob,
+            apply_extractions_to_gmail_records,
+            extract_jobs,
+        )
+
+        vault = Path(vault_path)
+        jobs = []
+        for record in attachment_records:
+            account_email = str(record.get("account_email") or "").strip()
+            message_id = str(record.get("message_id") or "").strip()
+            attachment_id = str(record.get("attachment_id") or "").strip()
+            uid = _attachment_uid(account_email, message_id, attachment_id)
+            record["uid"] = uid
+            inline = _decode_body_bytes(str(record.get("inline_b64") or ""))
+            created = str(record.get("created") or "").strip()
+            year_month = created[:7] if len(created) >= 7 else ""
+            existing_sha = ""
+            existing_status = ""
+            existing_text = ""
+            existing_text_source = ""
+            if year_month:
+                rel = Path("EmailAttachments") / year_month / f"{uid}.md"
+                if (vault / rel).is_file():
+                    from archive_vault.vault import read_note
+
+                    fm, body, _prov = read_note(vault, str(rel))
+                    existing_sha = str(fm.get("extracted_text_sha") or "").strip()
+                    existing_status = str(fm.get("extraction_status") or "").strip()
+                    existing_text = body
+                    existing_text_source = str(fm.get("text_source") or "").strip()
+            jobs.append(
+                AttachmentJob(
+                    uid=uid,
+                    filename=str(record.get("filename") or "").strip(),
+                    mime_type=str(record.get("mime_type") or "").strip(),
+                    size_bytes=int(record.get("size_bytes") or 0),
+                    message_id=message_id,
+                    attachment_id=attachment_id,
+                    account_email=account_email,
+                    existing_sha=existing_sha,
+                    existing_status=existing_status,
+                    existing_text=existing_text,
+                    existing_text_source=existing_text_source,
+                    inline_bytes=inline,
+                )
+            )
+
+        def _fetch(message_id: str, attachment_id: str, account_email: str) -> bytes:
+            return self.fetch_attachment_bytes(message_id, attachment_id, account_email=account_email)
+
+        extractions = extract_jobs(
+            vault,
+            jobs,
+            fetch_bytes=_fetch if fetch_remote else None,
+            workers=get_gmail_api_workers(),
+        )
+        apply_extractions_to_gmail_records(message_records, attachment_records, extractions)

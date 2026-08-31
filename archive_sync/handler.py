@@ -203,6 +203,7 @@ def cmd_gmail_messages(args):
         page_size=args.page_size,
         workers=args.workers,
         quick_update=args.quick_update,
+        extract_attachment_text=True,
     )
 
 

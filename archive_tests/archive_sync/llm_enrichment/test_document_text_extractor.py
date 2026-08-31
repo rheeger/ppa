@@ -80,3 +80,25 @@ def test_extract_markdown_html(tmp_path: Path) -> None:
     p.write_text("<html><body><p>Hello</p></body></html>", encoding="utf-8")
     out = extract_markdown_text(p)
     assert "Hello" in out
+
+
+def test_convert_document_tries_anydoc_for_images(tmp_path: Path, monkeypatch) -> None:
+    import anydoc
+
+    from archive_sync.llm_enrichment.document_text_extractor import convert_document_to_markdown
+
+    seen: dict[str, object] = {}
+
+    def _fake_to_markdown(path: str, **kwargs):
+        seen["path"] = path
+        seen["kwargs"] = kwargs
+        return "# OCR image\n"
+
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test-env")
+    monkeypatch.setattr(anydoc, "to_markdown", _fake_to_markdown)
+    img = tmp_path / "scan.png"
+    img.write_bytes(b"\x89PNG\r\n")
+    text, source = convert_document_to_markdown(img)
+    assert source == "anydoc"
+    assert "OCR image" in text
+    assert seen["kwargs"]["ocr"] == "hosted"

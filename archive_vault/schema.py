@@ -941,19 +941,32 @@ class EmailAttachmentCard(BaseCard):
     content_id: str = ""
     is_inline: bool = False
     attachment_metadata_sha: str = ""
+    text_source: str = ""
+    extracted_text_sha: str = ""
+    extraction_status: str = ""
 
     @field_validator("account_email")
     @classmethod
     def lowercase_attachment_account(cls, value: str) -> str:
         return value.lower().strip()
 
-    @field_validator("filename", "mime_type", "content_id", "attachment_metadata_sha")
+    @field_validator(
+        "filename",
+        "mime_type",
+        "content_id",
+        "attachment_metadata_sha",
+        "text_source",
+        "extracted_text_sha",
+        "extraction_status",
+    )
     @classmethod
     def clean_attachment_strings(cls, value: str) -> str:
         return _clean_string(value)
 
     @model_validator(mode="after")
     def attachment_summary_fallback(self) -> EmailAttachmentCard:
+        self.text_source = _clean_string(self.text_source).lower()
+        self.extraction_status = _clean_string(self.extraction_status).lower()
         if not self.summary:
             self.summary = self.filename or self.attachment_id
         self.summary = _clean_string(self.summary)

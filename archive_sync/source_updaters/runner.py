@@ -193,6 +193,7 @@ def adapter_ingest_kwargs(
     if adapter_id == "gmail-messages":
         kwargs["account_email"] = scope
         kwargs["gmail_promotion_gate"] = True
+        kwargs["extract_attachment_text"] = True
         if catch_up:
             # Reset page cursor so threads.list starts at newest mail.
             # Keep the promotion gate on; history_id quick-update stays cheap.

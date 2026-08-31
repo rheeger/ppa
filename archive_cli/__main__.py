@@ -804,6 +804,24 @@ def main() -> None:
         help="Max eligible cards to process (0 = no cap)",
     )
 
+    extract_att_parser = subparsers.add_parser(
+        "extract-attachment-text",
+        help="Extract email-attachment files via anydoc (local Attachments/ cache)",
+    )
+    extract_att_parser.add_argument("--vault", default="", help="Vault path (default: PPA_PATH)")
+    extract_att_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be converted without writing vault cards",
+    )
+    extract_att_parser.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Max eligible cards to process (0 = no cap)",
+    )
+
     enrich_orch_parser = subparsers.add_parser(
         "enrich",
         help="Full vault enrichment orchestrator (extract-document-text → enrich-emails → enrich-cards × 4)",
@@ -1655,6 +1673,24 @@ def main() -> None:
             vault = Path(vault_arg) if vault_arg else resolve_vault()
             lim = int(getattr(args, "limit", 0) or 0)
             out = run_document_text_extraction(
+                vault,
+                dry_run=bool(getattr(args, "dry_run", False)),
+                limit=(lim if lim > 0 else None),
+            )
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "extract-attachment-text":
+        try:
+            from archive_sync.attachment_text import run_attachment_text_extraction
+
+            from .commands._resolve import resolve_vault
+
+            vault_arg = str(getattr(args, "vault", "") or "").strip()
+            vault = Path(vault_arg) if vault_arg else resolve_vault()
+            lim = int(getattr(args, "limit", 0) or 0)
+            out = run_attachment_text_extraction(
                 vault,
                 dry_run=bool(getattr(args, "dry_run", False)),
                 limit=(lim if lim > 0 else None),

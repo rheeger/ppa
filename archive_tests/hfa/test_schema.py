@@ -6,6 +6,7 @@ from archive_vault.schema import (
     BeeperMessageCard,
     BeeperThreadCard,
     DocumentCard,
+    EmailAttachmentCard,
     EmailMessageCard,
     EmailThreadCard,
     GitCommitCard,
@@ -128,6 +129,29 @@ def test_email_message_card_normalizes_addresses_and_summary():
     assert card.from_email == "alice@example.com"
     assert card.to_emails == ["bob@example.com"]
     assert card.summary == "Hello there"
+
+
+def test_email_attachment_card_normalizes_extraction_fields():
+    card = EmailAttachmentCard(
+        uid="hfa-email-attachment-abc123def456",
+        type="email_attachment",
+        source=["gmail.attachment"],
+        source_id="message-1:a1",
+        created="2026-03-08",
+        updated="2026-03-08",
+        summary="",
+        gmail_message_id="message-1",
+        gmail_thread_id="thread-1",
+        attachment_id="a1",
+        filename=" Scan.PDF ",
+        text_source=" ANYDOC ",
+        extracted_text_sha="abc",
+        extraction_status=" CONTENT_EXTRACTED ",
+    )
+    assert card.summary == "Scan.PDF"
+    assert card.text_source == "anydoc"
+    assert card.extraction_status == "content_extracted"
+    assert card.extracted_text_sha == "abc"
 
 
 def test_email_thread_card_sets_message_count_from_messages():
