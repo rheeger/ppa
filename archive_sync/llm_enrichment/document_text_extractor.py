@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from archive_sync.adapters.file_libraries import MAX_FILE_BYTES, resolve_library_root
 from archive_vault.provenance import ProvenanceEntry, merge_provenance
 from archive_vault.schema import validate_card_strict
 from archive_vault.vault import read_note, write_card
@@ -46,13 +48,20 @@ def needs_markitdown_extraction(card_fm: dict[str, Any]) -> bool:
 
 
 def resolve_source_file(library_root: str, relative_path: str) -> Path | None:
-    """Return absolute path to the indexed library file, or None if paths are unusable."""
+    """Return absolute path to the indexed library file, or None if paths are unusable.
 
-    root = (library_root or "").strip()
+    ``library_root`` may be a ROOTS / CUSTOM_ROOTS label (``documents``,
+    ``gdrive.personal``, ``custom:requested record``, …) or an existing directory.
+    Office lock files (``~$…``) are skipped.
+    """
+
     rel = (relative_path or "").strip()
-    if not root or not rel:
+    if not rel or Path(rel).name.startswith("~$"):
         return None
-    p = Path(root).expanduser() / rel
+    root = resolve_library_root(library_root)
+    if root is None:
+        return None
+    p = root / rel
     try:
         p = p.resolve()
     except OSError:
@@ -68,14 +77,16 @@ def extract_markdown_text(source_path: Path) -> str:
 
 
 def convert_document_to_markdown(source_path: Path) -> tuple[str, str]:
-    """Return (markdown, text_source). Prefers local anydoc; never enables hosted OCR."""
+    """Return (markdown, text_source). Hosted OCR only when a Firecrawl key is present."""
 
     suffix = source_path.suffix.lower()
     if suffix in _ANYDOC_EXTENSIONS:
         try:
             import anydoc
 
-            text = str(anydoc.to_markdown(str(source_path), ocr="reject") or "").strip()
+            from archive_sync.anydoc_ocr import anydoc_ocr_kwargs
+
+            text = str(anydoc.to_markdown(str(source_path), **anydoc_ocr_kwargs()) or "").strip()
             if text:
                 return text, "anydoc"
         except Exception as exc:
@@ -129,6 +140,12 @@ def reextract_one_card(
         return {"rel_path": rel_path, "status": "skipped", "reason": "source_missing"}
 
     try:
+        if src.stat().st_size > MAX_FILE_BYTES:
+            return {"rel_path": rel_path, "status": "skipped", "reason": "too_large"}
+    except OSError:
+        return {"rel_path": rel_path, "status": "skipped", "reason": "source_missing"}
+
+    try:
         new_body, text_source = convert_document_to_markdown(src)
     except Exception as exc:
         log.warning("document convert failed rel_path=%s src=%s err=%s", rel_path, src, exc)
@@ -175,32 +192,38 @@ def run_document_text_extraction(
 ) -> dict[str, Any]:
     """Scan vault for document cards needing re-extraction; process each."""
 
+    from archive_cli.index_config import get_rebuild_workers
     from archive_cli.vault_cache import VaultScanCache
 
     vault = Path(vault).resolve()
     scan_cache = VaultScanCache.build_or_load(vault, tier=2, progress_every=0)
     paths = sorted(scan_cache.rel_paths_by_type().get("document") or [])
-    results: list[dict[str, Any]] = []
-    ok = 0
-    skipped = 0
-    errors = 0
-    n = 0
+    eligible: list[str] = []
     for rel_path in paths:
         fm = scan_cache.frontmatter_for_rel_path(rel_path)
         if not needs_markitdown_extraction(fm):
             continue
-        if limit is not None and n >= limit:
+        eligible.append(rel_path)
+        if limit is not None and len(eligible) >= limit:
             break
-        n += 1
-        out = reextract_one_card(vault, rel_path, dry_run=dry_run)
-        results.append(out)
-        st = out.get("status")
-        if st == "ok":
-            ok += 1
-        elif st == "skipped":
-            skipped += 1
-        else:
-            errors += 1
+
+    results: list[dict[str, Any]] = []
+    workers = min(get_rebuild_workers(), max(1, len(eligible)))
+    if workers <= 1 or len(eligible) <= 1:
+        results = [reextract_one_card(vault, rel_path, dry_run=dry_run) for rel_path in eligible]
+    else:
+        by_path: dict[str, dict[str, Any]] = {}
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(reextract_one_card, vault, rel_path, dry_run=dry_run): rel_path for rel_path in eligible
+            }
+            for future in as_completed(futures):
+                by_path[futures[future]] = future.result()
+        results = [by_path[rel_path] for rel_path in eligible]
+
+    ok = sum(1 for out in results if out.get("status") == "ok")
+    skipped = sum(1 for out in results if out.get("status") == "skipped")
+    errors = sum(1 for out in results if out.get("status") not in {"ok", "skipped"})
 
     return {
         "vault": str(vault),

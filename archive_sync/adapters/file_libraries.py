@@ -99,7 +99,33 @@ ROOTS: dict[str, Path] = {
     "downloads": Path.home() / "Downloads",
 }
 
+# Labels assigned at ingest as custom:{path.name.lower()} for roots not in ROOTS.
+CUSTOM_ROOTS: dict[str, Path] = {
+    "custom:requested record": Path.home()
+    / "Documents"
+    / "Health & Personal"
+    / "05_Amelia"
+    / "Requested Record",
+}
+
 ROOT_PATH_TO_LABEL = {path.expanduser().resolve(): label for label, path in ROOTS.items()}
+
+
+def resolve_library_root(library_root: str) -> Path | None:
+    """Map a stored ``library_root`` label (or absolute path) to a directory."""
+
+    label = (library_root or "").strip()
+    if not label:
+        return None
+    if label in ROOTS:
+        return ROOTS[label].expanduser()
+    if label in CUSTOM_ROOTS:
+        return CUSTOM_ROOTS[label].expanduser()
+    path = Path(label).expanduser()
+    try:
+        return path if path.is_dir() else None
+    except OSError:
+        return None
 
 INCLUDED_EXTENSIONS = {
     ".pdf",
@@ -531,6 +557,9 @@ def _stage_file_basename(root_label: str) -> str:
 
 def _init_stage_worker(vault_path: str) -> None:  # pragma: no cover - process pool runtime only
     global _STAGE_WORKER_IDENTITY_CACHE
+    from archive_sync.anydoc_ocr import load_firecrawl_api_key
+
+    load_firecrawl_api_key()
     _STAGE_WORKER_IDENTITY_CACHE = IdentityCache(vault_path)
 
 
@@ -635,17 +664,19 @@ def _anydoc_document_type(suffix: str) -> str:
 
 
 def _try_anydoc(path: Path) -> dict[str, Any] | None:
-    """Convert via local anydoc. Never enables hosted OCR. None = fall back."""
+    """Convert via anydoc. Hosted OCR only when a Firecrawl key is present."""
 
     try:
         import anydoc
     except ImportError:
         return None
+    from archive_sync.anydoc_ocr import anydoc_ocr_kwargs
+
     try:
-        raw = anydoc.to_markdown(str(path), ocr="reject")
+        raw = anydoc.to_markdown(str(path), **anydoc_ocr_kwargs())
     except Exception as exc:
         name = type(exc).__name__
-        if name in {"NeedsOcrError", "EncryptedError", "UnsupportedError"}:
+        if name in {"NeedsOcrError", "EncryptedError", "UnsupportedError", "HostedError"}:
             logger.debug("anydoc skip path=%s err=%s", path.name, exc)
         else:
             logger.warning("anydoc failed path=%s err=%s", path, exc)
@@ -1213,6 +1244,9 @@ class FileLibrariesAdapter(BaseAdapter):
             if label in ROOTS:
                 selected.append((label, ROOTS[label].expanduser().resolve()))
                 continue
+            if label in CUSTOM_ROOTS:
+                selected.append((label, CUSTOM_ROOTS[label].expanduser().resolve()))
+                continue
             path = Path(label).expanduser().resolve()
             root_label = ROOT_PATH_TO_LABEL.get(path, f"custom:{path.name.lower()}")
             selected.append((root_label, path))
@@ -1516,6 +1550,9 @@ class FileLibrariesAdapter(BaseAdapter):
         progress_every: int = 100,
         verbose: bool = False,
     ) -> dict[str, Any]:
+        from archive_sync.anydoc_ocr import load_firecrawl_api_key
+
+        load_firecrawl_api_key()
         selected_roots = self._selected_roots(roots)
         stage_path = Path(stage_dir).expanduser().resolve()
         stage_path.mkdir(parents=True, exist_ok=True)

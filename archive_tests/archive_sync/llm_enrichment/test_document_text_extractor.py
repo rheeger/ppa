@@ -33,6 +33,48 @@ def test_resolve_source_file(tmp_path: Path) -> None:
     assert got == f.resolve()
 
 
+def test_resolve_source_file_roots_label(tmp_path: Path, monkeypatch) -> None:
+    from archive_sync.adapters import file_libraries as fl
+
+    f = tmp_path / "scans" / "note.pdf"
+    f.parent.mkdir(parents=True)
+    f.write_bytes(b"%PDF")
+    monkeypatch.setitem(fl.ROOTS, "documents", tmp_path)
+    assert resolve_source_file("documents", "scans/note.pdf") == f.resolve()
+
+
+def test_resolve_source_file_gdrive_label(tmp_path: Path, monkeypatch) -> None:
+    from archive_sync.adapters import file_libraries as fl
+
+    f = tmp_path / "tax.pdf"
+    f.write_bytes(b"%PDF")
+    monkeypatch.setitem(fl.ROOTS, "gdrive.personal", tmp_path)
+    assert resolve_source_file("gdrive.personal", "tax.pdf") == f.resolve()
+
+
+def test_resolve_source_file_custom_root(tmp_path: Path, monkeypatch) -> None:
+    from archive_sync.adapters import file_libraries as fl
+
+    f = tmp_path / "chart.pdf"
+    f.write_bytes(b"%PDF")
+    monkeypatch.setitem(fl.CUSTOM_ROOTS, "custom:requested record", tmp_path)
+    assert resolve_source_file("custom:requested record", "chart.pdf") == f.resolve()
+
+
+def test_resolve_source_file_unknown_label() -> None:
+    assert resolve_source_file("documents-not-a-real-root", "a.pdf") is None
+
+
+def test_resolve_source_file_skips_office_lock(tmp_path: Path) -> None:
+    f = tmp_path / "~$lock.docx"
+    f.write_bytes(b"x")
+    assert resolve_source_file(str(tmp_path), "~$lock.docx") is None
+
+
+def test_resolve_source_file_missing(tmp_path: Path) -> None:
+    assert resolve_source_file(str(tmp_path), "nope.pdf") is None
+
+
 def test_extract_markdown_html(tmp_path: Path) -> None:
     p = tmp_path / "t.html"
     p.write_text("<html><body><p>Hello</p></body></html>", encoding="utf-8")
