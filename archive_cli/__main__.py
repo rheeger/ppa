@@ -821,6 +821,11 @@ def main() -> None:
         metavar="N",
         help="Max eligible cards to process (0 = no cap)",
     )
+    extract_att_parser.add_argument(
+        "--fetch",
+        action="store_true",
+        help="Download missing Gmail attachment bytes (document-like files only)",
+    )
 
     enrich_orch_parser = subparsers.add_parser(
         "enrich",
@@ -1690,10 +1695,22 @@ def main() -> None:
             vault_arg = str(getattr(args, "vault", "") or "").strip()
             vault = Path(vault_arg) if vault_arg else resolve_vault()
             lim = int(getattr(args, "limit", 0) or 0)
+            fetch_bytes = None
+            if bool(getattr(args, "fetch", False)):
+                from archive_sync.adapters.gmail_messages import GmailMessagesAdapter
+
+                adapter = GmailMessagesAdapter()
+
+                def fetch_bytes(message_id: str, attachment_id: str, account_email: str) -> bytes:
+                    return adapter.fetch_attachment_bytes(
+                        message_id, attachment_id, account_email=account_email
+                    )
+
             out = run_attachment_text_extraction(
                 vault,
                 dry_run=bool(getattr(args, "dry_run", False)),
                 limit=(lim if lim > 0 else None),
+                fetch_bytes=fetch_bytes,
             )
             _print_json(out)
         except PpaError as exc:

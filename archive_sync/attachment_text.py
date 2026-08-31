@@ -19,6 +19,7 @@ from typing import Any
 from archive_sync.document_extract import (
     DONE_SKIP_STATUSES,
     MAX_FILE_BYTES,
+    TINY_IMAGE_BYTES,
     STATUS_EXTRACTED,
     STATUS_FAILED,
     STATUS_LOCKFILE,
@@ -536,19 +537,34 @@ def run_attachment_text_extraction(
         )
 
     jobs: list[tuple[str, AttachmentJob]] = []
+    skipped_missing = 0
     for rel_path in paths:
         fm = scan_cache.frontmatter_for_rel_path(rel_path) or {}
         uid = str(fm.get("uid") or Path(rel_path).stem).strip()
         filename = str(fm.get("filename") or "").strip()
+        mime = str(fm.get("mime_type") or "").strip()
+        size_bytes = int(fm.get("size_bytes") or 0)
+        is_inline = bool(fm.get("is_inline", False))
+        if is_skippable_non_doc(filename, mime):
+            continue
+        if is_tiny_image(filename, size_bytes, mime) and (is_inline or size_bytes <= TINY_IMAGE_BYTES):
+            continue
         local = resolve_local_attachment(vault, uid, filename)
+        # Hosted OCR is credit-based: do not fetch raster logos/inline images.
+        if local is None and fetch_bytes is not None:
+            suffix = Path(safe_filename(filename)).suffix.lower()
+            if suffix in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".heic", ".svg"}:
+                continue
         status = str(fm.get("extraction_status") or "").strip()
         sha = str(fm.get("extracted_text_sha") or "").strip()
         if local is None and fetch_bytes is None:
+            skipped_missing += 1
             continue
         if local is not None:
             try:
                 current = bytes_sha256(local.read_bytes())
             except OSError:
+                skipped_missing += 1
                 continue
             if sha and sha == current and status in {STATUS_EXTRACTED, *DONE_SKIP_STATUSES}:
                 continue
@@ -611,5 +627,6 @@ def run_attachment_text_extraction(
         "ok": ok,
         "errors": errors,
         **counts,
+        "skipped_missing": skipped_missing,
         "results": results,
     }
