@@ -24,6 +24,7 @@ from .benchmark import (
 from .commands import admin as admin_cmd
 from .commands import attachments as attachments_cmd
 from .commands import batch_embed as batch_embed_cmd
+from .commands import evidence as evidence_cmd
 from .commands import explain
 from .commands import graph as graph_cmd
 from .commands import query as query_cmd
@@ -35,6 +36,7 @@ from .commands._resolve import resolve_index, resolve_store
 from .errors import PpaError, VaultNotFoundError
 from .index_config import get_seed_links_enabled
 from .log import configure_logging
+from .mcp_instructions import CARD_STACK_PLAYBOOK_HELP
 from .server import mcp
 
 _cli_log = logging.getLogger("ppa.cli")
@@ -127,7 +129,11 @@ _SEED_LINK_COMMANDS = frozenset(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Archive MCP server and index maintenance")
+    parser = argparse.ArgumentParser(
+        description="Archive MCP server and index maintenance",
+        epilog=CARD_STACK_PLAYBOOK_HELP,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("-v", "--verbose", action="store_true", help="DEBUG logging on stderr")
     parser.add_argument(
         "--log-file",
@@ -223,7 +229,7 @@ def main() -> None:
     )
     embed_batch_submit_parser = subparsers.add_parser(
         "embed-batch-submit",
-        help="Submit pending chunks to OpenAI Batch API (50% discount, no TPM/TPD)",
+        help="Submit pending chunks to OpenAI Batch API (50%% discount, no TPM/TPD)",
     )
     embed_batch_submit_parser.add_argument("--embedding-model", type=str, default="")
     embed_batch_submit_parser.add_argument("--embedding-version", type=int, default=0)
@@ -487,11 +493,32 @@ def main() -> None:
     subparsers.add_parser("migration-status")
     subparsers.add_parser("health")
 
-    search_parser = subparsers.add_parser("search", help="Full-text search (JSON on stdout)")
+    search_parser = subparsers.add_parser(
+        "search",
+        help="Discovery: full-text search, small limit (JSON)",
+        description="Discovery only. Next: `ppa evidence`, then `ppa read` one UID. " + CARD_STACK_PLAYBOOK_HELP,
+    )
     search_parser.add_argument("query")
-    search_parser.add_argument("--limit", type=int, default=20)
-    read_parser = subparsers.add_parser("read", help="Read one note by path or UID (JSON)")
+    search_parser.add_argument("--limit", type=int, default=12)
+    read_parser = subparsers.add_parser(
+        "read",
+        help="Read one note by path or UID (JSON)",
+        description=(
+            "Read ONE card. Use --include-attachment-uids / --include-duplicate-uids "
+            "for links only — never dumps OCR. " + CARD_STACK_PLAYBOOK_HELP
+        ),
+    )
     read_parser.add_argument("path_or_uid")
+    read_parser.add_argument(
+        "--include-attachment-uids",
+        action="store_true",
+        help="Add attachment_uids as links only (not attachment bodies/OCR)",
+    )
+    read_parser.add_argument(
+        "--include-duplicate-uids",
+        action="store_true",
+        help="Add duplicate_uids as links only (not duplicate bodies)",
+    )
     read_many_parser = subparsers.add_parser("read-many", help="Read multiple notes (JSON)")
     read_many_parser.add_argument("paths", nargs="+", metavar="PATH_OR_UID")
     fetch_attachment_parser = subparsers.add_parser(
@@ -504,21 +531,56 @@ def main() -> None:
     fetch_attachment_parser.add_argument("--filename", default="")
     fetch_attachment_parser.add_argument("--overwrite", action="store_true")
     fetch_attachment_parser.add_argument("--include-base64", action="store_true")
-    query_parser = subparsers.add_parser("query", help="Structured query (JSON)")
+    query_parser = subparsers.add_parser(
+        "query",
+        help="Structured query by type/people/source (JSON)",
+        description="Filter by type/people/source. Prefer `ppa evidence` for a compact dated list. "
+        + CARD_STACK_PLAYBOOK_HELP,
+    )
     query_parser.add_argument("--type", dest="type_filter", default="")
     query_parser.add_argument("--source", dest="source_filter", default="")
     query_parser.add_argument("--people", dest="people_filter", default="")
     query_parser.add_argument("--org", dest="org_filter", default="")
-    query_parser.add_argument("--limit", type=int, default=20)
+    query_parser.add_argument("--limit", type=int, default=12)
     graph_parser = subparsers.add_parser("graph", help="Wikilink graph from a note (JSON)")
     graph_parser.add_argument("note_path")
     graph_parser.add_argument("--hops", type=int, default=2)
     person_parser = subparsers.add_parser("person", help="Person profile by slug (JSON)")
     person_parser.add_argument("name")
-    timeline_parser = subparsers.add_parser("timeline", help="Notes in date range (JSON)")
+    timeline_parser = subparsers.add_parser(
+        "timeline",
+        help="Dated listing in a range (JSON, not full bodies)",
+        description="Date-range listing. For people+dates+support lines use `ppa evidence`. "
+        + CARD_STACK_PLAYBOOK_HELP,
+    )
     timeline_parser.add_argument("--start", dest="start_date", default="")
     timeline_parser.add_argument("--end", dest="end_date", default="")
-    timeline_parser.add_argument("--limit", type=int, default=20)
+    timeline_parser.add_argument("--limit", type=int, default=12)
+    evidence_parser = subparsers.add_parser(
+        "evidence",
+        help="Compact chronological evidence (JSON; --narrative for dated outline)",
+        description=(
+            "Compact hits: uid, date, type, title, one-line why, parent/duplicate/"
+            "attachment pointers. Default limit 12. Not full bodies. " + CARD_STACK_PLAYBOOK_HELP
+        ),
+    )
+    evidence_parser.add_argument(
+        "query",
+        nargs="?",
+        default="",
+        help="Optional question / keywords (discovery via lexical search)",
+    )
+    evidence_parser.add_argument("--type", dest="type_filter", default="")
+    evidence_parser.add_argument("--source", dest="source_filter", default="")
+    evidence_parser.add_argument("--people", dest="people_filter", default="")
+    evidence_parser.add_argument("--start", dest="start_date", default="")
+    evidence_parser.add_argument("--end", dest="end_date", default="")
+    evidence_parser.add_argument("--limit", type=int, default=12)
+    evidence_parser.add_argument(
+        "--narrative",
+        action="store_true",
+        help="Stitch hits into a short dated outline citing UIDs (not extracts)",
+    )
     tn_parser = subparsers.add_parser("temporal-neighbors", help="Cards near a timestamp (JSON)")
     tn_parser.add_argument("timestamp")
     tn_parser.add_argument("--direction", default="both", choices=("forward", "backward", "both"))
@@ -543,9 +605,13 @@ def main() -> None:
     vec_parser.add_argument("--people", dest="people_filter", default="")
     vec_parser.add_argument("--start-date", dest="start_date", default="")
     vec_parser.add_argument("--end-date", dest="end_date", default="")
-    hybrid_parser = subparsers.add_parser("hybrid-search", help="Hybrid lexical+vector (JSON)")
+    hybrid_parser = subparsers.add_parser(
+        "hybrid-search",
+        help="Hybrid discovery, small limit (JSON)",
+        description="Open-ended discovery. Next: `ppa evidence`, then `ppa read` one UID. " + CARD_STACK_PLAYBOOK_HELP,
+    )
     hybrid_parser.add_argument("query")
-    hybrid_parser.add_argument("--limit", type=int, default=20)
+    hybrid_parser.add_argument("--limit", type=int, default=12)
     hybrid_parser.add_argument("--embedding-model", default="")
     hybrid_parser.add_argument("--embedding-version", type=int, default=0)
     hybrid_parser.add_argument("--type", dest="type_filter", default="")
@@ -1374,7 +1440,13 @@ def main() -> None:
     if args.command == "read":
         try:
             store = resolve_store()
-            out = read_cmd.read(args.path_or_uid, store=store, logger=_cli_log)
+            out = read_cmd.read(
+                args.path_or_uid,
+                store=store,
+                logger=_cli_log,
+                include_attachment_uids=bool(getattr(args, "include_attachment_uids", False)),
+                include_duplicate_uids=bool(getattr(args, "include_duplicate_uids", False)),
+            )
             _print_json(out)
         except PpaError as exc:
             _cli_fail(exc)
@@ -1443,6 +1515,25 @@ def main() -> None:
                 start_date=args.start_date,
                 end_date=args.end_date,
                 limit=args.limit,
+                store=store,
+                logger=_cli_log,
+            )
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "evidence":
+        try:
+            store = resolve_store()
+            out = evidence_cmd.evidence(
+                query=args.query,
+                type_filter=args.type_filter,
+                source_filter=args.source_filter,
+                people_filter=args.people_filter,
+                start_date=args.start_date,
+                end_date=args.end_date,
+                limit=args.limit,
+                narrative=bool(args.narrative),
                 store=store,
                 logger=_cli_log,
             )
@@ -1720,9 +1811,7 @@ def main() -> None:
                 adapter = GmailMessagesAdapter()
 
                 def fetch_bytes(message_id: str, attachment_id: str, account_email: str) -> bytes:
-                    return adapter.fetch_attachment_bytes(
-                        message_id, attachment_id, account_email=account_email
-                    )
+                    return adapter.fetch_attachment_bytes(message_id, attachment_id, account_email=account_email)
 
             if fetch_only:
                 from archive_sync.attachment_text import run_attachment_fetch

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from archive_cli.mcp_instructions import (
+    CARD_STACK_PLAYBOOK,
+    CARD_STACK_PLAYBOOK_HELP,
     FILTER_HINT,
     TOOL_DESCRIPTIONS,
     build_server_instructions,
@@ -16,6 +18,8 @@ REQUIRED_INSTRUCTION_NEEDLES = (
     "archive_hybrid_search",
     "archive_query",
     "archive_read",
+    "archive_evidence",
+    "CARD-STACK PLAYBOOK",
     "archive_temporal_neighbors",
     "archive_person",
     "people_filter",
@@ -38,6 +42,7 @@ REQUIRED_RETRIEVAL_TOOLS = (
     "archive_person",
     "archive_graph",
     "archive_timeline",
+    "archive_evidence",
     "archive_temporal_neighbors",
     "archive_knowledge",
     "archive_stats",
@@ -75,4 +80,18 @@ def test_query_and_hybrid_descriptions_teach_filters() -> None:
     hybrid = TOOL_DESCRIPTIONS["archive_hybrid_search"]
     assert "people_filter=Sarah" in query
     assert "query=<email>" in hybrid
-    assert "trust boundary" in TOOL_DESCRIPTIONS["archive_read"]
+    assert "trust boundary" in TOOL_DESCRIPTIONS["archive_read"].lower()
+
+
+def test_playbook_is_prescriptive_and_shared() -> None:
+    assert "archive_evidence" in CARD_STACK_PLAYBOOK
+    assert "archive_read" in CARD_STACK_PLAYBOOK
+    assert "Never paste OCR" in CARD_STACK_PLAYBOOK
+    assert "evidence" in CARD_STACK_PLAYBOOK_HELP
+    assert "list compactly" in CARD_STACK_PLAYBOOK_HELP
+    evidence = TOOL_DESCRIPTIONS["archive_evidence"]
+    assert "compact" in evidence.lower()
+    assert "narrative" in evidence
+    read = TOOL_DESCRIPTIONS["archive_read"]
+    assert "include_attachment_uids" in read
+    assert "links only" in read or "link-only" in read

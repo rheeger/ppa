@@ -128,20 +128,74 @@ class DefaultArchiveStore(ArchiveStore):
         source_filter: str = "",
         people_filter: str = "",
         org_filter: str = "",
+        start_date: str = "",
+        end_date: str = "",
         limit: int = 20,
     ) -> dict[str, Any]:
-        return {
-            "rows": self.index.query_cards(
+        kwargs: dict[str, Any] = {
+            "type_filter": type_filter,
+            "source_filter": source_filter,
+            "people_filter": people_filter,
+            "org_filter": org_filter,
+            "limit": limit,
+        }
+        query_fn = self.index.query_cards
+        # Date filters are additive; FakeIndex and older indexes may omit them.
+        try:
+            rows = query_fn(**kwargs, start_date=start_date, end_date=end_date)
+        except TypeError:
+            rows = query_fn(**kwargs)
+        return {"rows": rows}
+
+    def search(self, query: str, *, limit: int = 20, **kwargs: Any) -> dict[str, Any]:
+        return {"rows": self.index.search(query, limit=limit, **kwargs)}
+
+    def card_stack_pointers(self, uids: list[str]) -> dict[str, dict[str, Any]]:
+        fn = getattr(self.index, "card_stack_pointers", None)
+        if callable(fn):
+            return fn(uids)
+        return {}
+
+    def evidence(
+        self,
+        *,
+        query: str = "",
+        type_filter: str = "",
+        source_filter: str = "",
+        people_filter: str = "",
+        start_date: str = "",
+        end_date: str = "",
+        limit: int = 12,
+    ) -> dict[str, Any]:
+        """Compact chronological evidence via existing search/query internals."""
+        from archive_cli.card_traversal import clamp_evidence_limit, compact_hits, row_uid
+
+        cap = clamp_evidence_limit(limit)
+        cleaned = query.strip()
+        if cleaned:
+            rows = self.index.search(
+                cleaned,
+                limit=cap,
                 type_filter=type_filter,
                 source_filter=source_filter,
                 people_filter=people_filter,
-                org_filter=org_filter,
-                limit=limit,
+                start_date=start_date,
+                end_date=end_date,
             )
-        }
-
-    def search(self, query: str, *, limit: int = 20) -> dict[str, Any]:
-        return {"rows": self.index.search(query, limit=limit)}
+        else:
+            result = self.query(
+                type_filter=type_filter,
+                source_filter=source_filter,
+                people_filter=people_filter,
+                start_date=start_date,
+                end_date=end_date,
+                limit=cap,
+            )
+            rows = list(result.get("rows") or [])
+        uids = [row_uid(row) for row in rows if row_uid(row)]
+        pointers = self.card_stack_pointers(uids) if uids else {}
+        hits = compact_hits(rows, pointers_by_uid=pointers, question=cleaned, chronological=True)
+        return {"hits": hits, "query": cleaned, "limit": cap}
 
     def graph(self, note_path: str, *, hops: int = 2) -> dict[str, Any]:
         rel_path = note_path if note_path.endswith(".md") else f"{note_path}.md"

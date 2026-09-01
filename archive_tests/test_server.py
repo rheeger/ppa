@@ -59,11 +59,26 @@ class FakeIndex:
     def search(self, query: str, limit: int = 20, **_kwargs):
         return [
             {
+                "card_uid": "hfa-person-aaaabbbbcccc",
                 "rel_path": "People/jane-smith.md",
                 "summary": "Jane Smith",
+                "type": "person",
+                "activity_at": "2026-03-06",
                 "matched_by": "lexical",
+                "preview": "FULL ATTACHMENT OCR MUST NEVER APPEAR IN EVIDENCE: " + ("x" * 400),
             }
         ]
+
+    def card_stack_pointers(self, uids):
+        out = {}
+        for uid in uids:
+            if uid == "hfa-person-aaaabbbbcccc":
+                out[uid] = {
+                    "attachment_uids": ["hfa-email-attachment-test"],
+                    "duplicate_uids": ["hfa-person-duplicate"],
+                    "parent_uid": "",
+                }
+        return out
 
     def read_path_for_uid(self, uid: str):
         if uid == "hfa-person-aaaabbbbcccc":
@@ -73,6 +88,7 @@ class FakeIndex:
     def query_cards(self, **_kwargs):
         return [
             {
+                "card_uid": "hfa-person-aaaabbbbcccc",
                 "rel_path": "People/jane-smith.md",
                 "summary": "Jane Smith",
                 "type": "person",
@@ -93,9 +109,11 @@ class FakeIndex:
     def timeline(self, **_kwargs):
         return [
             {
+                "card_uid": "hfa-person-aaaabbbbcccc",
                 "created": "2026-03-06",
                 "rel_path": "People/jane-smith.md",
                 "summary": "Jane Smith",
+                "type": "person",
             }
         ]
 

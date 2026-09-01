@@ -799,6 +799,8 @@ class QueryMixin:
         source_filter: str = "",
         people_filter: str = "",
         org_filter: str = "",
+        start_date: str = "",
+        end_date: str = "",
         limit: int = 20,
     ) -> list[dict[str, Any]]:
         self.ensure_ready()
@@ -808,10 +810,12 @@ class QueryMixin:
             source_filter=source_filter,
             people_filter=people_filter,
             org_filter=org_filter,
+            start_date=start_date,
+            end_date=end_date,
         )
         params.append(limit)
         sql = f"""
-            SELECT DISTINCT c.rel_path, c.summary, c.type, c.activity_at,
+            SELECT DISTINCT c.uid AS card_uid, c.rel_path, c.summary, c.type, c.activity_at,
                    {self._corpus_state_select_sql("c")}
             FROM {self.schema}.cards c
             WHERE {" AND ".join(clauses)}
@@ -826,7 +830,7 @@ class QueryMixin:
         clauses, params = self._filter_clauses(alias="c", start_date=start_date, end_date=end_date)
         params.append(limit)
         sql = f"""
-            SELECT c.activity_at AS created, c.rel_path, c.summary, c.type,
+            SELECT c.uid AS card_uid, c.activity_at AS created, c.rel_path, c.summary, c.type,
                    {self._corpus_state_select_sql("c")}
             FROM {self.schema}.cards c
             WHERE {" AND ".join(clauses)}
@@ -835,6 +839,35 @@ class QueryMixin:
         """
         with self._connect() as conn:
             return [dict(row) for row in conn.execute(sql, params).fetchall()]
+
+    def card_stack_pointers(self, uids: list[str]) -> dict[str, dict[str, Any]]:
+        """Bulk parent / attachment / duplicate UIDs from edges (one SQL, no vault walk)."""
+        from archive_cli.card_traversal import apply_edge_to_pointers, empty_pointers
+
+        cleaned = [str(u).strip() for u in uids if str(u).strip()]
+        if not cleaned:
+            return {}
+        self.ensure_ready()
+        sql = f"""
+            SELECT source_uid, target_uid, field_name
+            FROM {self.schema}.edges
+            WHERE (source_uid = ANY(%s) OR target_uid = ANY(%s))
+              AND field_name IN ('attachments', 'duplicates', 'message', 'thread',
+                                 'source_email', 'parent')
+              AND target_kind = 'card'
+              AND target_uid <> ''
+        """
+        pointers: dict[str, dict[str, Any]] = {uid: empty_pointers() for uid in cleaned}
+        with self._connect() as conn:
+            rows = conn.execute(sql, (cleaned, cleaned)).fetchall()
+        for row in rows:
+            apply_edge_to_pointers(
+                pointers,
+                source_uid=str(row["source_uid"] or ""),
+                target_uid=str(row["target_uid"] or ""),
+                field_name=str(row["field_name"] or ""),
+            )
+        return pointers
 
     def stats(self) -> tuple[int, list[dict[str, Any]], list[dict[str, Any]]]:
         self.ensure_ready()

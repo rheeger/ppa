@@ -25,6 +25,7 @@ except ImportError:  # pragma: no cover
 
 
 from .commands import admin, attachments, explain
+from .commands import evidence as evidence_cmd
 from .commands import formatters as fmt
 from .commands import graph as graph_cmd
 from .commands import query as query_cmd
@@ -91,6 +92,7 @@ _TOOL_PROFILES: dict[str, set[str] | None] = {
         "archive_graph",
         "archive_person",
         "archive_timeline",
+        "archive_evidence",
         "archive_temporal_neighbors",
         "archive_knowledge",
         "archive_stats",
@@ -106,6 +108,7 @@ _TOOL_PROFILES: dict[str, set[str] | None] = {
         "archive_search",
         "archive_query",
         "archive_timeline",
+        "archive_evidence",
         "archive_stats",
         "archive_search_json",
     },
@@ -179,22 +182,54 @@ def archive_search(query: str, limit: int = 20) -> str:
         raise
 
 
+def _format_read_link_footer(payload: dict) -> str:
+    """Append attachment/duplicate UIDs as links only — never their bodies."""
+    lines: list[str] = []
+    if "attachment_uids" in payload:
+        uids = payload.get("attachment_uids") or []
+        lines.append(f"attachment_uids: {', '.join(str(u) for u in uids) if uids else '(none)'}")
+    if "duplicate_uids" in payload:
+        uids = payload.get("duplicate_uids") or []
+        lines.append(f"duplicate_uids: {', '.join(str(u) for u in uids) if uids else '(none)'}")
+    parent = payload.get("parent_uid") or ""
+    if parent:
+        lines.append(f"parent_uid: {parent}")
+    if not lines:
+        return ""
+    return "\n\n--- links only (not bodies; archive_read each UID to open) ---\n" + "\n".join(lines)
+
+
 @_tool("archive_read")
-def archive_read(path_or_uid: str) -> str:
+def archive_read(
+    path_or_uid: str,
+    include_attachment_uids: bool = False,
+    include_duplicate_uids: bool = False,
+) -> str:
     """Read note by relative path or UID."""
 
-    t0 = _log_tool_call("archive_read", path_or_uid=path_or_uid)
+    t0 = _log_tool_call(
+        "archive_read",
+        path_or_uid=path_or_uid,
+        include_attachment_uids=include_attachment_uids,
+        include_duplicate_uids=include_duplicate_uids,
+    )
     try:
         profile_error = _tool_profile_error("archive_read")
         if profile_error:
             return _log_tool_return_error("archive_read", profile_error)
         store = resolve_store()
-        payload = read_cmd.read(path_or_uid, store=store, logger=_log)
+        payload = read_cmd.read(
+            path_or_uid,
+            store=store,
+            logger=_log,
+            include_attachment_uids=include_attachment_uids,
+            include_duplicate_uids=include_duplicate_uids,
+        )
         if not payload.get("found"):
             _log_tool_done("archive_read", t0, found=False)
             return "Not found"
         _log_tool_done("archive_read", t0, found=True)
-        return str(payload.get("content", ""))
+        return str(payload.get("content", "")) + _format_read_link_footer(payload)
     except PpaError as exc:
         return _ppa_err("archive_read", exc)
     except Exception as exc:
@@ -299,6 +334,57 @@ def archive_person(name: str) -> str:
         return str(result.get("content", ""))
     except PpaError as exc:
         return _ppa_err("archive_person", exc)
+
+
+@_tool("archive_evidence")
+def archive_evidence(
+    query: str = "",
+    type_filter: str = "",
+    source_filter: str = "",
+    people_filter: str = "",
+    start_date: str = "",
+    end_date: str = "",
+    limit: int = 12,
+    narrative: bool = False,
+) -> str:
+    """Compact chronological evidence listing."""
+
+    t0 = _log_tool_call(
+        "archive_evidence",
+        query=query,
+        type_filter=type_filter,
+        people_filter=people_filter,
+        start_date=start_date,
+        end_date=end_date,
+        limit=limit,
+        narrative=narrative,
+    )
+    try:
+        profile_error = _tool_profile_error("archive_evidence")
+        if profile_error:
+            return _log_tool_return_error("archive_evidence", profile_error)
+        store = resolve_store()
+        result = evidence_cmd.evidence(
+            query=query,
+            type_filter=type_filter,
+            source_filter=source_filter,
+            people_filter=people_filter,
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
+            narrative=narrative,
+            store=store,
+            logger=_log,
+        )
+        hits = result.get("hits") or []
+        out = fmt.format_evidence(result)
+        _log_tool_done("archive_evidence", t0, result_count=len(hits))
+        return out
+    except PpaError as exc:
+        return _ppa_err("archive_evidence", exc)
+    except Exception as exc:
+        _log.error("tool=archive_evidence error=%s", str(exc))
+        raise
 
 
 @_tool("archive_timeline")
