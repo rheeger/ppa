@@ -15,6 +15,7 @@ dependencies = [
   "html2text>=2024.2.26",
   "markitdown>=0.0.1",
   "firecrawl-anydoc>=0.2.0",
+  "pypdf>=5.0",
 ]
 
 [project.scripts]

@@ -76,6 +76,9 @@ jobs:
       - run: python -m pytest archive_tests/ -v --tb=short -m "not integration and not slow"
         env:
           PPA_INDEX_DSN: "postgresql://unused:unused@localhost/unused"
+          PPA_EMBEDDING_PROVIDER: hash
+          PPA_EMBEDDING_MODEL: archive-hash-dev
+          PPA_EMBEDDING_VERSION: "1"
 
   integration:
     runs-on: ubuntu-latest
