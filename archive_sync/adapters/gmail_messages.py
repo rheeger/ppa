@@ -887,7 +887,9 @@ class GmailMessagesAdapter(BaseAdapter):
         Gmail without UTF-8 coercion.
         """
 
-        token_manager = self._token_manager_for(account_email) if account_email else getattr(self, "_token_manager", None)
+        token_manager = (
+            self._token_manager_for(account_email) if account_email else getattr(self, "_token_manager", None)
+        )
         if not message_id or not attachment_id:
             return b""
         payload = self._gws_with_retry(

@@ -157,7 +157,7 @@ class FakeIndex:
         return {
             "embedding_model": embedding_model,
             "embedding_version": embedding_version,
-            "chunk_schema_version": 5,
+            "chunk_schema_version": 6,
             "chunk_count": 4,
             "embedded_chunk_count": 2,
             "pending_chunk_count": 2,
@@ -187,7 +187,7 @@ class FakeIndex:
             "provider": getattr(provider, "name", "unknown"),
             "embedding_model": embedding_model,
             "embedding_version": embedding_version,
-            "chunk_schema_version": 5,
+            "chunk_schema_version": 6,
             "batch_size": 2,
             "failed": 0,
             "embedded": min(limit, 2),
@@ -744,7 +744,7 @@ def test_postgres_bootstrap_prepares_pgvector_ready_schema(tmp_vault, monkeypatc
 def test_archive_embedding_status_and_backlog(tmp_vault, fake_index):
     status = archive_embedding_status(embedding_model="test-embed", embedding_version=1)
     assert "embedding_model: test-embed" in status
-    assert "chunk_schema_version: 5" in status
+    assert "chunk_schema_version: 6" in status
     assert "pending_chunk_count: 2" in status
 
     backlog = archive_embedding_backlog(limit=3, embedding_model="test-embed", embedding_version=1)

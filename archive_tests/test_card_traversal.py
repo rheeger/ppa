@@ -1,4 +1,4 @@
-"""Compact evidence listing: no full bodies, dated hits, playbook in --help."""
+"""Compact evidence listing: no full bodies, dated hits, composition in --help."""
 
 from __future__ import annotations
 
@@ -212,7 +212,7 @@ Body of the email only.
     assert "hfa-email-attachment-aaa" in footer
 
 
-def test_cli_help_includes_playbook() -> None:
+def test_cli_help_includes_composition() -> None:
     env = {**os.environ, "PPA_PATH": "/tmp/ppa-help-vault"}
     for cmd in ("--help", "evidence", "search", "read", "query", "timeline", "hybrid-search"):
         args = [sys.executable, "-m", "archive_cli"]
@@ -221,15 +221,23 @@ def test_cli_help_includes_playbook() -> None:
         else:
             args.extend([cmd, "--help"])
         out = subprocess.check_output(args, cwd=str(PPA_ROOT), env=env, text=True)
-        assert "evidence" in out.lower()
-        assert "playbook" in out.lower() or "Card-stack" in out
-        if cmd in {"evidence", "search", "read"}:
-            assert "compact" in out.lower() or "links only" in out.lower() or "OCR" in out
+        lowered = out.lower()
+        assert "compose" in lowered or "follow" in lowered
+        assert "search" in lowered or "hybrid" in lowered or "query" in lowered
+        if cmd == "evidence":
+            assert "compact" in lowered
+            assert "raise" in lowered or "wider" in lowered
+        if cmd in {"search", "hybrid-search", "query"}:
+            assert "never use" not in lowered
+            assert "discovery only" not in lowered
 
 
-def test_mcp_tool_docs_include_playbook_needles() -> None:
-    for name in ("archive_search", "archive_evidence", "archive_read", "archive_hybrid_search"):
+def test_mcp_tool_docs_include_composition_needles() -> None:
+    for name in ("archive_search", "archive_evidence", "archive_read", "archive_hybrid_search", "archive_query"):
         desc = TOOL_DESCRIPTIONS[name]
         assert len(desc) > 80
-    assert "compact listing" in TOOL_DESCRIPTIONS["archive_evidence"]
+    evidence = TOOL_DESCRIPTIONS["archive_evidence"].lower()
+    assert "compact" in evidence
+    assert "raise" in evidence
     assert CARD_STACK_PLAYBOOK_HELP
+    assert "compose" in CARD_STACK_PLAYBOOK_HELP.lower()

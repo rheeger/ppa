@@ -19,7 +19,7 @@ REQUIRED_INSTRUCTION_NEEDLES = (
     "archive_query",
     "archive_read",
     "archive_evidence",
-    "CARD-STACK PLAYBOOK",
+    "HOW TO COMPOSE QUERIES",
     "archive_temporal_neighbors",
     "archive_person",
     "people_filter",
@@ -83,15 +83,35 @@ def test_query_and_hybrid_descriptions_teach_filters() -> None:
     assert "trust boundary" in TOOL_DESCRIPTIONS["archive_read"].lower()
 
 
-def test_playbook_is_prescriptive_and_shared() -> None:
-    assert "archive_evidence" in CARD_STACK_PLAYBOOK
-    assert "archive_read" in CARD_STACK_PLAYBOOK
-    assert "Never paste OCR" in CARD_STACK_PLAYBOOK
-    assert "evidence" in CARD_STACK_PLAYBOOK_HELP
-    assert "list compactly" in CARD_STACK_PLAYBOOK_HELP
+def test_playbook_teaches_composition() -> None:
+    text = CARD_STACK_PLAYBOOK.lower()
+    for name in (
+        "archive_search",
+        "archive_hybrid_search",
+        "archive_query",
+        "archive_evidence",
+        "archive_read",
+        "archive_person",
+    ):
+        assert name in CARD_STACK_PLAYBOOK
+    assert "follow" in text
+    assert "parent" in text and "attachment" in text
+    assert "raise limit" in text or "starting points" in text
+    assert "do not use archive_search" not in text
+    assert "never use" not in text
+    assert "only use evidence" not in text
+    help_text = CARD_STACK_PLAYBOOK_HELP.lower()
+    assert "compose" in help_text
+    assert "search" in help_text and "hybrid" in help_text and "query" in help_text
+    assert "evidence" in help_text
     evidence = TOOL_DESCRIPTIONS["archive_evidence"]
     assert "compact" in evidence.lower()
     assert "narrative" in evidence
+    assert "raise" in evidence.lower()
     read = TOOL_DESCRIPTIONS["archive_read"]
     assert "include_attachment_uids" in read
-    assert "links only" in read or "link-only" in read
+    assert "link-only" in read or "link lists" in read
+    search = TOOL_DESCRIPTIONS["archive_search"].lower()
+    assert "discovery only" not in search
+    hybrid = TOOL_DESCRIPTIONS["archive_hybrid_search"].lower()
+    assert "small limit" not in hybrid

@@ -9,11 +9,7 @@ use crate::chunk::helpers::{
     meeting_transcript_focus_section, otter_pipe_turns, rolling_text_windows, split_paragraphs,
 };
 
-pub fn build_person_chunks(
-    fm: &Map<String, Value>,
-    body: &str,
-    acc: &mut ChunkAccumulator,
-) {
+pub fn build_person_chunks(fm: &Map<String, Value>, body: &str, acc: &mut ChunkAccumulator) {
     let summary = fm_str_value(fm, "summary");
     let profile_lines = [
         format_labeled_block(
@@ -108,10 +104,7 @@ pub fn build_email_thread_chunks(
     let thread_meta = [
         format_labeled_block("summary", &[fm_str_value(fm, "summary")]),
         format_labeled_block("participants", &participant_vals),
-        format_labeled_block(
-            "labels",
-            &coerce_string_list_json(fm.get("label_ids")),
-        ),
+        format_labeled_block("labels", &coerce_string_list_json(fm.get("label_ids"))),
         format_labeled_block(
             "time",
             &[
@@ -157,18 +150,25 @@ pub fn build_email_thread_chunks(
     }
 }
 
-pub fn build_email_message_chunks(
-    fm: &Map<String, Value>,
-    body: &str,
-    acc: &mut ChunkAccumulator,
-) {
-    acc.append_chunks("message_subject", &fm_str_value(fm, "subject"), &["subject"]);
-    acc.append_chunks("message_snippet", &fm_str_value(fm, "snippet"), &["snippet"]);
+pub fn build_email_message_chunks(fm: &Map<String, Value>, body: &str, acc: &mut ChunkAccumulator) {
+    acc.append_chunks(
+        "message_subject",
+        &fm_str_value(fm, "subject"),
+        &["subject"],
+    );
+    acc.append_chunks(
+        "message_snippet",
+        &fm_str_value(fm, "snippet"),
+        &["snippet"],
+    );
     let envelope = [
         format_labeled_block("summary", &[fm_str_value(fm, "summary")]),
         format_labeled_block(
             "from",
-            &[fm_str_value(fm, "from_name"), fm_str_value(fm, "from_email")],
+            &[
+                fm_str_value(fm, "from_name"),
+                fm_str_value(fm, "from_email"),
+            ],
         ),
         format_labeled_block("to", &coerce_string_list_json(fm.get("to_emails"))),
         format_labeled_block(
@@ -232,6 +232,34 @@ pub fn build_email_message_chunks(
     );
     if body.trim().len() > 0 {
         acc.append_chunks("message_body", body.trim(), &["body"]);
+    }
+}
+
+pub fn build_email_attachment_chunks(
+    fm: &Map<String, Value>,
+    body: &str,
+    acc: &mut ChunkAccumulator,
+) {
+    let identity = [
+        format_labeled_block("filename", &[fm_str_value(fm, "filename")]),
+        format_labeled_block("summary", &[fm_str_value(fm, "summary")]),
+        format_labeled_block(
+            "parent",
+            &[fm_str_value(fm, "message"), fm_str_value(fm, "thread")],
+        ),
+        format_labeled_block("mime_type", &[fm_str_value(fm, "mime_type")]),
+    ]
+    .into_iter()
+    .filter(|l| !l.is_empty())
+    .collect::<Vec<_>>()
+    .join("\n");
+    acc.append_chunks(
+        "attachment_filename",
+        &identity,
+        &["filename", "summary", "message", "thread", "mime_type"],
+    );
+    if body.trim().len() > 0 {
+        acc.append_chunks("attachment_body", body.trim(), &["body"]);
     }
 }
 
@@ -551,11 +579,7 @@ pub fn build_meeting_transcript_chunks(
     }
 }
 
-pub fn build_document_chunks(
-    fm: &Map<String, Value>,
-    body: &str,
-    acc: &mut ChunkAccumulator,
-) {
+pub fn build_document_chunks(fm: &Map<String, Value>, body: &str, acc: &mut ChunkAccumulator) {
     let title_meta = [
         format_labeled_block(
             "title",
@@ -617,16 +641,10 @@ pub fn build_document_chunks(
         ),
         format_labeled_block("emails", &coerce_string_list_json(fm.get("emails"))),
         format_labeled_block("phones", &coerce_string_list_json(fm.get("phones"))),
-        format_labeled_block(
-            "websites",
-            &coerce_string_list_json(fm.get("websites")),
-        ),
+        format_labeled_block("websites", &coerce_string_list_json(fm.get("websites"))),
         format_labeled_block("people", &coerce_string_list_json(fm.get("people"))),
         format_labeled_block("orgs", &coerce_string_list_json(fm.get("orgs"))),
-        format_labeled_block(
-            "sheets",
-            &coerce_string_list_json(fm.get("sheet_names")),
-        ),
+        format_labeled_block("sheets", &coerce_string_list_json(fm.get("sheet_names"))),
         format_labeled_block("tags", &coerce_string_list_json(fm.get("tags"))),
     ]
     .into_iter()
@@ -725,10 +743,7 @@ pub fn build_git_repository_chunks(
     );
     let topics = [
         format_labeled_block("primary_language", &[fm_str_value(fm, "primary_language")]),
-        format_labeled_block(
-            "languages",
-            &coerce_string_list_json(fm.get("languages")),
-        ),
+        format_labeled_block("languages", &coerce_string_list_json(fm.get("languages"))),
         format_labeled_block("topics", &coerce_string_list_json(fm.get("topics"))),
         format_labeled_block("license", &[fm_str_value(fm, "license_name")]),
         format_labeled_block("orgs", &coerce_string_list_json(fm.get("orgs"))),
@@ -758,11 +773,7 @@ pub fn build_git_repository_chunks(
     }
 }
 
-pub fn build_git_commit_chunks(
-    fm: &Map<String, Value>,
-    body: &str,
-    acc: &mut ChunkAccumulator,
-) {
+pub fn build_git_commit_chunks(fm: &Map<String, Value>, body: &str, acc: &mut ChunkAccumulator) {
     let headline = {
         let mh = fm_str_value(fm, "message_headline");
         if mh.is_empty() {
@@ -844,11 +855,7 @@ pub fn build_git_commit_chunks(
     }
 }
 
-pub fn build_git_thread_chunks(
-    fm: &Map<String, Value>,
-    body: &str,
-    acc: &mut ChunkAccumulator,
-) {
+pub fn build_git_thread_chunks(fm: &Map<String, Value>, body: &str, acc: &mut ChunkAccumulator) {
     let title = [
         format_labeled_block(
             "title",
@@ -891,10 +898,7 @@ pub fn build_git_thread_chunks(
             "participants",
             &coerce_string_list_json(fm.get("participant_logins")),
         ),
-        format_labeled_block(
-            "assignees",
-            &coerce_string_list_json(fm.get("assignees")),
-        ),
+        format_labeled_block("assignees", &coerce_string_list_json(fm.get("assignees"))),
         format_labeled_block("labels", &coerce_string_list_json(fm.get("labels"))),
         format_labeled_block("people", &coerce_string_list_json(fm.get("people"))),
     ]
@@ -911,10 +915,7 @@ pub fn build_git_thread_chunks(
         format_labeled_block("base_ref", &[fm_str_value(fm, "base_ref")]),
         format_labeled_block("head_ref", &[fm_str_value(fm, "head_ref")]),
         format_labeled_block("message_count", &[fm_str_value(fm, "message_count")]),
-        format_labeled_block(
-            "messages",
-            &coerce_string_list_json(fm.get("messages")),
-        ),
+        format_labeled_block("messages", &coerce_string_list_json(fm.get("messages"))),
     ]
     .into_iter()
     .filter(|l| !l.is_empty())
@@ -930,11 +931,7 @@ pub fn build_git_thread_chunks(
     }
 }
 
-pub fn build_git_message_chunks(
-    fm: &Map<String, Value>,
-    body: &str,
-    acc: &mut ChunkAccumulator,
-) {
+pub fn build_git_message_chunks(fm: &Map<String, Value>, body: &str, acc: &mut ChunkAccumulator) {
     let context = [
         format_labeled_block("summary", &[fm_str_value(fm, "summary")]),
         format_labeled_block("repo", &[fm_str_value(fm, "repository_name_with_owner")]),
@@ -1024,11 +1021,7 @@ pub fn build_git_message_chunks(
 }
 
 /// `CHUNKABLE_TEXT_FIELDS` + body — same as `archive_cli.features`.
-pub fn build_default_chunks(
-    fm: &Map<String, Value>,
-    body: &str,
-    acc: &mut ChunkAccumulator,
-) {
+pub fn build_default_chunks(fm: &Map<String, Value>, body: &str, acc: &mut ChunkAccumulator) {
     const FIELDS: &[&str] = &[
         "summary",
         "subject",

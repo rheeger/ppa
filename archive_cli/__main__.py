@@ -495,8 +495,9 @@ def main() -> None:
 
     search_parser = subparsers.add_parser(
         "search",
-        help="Discovery: full-text search, small limit (JSON)",
-        description="Discovery only. Next: `ppa evidence`, then `ppa read` one UID. " + CARD_STACK_PLAYBOOK_HELP,
+        help="Full-text search (JSON); raise --limit to go wider",
+        description="Keyword/phrase search. Compose with `ppa evidence`, `ppa query`, or `ppa read`. "
+        + CARD_STACK_PLAYBOOK_HELP,
     )
     search_parser.add_argument("query")
     search_parser.add_argument("--limit", type=int, default=12)
@@ -504,20 +505,20 @@ def main() -> None:
         "read",
         help="Read one note by path or UID (JSON)",
         description=(
-            "Read ONE card. Use --include-attachment-uids / --include-duplicate-uids "
-            "for links only — never dumps OCR. " + CARD_STACK_PLAYBOOK_HELP
+            "Read one card. --include-attachment-uids / --include-duplicate-uids "
+            "add link lists — follow those UIDs with another read for bodies. " + CARD_STACK_PLAYBOOK_HELP
         ),
     )
     read_parser.add_argument("path_or_uid")
     read_parser.add_argument(
         "--include-attachment-uids",
         action="store_true",
-        help="Add attachment_uids as links only (not attachment bodies/OCR)",
+        help="Add attachment_uids as a link list (read those UIDs for bodies)",
     )
     read_parser.add_argument(
         "--include-duplicate-uids",
         action="store_true",
-        help="Add duplicate_uids as links only (not duplicate bodies)",
+        help="Add duplicate_uids as a link list (read those UIDs for bodies)",
     )
     read_many_parser = subparsers.add_parser("read-many", help="Read multiple notes (JSON)")
     read_many_parser.add_argument("paths", nargs="+", metavar="PATH_OR_UID")
@@ -534,8 +535,8 @@ def main() -> None:
     query_parser = subparsers.add_parser(
         "query",
         help="Structured query by type/people/source (JSON)",
-        description="Filter by type/people/source. Prefer `ppa evidence` for a compact dated list. "
-        + CARD_STACK_PLAYBOOK_HELP,
+        description="Filter by type/people/source. Multi-type is another --type call. "
+        "Compose with `ppa evidence` (compact dated stack) or `ppa read` (bodies). " + CARD_STACK_PLAYBOOK_HELP,
     )
     query_parser.add_argument("--type", dest="type_filter", default="")
     query_parser.add_argument("--source", dest="source_filter", default="")
@@ -550,8 +551,8 @@ def main() -> None:
     timeline_parser = subparsers.add_parser(
         "timeline",
         help="Dated listing in a range (JSON, not full bodies)",
-        description="Date-range listing. For people+dates+support lines use `ppa evidence`. "
-        + CARD_STACK_PLAYBOOK_HELP,
+        description="Date-range listing. Combine with `ppa evidence` for people filters "
+        "and compact support lines, or `ppa read` for bodies. " + CARD_STACK_PLAYBOOK_HELP,
     )
     timeline_parser.add_argument("--start", dest="start_date", default="")
     timeline_parser.add_argument("--end", dest="end_date", default="")
@@ -561,7 +562,7 @@ def main() -> None:
         help="Compact chronological evidence (JSON; --narrative for dated outline)",
         description=(
             "Compact hits: uid, date, type, title, one-line why, parent/duplicate/"
-            "attachment pointers. Default limit 12. Not full bodies. " + CARD_STACK_PLAYBOOK_HELP
+            "attachment pointers. Default limit 12 — raise it to go wider. " + CARD_STACK_PLAYBOOK_HELP
         ),
     )
     evidence_parser.add_argument(
@@ -607,8 +608,9 @@ def main() -> None:
     vec_parser.add_argument("--end-date", dest="end_date", default="")
     hybrid_parser = subparsers.add_parser(
         "hybrid-search",
-        help="Hybrid discovery, small limit (JSON)",
-        description="Open-ended discovery. Next: `ppa evidence`, then `ppa read` one UID. " + CARD_STACK_PLAYBOOK_HELP,
+        help="Hybrid discovery (JSON); raise --limit to go wider",
+        description="Lexical + semantic + graph. Use when lexical search is weak. "
+        "Compose with `ppa evidence` or `ppa read`. " + CARD_STACK_PLAYBOOK_HELP,
     )
     hybrid_parser.add_argument("query")
     hybrid_parser.add_argument("--limit", type=int, default=12)

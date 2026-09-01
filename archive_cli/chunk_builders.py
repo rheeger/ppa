@@ -329,9 +329,7 @@ def _build_email_attachment_chunks(frontmatter: dict[str, Any], body: str, appen
         for line in [
             _format_labeled_block("filename", [str(frontmatter.get("filename", ""))]),
             _format_labeled_block("summary", [str(frontmatter.get("summary", ""))]),
-            _format_labeled_block(
-                "parent", [str(frontmatter.get("message", "")), str(frontmatter.get("thread", ""))]
-            ),
+            _format_labeled_block("parent", [str(frontmatter.get("message", "")), str(frontmatter.get("thread", ""))]),
             _format_labeled_block("mime_type", [str(frontmatter.get("mime_type", ""))]),
         ]
         if line

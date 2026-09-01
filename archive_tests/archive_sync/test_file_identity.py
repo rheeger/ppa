@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from archive_sync.adapters.base import deterministic_provenance
 from archive_sync.file_identity import (
     FileIdentityIndex,
     register_ingested_file,
     run_file_duplicate_linking,
     source_sha_from_frontmatter,
 )
-from archive_sync.adapters.base import deterministic_provenance
 from archive_vault.schema import DocumentCard, EmailAttachmentCard, validate_card_strict
 from archive_vault.vault import read_note, write_card
 
@@ -161,9 +161,7 @@ def test_incremental_links_missing_dups_without_stamping_unique(tmp_path: Path, 
     from archive_cli.vault_cache import VaultScanCache
 
     VaultScanCache.build_or_load(vault, tier=2, progress_every=0)
-    out = run_file_duplicate_linking(
-        vault, dry_run=False, identity_db=tmp_path / "id.sqlite", incremental=True
-    )
+    out = run_file_duplicate_linking(vault, dry_run=False, identity_db=tmp_path / "id.sqlite", incremental=True)
     assert out["groups"] == 1
     assert out["cards_linked"] == 2
     fm_unique, _, _ = read_note(vault, "Documents/2026-01/hfa-document-ccc333ccc333.md")

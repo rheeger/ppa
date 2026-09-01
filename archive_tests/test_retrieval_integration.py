@@ -727,7 +727,7 @@ def test_live_postgres_rebuild_graph_and_lexical_search(live_archive):
     vault, index, _provider = live_archive
     rebuilt = archive_rebuild_indexes()
     assert "cards: 8" in rebuilt
-    assert index.status()["chunk_schema_version"] == "5"
+    assert index.status()["chunk_schema_version"] == "6"
 
     lexical = archive_search("Jane Smith", limit=3).splitlines()
     assert lexical[0].startswith("- People/jane-smith.md")

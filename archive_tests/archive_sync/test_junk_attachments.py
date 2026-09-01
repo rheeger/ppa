@@ -16,21 +16,15 @@ from archive_vault.vault import read_note, write_card
 
 def test_should_not_emit_inline_logo_tiny_raster_image001_or_angjd() -> None:
     assert (
-        should_emit_email_attachment(
-            filename="logo.png", mime_type="image/png", size_bytes=4000, is_inline=True
-        )
+        should_emit_email_attachment(filename="logo.png", mime_type="image/png", size_bytes=4000, is_inline=True)
         is False
     )
     assert (
-        should_emit_email_attachment(
-            filename="pixel.gif", mime_type="image/gif", size_bytes=800, is_inline=False
-        )
+        should_emit_email_attachment(filename="pixel.gif", mime_type="image/gif", size_bytes=800, is_inline=False)
         is False
     )
     assert (
-        should_emit_email_attachment(
-            filename="image001.png", mime_type="image/png", size_bytes=12_000, is_inline=False
-        )
+        should_emit_email_attachment(filename="image001.png", mime_type="image/png", size_bytes=12_000, is_inline=False)
         is False
     )
     assert (
@@ -42,21 +36,12 @@ def test_should_not_emit_inline_logo_tiny_raster_image001_or_angjd() -> None:
         is False
     )
     assert (
-        should_emit_email_attachment(
-            filename="signature.png", mime_type="image/png", size_bytes=8_000, is_inline=False
-        )
+        should_emit_email_attachment(filename="signature.png", mime_type="image/png", size_bytes=8_000, is_inline=False)
         is False
     )
+    assert should_emit_email_attachment(filename="invoice.pdf", mime_type="application/pdf", size_bytes=40_000) is True
     assert (
-        should_emit_email_attachment(
-            filename="invoice.pdf", mime_type="application/pdf", size_bytes=40_000
-        )
-        is True
-    )
-    assert (
-        should_emit_email_attachment(
-            filename="scan.png", mime_type="image/png", size_bytes=250_000, is_inline=False
-        )
+        should_emit_email_attachment(filename="scan.png", mime_type="image/png", size_bytes=250_000, is_inline=False)
         is True
     )
 

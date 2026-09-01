@@ -14,6 +14,7 @@ fn chunk_builder_name(card_type: &str) -> Option<&'static str> {
         "person" => Some("person"),
         "email_thread" => Some("email_thread"),
         "email_message" => Some("email_message"),
+        "email_attachment" => Some("email_attachment"),
         "imessage_thread" => Some("imessage_thread"),
         "calendar_event" => Some("calendar_event"),
         "meeting_transcript" => Some("meeting_transcript"),
@@ -47,6 +48,7 @@ fn build_chunks_map(fm: &Map<String, JsonValue>, body: &str) -> Vec<ChunkRecord>
             "person" => builders::build_person_chunks(fm, body, &mut acc),
             "email_thread" => builders::build_email_thread_chunks(fm, body, &mut acc, limit),
             "email_message" => builders::build_email_message_chunks(fm, body, &mut acc),
+            "email_attachment" => builders::build_email_attachment_chunks(fm, body, &mut acc),
             "imessage_thread" => builders::build_imessage_thread_chunks(fm, body, &mut acc, limit),
             "calendar_event" => builders::build_calendar_event_chunks(fm, body, &mut acc),
             "meeting_transcript" => {

@@ -11,10 +11,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from archive_sync.attachment_text import run_attachment_text_extraction
 from archive_sync.llm_enrichment.cache import InferenceCache
 from archive_sync.llm_enrichment.card_enrichment_runner import CardEnrichmentRunner
 from archive_sync.llm_enrichment.defaults import DEFAULT_ENRICH_CARD_GEMINI_MODEL
-from archive_sync.attachment_text import run_attachment_text_extraction
 from archive_sync.llm_enrichment.document_text_extractor import run_document_text_extraction
 from archive_sync.llm_enrichment.enrich_runner import LlmEnrichmentRunner
 

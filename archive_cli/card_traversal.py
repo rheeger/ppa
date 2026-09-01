@@ -1,7 +1,8 @@
-"""Compact card-stack listing: evidence hits, pointers, dated narrative.
+"""Compact evidence listing: dated hits, stack pointers, optional narrative.
 
-Agents should list compactly, then ``archive_read`` only the UIDs that support
-the question. This module never returns card bodies or OCR/markdown extracts.
+``archive_evidence`` / ``ppa evidence`` return uid/date/type/title/why plus
+parent/attachment/duplicate UIDs — not card bodies. Other tools (search,
+hybrid, query, read) stay available for wide scans and full reads.
 """
 
 from __future__ import annotations
@@ -12,7 +13,6 @@ from typing import Any
 from archive_cli.index_config import _activity_date, _format_activity_at
 
 DEFAULT_EVIDENCE_LIMIT = 12
-MAX_EVIDENCE_LIMIT = 25
 TITLE_CHARS = 80
 SUPPORT_CHARS = 120
 
@@ -40,10 +40,9 @@ _BODY_KEYS = frozenset(
 
 
 def clamp_evidence_limit(limit: int | None) -> int:
+    """Floor invalid/empty limits at 1. No upper cap — raise ``limit`` to go wide."""
     raw = DEFAULT_EVIDENCE_LIMIT if limit is None else int(limit)
-    if raw < 1:
-        return 1
-    return min(raw, MAX_EVIDENCE_LIMIT)
+    return max(raw, 1)
 
 
 def uid_from_ref(value: Any) -> str:

@@ -14,8 +14,8 @@ use serde_json::Value as JsonValue;
 use crate::chunk::build_chunks;
 use crate::json_stable;
 use crate::materializer::activity::{card_activity_at_value, card_activity_end_at_value};
-use crate::materializer::card_fields::CardFields;
 use crate::materializer::body::read_note_body;
+use crate::materializer::card_fields::CardFields;
 use crate::materializer::edges;
 use crate::materializer::external_ids::iter_external_ids_value;
 use crate::materializer::projection::{build_typed_projection_row_rust, ProjectionCell};
@@ -175,8 +175,7 @@ fn materialize_one_rust(
     .map_err(|e| format!("read {rel_path}: {e}"))?;
 
     let search_text = build_search_text_value(fm, &body);
-    let content_hash_val =
-        content_hash_value(fm_val.clone(), &body).map_err(|e| e.to_string())?;
+    let content_hash_val = content_hash_value(fm_val.clone(), &body).map_err(|e| e.to_string())?;
 
     let activity_raw = card_activity_at_value(fm);
     let activity_at = parse_timestamp_to_utc_rust(&activity_raw);
@@ -517,7 +516,7 @@ fn materialize_rust_to_py(py: Python<'_>, m: MaterializedOneRust) -> PyResult<Py
 /// in-memory cache (zlib-decompressed, already provenance-stripped) instead of disk.
 /// Create the `BodyCache` once via `BodyCache.load(path)` and pass it to every batch call.
 #[pyfunction]
-#[pyo3(signature = (rows, vault_root, slug_map, path_to_uid, person_lookup, target_field_index, batch_id=None, chunk_schema_version=5, body_cache=None))]
+#[pyo3(signature = (rows, vault_root, slug_map, path_to_uid, person_lookup, target_field_index, batch_id=None, chunk_schema_version=6, body_cache=None))]
 pub fn materialize_row_batch(
     py: Python<'_>,
     rows: &Bound<'_, PyAny>,
@@ -589,7 +588,7 @@ pub fn materialize_row_batch(
 /// materializing each chunk in parallel then converting to Python. Logs progress to stderr.
 /// Returns a Python list of `ProjectionRowBuffer` objects.
 #[pyfunction]
-#[pyo3(signature = (rows, vault_root, slug_map, path_to_uid, person_lookup, target_field_index, batch_id=None, chunk_schema_version=5, body_cache=None, batch_size=5000))]
+#[pyo3(signature = (rows, vault_root, slug_map, path_to_uid, person_lookup, target_field_index, batch_id=None, chunk_schema_version=6, body_cache=None, batch_size=5000))]
 pub fn materialize_all_rows(
     py: Python<'_>,
     rows: &Bound<'_, PyAny>,
@@ -665,9 +664,12 @@ pub fn materialize_all_rows(
         let eta = (total - processed) as f64 / rate.max(1.0);
         eprintln!(
             "[archive_crate] materialize {}/{} ({:.1}%) elapsed={:.1}s rate={:.0}/s eta={:.0}s",
-            processed, total,
+            processed,
+            total,
             processed as f64 / total as f64 * 100.0,
-            elapsed, rate, eta,
+            elapsed,
+            rate,
+            eta,
         );
     }
 
