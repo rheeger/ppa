@@ -44,6 +44,9 @@ DEFAULT_PORT_FILE = Path.home() / ".ppa" / "local-postgres-port"
 DEFAULT_GOOGLE_ACCOUNT = "rheeger@gmail.com"
 DEFAULT_GITHUB_STAGE = Path.home() / "Archive" / "raw-data" / "github-history"
 DEFAULT_IMESSAGE_SNAPSHOT = Path.home() / "Archive" / "raw-data" / "imessage-snapshots" / "latest"
+# Embedding + linker processors resolve via archive_cli.providers.resolve_provider(),
+# which reads PPA_ENRICHMENT_MODEL (not PPA_EMBEDDING_*). Unset → llm_provider_unavailable.
+DEFAULT_ENRICHMENT_MODEL = "openai:gpt-4o-mini"
 LAUNCHD_LABEL = "com.rheeger.ppa.maintain-nightly"
 PLIST_NAME = f"{LAUNCHD_LABEL}.plist"
 FAILED_UPDATER_STATUSES = frozenset({"failed", "blocked"})
@@ -293,6 +296,7 @@ def apply_runtime_env() -> dict[str, str]:
     os.environ.setdefault("PPA_EMBEDDING_PROVIDER", "openai")
     os.environ.setdefault("PPA_EMBEDDING_MODEL", "text-embedding-3-small")
     os.environ.setdefault("PPA_EMBEDDING_VERSION", "1")
+    os.environ.setdefault("PPA_ENRICHMENT_MODEL", DEFAULT_ENRICHMENT_MODEL)
     os.environ.setdefault("GOOGLE_ACCOUNT", DEFAULT_GOOGLE_ACCOUNT)
     os.environ.setdefault("OTTER_FETCH_MODE", "mcp")
     os.environ.setdefault("PPA_NONINTERACTIVE", "1")
