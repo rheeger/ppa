@@ -76,15 +76,33 @@ class EmbedderMixin:
                 """,
                 (embedding_model, embedding_version),
             ).fetchone()
+            # Orphan embeddings (chunk deleted/replaced) make chunks-embeddings
+            # negative even when current chunks still lack vectors. embed_pending
+            # uses this count as its work limit, so it must be the anti-join.
+            pending_row = conn.execute(
+                f"""
+                SELECT COUNT(*) AS count
+                FROM {self.schema}.chunks c
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM {self.schema}.embeddings e
+                    WHERE e.chunk_key = c.chunk_key
+                      AND e.embedding_model = %s
+                      AND e.embedding_version = %s
+                )
+                """,
+                (embedding_model, embedding_version),
+            ).fetchone()
         total_chunks = int(total_row["count"])
         embedded_chunks = int(embedded_row["count"])
+        pending_chunks = int(pending_row["count"])
         return {
             "embedding_model": embedding_model,
             "embedding_version": embedding_version,
             "chunk_schema_version": CHUNK_SCHEMA_VERSION,
             "chunk_count": total_chunks,
             "embedded_chunk_count": embedded_chunks,
-            "pending_chunk_count": max(total_chunks - embedded_chunks, 0),
+            "pending_chunk_count": pending_chunks,
         }
 
     def embedding_backlog(
