@@ -125,6 +125,15 @@ def test_default_log_path_uses_local_date() -> None:
     assert path == REPO_ROOT / "logs" / "ppa-maintain-nightly-20260830.log"
 
 
+def test_apply_runtime_env_sets_noninteractive(monkeypatch) -> None:
+    mod = _load_mod()
+    monkeypatch.setenv("PPA_INDEX_DSN", "postgresql://archive:archive@127.0.0.1:50731/archive")
+    monkeypatch.delenv("PPA_NONINTERACTIVE", raising=False)
+    env = mod.apply_runtime_env()
+    assert env.get("PPA_NONINTERACTIVE") == "1"
+    assert env.get("OTTER_FETCH_MODE") == "mcp"
+
+
 def test_default_maintain_source_keys_excludes_parked() -> None:
     from archive_sync.source_updaters.runner import default_maintain_source_keys
 

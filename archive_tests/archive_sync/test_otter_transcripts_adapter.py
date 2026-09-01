@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 import json
+import subprocess
 
 from archive_sync.adapters.base import deterministic_provenance
 from archive_sync.adapters.otter_transcripts import (
     OtterApiClient,
+    OtterMcpAuthError,
     OtterMcpClient,
     OtterTranscriptsAdapter,
     _candidate_tool_names,
+    ensure_otter_mcp_unattended_auth,
+    otter_access_token_expired,
+    otter_mcp_noninteractive,
     persist_otter_mcp_tokens,
+    refresh_otter_mcp_tokens,
     restore_otter_mcp_tokens,
 )
 from archive_vault.schema import CalendarEventCard, MeetingTranscriptCard, PersonCard
@@ -113,10 +119,11 @@ def test_otter_api_client_uses_api_key_search_endpoints(monkeypatch):
 
 
 def test_otter_mcp_client_discovers_tools_and_calls_mcporter(monkeypatch):
+    monkeypatch.setenv("PPA_NONINTERACTIVE", "0")
     client = OtterMcpClient(mcporter_bin="/tmp/mcporter", server_name="otter_meeting_mcp")
 
     def fake_run_mcporter(*args):
-        if args == ("list", "otter_meeting_mcp"):
+        if args[0] == "list":
             return "list_recent_meetings\nget_meeting\nget_transcript\n", ""
         if args[0] == "call":
             if args[1] == "otter_meeting_mcp.get_user_info":
@@ -204,6 +211,7 @@ otter_meeting_mcp
 
 
 def test_otter_mcp_client_discovers_json_list_tools(tmp_path, monkeypatch):
+    monkeypatch.setenv("PPA_NONINTERACTIVE", "0")
     monkeypatch.setenv("OTTER_MCP_CREDENTIALS_PATH", str(tmp_path / "mcporter.json"))
     monkeypatch.setenv("OTTER_MCP_PPA_TOKEN_PATH", str(tmp_path / "ppa.json"))
     client = OtterMcpClient(mcporter_bin="/tmp/mcporter", server_name="otter_meeting_mcp")
@@ -268,13 +276,193 @@ def test_persist_and_restore_otter_mcp_tokens(tmp_path) -> None:
     assert tokens["refresh_token"] == "refresh-1"
 
 
+def test_restore_otter_mcp_tokens_fills_missing_client_info(tmp_path) -> None:
+    mcporter_path = tmp_path / "mcporter-credentials.json"
+    ppa_path = tmp_path / "ppa-otter.json"
+    mcporter_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "entries": {
+                    "otter_meeting_mcp|abc": {
+                        "serverName": "otter_meeting_mcp",
+                        "serverUrl": "https://mcp.otter.ai/mcp",
+                        "clientInfo": {},
+                        "tokens": {"access_token": "access-stale", "refresh_token": "refresh-1"},
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    ppa_path.write_text(
+        json.dumps(
+            {
+                "serverName": "otter_meeting_mcp",
+                "clientInfo": {"client_id": "otter-client-1", "token_endpoint_auth_method": "none"},
+                "tokens": {"access_token": "access-stale", "refresh_token": "refresh-1"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert restore_otter_mcp_tokens(credentials_path=mcporter_path, ppa_token_path=ppa_path) is True
+    restored = json.loads(mcporter_path.read_text(encoding="utf-8"))
+    entry = next(iter(restored["entries"].values()))
+    assert entry["clientInfo"]["client_id"] == "otter-client-1"
+
+
+def test_otter_mcp_noninteractive_respects_flag_and_stdin(monkeypatch) -> None:
+    monkeypatch.setenv("PPA_NONINTERACTIVE", "1")
+    monkeypatch.delenv("CI", raising=False)
+    assert otter_mcp_noninteractive() is True
+
+    monkeypatch.setenv("PPA_NONINTERACTIVE", "0")
+    monkeypatch.setenv("CI", "true")
+    assert otter_mcp_noninteractive() is False
+
+    monkeypatch.delenv("PPA_NONINTERACTIVE", raising=False)
+    monkeypatch.delenv("CI", raising=False)
+
+    class _NoTty:
+        def isatty(self) -> bool:
+            return False
+
+    class _Tty:
+        def isatty(self) -> bool:
+            return True
+
+    assert otter_mcp_noninteractive(stdin=_NoTty()) is True
+    assert otter_mcp_noninteractive(stdin=_Tty()) is False
+
+
+def test_ensure_unattended_auth_uses_existing_creds_and_refreshes(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("PPA_NONINTERACTIVE", "1")
+    monkeypatch.delenv("CI", raising=False)
+    mcporter_path = tmp_path / "mcporter.json"
+    ppa_path = tmp_path / "ppa.json"
+    ppa_path.write_text(
+        json.dumps(
+            {
+                "serverName": "otter_meeting_mcp",
+                "updatedAt": "2020-01-01T00:00:00Z",
+                "clientInfo": {"client_id": "otter-client-1"},
+                "tokens": {
+                    "access_token": "expired-access",
+                    "refresh_token": "refresh-keep",
+                    "expires_in": 3600,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    posts: list[object] = []
+
+    def fake_post(_request):
+        posts.append(_request)
+        return json.dumps(
+            {
+                "access_token": "fresh-access",
+                "refresh_token": "refresh-keep",
+                "expires_in": 3600,
+                "token_type": "Bearer",
+            }
+        ).encode("utf-8")
+
+    monkeypatch.setattr(
+        "archive_sync.adapters.otter_transcripts.discover_otter_token_url",
+        lambda: "https://otter.ai/oauth/token",
+    )
+    assert (
+        refresh_otter_mcp_tokens(
+            credentials_path=mcporter_path,
+            ppa_token_path=ppa_path,
+            force=True,
+            post_form=fake_post,
+        )
+        is True
+    )
+    assert posts
+    snapshot = json.loads(ppa_path.read_text(encoding="utf-8"))
+    assert snapshot["tokens"]["access_token"] == "fresh-access"
+    restored = json.loads(mcporter_path.read_text(encoding="utf-8"))
+    tokens = next(iter(restored["entries"].values()))["tokens"]
+    assert tokens["access_token"] == "fresh-access"
+    assert tokens["refresh_token"] == "refresh-keep"
+
+
+def test_noninteractive_missing_refresh_raises_without_mcporter(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("PPA_NONINTERACTIVE", "1")
+    monkeypatch.setenv("OTTER_MCP_CREDENTIALS_PATH", str(tmp_path / "missing-mcporter.json"))
+    monkeypatch.setenv("OTTER_MCP_PPA_TOKEN_PATH", str(tmp_path / "missing-ppa.json"))
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(self, *args, **kwargs):
+        calls.append(args)
+        raise AssertionError("mcporter must not start a browser oauth flow")
+
+    monkeypatch.setattr("archive_sync.adapters.otter_transcripts.subprocess.run", fake_run)
+    try:
+        ensure_otter_mcp_unattended_auth()
+        raise AssertionError("expected OtterMcpAuthError")
+    except OtterMcpAuthError as exc:
+        assert "unattended" in str(exc).lower() or "oauth" in str(exc).lower()
+    assert calls == []
+
+
+def test_noninteractive_run_mcporter_uses_devnull_and_oauth_timeout(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("PPA_NONINTERACTIVE", "1")
+    monkeypatch.setenv("OTTER_MCP_CREDENTIALS_PATH", str(tmp_path / "mcporter.json"))
+    monkeypatch.setenv("OTTER_MCP_PPA_TOKEN_PATH", str(tmp_path / "ppa.json"))
+    client = OtterMcpClient(mcporter_bin="/bin/echo", server_name="otter_meeting_mcp")
+    seen: dict[str, object] = {}
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        seen["stdin"] = kwargs.get("stdin")
+        seen["env"] = kwargs.get("env")
+        seen["timeout"] = kwargs.get("timeout")
+
+        class _Proc:
+            returncode = 0
+            stdout = '{"tools":[]}'
+            stderr = ""
+
+        return _Proc()
+
+    monkeypatch.setattr("archive_sync.adapters.otter_transcripts.subprocess.run", fake_run)
+    monkeypatch.setattr(client, "_ensure_mcporter", lambda: "/bin/echo")
+    stdout, _ = client._run_mcporter("list", "--json")
+    assert stdout == '{"tools":[]}'
+    cmd = seen["cmd"]
+    assert isinstance(cmd, list)
+    assert "--oauth-timeout" in cmd
+    assert seen["stdin"] is subprocess.DEVNULL
+    env = seen["env"]
+    assert isinstance(env, dict)
+    assert env.get("MCPORTER_OAUTH_TIMEOUT_MS") == "1"
+    assert "ppa-no-browser-bin" in str(env.get("PATH", ""))
+
+
+def test_otter_access_token_expired_from_expires_in() -> None:
+    tokens = {"access_token": "not-a-jwt", "expires_in": 3600}
+    assert (
+        otter_access_token_expired(
+            tokens,
+            updated_at="2020-01-01T00:00:00Z",
+        )
+        is True
+    )
+    assert otter_access_token_expired({"access_token": "still-good"}) is False
+
+
 def test_otter_mcp_client_uses_otter_prefixed_tools(monkeypatch):
+    monkeypatch.setenv("PPA_NONINTERACTIVE", "0")
     client = OtterMcpClient(mcporter_bin="/tmp/mcporter", server_name="otter_meeting_mcp")
     calls: list[tuple[str, ...]] = []
 
     def fake_run_mcporter(*args):
         calls.append(args)
-        if args == ("list", "otter_meeting_mcp"):
+        if args[0] == "list":
             return "function otter_search()\nfunction otter_fetch(id: string)\nfunction otter_get_user_info()\n", ""
         if args[0] == "call":
             if args[1] == "otter_meeting_mcp.otter_get_user_info":
