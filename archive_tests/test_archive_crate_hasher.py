@@ -31,3 +31,14 @@ def test_content_hash_nul_body_stripped():
     fm = {"type": "x"}
     body = "a\x00b"
     assert archive_crate.content_hash(fm, body) == _content_hash(fm, body)
+
+
+def test_hash_paths_sha256(tmp_path):
+    import archive_crate
+
+    path = tmp_path / "blob.bin"
+    path.write_bytes(b"same-file-bytes")
+    expected = hashlib.sha256(b"same-file-bytes").hexdigest()
+    rows = dict(archive_crate.hash_paths_sha256([str(path), str(tmp_path / "missing.bin")]))
+    assert rows[str(path)] == expected
+    assert str(tmp_path / "missing.bin") not in rows

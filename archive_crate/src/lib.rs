@@ -27,6 +27,7 @@ fn archive_crate(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(walk::walk_vault_count, m)?)?;
     m.add_function(wrap_pyfunction!(walk::walk_vault_monolithic, m)?)?;
     m.add_function(wrap_pyfunction!(hasher::raw_content_sha256, m)?)?;
+    m.add_function(wrap_pyfunction!(hasher::hash_paths_sha256, m)?)?;
     m.add_function(wrap_pyfunction!(hasher::content_hash, m)?)?;
     m.add_function(wrap_pyfunction!(frontmatter::parse_frontmatter, m)?)?;
     m.add_function(wrap_pyfunction!(json_stable::stable_json_from_yaml_frontmatter, m)?)?;

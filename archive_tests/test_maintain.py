@@ -502,6 +502,10 @@ def test_maintain_catch_up_handoff_dirty_uids_to_real_executor(
         return adapter
 
     monkeypatch.setattr("archive_sync.source_updaters.runner.build_adapter", _build_adapter)
+    monkeypatch.setattr(
+        "archive_cli.commands.maintain._run_file_hygiene",
+        lambda *a, **k: ({"purged": 0}, {"cards_linked": 0, "cards_scanned": 0}, []),
+    )
 
     store = mock.MagicMock()
     store.vault = vault
@@ -545,3 +549,76 @@ def test_maintain_catch_up_handoff_dirty_uids_to_real_executor(
 
     rebuild_calls = [c.kwargs for c in store.rebuild.call_args_list]
     assert any(c.get("force_full") is False for c in rebuild_calls)
+
+
+def test_maintain_processors_invoke_duplicate_linking_and_junk_purge(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vault = _join_vault(tmp_path)
+    called: dict[str, Any] = {}
+
+    def fake_purge(path, **kwargs):
+        called["purge"] = {"vault": str(path), "dry_run": kwargs.get("dry_run")}
+        return {"purged": 2, "dirty_uids": ["hfa-email-message-parent1"]}
+
+    def fake_link(path, **kwargs):
+        called["link"] = {
+            "vault": str(path),
+            "dry_run": kwargs.get("dry_run"),
+            "incremental": kwargs.get("incremental"),
+            "uid_allowlist": kwargs.get("uid_allowlist"),
+        }
+        return {
+            "cards_linked": 3,
+            "cards_scanned": 10,
+            "hashes_reused": 8,
+            "hashes_computed": 2,
+            "groups": 1,
+            "dirty_uids": ["hfa-document-aaa111aaa111"],
+        }
+
+    monkeypatch.setattr("archive_sync.junk_attachments.run_junk_attachment_purge", fake_purge)
+    monkeypatch.setattr("archive_sync.file_identity.run_file_duplicate_linking", fake_link)
+
+    store = mock.MagicMock()
+    conn = mock.MagicMock()
+
+    def exec_side(sql, params=None):
+        m = mock.MagicMock()
+        s = str(sql)
+        if "last_maintenance_at" in s:
+            m.fetchone.return_value = None
+        elif "ingestion_log" in s:
+            m.fetchall.return_value = []
+            m.fetchone.return_value = None
+        else:
+            m.fetchone.return_value = None
+            m.fetchall.return_value = []
+        return m
+
+    conn.execute.side_effect = exec_side
+    store.vault = vault
+    store.index.schema = "ppa"
+    store.index._connect.return_value = _connect_ctx(conn)
+    store.rebuild.return_value = {"cards": 0}
+
+    monkeypatch.setattr(
+        "archive_cli.commands.maintain._run_processors",
+        lambda *a, **k: (0, [], 0),
+    )
+
+    rep = run_maintenance(
+        store=store,
+        logger=logging.getLogger("t"),
+        dry_run=False,
+        run_processors=True,
+        apply_processors=True,
+    )
+    assert called["purge"]["dry_run"] is False
+    assert called["link"]["incremental"] is True
+    assert called["link"]["dry_run"] is False
+    assert called["link"]["uid_allowlist"] is None
+    assert rep.junk_attachments_purged == 2
+    assert rep.file_duplicates_linked == 3
+    assert not any(e.get("step") == "file_hygiene" for e in rep.errors)

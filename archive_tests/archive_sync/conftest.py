@@ -8,6 +8,11 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _isolate_file_identity_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PPA_FILE_IDENTITY_DB", str(tmp_path / "file-identity.sqlite"))
+
+
 @pytest.fixture
 def tmp_vault(tmp_path: Path) -> Path:
     vault = tmp_path / "hf-archives"

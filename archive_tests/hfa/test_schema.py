@@ -152,6 +152,8 @@ def test_email_attachment_card_normalizes_extraction_fields():
     assert card.text_source == "anydoc"
     assert card.extraction_status == "content_extracted"
     assert card.extracted_text_sha == "abc"
+    assert card.content_sha == ""
+    assert card.duplicates == []
 
 
 def test_email_thread_card_sets_message_count_from_messages():

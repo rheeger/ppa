@@ -67,6 +67,10 @@ def test_ingest_creates_document_card_and_resolves_people(tmp_vault: Path, tmp_p
     assert frontmatter["metadata_sha"]
     assert "Resolved people: [[alice-example]]" in body
     assert "Extracted text:" in body
+    from archive_sync.file_identity import FileIdentityIndex
+
+    identity = FileIdentityIndex()
+    assert frontmatter["uid"] in identity.uids_for_sha(frontmatter["content_sha"])
 
 
 def test_stage_documents_writes_manifest_without_touching_vault(tmp_vault: Path, tmp_path: Path):

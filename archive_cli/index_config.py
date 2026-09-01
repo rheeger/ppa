@@ -188,6 +188,14 @@ def get_anydoc_extract_cache_path() -> Path:
     return Path.home() / ".ppa" / "anydoc-extract-cache.sqlite"
 
 
+def get_file_identity_db_path() -> Path:
+    """Source-byte SHA → card UID index for same-file duplicate links."""
+    raw = _ppa_env("PPA_FILE_IDENTITY_DB")
+    if raw:
+        return Path(raw)
+    return Path.home() / ".ppa" / "file-identity.sqlite"
+
+
 def get_embed_write_batch_size() -> int:
     raw = _ppa_env("PPA_EMBED_WRITE_BATCH_SIZE")
     if not raw:

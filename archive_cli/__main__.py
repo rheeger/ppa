@@ -832,6 +832,17 @@ def main() -> None:
         help="Download missing document-like attachments; do not extract or call hosted OCR",
     )
 
+    link_dupes_parser = subparsers.add_parser(
+        "link-file-duplicates",
+        help="Hash document/attachment source bytes and wikilink same-file copies",
+    )
+    link_dupes_parser.add_argument("--vault", default="", help="Vault path (default: PPA_PATH)")
+    link_dupes_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Count groups without writing cards",
+    )
+
     enrich_orch_parser = subparsers.add_parser(
         "enrich",
         help="Full vault enrichment orchestrator (extract-document-text → enrich-emails → enrich-cards × 4)",
@@ -1730,6 +1741,19 @@ def main() -> None:
                     limit=(lim if lim > 0 else None),
                     fetch_bytes=fetch_bytes,
                 )
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "link-file-duplicates":
+        try:
+            from archive_sync.file_identity import run_file_duplicate_linking
+
+            from .commands._resolve import resolve_vault
+
+            vault_arg = str(getattr(args, "vault", "") or "").strip()
+            vault = Path(vault_arg) if vault_arg else resolve_vault()
+            out = run_file_duplicate_linking(vault, dry_run=bool(getattr(args, "dry_run", False)))
             _print_json(out)
         except PpaError as exc:
             _cli_fail(exc)

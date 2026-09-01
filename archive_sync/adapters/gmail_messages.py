@@ -22,6 +22,7 @@ from email.utils import getaddresses, parsedate_to_datetime
 from typing import Any
 
 from archive_auth import build_google_cli_token_manager
+from archive_sync.junk_attachments import should_emit_email_attachment
 from archive_vault.identity import IdentityCache
 from archive_vault.schema import EmailAttachmentCard, EmailMessageCard, EmailThreadCard
 from archive_vault.thread_hash import (
@@ -1026,7 +1027,16 @@ class GmailMessagesAdapter(BaseAdapter):
         )
         people_links = self._resolve_people(identity_cache, participant_emails)
         body = _extract_text_body(message.get("payload", {}) or {})
-        attachments = _extract_attachments(message.get("payload", {}) or {})
+        attachments = [
+            attachment
+            for attachment in _extract_attachments(message.get("payload", {}) or {})
+            if should_emit_email_attachment(
+                filename=str(attachment.get("filename") or ""),
+                mime_type=str(attachment.get("mime_type") or ""),
+                size_bytes=int(attachment.get("size_bytes") or 0),
+                is_inline=bool(attachment.get("is_inline", False)),
+            )
+        ]
         attachment_links = [
             _wikilink_from_uid(
                 _attachment_uid(account_email, str(message.get("id", "")), str(attachment["attachment_id"]))
@@ -1756,6 +1766,7 @@ class GmailMessagesAdapter(BaseAdapter):
                 text_source=str(item.get("text_source", "")).strip(),
                 extracted_text_sha=str(item.get("extracted_text_sha", "")).strip(),
                 extraction_status=str(item.get("extraction_status", "")).strip(),
+                content_sha=str(item.get("content_sha", "") or item.get("extracted_text_sha", "")).strip(),
             )
             provenance = deterministic_provenance(card, ATTACHMENT_SOURCE)
             return card, provenance, str(item.get("body", "")).strip()
@@ -1781,6 +1792,22 @@ class GmailMessagesAdapter(BaseAdapter):
             if not str(body or "").strip():
                 body = existing_body
         self._replace_generic_card(vault_path, rel_path, card, body, provenance)
+
+    def after_card_write(self, vault_path, card, rel_path, *, raw_item, action, **kwargs) -> None:
+        if getattr(card, "type", "") != "email_attachment":
+            return
+        sha = str(getattr(card, "content_sha", "") or getattr(card, "extracted_text_sha", "") or "").strip()
+        uid = str(getattr(card, "uid", "") or "").strip()
+        if not sha or not uid:
+            return
+        try:
+            from pathlib import Path
+
+            from archive_sync.file_identity import register_ingested_file
+
+            register_ingested_file(Path(vault_path), uid=uid, rel_path=str(rel_path), sha256=sha)
+        except Exception as exc:
+            log.warning("file-identity ingest link skipped uid=%s err=%s", uid, exc)
 
     def _enrich_gmail_attachment_text(
         self,

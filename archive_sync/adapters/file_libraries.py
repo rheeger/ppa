@@ -1896,3 +1896,15 @@ class FileLibrariesAdapter(BaseAdapter):
 
     def merge_card(self, vault_path, rel_path, card, body, provenance) -> None:
         self._replace_generic_card(vault_path, rel_path, card, body, provenance)
+
+    def after_card_write(self, vault_path, card, rel_path, *, raw_item, action, **kwargs) -> None:
+        sha = str(getattr(card, "content_sha", "") or "").strip()
+        uid = str(getattr(card, "uid", "") or "").strip()
+        if not sha or not uid:
+            return
+        try:
+            from archive_sync.file_identity import register_ingested_file
+
+            register_ingested_file(Path(vault_path), uid=uid, rel_path=str(rel_path), sha256=sha)
+        except Exception as exc:
+            logger.warning("file-identity ingest link skipped uid=%s err=%s", uid, exc)

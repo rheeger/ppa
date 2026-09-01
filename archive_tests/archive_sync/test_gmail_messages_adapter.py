@@ -37,6 +37,7 @@ def _message(
     to_value: str,
     snippet: str,
     attachment: dict | None = None,
+    attachments: list[dict] | None = None,
     invite_ics: str | None = None,
     event_id_hint: str | None = None,
     html_body: str | None = None,
@@ -55,13 +56,20 @@ def _message(
     if event_id_hint:
         headers.append({"name": "X-Goog-Calendar-EventId", "value": event_id_hint})
     parts = [{"mimeType": "text/plain", "body": {"data": _b64(body)}}]
+    att_items = list(attachments or [])
     if attachment:
+        att_items.append(attachment)
+    for item in att_items:
+        disposition = "inline" if item.get("is_inline") else "attachment"
+        headers = [{"name": "Content-Disposition", "value": disposition}]
+        if item.get("content_id"):
+            headers.append({"name": "Content-ID", "value": str(item["content_id"])})
         parts.append(
             {
-                "mimeType": attachment["mime_type"],
-                "filename": attachment["filename"],
-                "body": {"attachmentId": attachment["attachment_id"], "size": attachment["size_bytes"]},
-                "headers": [{"name": "Content-Disposition", "value": "attachment"}],
+                "mimeType": item["mime_type"],
+                "filename": item["filename"],
+                "body": {"attachmentId": item["attachment_id"], "size": item["size_bytes"]},
+                "headers": headers,
             }
         )
     if invite_ics:
@@ -978,6 +986,74 @@ def test_attachment_cap_does_not_leave_orphaned_attachment_links(tmp_vault):
     }
     assert attachments_by_message["m1"] == [attachment_link]
     assert attachments_by_message["m2"] == []
+
+
+def test_gmail_apply_does_not_emit_junk_attachments(tmp_vault, tmp_path, monkeypatch):
+    monkeypatch.setenv("PPA_FILE_IDENTITY_DB", str(tmp_path / "id.sqlite"))
+    adapter = GmailMessagesAdapter()
+    responses = iter(
+        [
+            {"threads": [{"id": "t1", "historyId": "h1"}], "nextPageToken": None},
+            _thread(
+                "t1",
+                _message(
+                    message_id="m1",
+                    thread_id="t1",
+                    internal_date="1710000000000",
+                    subject="Invoice",
+                    body="see attached",
+                    from_value="Alice Example <alice@example.com>",
+                    to_value="me@example.com",
+                    snippet="see attached",
+                    attachments=[
+                        {
+                            "attachment_id": "pdf1",
+                            "filename": "invoice.pdf",
+                            "mime_type": "application/pdf",
+                            "size_bytes": 12_000,
+                        },
+                        {
+                            "attachment_id": "logo1",
+                            "filename": "logo.png",
+                            "mime_type": "image/png",
+                            "size_bytes": 4_000,
+                            "is_inline": True,
+                            "content_id": "logo@mail",
+                        },
+                        {
+                            "attachment_id": "img1",
+                            "filename": "image001.png",
+                            "mime_type": "image/png",
+                            "size_bytes": 8_000,
+                        },
+                        {
+                            "attachment_id": "tok1",
+                            "filename": "ANGjdJ9xxxxxxxxxxxxxxxx",
+                            "mime_type": "application/octet-stream",
+                            "size_bytes": 200,
+                        },
+                    ],
+                ),
+                history_id="h1",
+            ),
+        ]
+    )
+    adapter._gws = lambda args: next(responses)  # type: ignore[method-assign]
+    result = adapter.ingest(
+        str(tmp_vault),
+        account_email="me@example.com",
+        max_threads=10,
+        max_messages=10,
+        max_attachments=10,
+    )
+    attachment_files = sorted((tmp_vault / "EmailAttachments").rglob("*.md"))
+    assert len(attachment_files) == 1
+    fm, _, _ = read_note(tmp_vault, str(attachment_files[0].relative_to(tmp_vault)))
+    assert fm["filename"] == "invoice.pdf"
+    message_files = sorted((tmp_vault / "Email").rglob("*.md"))
+    msg_fm, _, _ = read_note(tmp_vault, str(message_files[0].relative_to(tmp_vault)))
+    assert len(msg_fm.get("attachments") or []) == 1
+    assert result.created >= 3
 
 
 def test_extracts_invite_data_from_calendar_attachment_fetch():

@@ -164,6 +164,15 @@ def reextract_one_card(
         )
     prov = merge_provenance(existing_prov, incoming)
     write_card(vault, rel_path, card, new_body, prov)
+    sha = str(field_updates.get("extracted_text_sha") or fm.get("content_sha") or "").strip()
+    uid = str(fm.get("uid") or "").strip()
+    if sha and uid:
+        try:
+            from archive_sync.file_identity import register_ingested_file
+
+            register_ingested_file(vault, uid=uid, rel_path=rel_path, sha256=sha)
+        except Exception as exc:
+            log.warning("file-identity extract link skipped uid=%s err=%s", uid, exc)
     return {
         "rel_path": rel_path,
         "status": "ok",

@@ -113,6 +113,7 @@ pub static KNOWN_CARD_FIELD_KEYS: &[&str] = &[
     "driver_name",
     "dropoff_at",
     "dropoff_location",
+    "duplicates",
     "duration_minutes",
     "duration_ms",
     "duration_seconds",

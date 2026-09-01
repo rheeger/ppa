@@ -506,6 +506,20 @@ def run_processors(
                 default_card_type=default_card_type,
                 default_processor_decision=default_processor_decision,
             )
+            if uids:
+                seen = {snap.input_uid for snap in snapshots}
+                extra = [uid for uid in uids if uid not in seen]
+                if extra:
+                    snapshots.extend(
+                        load_dirty_inputs(
+                            dirty_uids=extra,
+                            vault_path=vault_path,
+                            store=store,
+                            state_store=state_store,
+                            default_card_type=default_card_type,
+                            default_processor_decision=default_processor_decision,
+                        )
+                    )
         elif uids:
             snapshots = load_dirty_inputs(
                 dirty_uids=uids,
