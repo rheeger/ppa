@@ -10,7 +10,10 @@ Nightly IS ``maintain`` with live updater + dirty-processor flags:
 
 That sequence already: pulls every executable (non-parked) source → applies new
 data → rematerializes dirty UIDs → dirty-embeds via the embedding processor
-(``store.embed_pending``) → incremental index. No separate ``embed-pending``
+(``store.embed_pending``) → incremental index. ``ppa maintain`` itself also
+skips junk email-attachment cards on Gmail apply, incrementally purges any
+that slipped through, and hash-links document/attachment duplicates
+(``file_identity``). No separate ``embed-pending`` or ``link-file-duplicates``
 step. No ``--catch-up``. No Photos / Apple Health. No ``--allow-full-embedding``
 / IVFFlat / force-full rebuild.
 
@@ -392,10 +395,13 @@ def main(argv: list[str] | None = None) -> int:
         LOG.error("maintain failed: %s log_file=%s", reason, log_file)
         return 1
     LOG.info(
-        "nightly maintain done nothing_to_do=%s cards_rebuilt=%s updater_runs=%s log_file=%s",
+        "nightly maintain done nothing_to_do=%s cards_rebuilt=%s updater_runs=%s "
+        "junk_purged=%s file_dups_linked=%s log_file=%s",
         report.get("nothing_to_do"),
         report.get("cards_rebuilt"),
         report.get("source_updater_runs"),
+        report.get("junk_attachments_purged"),
+        report.get("file_duplicates_linked"),
         log_file,
     )
     return 0

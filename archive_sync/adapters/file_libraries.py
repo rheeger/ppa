@@ -99,7 +99,30 @@ ROOTS: dict[str, Path] = {
     "downloads": Path.home() / "Downloads",
 }
 
+# Labels assigned at ingest as custom:{path.name.lower()} for roots not in ROOTS.
+CUSTOM_ROOTS: dict[str, Path] = {
+    "custom:requested record": Path.home() / "Documents" / "Health & Personal" / "05_Amelia" / "Requested Record",
+}
+
 ROOT_PATH_TO_LABEL = {path.expanduser().resolve(): label for label, path in ROOTS.items()}
+
+
+def resolve_library_root(library_root: str) -> Path | None:
+    """Map a stored ``library_root`` label (or absolute path) to a directory."""
+
+    label = (library_root or "").strip()
+    if not label:
+        return None
+    if label in ROOTS:
+        return ROOTS[label].expanduser()
+    if label in CUSTOM_ROOTS:
+        return CUSTOM_ROOTS[label].expanduser()
+    path = Path(label).expanduser()
+    try:
+        return path if path.is_dir() else None
+    except OSError:
+        return None
+
 
 INCLUDED_EXTENSIONS = {
     ".pdf",
@@ -125,7 +148,21 @@ INCLUDED_EXTENSIONS = {
     ".vcf",
 }
 PACKAGE_EXTENSIONS = {".pages", ".key"}
-TEXT_EXTENSIONS = {".txt", ".md", ".rtf", ".json", ".csv", ".xml", ".html", ".htm"}
+TEXT_EXTENSIONS = {".txt", ".md", ".json", ".csv", ".xml"}
+HTML_EXTENSIONS = {".html", ".htm"}
+# Local anydoc (firecrawl-anydoc) formats already in INCLUDED_EXTENSIONS.
+# .odt/.ods/.odp/.epub are supported by anydoc but not ingested today.
+ANYDOC_EXTENSIONS = {
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".rtf",
+    ".ppt",
+    ".pptx",
+    ".xls",
+    ".xlsx",
+    ".csv",
+}
 TEXTUTIL_EXTENSIONS = {".doc", ".docx", ".pages", ".rtf"}
 XML_SPREADSHEET_EXTENSIONS = {".xlsx"}
 XML_PRESENTATION_EXTENSIONS = {".pptx"}
@@ -298,7 +335,9 @@ def _derive_title(path: Path, text: str, *, preferred: str = "") -> tuple[str, b
 
 
 def _sha256_bytes(value: bytes) -> str:
-    return hashlib.sha256(value).hexdigest()
+    from archive_sync.file_hash import bytes_sha256
+
+    return bytes_sha256(value)
 
 
 def _sha256_text(value: str) -> str:
@@ -517,6 +556,9 @@ def _stage_file_basename(root_label: str) -> str:
 
 def _init_stage_worker(vault_path: str) -> None:  # pragma: no cover - process pool runtime only
     global _STAGE_WORKER_IDENTITY_CACHE
+    from archive_sync.anydoc_ocr import load_firecrawl_api_key
+
+    load_firecrawl_api_key()
     _STAGE_WORKER_IDENTITY_CACHE = IdentityCache(vault_path)
 
 
@@ -564,6 +606,12 @@ def _iter_plain_rows(text: str, *, delimiter: str) -> list[str]:
     return rows
 
 
+def _html_to_markdown(raw: str) -> str:
+    from archive_sync.document_extract import html_to_markdown
+
+    return html_to_markdown(raw)
+
+
 def _extract_text_file(path: Path) -> tuple[str, str]:
     if _path_size(path) > MAX_TEXT_FILE_BYTES:
         return "", "metadata_only"
@@ -571,6 +619,86 @@ def _extract_text_file(path: Path) -> tuple[str, str]:
     if path.suffix.lower() == ".csv":
         return "\n".join(_iter_plain_rows(raw, delimiter=",")), "csv"
     return _trim_text(raw), "plain"
+
+
+def _extract_html(path: Path) -> dict[str, Any]:
+    if _path_size(path) > MAX_TEXT_FILE_BYTES:
+        return {
+            "title": _filename_title(path),
+            "document_type": path.suffix.lower().lstrip("."),
+            "text": "",
+            "text_source": "metadata_only",
+            "quality_flags": ["metadata_only", "title_from_filename"],
+        }
+    raw = path.read_text(encoding="utf-8", errors="ignore")
+    try:
+        text = _trim_text(_html_to_markdown(raw))
+        text_source = "html2text"
+    except Exception:
+        text = _trim_text(_strip_html(raw))
+        text_source = "html_stripped"
+    title, title_from_filename = _derive_title(path, text)
+    return {
+        "title": title,
+        "description": _preview_description(text, title=title),
+        "document_date": _detect_date(text[:4000]) or _detect_date(_path_text(path)),
+        "document_type": path.suffix.lower().lstrip("."),
+        "text": text,
+        "text_source": text_source,
+        "quality_flags": ["title_from_filename"] if title_from_filename else [],
+    }
+
+
+def _anydoc_document_type(suffix: str) -> str:
+    if suffix in {".csv", ".xlsx", ".xls"}:
+        return "spreadsheet"
+    if suffix in {".pptx", ".ppt"}:
+        return "presentation"
+    return suffix.lstrip(".")
+
+
+def _try_anydoc(path: Path) -> dict[str, Any] | None:
+    """Convert via the shared extract library. Local reject first; hosted on NeedsOcr."""
+
+    try:
+        import anydoc  # noqa: F401
+    except ImportError:
+        return None
+    from archive_sync.anydoc_ocr import is_needs_ocr
+    from archive_sync.document_extract import UnsupportedExtract, convert_document_to_markdown, is_tiny_image
+
+    try:
+        size = _path_size(path)
+    except OSError:
+        return None
+    allow_hosted = not is_tiny_image(path.name, size)
+    try:
+        raw, text_source = convert_document_to_markdown(path, allow_hosted=allow_hosted)
+    except Exception as exc:
+        name = type(exc).__name__
+        if (
+            is_needs_ocr(exc)
+            or isinstance(exc, UnsupportedExtract)
+            or name in {"EncryptedError", "UnsupportedError", "HostedError"}
+        ):
+            logger.debug("anydoc skip path=%s err=%s", path.name, exc)
+        else:
+            logger.warning("anydoc failed path=%s err=%s", path, exc)
+        return None
+    text = _trim_text(str(raw or "").strip())
+    if not text:
+        return None
+    suffix = path.suffix.lower()
+    title, title_from_filename = _derive_title(path, text)
+    return {
+        "title": title,
+        "description": _preview_description(text, title=title),
+        "document_date": _detect_date(text[:4000]) or _detect_date(_path_text(path)),
+        "document_type": _anydoc_document_type(suffix),
+        "text": text,
+        "text_source": text_source,
+        "quality_flags": ["title_from_filename"] if title_from_filename else [],
+    }
 
 
 def _extract_email(path: Path) -> dict[str, Any]:
@@ -960,6 +1088,12 @@ def _extract_generic_metadata(path: Path) -> dict[str, Any]:
 
 def _extract_payload(path: Path) -> dict[str, Any]:
     suffix = path.suffix.lower()
+    if suffix in HTML_EXTENSIONS:
+        return _extract_html(path)
+    if suffix in ANYDOC_EXTENSIONS:
+        payload = _try_anydoc(path)
+        if payload is not None:
+            return payload
     if suffix in TEXT_EXTENSIONS:
         text, text_source = _extract_text_file(path)
         title, title_from_filename = _derive_title(path, text)
@@ -1113,6 +1247,9 @@ class FileLibrariesAdapter(BaseAdapter):
         for label in labels:
             if label in ROOTS:
                 selected.append((label, ROOTS[label].expanduser().resolve()))
+                continue
+            if label in CUSTOM_ROOTS:
+                selected.append((label, CUSTOM_ROOTS[label].expanduser().resolve()))
                 continue
             path = Path(label).expanduser().resolve()
             root_label = ROOT_PATH_TO_LABEL.get(path, f"custom:{path.name.lower()}")
@@ -1417,6 +1554,9 @@ class FileLibrariesAdapter(BaseAdapter):
         progress_every: int = 100,
         verbose: bool = False,
     ) -> dict[str, Any]:
+        from archive_sync.anydoc_ocr import load_firecrawl_api_key
+
+        load_firecrawl_api_key()
         selected_roots = self._selected_roots(roots)
         stage_path = Path(stage_dir).expanduser().resolve()
         stage_path.mkdir(parents=True, exist_ok=True)
@@ -1754,3 +1894,15 @@ class FileLibrariesAdapter(BaseAdapter):
 
     def merge_card(self, vault_path, rel_path, card, body, provenance) -> None:
         self._replace_generic_card(vault_path, rel_path, card, body, provenance)
+
+    def after_card_write(self, vault_path, card, rel_path, *, raw_item, action, **kwargs) -> None:
+        sha = str(getattr(card, "content_sha", "") or "").strip()
+        uid = str(getattr(card, "uid", "") or "").strip()
+        if not sha or not uid:
+            return
+        try:
+            from archive_sync.file_identity import register_ingested_file
+
+            register_ingested_file(Path(vault_path), uid=uid, rel_path=str(rel_path), sha256=sha)
+        except Exception as exc:
+            logger.warning("file-identity ingest link skipped uid=%s err=%s", uid, exc)

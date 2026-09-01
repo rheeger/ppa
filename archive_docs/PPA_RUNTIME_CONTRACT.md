@@ -113,6 +113,7 @@ These control rebuild, embedding, and flush behavior.
 | `PPA_REBUILD_STAGING_MODE`         | `direct`       |
 | `PPA_FORCE_FULL_REBUILD`           | `0`            |
 | `PPA_DISABLE_MANIFEST_CACHE`       | `0`            |
+| `PPA_ANYDOC_EXTRACT_CACHE`         | `~/.ppa/anydoc-extract-cache.sqlite` |
 | `PPA_SEED_FROZEN`                  | `0`            |
 | `PPA_REBUILD_RESUME`               | `0`            |
 | `PPA_REBUILD_FLUSH_MAX_TOTAL_ROWS` | _(adaptive)_   |

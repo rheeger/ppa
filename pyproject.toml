@@ -14,6 +14,7 @@ dependencies = [
   "python-dateutil>=2.8",
   "html2text>=2024.2.26",
   "markitdown>=0.0.1",
+  "firecrawl-anydoc>=0.2.0",
 ]
 
 [project.scripts]

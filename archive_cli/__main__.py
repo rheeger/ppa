@@ -788,7 +788,7 @@ def main() -> None:
 
     extract_doc_parser = subparsers.add_parser(
         "extract-document-text",
-        help="Re-extract document card bodies with markitdown (RTF/plain binary fixes)",
+        help="Re-extract document card bodies via local anydoc (hosted OCR only on NeedsOcr)",
     )
     extract_doc_parser.add_argument("--vault", default="", help="Vault path (default: PPA_PATH)")
     extract_doc_parser.add_argument(
@@ -802,6 +802,45 @@ def main() -> None:
         default=0,
         metavar="N",
         help="Max eligible cards to process (0 = no cap)",
+    )
+
+    extract_att_parser = subparsers.add_parser(
+        "extract-attachment-text",
+        help="Extract email-attachment files onto attachment cards (local anydoc first)",
+    )
+    extract_att_parser.add_argument("--vault", default="", help="Vault path (default: PPA_PATH)")
+    extract_att_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be converted without writing vault cards",
+    )
+    extract_att_parser.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Max eligible cards to process (0 = no cap)",
+    )
+    extract_att_parser.add_argument(
+        "--fetch",
+        action="store_true",
+        help="Download missing Gmail attachment bytes (document-like files only)",
+    )
+    extract_att_parser.add_argument(
+        "--fetch-only",
+        action="store_true",
+        help="Download missing document-like attachments; do not extract or call hosted OCR",
+    )
+
+    link_dupes_parser = subparsers.add_parser(
+        "link-file-duplicates",
+        help="Hash document/attachment source bytes and wikilink same-file copies",
+    )
+    link_dupes_parser.add_argument("--vault", default="", help="Vault path (default: PPA_PATH)")
+    link_dupes_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Count groups without writing cards",
     )
 
     enrich_orch_parser = subparsers.add_parser(
@@ -1659,6 +1698,62 @@ def main() -> None:
                 dry_run=bool(getattr(args, "dry_run", False)),
                 limit=(lim if lim > 0 else None),
             )
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "extract-attachment-text":
+        try:
+            from archive_sync.attachment_text import run_attachment_text_extraction
+
+            from .commands._resolve import resolve_vault
+
+            vault_arg = str(getattr(args, "vault", "") or "").strip()
+            vault = Path(vault_arg) if vault_arg else resolve_vault()
+            lim = int(getattr(args, "limit", 0) or 0)
+            fetch_only = bool(getattr(args, "fetch_only", False))
+            want_fetch = fetch_only or bool(getattr(args, "fetch", False))
+            fetch_bytes = None
+            if want_fetch:
+                from archive_sync.adapters.gmail_messages import GmailMessagesAdapter
+
+                adapter = GmailMessagesAdapter()
+
+                def fetch_bytes(message_id: str, attachment_id: str, account_email: str) -> bytes:
+                    return adapter.fetch_attachment_bytes(
+                        message_id, attachment_id, account_email=account_email
+                    )
+
+            if fetch_only:
+                from archive_sync.attachment_text import run_attachment_fetch
+
+                if fetch_bytes is None:
+                    raise PpaError("extract-attachment-text --fetch-only requires a Gmail fetch path")
+                out = run_attachment_fetch(
+                    vault,
+                    fetch_bytes=fetch_bytes,
+                    limit=(lim if lim > 0 else None),
+                )
+            else:
+                out = run_attachment_text_extraction(
+                    vault,
+                    dry_run=bool(getattr(args, "dry_run", False)),
+                    limit=(lim if lim > 0 else None),
+                    fetch_bytes=fetch_bytes,
+                )
+            _print_json(out)
+        except PpaError as exc:
+            _cli_fail(exc)
+        return
+    if args.command == "link-file-duplicates":
+        try:
+            from archive_sync.file_identity import run_file_duplicate_linking
+
+            from .commands._resolve import resolve_vault
+
+            vault_arg = str(getattr(args, "vault", "") or "").strip()
+            vault = Path(vault_arg) if vault_arg else resolve_vault()
+            out = run_file_duplicate_linking(vault, dry_run=bool(getattr(args, "dry_run", False)))
             _print_json(out)
         except PpaError as exc:
             _cli_fail(exc)

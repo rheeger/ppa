@@ -67,6 +67,10 @@ def test_ingest_creates_document_card_and_resolves_people(tmp_vault: Path, tmp_p
     assert frontmatter["metadata_sha"]
     assert "Resolved people: [[alice-example]]" in body
     assert "Extracted text:" in body
+    from archive_sync.file_identity import FileIdentityIndex
+
+    identity = FileIdentityIndex()
+    assert frontmatter["uid"] in identity.uids_for_sha(frontmatter["content_sha"])
 
 
 def test_stage_documents_writes_manifest_without_touching_vault(tmp_vault: Path, tmp_path: Path):
@@ -280,3 +284,67 @@ def test_ingest_ics_extracts_date_range_and_location(tmp_vault: Path, tmp_path: 
     assert frontmatter["websites"] == ["https://www.cvs.com/vaccine"]
     assert frontmatter["orgs"] == ["CVS Pharmacy"]
     assert "Location: CVS Pharmacy, 218 Myrtle Ave, Brooklyn, NY" in body
+
+
+def _minimal_text_pdf(text: str) -> bytes:
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+    ]
+    stream = f"BT /F1 24 Tf 72 720 Td ({text}) Tj ET".encode("latin-1")
+    objects.append(b"<< /Length %d >>\nstream\n" % len(stream) + stream + b"\nendstream")
+    objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for index, body in enumerate(objects, 1):
+        offsets.append(len(out))
+        out.extend(f"{index} 0 obj\n".encode())
+        out.extend(body)
+        out.extend(b"\nendobj\n")
+    xref = len(out)
+    out.extend(f"xref\n0 {len(objects) + 1}\n".encode())
+    out.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        out.extend(f"{offset:010d} 00000 n \n".encode())
+    out.extend(f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode())
+    return bytes(out)
+
+
+def test_extract_payload_pdf_uses_anydoc(tmp_path: Path):
+    from archive_sync.adapters.file_libraries import _extract_payload
+
+    pdf_path = tmp_path / "hello.pdf"
+    pdf_path.write_bytes(_minimal_text_pdf("Hello anydoc PDF"))
+    payload = _extract_payload(pdf_path)
+    assert payload["text_source"] == "anydoc"
+    assert "Hello anydoc PDF" in payload["text"]
+    assert "<" not in payload["text"]
+
+
+def test_extract_payload_html_converts_to_markdown(tmp_path: Path):
+    from archive_sync.adapters.file_libraries import _extract_payload
+
+    html_path = tmp_path / "epic-note.htm"
+    html_path.write_text(
+        "<html><head><style>body{color:red}</style></head>"
+        "<body><h1>Office Visit</h1><p>Patient seen 2024-01-15.</p></body></html>",
+        encoding="utf-8",
+    )
+    payload = _extract_payload(html_path)
+    assert payload["text_source"] == "html2text"
+    assert "Office Visit" in payload["text"]
+    assert "Patient seen 2024-01-15" in payload["text"]
+    assert "<style>" not in payload["text"]
+    assert "<p>" not in payload["text"]
+
+
+def test_extract_payload_pdf_falls_back_when_anydoc_unavailable(tmp_path: Path, monkeypatch):
+    from archive_sync.adapters import file_libraries as fl
+
+    pdf_path = tmp_path / "hello.pdf"
+    pdf_path.write_bytes(_minimal_text_pdf("Hello fallback PDF"))
+    monkeypatch.setattr(fl, "_try_anydoc", lambda path: None)
+    payload = fl._extract_payload(pdf_path)
+    assert payload["text_source"] == "pdf"
+    assert "Hello fallback PDF" in payload["text"]

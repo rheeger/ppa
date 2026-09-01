@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import time
+import urllib.error
 from pathlib import Path
 
 from archive_sync.adapters.base import deterministic_provenance
@@ -35,6 +37,7 @@ def _message(
     to_value: str,
     snippet: str,
     attachment: dict | None = None,
+    attachments: list[dict] | None = None,
     invite_ics: str | None = None,
     event_id_hint: str | None = None,
     html_body: str | None = None,
@@ -53,13 +56,20 @@ def _message(
     if event_id_hint:
         headers.append({"name": "X-Goog-Calendar-EventId", "value": event_id_hint})
     parts = [{"mimeType": "text/plain", "body": {"data": _b64(body)}}]
+    att_items = list(attachments or [])
     if attachment:
+        att_items.append(attachment)
+    for item in att_items:
+        disposition = "inline" if item.get("is_inline") else "attachment"
+        headers = [{"name": "Content-Disposition", "value": disposition}]
+        if item.get("content_id"):
+            headers.append({"name": "Content-ID", "value": str(item["content_id"])})
         parts.append(
             {
-                "mimeType": attachment["mime_type"],
-                "filename": attachment["filename"],
-                "body": {"attachmentId": attachment["attachment_id"], "size": attachment["size_bytes"]},
-                "headers": [{"name": "Content-Disposition", "value": "attachment"}],
+                "mimeType": item["mime_type"],
+                "filename": item["filename"],
+                "body": {"attachmentId": item["attachment_id"], "size": item["size_bytes"]},
+                "headers": headers,
             }
         )
     if invite_ics:
@@ -795,23 +805,48 @@ def test_gws_with_retry_retries_rate_limit_errors(monkeypatch):
     adapter = GmailMessagesAdapter()
     calls = {"count": 0}
 
-    def flaky(args):
+    def flaky(args, *, token_manager=None):
         calls["count"] += 1
         if calls["count"] == 1:
             raise RuntimeError('{"error":{"code":403,"reason":"rateLimitExceeded","message":"Quota exceeded"}}')
         return {"ok": True}
 
     monkeypatch.setattr(adapter, "_gws", flaky)
+    monkeypatch.setattr("archive_sync.adapters.gmail_messages.time.sleep", lambda *_args, **_kwargs: None)
     result = adapter._gws_with_retry(["gmail", "users", "threads", "list", "--params", "{}"], attempts=2)
     assert result == {"ok": True}
     assert calls["count"] == 2
+
+
+def test_gws_with_retry_does_not_retry_permission_denied(monkeypatch):
+    from archive_sync.adapters.gmail_http_errors import GmailPermissionDenied
+
+    adapter = GmailMessagesAdapter()
+    calls = {"count": 0}
+    body = (
+        '{"error":{"code":403,"message":"Permission denied",'
+        '"errors":[{"reason":"forbidden","message":"Permission denied"}],'
+        '"status":"PERMISSION_DENIED"}}'
+    )
+
+    def always_forbidden(args, *, token_manager=None):
+        calls["count"] += 1
+        raise GmailPermissionDenied(body, reason="forbidden")
+
+    monkeypatch.setattr(adapter, "_gws", always_forbidden)
+    try:
+        adapter._gws_with_retry(["gmail", "users", "messages", "attachments", "get", "--params", "{}"], attempts=8)
+        raise AssertionError("expected permission denied")
+    except GmailPermissionDenied:
+        pass
+    assert calls["count"] == 1
 
 
 def test_gws_with_retry_retries_failed_precondition_errors(monkeypatch):
     adapter = GmailMessagesAdapter()
     calls = {"count": 0}
 
-    def flaky(args):
+    def flaky(args, *, token_manager=None):
         calls["count"] += 1
         if calls["count"] == 1:
             raise RuntimeError(
@@ -820,6 +855,7 @@ def test_gws_with_retry_retries_failed_precondition_errors(monkeypatch):
         return {"ok": True}
 
     monkeypatch.setattr(adapter, "_gws", flaky)
+    monkeypatch.setattr("archive_sync.adapters.gmail_messages.time.sleep", lambda *_args, **_kwargs: None)
     result = adapter._gws_with_retry(["gmail", "users", "threads", "get", "--params", "{}"], attempts=2)
     assert result == {"ok": True}
     assert calls["count"] == 2
@@ -850,10 +886,39 @@ def test_gws_falls_back_to_http_for_project_permission_errors(monkeypatch):
         )()
 
     monkeypatch.setattr("archive_sync.adapters.gmail_messages.subprocess.run", fake_run)
-    monkeypatch.setattr(adapter, "_gmail_http_json", lambda args: {"threads": [{"id": "t1"}]})
+    monkeypatch.setattr(adapter, "_gmail_http_json", lambda args, token_manager=None: {"threads": [{"id": "t1"}]})
 
     result = adapter._gws(["gmail", "users", "threads", "list", "--params", '{"userId":"me","maxResults":1}'])
     assert result == {"threads": [{"id": "t1"}]}
+
+
+def test_http_retries_rate_limit_then_succeeds(monkeypatch):
+    adapter = GmailMessagesAdapter()
+    calls = {"n": 0}
+
+    class DummyManager:
+        def get_access_token(self, *, force_refresh=False):
+            return "token"
+
+    def fake_urlopen(req, timeout=30):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise urllib.error.HTTPError(
+                req.full_url,
+                403,
+                "Forbidden",
+                {"Retry-After": "0"},
+                io.BytesIO(
+                    b'{"error":{"code":403,"message":"Quota exceeded","errors":[{"reason":"rateLimitExceeded"}]}}'
+                ),
+            )
+        return io.BytesIO(b'{"data":"ok"}')
+
+    monkeypatch.setattr("archive_sync.adapters.gmail_messages.time.sleep", lambda *_a, **_k: None)
+    monkeypatch.setattr("archive_sync.adapters.gmail_messages.urllib.request.urlopen", fake_urlopen)
+    out = adapter._gmail_http_request_json("https://example.test/att", token_manager=DummyManager())
+    assert out == {"data": "ok"}
+    assert calls["n"] == 2
 
 
 def test_attachment_cap_does_not_leave_orphaned_attachment_links(tmp_vault):
@@ -921,6 +986,74 @@ def test_attachment_cap_does_not_leave_orphaned_attachment_links(tmp_vault):
     }
     assert attachments_by_message["m1"] == [attachment_link]
     assert attachments_by_message["m2"] == []
+
+
+def test_gmail_apply_does_not_emit_junk_attachments(tmp_vault, tmp_path, monkeypatch):
+    monkeypatch.setenv("PPA_FILE_IDENTITY_DB", str(tmp_path / "id.sqlite"))
+    adapter = GmailMessagesAdapter()
+    responses = iter(
+        [
+            {"threads": [{"id": "t1", "historyId": "h1"}], "nextPageToken": None},
+            _thread(
+                "t1",
+                _message(
+                    message_id="m1",
+                    thread_id="t1",
+                    internal_date="1710000000000",
+                    subject="Invoice",
+                    body="see attached",
+                    from_value="Alice Example <alice@example.com>",
+                    to_value="me@example.com",
+                    snippet="see attached",
+                    attachments=[
+                        {
+                            "attachment_id": "pdf1",
+                            "filename": "invoice.pdf",
+                            "mime_type": "application/pdf",
+                            "size_bytes": 12_000,
+                        },
+                        {
+                            "attachment_id": "logo1",
+                            "filename": "logo.png",
+                            "mime_type": "image/png",
+                            "size_bytes": 4_000,
+                            "is_inline": True,
+                            "content_id": "logo@mail",
+                        },
+                        {
+                            "attachment_id": "img1",
+                            "filename": "image001.png",
+                            "mime_type": "image/png",
+                            "size_bytes": 8_000,
+                        },
+                        {
+                            "attachment_id": "tok1",
+                            "filename": "ANGjdJ9xxxxxxxxxxxxxxxx",
+                            "mime_type": "application/octet-stream",
+                            "size_bytes": 200,
+                        },
+                    ],
+                ),
+                history_id="h1",
+            ),
+        ]
+    )
+    adapter._gws = lambda args: next(responses)  # type: ignore[method-assign]
+    result = adapter.ingest(
+        str(tmp_vault),
+        account_email="me@example.com",
+        max_threads=10,
+        max_messages=10,
+        max_attachments=10,
+    )
+    attachment_files = sorted((tmp_vault / "EmailAttachments").rglob("*.md"))
+    assert len(attachment_files) == 1
+    fm, _, _ = read_note(tmp_vault, str(attachment_files[0].relative_to(tmp_vault)))
+    assert fm["filename"] == "invoice.pdf"
+    message_files = sorted((tmp_vault / "Email").rglob("*.md"))
+    msg_fm, _, _ = read_note(tmp_vault, str(message_files[0].relative_to(tmp_vault)))
+    assert len(msg_fm.get("attachments") or []) == 1
+    assert result.created >= 3
 
 
 def test_extracts_invite_data_from_calendar_attachment_fetch():

@@ -220,6 +220,7 @@ DETERMINISTIC_ONLY = frozenset(
         "relative_path",
         "extension",
         "content_sha",
+        "duplicates",
         "file_created_at",
         "file_modified_at",
         "date_start",
@@ -941,19 +942,40 @@ class EmailAttachmentCard(BaseCard):
     content_id: str = ""
     is_inline: bool = False
     attachment_metadata_sha: str = ""
+    text_source: str = ""
+    extracted_text_sha: str = ""
+    extraction_status: str = ""
+    content_sha: str = ""
+    duplicates: list[str] = Field(default_factory=list)
 
     @field_validator("account_email")
     @classmethod
     def lowercase_attachment_account(cls, value: str) -> str:
         return value.lower().strip()
 
-    @field_validator("filename", "mime_type", "content_id", "attachment_metadata_sha")
+    @field_validator(
+        "filename",
+        "mime_type",
+        "content_id",
+        "attachment_metadata_sha",
+        "text_source",
+        "extracted_text_sha",
+        "extraction_status",
+        "content_sha",
+    )
     @classmethod
     def clean_attachment_strings(cls, value: str) -> str:
         return _clean_string(value)
 
+    @field_validator("duplicates")
+    @classmethod
+    def dedupe_attachment_duplicates(cls, value: list[str]) -> list[str]:
+        return _dedupe_preserve_order([_clean_string(item) for item in value if item and _clean_string(item)])
+
     @model_validator(mode="after")
     def attachment_summary_fallback(self) -> EmailAttachmentCard:
+        self.text_source = _clean_string(self.text_source).lower()
+        self.extraction_status = _clean_string(self.extraction_status).lower()
         if not self.summary:
             self.summary = self.filename or self.attachment_id
         self.summary = _clean_string(self.summary)
@@ -1479,6 +1501,7 @@ class DocumentCard(BaseCard):
     extracted_text_sha: str = ""
     extraction_status: str = ""
     quality_flags: list[str] = Field(default_factory=list)
+    duplicates: list[str] = Field(default_factory=list)
 
     @field_validator(
         "library_root",
@@ -1515,7 +1538,7 @@ class DocumentCard(BaseCard):
     def dedupe_document_phones(cls, value: list[str]) -> list[str]:
         return _dedupe_preserve_order([item.strip() for item in value if item and item.strip()])
 
-    @field_validator("authors", "counterparties", "websites", "sheet_names", "quality_flags")
+    @field_validator("authors", "counterparties", "websites", "sheet_names", "quality_flags", "duplicates")
     @classmethod
     def dedupe_document_lists(cls, value: list[str]) -> list[str]:
         return _dedupe_preserve_order([_clean_string(item) for item in value if item and _clean_string(item)])

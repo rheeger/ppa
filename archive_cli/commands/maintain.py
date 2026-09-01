@@ -139,6 +139,9 @@ class MaintenanceReport:
     processor_runs: int = 0
     processor_reports: list[dict[str, Any]] = field(default_factory=list)
     processor_output_count: int = 0
+    junk_attachments_purged: int = 0
+    file_duplicates_linked: int = 0
+    file_identity: dict[str, Any] = field(default_factory=dict)
     errors: list[dict[str, str]] = field(default_factory=list)
     skipped_steps: list[str] = field(default_factory=list)
     nothing_to_do: bool = False
@@ -300,12 +303,56 @@ def _record_processor_status_snapshots(store: DefaultArchiveStore, schema: str) 
         return count
 
 
+def _run_file_hygiene(
+    store: DefaultArchiveStore,
+    *,
+    apply: bool,
+    extra_dirty_uids: set[str] | None = None,
+    logger: logging.Logger,
+) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
+    """Purge slipped junk attachments, then hash-link missing duplicate peers.
+
+    Linking is cache-wide (reuse existing shas, Rust-hash the rest) so historical
+    unlinked copies are found. Dirty hints are not used as a write allowlist.
+    """
+
+    from pathlib import Path
+
+    from archive_sync.file_identity import run_file_duplicate_linking
+    from archive_sync.junk_attachments import run_junk_attachment_purge
+
+    vault = Path(store.vault)
+    hint = {str(uid).strip() for uid in (extra_dirty_uids or set()) if str(uid).strip()}
+    logger.info("maintain file hygiene start apply=%s dirty_hint=%s", apply, len(hint))
+    purge = run_junk_attachment_purge(vault, dry_run=not apply, store=store)
+    purged = {str(uid).strip() for uid in (purge.get("purged_uids") or []) if str(uid).strip()}
+    link = run_file_duplicate_linking(
+        vault,
+        dry_run=not apply,
+        incremental=True,
+        exclude_uids=purged or None,
+    )
+    dirty = [
+        str(uid).strip()
+        for uid in list(purge.get("dirty_uids") or []) + list(link.get("dirty_uids") or [])
+        if str(uid).strip()
+    ]
+    logger.info(
+        "maintain file hygiene done purged=%s linked=%s dirty=%s",
+        purge.get("purged"),
+        link.get("cards_linked"),
+        len(set(dirty)),
+    )
+    return purge, link, sorted(set(dirty))
+
+
 def _run_processors(
     store: DefaultArchiveStore,
     schema: str,
     *,
     apply: bool,
     dirty_uids_path: str = "",
+    extra_dirty_uids: list[str] | None = None,
     source_updater_reports: list[dict[str, Any]] | None = None,
     processor_keys: list[str] | None = None,
     allow_full_embedding: bool = False,
@@ -340,6 +387,7 @@ def _run_processors(
             keys = list(processor_keys or [])
             result = run_processors(
                 dirty_uids_path=Path(dirty_uids_path) if dirty_uids_path else None,
+                dirty_uids=list(extra_dirty_uids or []),
                 source_updater_reports=source_updater_reports,
                 vault_path=str(store.vault),
                 store=store,
@@ -361,6 +409,7 @@ def _run_processors(
         keys = list(processor_keys or [])
         result = run_processors(
             dirty_uids_path=Path(dirty_uids_path) if dirty_uids_path else None,
+            dirty_uids=list(extra_dirty_uids or []),
             source_updater_reports=source_updater_reports,
             vault_path=str(store.vault),
             store=store,
@@ -450,6 +499,34 @@ def run_maintenance(
     elif record_processor_status:
         report.skipped_steps.append("processor_status_snapshot (dry-run)")
 
+    hygiene_dirty: list[str] = []
+    if run_processors or run_source_updaters:
+        try:
+            from archive_sync.processors.dirty_io import dirty_uids_from_source_reports
+
+            hint = set(dirty_uids_from_source_reports(report.source_updater_reports or []))
+            apply_hygiene = (bool(apply_processors) or bool(apply_source_updaters)) and not dry_run
+            purge, link, hygiene_dirty = _run_file_hygiene(
+                store,
+                apply=apply_hygiene,
+                extra_dirty_uids=hint,
+                logger=logger,
+            )
+            report.junk_attachments_purged = int(purge.get("purged") or 0)
+            report.file_duplicates_linked = int(link.get("cards_linked") or 0)
+            report.file_identity = {
+                "cards_scanned": link.get("cards_scanned"),
+                "hashes_reused": link.get("hashes_reused"),
+                "hashes_computed": link.get("hashes_computed"),
+                "groups": link.get("groups"),
+                "incremental": True,
+            }
+            if not apply_hygiene:
+                report.skipped_steps.append("file_hygiene (dry-run)")
+        except Exception as exc:
+            logger.exception("maintain_file_hygiene_failed")
+            report.errors.append({"step": "file_hygiene", "error": str(exc)})
+
     if run_processors:
         try:
             apply = bool(apply_processors) and not dry_run
@@ -458,6 +535,7 @@ def run_maintenance(
                 schema,
                 apply=apply,
                 dirty_uids_path=dirty_uids_path,
+                extra_dirty_uids=hygiene_dirty,
                 source_updater_reports=report.source_updater_reports or None,
                 processor_keys=processor_keys,
                 allow_full_embedding=allow_full_embedding,
@@ -514,7 +592,21 @@ def run_maintenance(
         return report
 
     if not new_rows:
-        report.nothing_to_do = True
+        processors_applied = bool(run_processors) and bool(apply_processors) and not dry_run
+        if hygiene_dirty and not dry_run and not processors_applied:
+            try:
+                counts = store.rebuild(force_full=False, uid_allowlist=set(hygiene_dirty))
+                report.cards_rebuilt = int(counts.get("cards", 0) or 0)
+            except Exception as exc:
+                logger.exception("maintain_rebuild_failed")
+                report.errors.append({"step": "incremental_rebuild", "error": str(exc)})
+        report.nothing_to_do = (
+            not hygiene_dirty
+            and not report.source_updater_runs
+            and not report.processor_runs
+            and report.junk_attachments_purged == 0
+            and report.file_duplicates_linked == 0
+        )
         report.completed_at = datetime.now(timezone.utc).isoformat()
         return report
 
@@ -575,7 +667,11 @@ def run_maintenance(
         report.skipped_steps.append("watermark_update (dry-run)")
     else:
         try:
-            counts = store.rebuild(force_full=False, uid_allowlist=tailed_uids)
+            processors_applied = bool(run_processors) and bool(apply_processors)
+            rebuild_uids = set(tailed_uids)
+            if hygiene_dirty and not processors_applied:
+                rebuild_uids.update(hygiene_dirty)
+            counts = store.rebuild(force_full=False, uid_allowlist=rebuild_uids)
             report.cards_rebuilt = int(counts.get("cards", 0) or 0)
         except Exception as exc:
             logger.exception("maintain_rebuild_failed")

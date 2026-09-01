@@ -323,6 +323,28 @@ def _build_email_message_chunks(frontmatter: dict[str, Any], body: str, append_c
         append_chunks("message_body", body.strip(), ["body"])
 
 
+def _build_email_attachment_chunks(frontmatter: dict[str, Any], body: str, append_chunks) -> None:
+    identity = "\n".join(
+        line
+        for line in [
+            _format_labeled_block("filename", [str(frontmatter.get("filename", ""))]),
+            _format_labeled_block("summary", [str(frontmatter.get("summary", ""))]),
+            _format_labeled_block(
+                "parent", [str(frontmatter.get("message", "")), str(frontmatter.get("thread", ""))]
+            ),
+            _format_labeled_block("mime_type", [str(frontmatter.get("mime_type", ""))]),
+        ]
+        if line
+    )
+    append_chunks(
+        "attachment_filename",
+        identity,
+        ["filename", "summary", "message", "thread", "mime_type"],
+    )
+    if body.strip():
+        append_chunks("attachment_body", body.strip(), ["body"])
+
+
 def _build_imessage_thread_chunks(frontmatter: dict[str, Any], body: str, append_chunks, *, limit: int) -> None:
     meta = "\n".join(
         line
@@ -823,6 +845,7 @@ _CHUNK_BUILDER_FUNCTIONS: dict[str, object] = {
     "person": lambda card, fm, body, ac, limit: _build_person_chunks(card, fm, body, ac),
     "email_thread": lambda card, fm, body, ac, limit: _build_email_thread_chunks(fm, body, ac, limit=limit),
     "email_message": lambda card, fm, body, ac, limit: _build_email_message_chunks(fm, body, ac),
+    "email_attachment": lambda card, fm, body, ac, limit: _build_email_attachment_chunks(fm, body, ac),
     "imessage_thread": lambda card, fm, body, ac, limit: _build_imessage_thread_chunks(fm, body, ac, limit=limit),
     "calendar_event": lambda card, fm, body, ac, limit: _build_calendar_event_chunks(fm, body, ac),
     "meeting_transcript": lambda card, fm, body, ac, limit: _build_meeting_transcript_chunks(fm, body, ac, limit=limit),

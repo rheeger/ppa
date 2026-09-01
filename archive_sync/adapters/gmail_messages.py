@@ -5,11 +5,14 @@ from __future__ import annotations
 import base64
 import html
 import json
+import logging
 import os
 import random
 import re
 import subprocess
+import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -19,6 +22,7 @@ from email.utils import getaddresses, parsedate_to_datetime
 from typing import Any
 
 from archive_auth import build_google_cli_token_manager
+from archive_sync.junk_attachments import should_emit_email_attachment
 from archive_vault.identity import IdentityCache
 from archive_vault.schema import EmailAttachmentCard, EmailMessageCard, EmailThreadCard
 from archive_vault.thread_hash import (
@@ -30,6 +34,16 @@ from archive_vault.uid import generate_uid
 
 from .base import BaseAdapter, FetchedBatch, deterministic_provenance
 from .gmail_correspondents import load_own_aliases
+from .gmail_http_errors import (
+    GmailDailyQuotaExceeded,
+    GmailPermissionDenied,
+    classify_gmail_error,
+    gmail_error_reason,
+    raise_classified_gmail_error,
+    retry_after_seconds,
+)
+
+log = logging.getLogger("ppa.gmail_messages")
 
 THREAD_SOURCE = "gmail.thread"
 MESSAGE_SOURCE = "gmail.message"
@@ -389,6 +403,7 @@ def _extract_attachments(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "size_bytes": int(body.get("size", 0) or 0),
                 "content_id": content_id,
                 "is_inline": "inline" in disposition or bool(content_id),
+                "inline_b64": str(body.get("data", "")).strip(),
             }
         )
     return attachments
@@ -398,35 +413,61 @@ class GmailMessagesAdapter(BaseAdapter):
     source_id = "gmail-messages"
     preload_existing_uid_index = False
 
-    def _ensure_token_manager(self, account_email: str) -> None:
+    def _token_lock(self) -> threading.RLock:
+        lock = getattr(self, "_token_managers_lock", None)
+        if lock is None:
+            lock = threading.RLock()
+            self._token_managers_lock = lock
+        return lock
+
+    def _token_manager_for(self, account_email: str):
+        """Return a per-account token manager. Safe under concurrent fetch workers."""
+
         account = account_email.strip().lower()
-        token_key = ("gmail", account)
-        if getattr(self, "_token_manager_key", None) == token_key:
-            return
-        try:
-            self._token_manager = build_google_cli_token_manager(
-                account_email=account,
-                services=["gmail"],
-            )
-        except RuntimeError:
-            self._token_manager = None
-        self._token_manager_key = token_key
+        if not account:
+            return getattr(self, "_token_manager", None)
+        key = ("gmail", account)
+        with self._token_lock():
+            cache = getattr(self, "_token_managers", None)
+            if cache is None:
+                cache = {}
+                self._token_managers = cache
+            if key not in cache:
+                try:
+                    cache[key] = build_google_cli_token_manager(
+                        account_email=account,
+                        services=["gmail"],
+                    )
+                except RuntimeError:
+                    cache[key] = None
+            self._token_manager = cache[key]
+            self._token_manager_key = key
+            return cache[key]
+
+    def _ensure_token_manager(self, account_email: str) -> None:
+        self._token_manager_for(account_email)
 
     def get_cursor_key(self, **kwargs) -> str:
         account_email = str(kwargs.get("account_email", "")).strip().lower()
         return f"{self.source_id}:{account_email}" if account_email else self.source_id
 
-    def _gws(self, args: list[str]) -> dict[str, Any]:
-        env = None
-        token_manager = getattr(self, "_token_manager", None)
+    def _active_token_manager(self, token_manager=None):
         if token_manager is not None:
-            env = token_manager.build_env()
+            return token_manager
+        tls = getattr(self, "_token_tls", None)
+        if tls is not None and getattr(tls, "token_manager", None) is not None:
+            return tls.token_manager
+        return getattr(self, "_token_manager", None)
+
+    def _gws(self, args: list[str]) -> dict[str, Any]:
+        tm = self._active_token_manager()
+        env = tm.build_env() if tm is not None else None
         proc = subprocess.run(["gws", *args], capture_output=True, text=True, check=False, env=env)
         if proc.returncode != 0:
             message = proc.stderr.strip() or proc.stdout.strip() or "gws command failed"
             if self._should_fallback_to_http(message, args):
-                return self._gmail_http_json(args)
-            raise RuntimeError(message)
+                return self._gmail_http_json(args, token_manager=tm)
+            raise_classified_gmail_error(message)
         try:
             return json.loads(proc.stdout)
         except json.JSONDecodeError as exc:
@@ -446,15 +487,15 @@ class GmailMessagesAdapter(BaseAdapter):
             )
         )
 
-    def _gmail_http_json(self, args: list[str]) -> dict[str, Any]:
-        token_manager = getattr(self, "_token_manager", None)
-        if token_manager is None:
+    def _gmail_http_json(self, args: list[str], *, token_manager=None) -> dict[str, Any]:
+        tm = token_manager if token_manager is not None else getattr(self, "_token_manager", None)
+        if tm is None:
             raise RuntimeError("Gmail HTTP fallback requires a token manager")
         params = json.loads(args[-1]) if args[-2:] and args[-2] == "--params" else {}
         if args[:4] == ["gmail", "users", "threads", "list"]:
             query = urllib.parse.urlencode({key: value for key, value in params.items() if value not in (None, "")})
             url = f"https://gmail.googleapis.com/gmail/v1/users/me/threads?{query}"
-            return self._gmail_http_request_json(url, token_manager=token_manager)
+            return self._gmail_http_request_json(url, token_manager=tm)
         if args[:4] == ["gmail", "users", "threads", "get"]:
             thread_id = urllib.parse.quote(str(params.get("id", "")).strip(), safe="")
             query = urllib.parse.urlencode(
@@ -463,15 +504,15 @@ class GmailMessagesAdapter(BaseAdapter):
             url = f"https://gmail.googleapis.com/gmail/v1/users/me/threads/{thread_id}"
             if query:
                 url = f"{url}?{query}"
-            return self._gmail_http_request_json(url, token_manager=token_manager)
+            return self._gmail_http_request_json(url, token_manager=tm)
         if args[:4] == ["gmail", "users", "messages", "attachments"]:
             message_id = urllib.parse.quote(str(params.get("messageId", "")).strip(), safe="")
             attachment_id = urllib.parse.quote(str(params.get("id", "")).strip(), safe="")
             url = f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}/attachments/{attachment_id}"
-            return self._gmail_http_request_json(url, token_manager=token_manager)
+            return self._gmail_http_request_json(url, token_manager=tm)
         raise RuntimeError("Unsupported Gmail HTTP fallback command")
 
-    def _gmail_http_request_json(self, url: str, *, token_manager) -> dict[str, Any]:
+    def _gmail_http_request_json(self, url: str, *, token_manager, attempts: int = 8) -> dict[str, Any]:
         def _request(force_refresh: bool = False) -> dict[str, Any]:
             token = token_manager.get_access_token(force_refresh=force_refresh)
             req = urllib.request.Request(url)
@@ -479,30 +520,74 @@ class GmailMessagesAdapter(BaseAdapter):
             with urllib.request.urlopen(req, timeout=30) as resp:
                 return json.loads(resp.read().decode("utf-8"))
 
-        try:
-            return _request()
-        except urllib.error.HTTPError as exc:
-            if exc.code == 401:
-                return _request(force_refresh=True)
-            raise RuntimeError(exc.read().decode("utf-8") or str(exc)) from exc
+        last_exc: Exception | None = None
+        for attempt in range(1, max(1, attempts) + 1):
+            try:
+                return _request()
+            except urllib.error.HTTPError as exc:
+                last_exc = exc
+                body = exc.read().decode("utf-8") or str(exc)
+                if exc.code == 401:
+                    try:
+                        return _request(force_refresh=True)
+                    except urllib.error.HTTPError as retry_exc:
+                        raise_classified_gmail_error(
+                            retry_exc.read().decode("utf-8") or str(retry_exc),
+                            status=retry_exc.code,
+                        )
+                kind = classify_gmail_error(body, exc.code)
+                if kind == "daily_quota":
+                    raise GmailDailyQuotaExceeded(body)
+                if kind == "permission":
+                    raise GmailPermissionDenied(body, reason=gmail_error_reason(body) or "forbidden")
+                if kind == "rate_limit" and attempt < attempts:
+                    header = ""
+                    if exc.headers is not None:
+                        header = str(exc.headers.get("Retry-After") or "")
+                    sleep_seconds = retry_after_seconds(header, attempt)
+                    log.warning(
+                        "retrying 403 rate-limit attempt=%s/%s sleep=%.1fs",
+                        attempt,
+                        attempts,
+                        sleep_seconds,
+                    )
+                    time.sleep(sleep_seconds)
+                    continue
+                if kind == "transient" and attempt < attempts:
+                    time.sleep(min(8.0, 0.5 * (2 ** (attempt - 1))) + random.uniform(0.0, 0.25))
+                    continue
+                raise_classified_gmail_error(body, status=exc.code)
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("gmail http request failed without an exception")
 
-    def _gws_with_retry(self, args: list[str], *, attempts: int = 8) -> dict[str, Any]:
+    def _gws_with_retry(self, args: list[str], *, attempts: int = 8, token_manager=None) -> dict[str, Any]:
+        with self._token_lock():
+            tls = getattr(self, "_token_tls", None)
+            if tls is None:
+                tls = threading.local()
+                self._token_tls = tls
+        prev = getattr(tls, "token_manager", None)
+        if token_manager is not None:
+            tls.token_manager = token_manager
+        try:
+            return self._gws_with_retry_loop(args, attempts=attempts)
+        finally:
+            tls.token_manager = prev
+
+    def _gws_with_retry_loop(self, args: list[str], *, attempts: int = 8) -> dict[str, Any]:
         last_exc: Exception | None = None
         for attempt in range(1, max(1, attempts) + 1):
             try:
                 return self._gws(args)
+            except GmailDailyQuotaExceeded:
+                raise
+            except GmailPermissionDenied:
+                raise
             except Exception as exc:
                 last_exc = exc
                 message = str(exc)
-                is_quota_error = any(
-                    marker in message
-                    for marker in (
-                        "rateLimitExceeded",
-                        "Quota exceeded",
-                        "quota metric",
-                        '"code": 403',
-                    )
-                )
+                kind = classify_gmail_error(message)
                 is_failed_precondition = any(
                     marker in message
                     for marker in (
@@ -510,13 +595,21 @@ class GmailMessagesAdapter(BaseAdapter):
                         "Precondition check failed",
                     )
                 )
-                is_transient = (
-                    bool(TRANSIENT_GMAIL_STATUS_RE.search(message)) or is_quota_error or is_failed_precondition
-                )
-                if attempt >= attempts or not is_transient:
+                retryable = kind in {"rate_limit", "transient"} or is_failed_precondition
+                if attempt >= attempts or not retryable:
+                    if kind == "daily_quota":
+                        raise GmailDailyQuotaExceeded(message) from exc
+                    if kind == "permission":
+                        raise GmailPermissionDenied(message) from exc
                     raise
-                if is_quota_error:
-                    sleep_seconds = min(90.0, 5.0 * (2 ** (attempt - 1))) + random.uniform(0.0, 0.5)
+                if kind == "rate_limit":
+                    sleep_seconds = retry_after_seconds(None, attempt)
+                    log.warning(
+                        "retrying 403 rate-limit attempt=%s/%s sleep=%.1fs",
+                        attempt,
+                        attempts,
+                        sleep_seconds,
+                    )
                 elif is_failed_precondition:
                     sleep_seconds = min(45.0, 3.0 * (2 ** (attempt - 1))) + random.uniform(0.0, 0.5)
                 else:
@@ -794,8 +887,7 @@ class GmailMessagesAdapter(BaseAdapter):
         Gmail without UTF-8 coercion.
         """
 
-        if account_email:
-            self._ensure_token_manager(account_email)
+        token_manager = self._token_manager_for(account_email) if account_email else getattr(self, "_token_manager", None)
         if not message_id or not attachment_id:
             return b""
         payload = self._gws_with_retry(
@@ -807,7 +899,8 @@ class GmailMessagesAdapter(BaseAdapter):
                 "get",
                 "--params",
                 json.dumps({"userId": "me", "messageId": message_id, "id": attachment_id}),
-            ]
+            ],
+            token_manager=token_manager,
         )
         return _decode_body_bytes(str(payload.get("data", "")))
 
@@ -934,7 +1027,16 @@ class GmailMessagesAdapter(BaseAdapter):
         )
         people_links = self._resolve_people(identity_cache, participant_emails)
         body = _extract_text_body(message.get("payload", {}) or {})
-        attachments = _extract_attachments(message.get("payload", {}) or {})
+        attachments = [
+            attachment
+            for attachment in _extract_attachments(message.get("payload", {}) or {})
+            if should_emit_email_attachment(
+                filename=str(attachment.get("filename") or ""),
+                mime_type=str(attachment.get("mime_type") or ""),
+                size_bytes=int(attachment.get("size_bytes") or 0),
+                is_inline=bool(attachment.get("is_inline", False)),
+            )
+        ]
         attachment_links = [
             _wikilink_from_uid(
                 _attachment_uid(account_email, str(message.get("id", "")), str(attachment["attachment_id"]))
@@ -1013,6 +1115,7 @@ class GmailMessagesAdapter(BaseAdapter):
                 "size_bytes": attachment["size_bytes"],
                 "content_id": attachment["content_id"],
                 "is_inline": attachment["is_inline"],
+                "inline_b64": str(attachment.get("inline_b64") or "").strip(),
                 "attachment_metadata_sha": compute_email_attachment_metadata_sha_from_payload(
                     {
                         "message_id": message_record["message_id"],
@@ -1431,6 +1534,14 @@ class GmailMessagesAdapter(BaseAdapter):
                             attachment_records = []
                         commit_cursor = commit_cursor and promo_result.commit_cursor
 
+                    if attachment_records or message_records:
+                        self._enrich_gmail_attachment_text(
+                            vault_path,
+                            message_records,
+                            attachment_records,
+                            fetch_remote=bool(kwargs.get("extract_attachment_text", False)),
+                        )
+
                     if (max_threads is None or emitted_threads < max_threads) and thread_records:
                         batch_items.extend(thread_records)
                         emitted_threads += 1
@@ -1652,11 +1763,121 @@ class GmailMessagesAdapter(BaseAdapter):
                 content_id=str(item.get("content_id", "")).strip(),
                 is_inline=bool(item.get("is_inline", False)),
                 attachment_metadata_sha=str(item.get("attachment_metadata_sha", "")).strip(),
+                text_source=str(item.get("text_source", "")).strip(),
+                extracted_text_sha=str(item.get("extracted_text_sha", "")).strip(),
+                extraction_status=str(item.get("extraction_status", "")).strip(),
+                content_sha=str(item.get("content_sha", "") or item.get("extracted_text_sha", "")).strip(),
             )
             provenance = deterministic_provenance(card, ATTACHMENT_SOURCE)
-            return card, provenance, ""
+            return card, provenance, str(item.get("body", "")).strip()
 
         raise ValueError(f"Unsupported Gmail record kind: {kind}")
 
     def merge_card(self, vault_path, rel_path, card, body, provenance) -> None:
+        from archive_sync.attachment_list import preserve_message_attachments_section
+        from archive_vault.schema import validate_card_permissive
+        from archive_vault.vault import read_note
+
+        frontmatter, existing_body, _existing_prov = read_note(vault_path, str(rel_path))
+        existing_card = validate_card_permissive(frontmatter)
+        if getattr(card, "type", "") == "email_message":
+            body = preserve_message_attachments_section(body, existing_body)
+        if getattr(card, "type", "") == "email_attachment":
+            if not str(getattr(card, "extraction_status", "") or "").strip():
+                card.extraction_status = str(getattr(existing_card, "extraction_status", "") or "")
+            if not str(getattr(card, "text_source", "") or "").strip():
+                card.text_source = str(getattr(existing_card, "text_source", "") or "")
+            if not str(getattr(card, "extracted_text_sha", "") or "").strip():
+                card.extracted_text_sha = str(getattr(existing_card, "extracted_text_sha", "") or "")
+            if not str(body or "").strip():
+                body = existing_body
         self._replace_generic_card(vault_path, rel_path, card, body, provenance)
+
+    def after_card_write(self, vault_path, card, rel_path, *, raw_item, action, **kwargs) -> None:
+        if getattr(card, "type", "") != "email_attachment":
+            return
+        sha = str(getattr(card, "content_sha", "") or getattr(card, "extracted_text_sha", "") or "").strip()
+        uid = str(getattr(card, "uid", "") or "").strip()
+        if not sha or not uid:
+            return
+        try:
+            from pathlib import Path
+
+            from archive_sync.file_identity import register_ingested_file
+
+            register_ingested_file(Path(vault_path), uid=uid, rel_path=str(rel_path), sha256=sha)
+        except Exception as exc:
+            log.warning("file-identity ingest link skipped uid=%s err=%s", uid, exc)
+
+    def _enrich_gmail_attachment_text(
+        self,
+        vault_path: str,
+        message_records: list[dict[str, Any]],
+        attachment_records: list[dict[str, Any]],
+        *,
+        fetch_remote: bool,
+    ) -> None:
+        if not attachment_records:
+            return
+        from pathlib import Path
+
+        from archive_cli.index_config import get_gmail_api_workers
+        from archive_sync.attachment_text import (
+            AttachmentJob,
+            apply_extractions_to_gmail_records,
+            extract_jobs,
+        )
+
+        vault = Path(vault_path)
+        jobs = []
+        for record in attachment_records:
+            account_email = str(record.get("account_email") or "").strip()
+            message_id = str(record.get("message_id") or "").strip()
+            attachment_id = str(record.get("attachment_id") or "").strip()
+            uid = _attachment_uid(account_email, message_id, attachment_id)
+            record["uid"] = uid
+            inline = _decode_body_bytes(str(record.get("inline_b64") or ""))
+            created = str(record.get("created") or "").strip()
+            year_month = created[:7] if len(created) >= 7 else ""
+            existing_sha = ""
+            existing_status = ""
+            existing_text = ""
+            existing_text_source = ""
+            if year_month:
+                rel = Path("EmailAttachments") / year_month / f"{uid}.md"
+                if (vault / rel).is_file():
+                    from archive_vault.vault import read_note
+
+                    fm, body, _prov = read_note(vault, str(rel))
+                    existing_sha = str(fm.get("extracted_text_sha") or "").strip()
+                    existing_status = str(fm.get("extraction_status") or "").strip()
+                    existing_text = body
+                    existing_text_source = str(fm.get("text_source") or "").strip()
+            jobs.append(
+                AttachmentJob(
+                    uid=uid,
+                    filename=str(record.get("filename") or "").strip(),
+                    mime_type=str(record.get("mime_type") or "").strip(),
+                    size_bytes=int(record.get("size_bytes") or 0),
+                    message_id=message_id,
+                    attachment_id=attachment_id,
+                    account_email=account_email,
+                    existing_sha=existing_sha,
+                    existing_status=existing_status,
+                    existing_text=existing_text,
+                    existing_text_source=existing_text_source,
+                    inline_bytes=inline,
+                    is_inline=bool(record.get("is_inline", False)),
+                )
+            )
+
+        def _fetch(message_id: str, attachment_id: str, account_email: str) -> bytes:
+            return self.fetch_attachment_bytes(message_id, attachment_id, account_email=account_email)
+
+        extractions = extract_jobs(
+            vault,
+            jobs,
+            fetch_bytes=_fetch if fetch_remote else None,
+            workers=get_gmail_api_workers(),
+        )
+        apply_extractions_to_gmail_records(message_records, attachment_records, extractions)
