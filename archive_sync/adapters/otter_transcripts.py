@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import base64
 import json
+import logging
 import os
 import random
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -28,6 +31,8 @@ from archive_vault.uid import generate_uid
 from archive_vault.vault import find_note_by_slug, read_note, write_card
 
 from .base import BaseAdapter, FetchedBatch, deterministic_provenance
+
+logger = logging.getLogger("ppa.otter")
 
 MEETING_SOURCE = "otter.meeting"
 TITLE_TOKEN_RE = re.compile(r"[a-z0-9]+")
@@ -487,10 +492,23 @@ class OtterApiClient:
 #   ~/.config/ppa/otter-mcp/credentials.json — PPA mirror so CLI soaks survive mcporter resets
 DEFAULT_OTTER_MCP_CREDENTIALS = Path.home() / ".mcporter" / "credentials.json"
 DEFAULT_OTTER_PPA_TOKEN_PATH = Path.home() / ".config" / "ppa" / "otter-mcp" / "credentials.json"
+DEFAULT_OTTER_TOKEN_URL = "https://otter.ai/oauth/token"
+DEFAULT_OTTER_AS_METADATA_URL = "https://otter.ai/.well-known/oauth-authorization-server"
 _OTTER_LIST_TOOL_ALIASES = ("otter_search", "list_recent_meetings", "list_meetings", "search_meetings")
 _OTTER_DETAIL_TOOL_ALIASES = ("otter_fetch", "get_meeting", "get_speech", "fetch_meeting")
 _OTTER_TRANSCRIPT_TOOL_ALIASES = ("otter_fetch", "get_transcript", "fetch_transcript")
 _OTTER_USER_INFO_TOOL_ALIASES = ("otter_get_user_info", "get_user_info")
+_ACCESS_TOKEN_REFRESH_SKEW_SECONDS = 60
+_NONINTERACTIVE_OAUTH_TIMEOUT_MS = "1"
+_NONINTERACTIVE_MCPORTER_TIMEOUT_SECONDS = 45
+_OAUTH_ERROR_RE = re.compile(
+    r"(auth|oauth|unauthorized|401|authorization required|timed out after|browser)",
+    re.IGNORECASE,
+)
+
+
+class OtterMcpAuthError(RuntimeError):
+    """Otter MCP cannot authenticate without a browser or TTY."""
 
 
 def otter_mcp_credentials_path() -> Path:
@@ -499,6 +517,24 @@ def otter_mcp_credentials_path() -> Path:
 
 def otter_ppa_token_path() -> Path:
     return Path(os.environ.get("OTTER_MCP_PPA_TOKEN_PATH") or DEFAULT_OTTER_PPA_TOKEN_PATH)
+
+
+def otter_mcp_noninteractive(*, stdin: Any | None = None) -> bool:
+    """True for maintain / CI / launchd — never open a browser or call input()."""
+
+    flag = _clean(os.environ.get("PPA_NONINTERACTIVE", "")).lower()
+    if flag in {"0", "false", "no", "off"}:
+        return False
+    if flag in {"1", "true", "yes", "on"}:
+        return True
+    ci = _clean(os.environ.get("CI", "")).lower()
+    if ci and ci not in {"0", "false", "off"}:
+        return True
+    stream = sys.stdin if stdin is None else stdin
+    try:
+        return not bool(stream.isatty())
+    except Exception:
+        return True
 
 
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
@@ -516,6 +552,29 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
         except OSError:
             pass
         raise
+
+
+def _load_json_dict(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _no_browser_bin() -> Path:
+    """PATH prefix with a no-op ``open`` so mcporter cannot launch a browser."""
+
+    bindir = Path(tempfile.gettempdir()) / "ppa-no-browser-bin"
+    bindir.mkdir(parents=True, exist_ok=True)
+    for name in ("open", "xdg-open"):
+        stub = bindir / name
+        if not stub.exists():
+            stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            stub.chmod(0o755)
+    return bindir
 
 
 def _otter_tokens_from_mcporter_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -546,6 +605,73 @@ def _otter_tokens_from_mcporter_payload(payload: dict[str, Any]) -> dict[str, An
     return None
 
 
+def _otter_client_id(snapshot: dict[str, Any] | None) -> str:
+    if not snapshot:
+        return ""
+    client = snapshot.get("clientInfo")
+    if not isinstance(client, dict):
+        return ""
+    return _first_nonempty(client.get("client_id"))
+
+
+def _merge_otter_snapshots(primary: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(primary)
+    primary_tokens = primary.get("tokens") if isinstance(primary.get("tokens"), dict) else {}
+    fallback_tokens = fallback.get("tokens") if isinstance(fallback.get("tokens"), dict) else {}
+    tokens = dict(primary_tokens)
+    for key in ("access_token", "token_type", "expires_in", "scope", "refresh_token"):
+        if tokens.get(key) in (None, "") and fallback_tokens.get(key) not in (None, ""):
+            tokens[key] = fallback_tokens[key]
+    merged["tokens"] = tokens
+    if not _otter_client_id(merged):
+        fallback_client = fallback.get("clientInfo")
+        if isinstance(fallback_client, dict) and _first_nonempty(fallback_client.get("client_id")):
+            merged["clientInfo"] = fallback_client
+    if not _first_nonempty(merged.get("updatedAt")):
+        merged["updatedAt"] = fallback.get("updatedAt") or datetime.now(timezone.utc).isoformat()
+    return merged
+
+
+def _write_mcporter_otter_entry(
+    credentials_path: Path,
+    snapshot: dict[str, Any],
+) -> None:
+    payload = _load_json_dict(credentials_path) or {"version": 1, "entries": {}}
+    entries = payload.setdefault("entries", {})
+    if not isinstance(entries, dict):
+        entries = {}
+        payload["entries"] = entries
+    entry_key = next(
+        (
+            key
+            for key, value in entries.items()
+            if isinstance(value, dict)
+            and value.get("serverName") == (snapshot.get("serverName") or "otter_meeting_mcp")
+        ),
+        next(iter(entries), "otter_meeting_mcp") if entries else "otter_meeting_mcp",
+    )
+    if entry_key not in entries:
+        hashed = next(
+            (key for key in entries if isinstance(key, str) and key.startswith("otter_meeting_mcp|")),
+            None,
+        )
+        entry_key = hashed or "otter_meeting_mcp"
+    existing_entry = entries.get(entry_key) if isinstance(entries.get(entry_key), dict) else {}
+    tokens = snapshot.get("tokens") if isinstance(snapshot.get("tokens"), dict) else {}
+    client = snapshot.get("clientInfo") if isinstance(snapshot.get("clientInfo"), dict) else {}
+    existing_client = existing_entry.get("clientInfo") if isinstance(existing_entry.get("clientInfo"), dict) else {}
+    entries[entry_key] = {
+        **existing_entry,
+        "serverName": snapshot.get("serverName") or existing_entry.get("serverName") or "otter_meeting_mcp",
+        "serverUrl": snapshot.get("serverUrl") or existing_entry.get("serverUrl") or "https://mcp.otter.ai/mcp",
+        "updatedAt": snapshot.get("updatedAt") or datetime.now(timezone.utc).isoformat(),
+        "clientInfo": client or existing_client or {},
+        "tokens": tokens,
+    }
+    payload["version"] = payload.get("version") or 1
+    _write_json_atomic(credentials_path, payload)
+
+
 def persist_otter_mcp_tokens(
     *,
     credentials_path: Path | None = None,
@@ -555,17 +681,15 @@ def persist_otter_mcp_tokens(
 
     src = Path(credentials_path) if credentials_path is not None else otter_mcp_credentials_path()
     dest = Path(ppa_token_path) if ppa_token_path is not None else otter_ppa_token_path()
-    if not src.exists():
-        return None
-    try:
-        payload = json.loads(src.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    if not isinstance(payload, dict):
+    payload = _load_json_dict(src)
+    if payload is None:
         return None
     snapshot = _otter_tokens_from_mcporter_payload(payload)
     if snapshot is None:
         return None
+    existing = _load_json_dict(dest)
+    if existing is not None:
+        snapshot = _merge_otter_snapshots(snapshot, existing)
     _write_json_atomic(dest, snapshot)
     return dest
 
@@ -575,53 +699,240 @@ def restore_otter_mcp_tokens(
     credentials_path: Path | None = None,
     ppa_token_path: Path | None = None,
 ) -> bool:
-    """Rehydrate ~/.mcporter/credentials.json from the PPA token mirror if tokens are missing."""
+    """Rehydrate ~/.mcporter/credentials.json from the PPA token mirror.
+
+    Restores missing tokens *or* missing ``client_id``. mcporter refresh needs both;
+    a later save that wipes ``clientInfo`` would otherwise force a browser login.
+    """
 
     dest = Path(ppa_token_path) if ppa_token_path is not None else otter_ppa_token_path()
     src = Path(credentials_path) if credentials_path is not None else otter_mcp_credentials_path()
-    if not dest.exists():
-        return False
-    try:
-        snapshot = json.loads(dest.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    snapshot = _load_json_dict(dest)
+    if snapshot is None:
         return False
     tokens = snapshot.get("tokens") if isinstance(snapshot, dict) else None
     if not isinstance(tokens, dict) or not _first_nonempty(tokens.get("refresh_token"), tokens.get("access_token")):
         return False
-    payload: dict[str, Any] = {"version": 1, "entries": {}}
-    if src.exists():
-        try:
-            existing = json.loads(src.read_text(encoding="utf-8"))
-            if isinstance(existing, dict):
-                payload = existing
-        except (OSError, json.JSONDecodeError):
-            pass
-    entries = payload.setdefault("entries", {})
-    if not isinstance(entries, dict):
-        entries = {}
-        payload["entries"] = entries
-    if _otter_tokens_from_mcporter_payload(payload) is not None:
-        return True
-    entry_key = next(
-        (
-            key
-            for key, value in entries.items()
-            if isinstance(value, dict) and value.get("serverName") == "otter_meeting_mcp"
-        ),
-        "otter_meeting_mcp",
-    )
-    existing_entry = entries.get(entry_key) if isinstance(entries.get(entry_key), dict) else {}
-    entries[entry_key] = {
-        **existing_entry,
-        "serverName": snapshot.get("serverName") or existing_entry.get("serverName") or "otter_meeting_mcp",
-        "serverUrl": snapshot.get("serverUrl") or existing_entry.get("serverUrl") or "https://mcp.otter.ai/mcp",
-        "updatedAt": snapshot.get("updatedAt") or datetime.now(timezone.utc).isoformat(),
-        "clientInfo": snapshot.get("clientInfo") or existing_entry.get("clientInfo") or {},
-        "tokens": tokens,
-    }
-    payload["version"] = payload.get("version") or 1
-    _write_json_atomic(src, payload)
+    payload = _load_json_dict(src) or {"version": 1, "entries": {}}
+    existing = _otter_tokens_from_mcporter_payload(payload)
+    if existing is not None:
+        merged = _merge_otter_snapshots(existing, snapshot)
+        existing_tokens = existing.get("tokens") if isinstance(existing.get("tokens"), dict) else {}
+        if (
+            _first_nonempty(existing_tokens.get("refresh_token"), existing_tokens.get("access_token"))
+            and _otter_client_id(existing)
+            and merged.get("tokens") == existing_tokens
+            and _otter_client_id(merged) == _otter_client_id(existing)
+        ):
+            return True
+        snapshot = merged
+    _write_mcporter_otter_entry(src, snapshot)
     return True
+
+
+def _jwt_exp_utc(access_token: str) -> datetime | None:
+    token = _first_nonempty(access_token)
+    parts = token.split(".")
+    if len(parts) != 3:
+        return None
+    payload = parts[1]
+    pad = "=" * (-len(payload) % 4)
+    try:
+        body = json.loads(base64.urlsafe_b64decode(payload + pad))
+    except (ValueError, json.JSONDecodeError):
+        return None
+    exp = body.get("exp") if isinstance(body, dict) else None
+    if not isinstance(exp, (int, float)):
+        return None
+    return datetime.fromtimestamp(float(exp), tz=timezone.utc)
+
+
+def _parse_updated_at(value: Any) -> datetime | None:
+    cleaned = _first_nonempty(value)
+    if not cleaned:
+        return None
+    if cleaned.endswith("Z"):
+        cleaned = cleaned[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(cleaned)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def otter_access_token_expired(
+    tokens: dict[str, Any] | None,
+    *,
+    updated_at: str = "",
+    now: datetime | None = None,
+) -> bool:
+    if not tokens:
+        return True
+    access = _first_nonempty(tokens.get("access_token"))
+    if not access:
+        return True
+    current = now or datetime.now(timezone.utc)
+    exp = _jwt_exp_utc(access)
+    if exp is None:
+        issued = _parse_updated_at(updated_at)
+        expires_in = tokens.get("expires_in")
+        if issued is not None and isinstance(expires_in, (int, float)):
+            exp = issued + timedelta(seconds=float(expires_in))
+    if exp is None:
+        return False
+    return current >= (exp - timedelta(seconds=_ACCESS_TOKEN_REFRESH_SKEW_SECONDS))
+
+
+def load_otter_mcp_auth_snapshot(
+    *,
+    credentials_path: Path | None = None,
+    ppa_token_path: Path | None = None,
+) -> dict[str, Any] | None:
+    src = Path(credentials_path) if credentials_path is not None else otter_mcp_credentials_path()
+    dest = Path(ppa_token_path) if ppa_token_path is not None else otter_ppa_token_path()
+    restore_otter_mcp_tokens(credentials_path=src, ppa_token_path=dest)
+    mcporter = _otter_tokens_from_mcporter_payload(_load_json_dict(src) or {})
+    ppa = _load_json_dict(dest)
+    if mcporter is None:
+        return ppa
+    if ppa is None:
+        return mcporter
+    return _merge_otter_snapshots(mcporter, ppa)
+
+
+def discover_otter_token_url() -> str:
+    override = _clean(os.environ.get("OTTER_MCP_TOKEN_URL", ""))
+    if override:
+        return override
+    metadata_url = _clean(os.environ.get("OTTER_MCP_AS_METADATA_URL", "")) or DEFAULT_OTTER_AS_METADATA_URL
+    try:
+        request = urllib.request.Request(metadata_url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(request, timeout=15) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        token_url = _clean(payload.get("token_endpoint", "")) if isinstance(payload, dict) else ""
+        if token_url:
+            return token_url
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("otter oauth metadata fetch failed url=%s error=%s", metadata_url, type(exc).__name__)
+    return DEFAULT_OTTER_TOKEN_URL
+
+
+def refresh_otter_mcp_tokens(
+    *,
+    credentials_path: Path | None = None,
+    ppa_token_path: Path | None = None,
+    force: bool = False,
+    token_url: str | None = None,
+    post_form: Any | None = None,
+) -> bool:
+    """Refresh the Otter access token from disk. Never opens a browser.
+
+    Returns True when the access token is usable (already valid or refreshed).
+    Returns False when refresh is impossible (no refresh_token / client_id).
+    Raises ``OtterMcpAuthError`` when the token endpoint rejects the refresh.
+    """
+
+    src = Path(credentials_path) if credentials_path is not None else otter_mcp_credentials_path()
+    dest = Path(ppa_token_path) if ppa_token_path is not None else otter_ppa_token_path()
+    snapshot = load_otter_mcp_auth_snapshot(credentials_path=src, ppa_token_path=dest)
+    if snapshot is None:
+        return False
+    tokens = snapshot.get("tokens") if isinstance(snapshot.get("tokens"), dict) else {}
+    client = snapshot.get("clientInfo") if isinstance(snapshot.get("clientInfo"), dict) else {}
+    if not force and not otter_access_token_expired(tokens, updated_at=str(snapshot.get("updatedAt") or "")):
+        persist_otter_mcp_tokens(credentials_path=src, ppa_token_path=dest)
+        return True
+    refresh = _first_nonempty(tokens.get("refresh_token"))
+    client_id = _first_nonempty(client.get("client_id"))
+    if not refresh or not client_id:
+        return False
+    endpoint = _clean(token_url) or discover_otter_token_url()
+    body = urllib.parse.urlencode(
+        {"grant_type": "refresh_token", "refresh_token": refresh, "client_id": client_id}
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        endpoint,
+        data=body,
+        method="POST",
+        headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"},
+    )
+    try:
+        if post_form is not None:
+            raw = post_form(request)
+        else:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                raw = response.read()
+        payload = json.loads(raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw)
+    except urllib.error.HTTPError as exc:
+        raise OtterMcpAuthError(
+            f"Otter MCP oauth refresh failed HTTP {exc.code}. Re-auth interactively: mcporter auth otter_meeting_mcp."
+        ) from exc
+    except OtterMcpAuthError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise OtterMcpAuthError(
+            f"Otter MCP oauth refresh failed: {type(exc).__name__}. "
+            "Re-auth interactively: mcporter auth otter_meeting_mcp."
+        ) from exc
+    if not isinstance(payload, dict) or not _first_nonempty(payload.get("access_token")):
+        raise OtterMcpAuthError(
+            "Otter MCP oauth refresh returned no access_token. Re-auth interactively: mcporter auth otter_meeting_mcp."
+        )
+    new_tokens = {
+        key: payload.get(key)
+        for key in ("access_token", "token_type", "expires_in", "scope", "refresh_token")
+        if payload.get(key) not in (None, "")
+    }
+    if not _first_nonempty(new_tokens.get("refresh_token")):
+        new_tokens["refresh_token"] = refresh
+    snapshot = {
+        **snapshot,
+        "updatedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "tokens": new_tokens,
+        "clientInfo": client,
+    }
+    _write_json_atomic(dest, snapshot)
+    _write_mcporter_otter_entry(src, snapshot)
+    logger.info("otter mcp access token refreshed without browser")
+    return True
+
+
+def ensure_otter_mcp_unattended_auth(
+    *,
+    credentials_path: Path | None = None,
+    ppa_token_path: Path | None = None,
+) -> None:
+    """Restore + refresh Otter MCP tokens. Refuse a browser in non-interactive runs."""
+
+    src = Path(credentials_path) if credentials_path is not None else otter_mcp_credentials_path()
+    dest = Path(ppa_token_path) if ppa_token_path is not None else otter_ppa_token_path()
+    restore_otter_mcp_tokens(credentials_path=src, ppa_token_path=dest)
+    persist_otter_mcp_tokens(credentials_path=src, ppa_token_path=dest)
+    snapshot = load_otter_mcp_auth_snapshot(credentials_path=src, ppa_token_path=dest)
+    tokens = snapshot.get("tokens") if isinstance(snapshot, dict) and isinstance(snapshot.get("tokens"), dict) else {}
+    expired = otter_access_token_expired(tokens, updated_at=str((snapshot or {}).get("updatedAt") or ""))
+    noninteractive = otter_mcp_noninteractive()
+    refreshed = False
+    if expired:
+        try:
+            refreshed = refresh_otter_mcp_tokens(
+                credentials_path=src,
+                ppa_token_path=dest,
+                force=True,
+            )
+        except OtterMcpAuthError:
+            if noninteractive:
+                raise
+            logger.warning("otter mcp oauth refresh failed; interactive mcporter may prompt")
+        if noninteractive and not refreshed:
+            raise OtterMcpAuthError(
+                "Otter MCP oauth cannot continue unattended: missing refresh_token or client_id. "
+                f"Tokens belong in {src} (PPA mirror {dest}). "
+                "Re-auth interactively: mcporter auth otter_meeting_mcp."
+            )
+    persist_otter_mcp_tokens(credentials_path=src, ppa_token_path=dest)
 
 
 def _extract_json_object(text: str) -> dict[str, Any] | None:
@@ -633,6 +944,32 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         return None
     return parsed if isinstance(parsed, dict) else None
+
+
+def _normalize_mcporter_list_stdout(stdout: str, server_name: str) -> str:
+    """Unwrap multi-server ``mcporter list --json`` (autoAuthorize=false) to one server."""
+
+    payload = _extract_json_object(stdout)
+    if payload is None:
+        return stdout
+    servers = payload.get("servers")
+    if payload.get("mode") != "list" or not isinstance(servers, list):
+        return stdout
+    wanted = _clean(server_name).lower()
+    for server in servers:
+        if not isinstance(server, dict):
+            continue
+        name = _clean(server.get("name", ""))
+        if wanted and name.lower() != wanted:
+            continue
+        return json.dumps(
+            {
+                "name": name or server_name,
+                "status": server.get("status"),
+                "tools": server.get("tools") or [],
+            }
+        )
+    return stdout
 
 
 def _candidate_tool_names(stdout: str) -> list[str]:
@@ -740,24 +1077,50 @@ class OtterMcpClient:
         )
 
     def _run_mcporter(self, *args: str) -> tuple[str, str]:
-        cmd = [self._ensure_mcporter(), *args]
+        noninteractive = otter_mcp_noninteractive()
+        cmd = [self._ensure_mcporter()]
+        if noninteractive:
+            cmd.extend(["--oauth-timeout", _NONINTERACTIVE_OAUTH_TIMEOUT_MS])
+        cmd.extend(args)
         env = {**os.environ, "NPM_CONFIG_CACHE": os.environ.get("NPM_CONFIG_CACHE", "/tmp/npm-cache")}
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=self.timeout_seconds,
-            env=env,
+        if noninteractive:
+            env.setdefault("MCPORTER_OAUTH_TIMEOUT_MS", _NONINTERACTIVE_OAUTH_TIMEOUT_MS)
+            env["PATH"] = f"{_no_browser_bin()}{os.pathsep}{env.get('PATH', '')}"
+        timeout = (
+            min(self.timeout_seconds, _NONINTERACTIVE_MCPORTER_TIMEOUT_SECONDS)
+            if noninteractive
+            else self.timeout_seconds
         )
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout,
+                env=env,
+                stdin=subprocess.DEVNULL,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise OtterMcpAuthError(
+                f"Otter MCP mcporter timed out after {timeout}s without oauth. "
+                f"Tokens belong in {otter_mcp_credentials_path()} "
+                f"(PPA mirror {otter_ppa_token_path()}). "
+                f"Re-auth interactively: mcporter auth {self.server_name}."
+            ) from exc
         if proc.returncode != 0:
             error = proc.stderr.strip() or proc.stdout.strip() or f"mcporter failed with exit code {proc.returncode}"
+            if noninteractive and _OAUTH_ERROR_RE.search(error):
+                raise OtterMcpAuthError(
+                    f"Otter MCP oauth required but refused unattended: {error}. "
+                    f"Re-auth interactively: mcporter auth {self.server_name}."
+                )
             raise RuntimeError(error)
+        persist_otter_mcp_tokens()
         return proc.stdout, proc.stderr
 
     def _ensure_persisted_auth(self) -> None:
-        restore_otter_mcp_tokens()
-        persist_otter_mcp_tokens()
+        ensure_otter_mcp_unattended_auth()
 
     def _discover_tools(self) -> dict[str, str]:
         if self._discovered_tools is not None:
@@ -768,14 +1131,20 @@ class OtterMcpClient:
             self._ensure_persisted_auth()
             stdout = ""
             last_error: Exception | None = None
-            for args in (
-                ("list", self.server_name, "--json"),
-                ("list", "--json", self.server_name),
-                ("list", self.server_name),
-            ):
+            noninteractive = otter_mcp_noninteractive()
+            attempts: tuple[tuple[str, ...], ...] = (("list", "--json"),)
+            if not noninteractive:
+                attempts = (
+                    ("list", "--json"),
+                    ("list", self.server_name, "--json"),
+                    ("list", "--json", self.server_name),
+                    ("list", self.server_name),
+                )
+            for args in attempts:
                 try:
                     stdout, _ = self._run_mcporter(*args)
                     if stdout.strip():
+                        stdout = _normalize_mcporter_list_stdout(stdout, self.server_name)
                         break
                 except Exception as exc:  # noqa: BLE001
                     last_error = exc

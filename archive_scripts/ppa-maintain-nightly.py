@@ -295,6 +295,7 @@ def apply_runtime_env() -> dict[str, str]:
     os.environ.setdefault("PPA_EMBEDDING_VERSION", "1")
     os.environ.setdefault("GOOGLE_ACCOUNT", DEFAULT_GOOGLE_ACCOUNT)
     os.environ.setdefault("OTTER_FETCH_MODE", "mcp")
+    os.environ.setdefault("PPA_NONINTERACTIVE", "1")
     os.environ.setdefault("PPA_GITHUB_STAGE_DIR", str(DEFAULT_GITHUB_STAGE))
     os.environ.setdefault("IMESSAGE_SNAPSHOT_DIR", str(DEFAULT_IMESSAGE_SNAPSHOT))
     os.environ["PPA_INDEX_DSN"] = resolve_dsn()

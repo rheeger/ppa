@@ -309,7 +309,7 @@ Same contract as Gmail/Calendar. Added to `EXECUTABLE_ADAPTER_SOURCE_IDS`. **202
 
 | Stream | Key shape | Cursor / cap | Notes |
 | --- | --- | --- | --- |
-| Otter | `otter-transcripts:{account}` | `page_token` / `max_meetings` | MCP (`OTTER_FETCH_MODE=mcp`): list=`otter_search`, get=`otter_fetch`. OAuth refresh token on disk at `~/.mcporter/credentials.json` (mcporter) and the PPA mirror `~/.config/ppa/otter-mcp/credentials.json`. Override with `OTTER_MCP_CREDENTIALS_PATH` / `OTTER_MCP_PPA_TOKEN_PATH`. Re-auth: `mcporter auth otter_meeting_mcp`. |
+| Otter | `otter-transcripts:{account}` | `page_token` / `max_meetings` | MCP (`OTTER_FETCH_MODE=mcp`): list=`otter_search`, get=`otter_fetch`. OAuth refresh token on disk at `~/.mcporter/credentials.json` (mcporter) and the PPA mirror `~/.config/ppa/otter-mcp/credentials.json`. Override with `OTTER_MCP_CREDENTIALS_PATH` / `OTTER_MCP_PPA_TOKEN_PATH`. Nightly / non-TTY (`PPA_NONINTERACTIVE`) refreshes the access token without a browser and fails Otter (does not block other sources) if refresh is impossible. Re-auth: `mcporter auth otter_meeting_mcp`. |
 | Documents | `file-libraries:documents` | `max_files` | Live FS roots; hash load must use vault cache, not `Documents/` `rglob` |
 | Beeper | `beeper:local` | `max_threads` | Live SQLite; `fetch_batches`. Default-exclude iMessage / BlueBubbles / Helga-Pataki accounts — iMessage snapshot stays source of record. |
 | Google Contacts | `contacts:google` | page / `max_items` | API only — not Apple/VCF import |
