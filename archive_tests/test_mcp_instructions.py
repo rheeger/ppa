@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from archive_cli.mcp_instructions import (
+    CARD_STACK_PLAYBOOK,
+    CARD_STACK_PLAYBOOK_HELP,
     FILTER_HINT,
     TOOL_DESCRIPTIONS,
     build_server_instructions,
@@ -16,6 +18,8 @@ REQUIRED_INSTRUCTION_NEEDLES = (
     "archive_hybrid_search",
     "archive_query",
     "archive_read",
+    "archive_evidence",
+    "HOW TO COMPOSE QUERIES",
     "archive_temporal_neighbors",
     "archive_person",
     "people_filter",
@@ -38,6 +42,7 @@ REQUIRED_RETRIEVAL_TOOLS = (
     "archive_person",
     "archive_graph",
     "archive_timeline",
+    "archive_evidence",
     "archive_temporal_neighbors",
     "archive_knowledge",
     "archive_stats",
@@ -75,4 +80,38 @@ def test_query_and_hybrid_descriptions_teach_filters() -> None:
     hybrid = TOOL_DESCRIPTIONS["archive_hybrid_search"]
     assert "people_filter=Sarah" in query
     assert "query=<email>" in hybrid
-    assert "trust boundary" in TOOL_DESCRIPTIONS["archive_read"]
+    assert "trust boundary" in TOOL_DESCRIPTIONS["archive_read"].lower()
+
+
+def test_playbook_teaches_composition() -> None:
+    text = CARD_STACK_PLAYBOOK.lower()
+    for name in (
+        "archive_search",
+        "archive_hybrid_search",
+        "archive_query",
+        "archive_evidence",
+        "archive_read",
+        "archive_person",
+    ):
+        assert name in CARD_STACK_PLAYBOOK
+    assert "follow" in text
+    assert "parent" in text and "attachment" in text
+    assert "raise limit" in text or "starting points" in text
+    assert "do not use archive_search" not in text
+    assert "never use" not in text
+    assert "only use evidence" not in text
+    help_text = CARD_STACK_PLAYBOOK_HELP.lower()
+    assert "compose" in help_text
+    assert "search" in help_text and "hybrid" in help_text and "query" in help_text
+    assert "evidence" in help_text
+    evidence = TOOL_DESCRIPTIONS["archive_evidence"]
+    assert "compact" in evidence.lower()
+    assert "narrative" in evidence
+    assert "raise" in evidence.lower()
+    read = TOOL_DESCRIPTIONS["archive_read"]
+    assert "include_attachment_uids" in read
+    assert "link-only" in read or "link lists" in read
+    search = TOOL_DESCRIPTIONS["archive_search"].lower()
+    assert "discovery only" not in search
+    hybrid = TOOL_DESCRIPTIONS["archive_hybrid_search"].lower()
+    assert "small limit" not in hybrid

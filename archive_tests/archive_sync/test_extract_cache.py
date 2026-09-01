@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from archive_sync.anydoc_ocr import to_markdown_local_first
 from archive_sync.attachment_text import AttachmentJob, extract_job
 from archive_sync.document_extract import (
     STATUS_EXTRACTED,
@@ -28,7 +29,6 @@ from archive_sync.extract_cache import (
     reset_extract_cache_for_tests,
     seed_card,
 )
-from archive_sync.anydoc_ocr import to_markdown_local_first
 
 
 class _NeedsOcrError(Exception):
@@ -51,7 +51,9 @@ def _isolate_extract_cache(monkeypatch, tmp_path: Path) -> None:
     reset_extract_cache_for_tests()
 
 
-def _patch_hosted_anydoc(monkeypatch, *, hosted_return: str = "# Hosted once", fail_hosted: BaseException | None = None):
+def _patch_hosted_anydoc(
+    monkeypatch, *, hosted_return: str = "# Hosted once", fail_hosted: BaseException | None = None
+):
     """Mock anydoc: local always NeedsOcr; hosted is counted. Never hits the network."""
 
     import anydoc
@@ -316,9 +318,7 @@ def test_local_reject_does_not_cache_success(tmp_path: Path, monkeypatch) -> Non
 
 def test_hosted_403_does_not_cache_retry_allowed(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test-env")
-    calls = _patch_hosted_anydoc(
-        monkeypatch, fail_hosted=_HostedError("403 permission denied")
-    )
+    calls = _patch_hosted_anydoc(monkeypatch, fail_hosted=_HostedError("403 permission denied"))
     data = b"%PDF-1.4 hosted-forbidden"
     path = tmp_path / "scan.pdf"
     path.write_bytes(data)
@@ -378,9 +378,7 @@ def test_tiny_inline_image_skips_hosted(monkeypatch) -> None:
     monkeypatch.setattr(anydoc, "to_markdown", _boom)
     monkeypatch.setattr(anydoc, "to_markdown_bytes", _boom)
     data = b"\x89PNG" + b"x" * 100
-    result = extract_from_bytes(
-        data, filename="logo.png", mime_type="image/png", is_inline=True
-    )
+    result = extract_from_bytes(data, filename="logo.png", mime_type="image/png", is_inline=True)
     assert result.status == STATUS_TINY_IMAGE
     assert called["n"] == 0
     assert get_extract_cache().get(bytes_sha256(data)) is None

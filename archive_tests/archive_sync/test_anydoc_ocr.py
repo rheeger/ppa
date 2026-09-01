@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 
-from archive_sync.extract_cache import reset_extract_cache_for_tests
 from archive_sync.anydoc_ocr import (
     anydoc_hosted_ocr_kwargs,
     anydoc_ocr_kwargs,
@@ -16,6 +15,7 @@ from archive_sync.anydoc_ocr import (
     reset_ocr_reject_log,
     to_markdown_local_first,
 )
+from archive_sync.extract_cache import reset_extract_cache_for_tests
 
 
 class _NeedsOcrError(Exception):

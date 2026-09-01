@@ -5,14 +5,29 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from archive_cli.card_traversal import stack_pointers_from_frontmatter
+from archive_vault.yaml_parser import parse_frontmatter
+
 from ..errors import InvalidInputError
 from ..store import DefaultArchiveStore
 from .confidence import compute_confidence
 
 
-def read(path_or_uid: str, *, store: DefaultArchiveStore, logger: logging.Logger) -> dict[str, Any]:
-    """Read one note by path or UID; returns ``store.read`` payload."""
-    logger.info("read_start path_or_uid=%r", path_or_uid)
+def read(
+    path_or_uid: str,
+    *,
+    store: DefaultArchiveStore,
+    logger: logging.Logger,
+    include_attachment_uids: bool = False,
+    include_duplicate_uids: bool = False,
+) -> dict[str, Any]:
+    """Read one note by path or UID; optional stack pointers as links only."""
+    logger.info(
+        "read_start path_or_uid=%r include_attachment_uids=%s include_duplicate_uids=%s",
+        path_or_uid,
+        include_attachment_uids,
+        include_duplicate_uids,
+    )
     result = store.read(path_or_uid)
     logger.info("read_done found=%s", bool(result.get("found")))
     found = bool(result.get("found"))
@@ -21,6 +36,15 @@ def read(path_or_uid: str, *, store: DefaultArchiveStore, logger: logging.Logger
         exact_match=found,
         query_text=path_or_uid,
     ).value
+    if found and (include_attachment_uids or include_duplicate_uids):
+        frontmatter, _body = parse_frontmatter(str(result.get("content") or ""))
+        ptrs = stack_pointers_from_frontmatter(frontmatter)
+        if include_attachment_uids:
+            result["attachment_uids"] = ptrs["attachment_uids"]
+        if include_duplicate_uids:
+            result["duplicate_uids"] = ptrs["duplicate_uids"]
+            if ptrs.get("parent_uid"):
+                result["parent_uid"] = ptrs["parent_uid"]
     return result
 
 

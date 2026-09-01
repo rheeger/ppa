@@ -59,11 +59,26 @@ class FakeIndex:
     def search(self, query: str, limit: int = 20, **_kwargs):
         return [
             {
+                "card_uid": "hfa-person-aaaabbbbcccc",
                 "rel_path": "People/jane-smith.md",
                 "summary": "Jane Smith",
+                "type": "person",
+                "activity_at": "2026-03-06",
                 "matched_by": "lexical",
+                "preview": "FULL ATTACHMENT OCR MUST NEVER APPEAR IN EVIDENCE: " + ("x" * 400),
             }
         ]
+
+    def card_stack_pointers(self, uids):
+        out = {}
+        for uid in uids:
+            if uid == "hfa-person-aaaabbbbcccc":
+                out[uid] = {
+                    "attachment_uids": ["hfa-email-attachment-test"],
+                    "duplicate_uids": ["hfa-person-duplicate"],
+                    "parent_uid": "",
+                }
+        return out
 
     def read_path_for_uid(self, uid: str):
         if uid == "hfa-person-aaaabbbbcccc":
@@ -73,6 +88,7 @@ class FakeIndex:
     def query_cards(self, **_kwargs):
         return [
             {
+                "card_uid": "hfa-person-aaaabbbbcccc",
                 "rel_path": "People/jane-smith.md",
                 "summary": "Jane Smith",
                 "type": "person",
@@ -93,9 +109,11 @@ class FakeIndex:
     def timeline(self, **_kwargs):
         return [
             {
+                "card_uid": "hfa-person-aaaabbbbcccc",
                 "created": "2026-03-06",
                 "rel_path": "People/jane-smith.md",
                 "summary": "Jane Smith",
+                "type": "person",
             }
         ]
 
@@ -139,7 +157,7 @@ class FakeIndex:
         return {
             "embedding_model": embedding_model,
             "embedding_version": embedding_version,
-            "chunk_schema_version": 5,
+            "chunk_schema_version": 6,
             "chunk_count": 4,
             "embedded_chunk_count": 2,
             "pending_chunk_count": 2,
@@ -169,7 +187,7 @@ class FakeIndex:
             "provider": getattr(provider, "name", "unknown"),
             "embedding_model": embedding_model,
             "embedding_version": embedding_version,
-            "chunk_schema_version": 5,
+            "chunk_schema_version": 6,
             "batch_size": 2,
             "failed": 0,
             "embedded": min(limit, 2),
@@ -726,7 +744,7 @@ def test_postgres_bootstrap_prepares_pgvector_ready_schema(tmp_vault, monkeypatc
 def test_archive_embedding_status_and_backlog(tmp_vault, fake_index):
     status = archive_embedding_status(embedding_model="test-embed", embedding_version=1)
     assert "embedding_model: test-embed" in status
-    assert "chunk_schema_version: 5" in status
+    assert "chunk_schema_version: 6" in status
     assert "pending_chunk_count: 2" in status
 
     backlog = archive_embedding_backlog(limit=3, embedding_model="test-embed", embedding_version=1)

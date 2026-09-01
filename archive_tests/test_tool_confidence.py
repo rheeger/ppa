@@ -31,6 +31,8 @@ def tmp_vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (meta / "sync-state.json").write_text("{}", encoding="utf-8")
     monkeypatch.setenv("PPA_PATH", str(vault))
     monkeypatch.setenv("PPA_INDEX_DSN", "postgresql://archive:archive@localhost:5432/archive")
+    monkeypatch.setenv("PPA_EMBEDDING_PROVIDER", "hash")
+    monkeypatch.setenv("PPA_EMBEDDING_MODEL", "archive-hash-dev")
     return vault
 
 

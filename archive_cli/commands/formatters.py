@@ -68,6 +68,41 @@ def format_graph(rel_path: str, graph: dict[str, Any]) -> str:
     return "\n".join(lines) if len(lines) > 1 else "No linked notes"
 
 
+def format_evidence(result: dict) -> str:
+    """Format archive_evidence compact hits (never full bodies)."""
+    hits = result.get("hits") or []
+    if not hits:
+        base = "No evidence"
+    else:
+        lines: list[str] = []
+        for hit in hits:
+            date = str(hit.get("date") or "undated")
+            uid = str(hit.get("uid") or "")
+            card_type = str(hit.get("type") or "")
+            title = str(hit.get("title") or "")
+            support = str(hit.get("support") or "")
+            ptrs: list[str] = []
+            parent = hit.get("parent_uid") or ""
+            if parent:
+                ptrs.append(f"parent={parent}")
+            atts = hit.get("attachment_uids") or []
+            if atts:
+                ptrs.append(f"attachments={','.join(str(a) for a in atts)}")
+            dups = hit.get("duplicate_uids") or []
+            if dups:
+                ptrs.append(f"duplicates={','.join(str(d) for d in dups)}")
+            extra = f" [{'; '.join(ptrs)}]" if ptrs else ""
+            lines.append(f"- {date} {uid} [{card_type}]: {title} — {support}{extra}")
+        base = "\n".join(lines)
+    narrative = str(result.get("narrative") or "").strip()
+    if narrative:
+        base = f"{base}\n\nNarrative:\n{narrative}"
+    return base + _confidence_footer(
+        confidence=str(result.get("confidence", "")),
+        row_count=len(hits),
+    )
+
+
 def format_timeline(result: dict) -> str:
     """Format archive_timeline result."""
     rows = result["rows"]

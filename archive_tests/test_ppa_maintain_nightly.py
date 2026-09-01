@@ -109,6 +109,10 @@ def test_dry_run_exits_zero(tmp_path: Path, monkeypatch, capsys) -> None:
     monkeypatch.chdir(REPO_ROOT)
     monkeypatch.setenv("PPA_INDEX_DSN", "postgresql://archive:archive@127.0.0.1:50731/archive")
     monkeypatch.setenv("GOOGLE_ACCOUNT", "rheeger@gmail.com")
+    # apply_runtime_env() setdefaults openai; pin hash so later unit tests stay offline.
+    monkeypatch.setenv("PPA_EMBEDDING_PROVIDER", "hash")
+    monkeypatch.setenv("PPA_EMBEDDING_MODEL", "archive-hash-dev")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     rc = mod.main(["--dry-run"])
     assert rc == 0
     # dry-run logs to stderr, not stdout
