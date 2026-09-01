@@ -236,6 +236,8 @@ def adapter_ingest_kwargs(
         resolved_stage = _resolve_github_stage_dir(stage_dir)
         if resolved_stage:
             kwargs["stage_dir"] = resolved_stage
+        if catch_up:
+            kwargs["catch_up"] = True
         return kwargs
     if adapter_id == "gmail-correspondents":
         kwargs["account_email"] = scope

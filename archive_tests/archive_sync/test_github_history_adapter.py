@@ -228,12 +228,14 @@ def test_stage_history_writes_manifest_and_stage_files(tmp_vault: Path, tmp_path
     monkeypatch.setattr(
         adapter,
         "_list_visible_repositories",
-        lambda max_repos=None: [{"full_name": "rheeger/hey-arnold-hfa"}],
+        lambda max_repos=None, since=None: [{"full_name": "rheeger/hey-arnold-hfa"}],
     )
     monkeypatch.setattr(
         adapter,
         "_fetch_repo_bundle",
-        lambda repo_row, *, vault_path, max_commits_per_repo, max_threads_per_repo, max_messages_per_thread: bundle,
+        lambda repo_row, *, vault_path, max_commits_per_repo, max_threads_per_repo, max_messages_per_thread, since=None: (
+            bundle
+        ),
     )
 
     manifest = adapter.stage_history(str(tmp_vault), stage_dir, verbose=False)
@@ -324,7 +326,9 @@ def test_fetch_commits_walks_multiple_refs_and_dedupes(monkeypatch):
 
     calls: list[tuple[str, bool]] = []
 
-    def fake_history(*, owner, repo, qualified_name, max_commits=None, seen_shas=None, stop_when_page_seen=False):
+    def fake_history(
+        *, owner, repo, qualified_name, max_commits=None, seen_shas=None, stop_when_page_seen=False, since=None
+    ):
         calls.append((qualified_name, stop_when_page_seen))
         if qualified_name == "refs/heads/main":
             return [{"oid": "aaa"}, {"oid": "bbb"}]
@@ -506,12 +510,15 @@ def test_fetch_repo_bundle_limits_discussion_fetches_when_thread_cap_set(tmp_vau
     monkeypatch.setattr(
         adapter,
         "_fetch_commits",
-        lambda owner, repo, max_commits=None, default_branch="": ({"nameWithOwner": "rheeger/test"}, []),
+        lambda owner, repo, max_commits=None, default_branch="", since=None: (
+            {"nameWithOwner": "rheeger/test"},
+            [],
+        ),
     )
     monkeypatch.setattr(
         adapter,
         "_repo_issues",
-        lambda owner, repo: [
+        lambda owner, repo, since=None: [
             {"number": 1, "title": "Issue 1", "state": "open", "updated_at": "2026-03-10T00:00:00Z"},
             {"number": 2, "title": "Issue 2", "state": "open", "updated_at": "2026-03-09T00:00:00Z"},
         ],
@@ -519,7 +526,7 @@ def test_fetch_repo_bundle_limits_discussion_fetches_when_thread_cap_set(tmp_vau
     monkeypatch.setattr(
         adapter,
         "_repo_pulls",
-        lambda owner, repo: [
+        lambda owner, repo, since=None: [
             {
                 "number": 11,
                 "id": 11,
@@ -566,3 +573,209 @@ def test_fetch_repo_bundle_limits_discussion_fetches_when_thread_cap_set(tmp_vau
     assert captured["pull_numbers"] == ["11"]
     assert captured["issue_numbers"] == ["11"]
     assert captured["review_pulls"] == ["11"]
+
+
+def test_item_is_newer_than_last_sync():
+    from datetime import datetime, timezone
+
+    from archive_sync.adapters.github_history import (
+        github_incremental_watermark,
+        item_is_newer_than,
+        repo_row_changed_since,
+    )
+
+    since = datetime(2026, 3, 10, 12, 0, tzinfo=timezone.utc)
+    assert item_is_newer_than({"updated_at": "2026-03-10T12:00:01Z"}, since)
+    assert not item_is_newer_than({"updated_at": "2026-03-10T12:00:00Z"}, since)
+    assert not item_is_newer_than({"updated_at": "2026-03-09T23:59:59Z"}, since)
+    assert not item_is_newer_than({"kind": "commit", "commit_sha": "abc"}, since)
+    assert repo_row_changed_since({"updated_at": "2026-03-11T00:00:00Z"}, since)
+    assert not repo_row_changed_since(
+        {"updated_at": "2026-03-01T00:00:00Z", "pushed_at": "2026-03-02T00:00:00Z"}, since
+    )
+    assert repo_row_changed_since({"full_name": "rheeger/unknown"}, since)
+    assert github_incremental_watermark({"last_sync": "2026-03-10T12:00:00"}) == since
+    assert github_incremental_watermark({"last_sync": "2026-03-10T12:00:00"}, catch_up=True) is None
+    assert github_incremental_watermark({}) is None
+
+
+def test_iter_staged_batches_skips_items_before_last_sync(tmp_path: Path):
+    from datetime import datetime, timezone
+
+    stage_dir = tmp_path / "stage"
+    stage_dir.mkdir()
+    rows = [
+        {"kind": "commit", "commit_sha": "old", "committed_at": "2026-03-01T00:00:00Z"},
+        {"kind": "commit", "commit_sha": "new", "committed_at": "2026-03-11T00:00:00Z"},
+        {"kind": "thread", "number": "1", "updated_at": "2026-03-09T00:00:00Z"},
+        {"kind": "thread", "number": "2", "updated_at": "2026-03-12T00:00:00Z"},
+    ]
+    (stage_dir / "commits.jsonl").write_text(
+        "\n".join(json.dumps(row) for row in rows[:2]) + "\n",
+        encoding="utf-8",
+    )
+    (stage_dir / "threads.jsonl").write_text(
+        "\n".join(json.dumps(row) for row in rows[2:]) + "\n",
+        encoding="utf-8",
+    )
+    adapter = GitHubHistoryAdapter()
+    batches = list(
+        adapter._iter_staged_batches(
+            stage_dir,
+            batch_size=10,
+            since=datetime(2026, 3, 10, tzinfo=timezone.utc),
+        )
+    )
+    items = [item for batch in batches for item in batch.items]
+    assert [item.get("commit_sha") or item.get("number") for item in items] == ["new", "2"]
+    assert sum(batch.skipped_count for batch in batches) == 2
+    assert batches[0].skip_details["unchanged_since_last_sync"] == 2
+
+
+def test_fetch_batches_without_last_sync_applies_full_stage(tmp_path: Path):
+    stage_dir = tmp_path / "stage"
+    stage_dir.mkdir()
+    (stage_dir / "commits.jsonl").write_text(
+        json.dumps({"kind": "commit", "commit_sha": "old", "committed_at": "2020-01-01T00:00:00Z"}) + "\n",
+        encoding="utf-8",
+    )
+    adapter = GitHubHistoryAdapter()
+    items = []
+    for batch in adapter.fetch_batches(str(tmp_path), {}, stage_dir=str(stage_dir), refresh_stage=False):
+        items.extend(batch.items)
+    assert len(items) == 1
+    assert items[0]["commit_sha"] == "old"
+
+
+def test_fetch_batches_incremental_skips_unchanged_repos(tmp_vault: Path, tmp_path: Path, monkeypatch):
+    adapter = GitHubHistoryAdapter()
+    fetched: list[str] = []
+    bundle = _sample_bundle()
+
+    def fake_list(*, max_repos=None, since=None):
+        repos = [
+            {
+                "full_name": "rheeger/stale",
+                "updated_at": "2026-03-01T00:00:00Z",
+                "pushed_at": "2026-03-01T00:00:00Z",
+            },
+            {
+                "full_name": "rheeger/hey-arnold-hfa",
+                "updated_at": "2026-03-11T00:00:00Z",
+                "pushed_at": "2026-03-11T00:00:00Z",
+            },
+        ]
+        if since is None:
+            return repos
+        from archive_sync.adapters.github_history import repo_row_changed_since
+
+        changed = [repo for repo in repos if repo_row_changed_since(repo, since)]
+        adapter._last_repo_list_skipped = len(repos) - len(changed)
+        return changed
+
+    def fake_bundle(repo_row, **kwargs):
+        fetched.append(repo_row["full_name"])
+        return bundle
+
+    monkeypatch.setattr(adapter, "_list_visible_repositories", fake_list)
+    monkeypatch.setattr(adapter, "_fetch_repo_bundle", fake_bundle)
+
+    batches = list(
+        adapter.fetch_batches(
+            str(tmp_vault),
+            {"last_sync": "2026-03-10T12:00:00Z"},
+            stage_dir=str(tmp_path / "stage"),
+        )
+    )
+    items = [item for batch in batches for item in batch.items]
+
+    assert fetched == ["rheeger/hey-arnold-hfa"]
+    assert items
+    assert items[0]["kind"] == "repo"
+    assert batches[0].skip_details["unchanged_since_last_sync"] == 1
+
+
+def test_fetch_batches_quiet_day_yields_no_items(tmp_vault: Path, tmp_path: Path, monkeypatch):
+    adapter = GitHubHistoryAdapter()
+    fetched: list[str] = []
+
+    def fake_list(*, max_repos=None, since=None):
+        adapter._last_repo_list_skipped = 97
+        return []
+
+    monkeypatch.setattr(adapter, "_list_visible_repositories", fake_list)
+    monkeypatch.setattr(
+        adapter,
+        "_fetch_repo_bundle",
+        lambda repo_row, **kwargs: fetched.append(repo_row["full_name"]) or {},
+    )
+
+    batches = list(
+        adapter.fetch_batches(
+            str(tmp_vault),
+            {"last_sync": "2026-03-10T12:00:00Z"},
+            stage_dir=str(tmp_path / "stage"),
+        )
+    )
+    assert fetched == []
+    assert batches[0].items == []
+    assert batches[0].skip_details["unchanged_since_last_sync"] == 97
+    assert batches[0].skip_details["delta_items"] == 0
+
+
+def test_stage_history_incremental_ignores_completed_repos_from_prior_full_run(
+    tmp_vault: Path, tmp_path: Path, monkeypatch
+):
+    stage_dir = tmp_path / "stage"
+    meta = stage_dir / "_meta"
+    meta.mkdir(parents=True)
+    (meta / "extract-state.json").write_text(
+        json.dumps(
+            {
+                "complete": True,
+                "completed_repos": ["rheeger/hey-arnold-hfa", "rheeger/stale"],
+                "since": "",
+            }
+        ),
+        encoding="utf-8",
+    )
+    adapter = GitHubHistoryAdapter()
+    fetched: list[str] = []
+    bundle = _sample_bundle()
+
+    monkeypatch.setattr(
+        adapter,
+        "_list_visible_repositories",
+        lambda max_repos=None, since=None: [
+            {
+                "full_name": "rheeger/hey-arnold-hfa",
+                "updated_at": "2026-03-11T00:00:00Z",
+                "pushed_at": "2026-03-11T00:00:00Z",
+            }
+        ],
+    )
+
+    def fake_bundle(repo_row, **kwargs):
+        fetched.append(repo_row["full_name"])
+        assert kwargs.get("since") is not None
+        return bundle
+
+    monkeypatch.setattr(adapter, "_fetch_repo_bundle", fake_bundle)
+    manifest = adapter.stage_history(
+        str(tmp_vault),
+        stage_dir,
+        since="2026-03-10T12:00:00Z",
+    )
+    assert fetched == ["rheeger/hey-arnold-hfa"]
+    assert manifest["mode"] == "incremental"
+    assert manifest["counts"]["repos"] == 1
+    assert any(item.get("kind") == "repo" for item in manifest["items"])
+
+
+def test_get_github_stage_workers_uses_ppa_env(monkeypatch):
+    from archive_cli.index_config import get_github_stage_workers
+
+    monkeypatch.delenv("PPA_GITHUB_STAGE_WORKERS", raising=False)
+    assert get_github_stage_workers() == 2
+    monkeypatch.setenv("PPA_GITHUB_STAGE_WORKERS", "6")
+    assert get_github_stage_workers() == 6
