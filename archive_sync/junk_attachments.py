@@ -15,7 +15,15 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from archive_sync.attachment_list import (
+    ATTACHMENTS_DIR,
+    extract_attachments_section,
+    merge_message_body,
+    render_attachment_list,
+    strip_attachments_section,
+)
 from archive_sync.document_extract import (
+    DOC_SUFFIXES,
     DONE_TEXT_SOURCES,
     STATUS_EXTRACTED,
     TINY_IMAGE_BYTES,
@@ -24,6 +32,7 @@ from archive_sync.document_extract import (
     safe_filename,
 )
 from archive_sync.file_identity import FileIdentityIndex, uid_from_wikilink, wikilink_uid
+from archive_sync.job_progress import log_progress
 
 log = logging.getLogger("ppa.junk_attachments")
 
@@ -38,23 +47,6 @@ IMAGE_MIMES = frozenset(
         "image/x-ms-bmp",
     }
 )
-DOC_SUFFIXES = frozenset(
-    {
-        ".pdf",
-        ".doc",
-        ".docx",
-        ".rtf",
-        ".ppt",
-        ".pptx",
-        ".xls",
-        ".xlsx",
-        ".csv",
-        ".html",
-        ".htm",
-        ".txt",
-        ".md",
-    }
-)
 IMAGE001_RE = re.compile(r"^image\d+\.(png|jpe?g|gif|webp|bmp)$", re.I)
 JUNK_WORD_RE = re.compile(
     r"(?:^|[\s_\-./])(logo|signature|outlook|cid)(?:$|[\s_\-./])",
@@ -63,31 +55,6 @@ JUNK_WORD_RE = re.compile(
 SIG_RE = re.compile(r"(?:^|[\s_\-./])sig(?:$|[\s_\-./]|\.(?:png|jpe?g|gif|webp|bmp)$)", re.I)
 LARGE_IMAGE_BYTES = 100 * 1024
 ATTACHMENT_UID_PREFIX = "hfa-email-attachment-"
-ATTACHMENTS_DIR = "Attachments"
-
-
-def _fmt_elapsed(seconds: float) -> str:
-    total = int(round(max(0.0, seconds)))
-    m, s = divmod(total, 60)
-    return f"{m}:{s:02d}"
-
-
-def _log_progress(prefix: str, i: int, n: int, t0: float, extra: str = "") -> None:
-    elapsed = time.monotonic() - t0
-    rate = i / elapsed if elapsed > 0 else 0.0
-    remain = (n - i) / rate if rate > 0 else 0.0
-    pct = (100.0 * i / n) if n else 100.0
-    log.info(
-        "%s %s/%s (%.1f%%) elapsed=%s eta_remaining=%s rate_per_s=%.2f %s",
-        prefix,
-        i,
-        n,
-        pct,
-        _fmt_elapsed(elapsed),
-        _fmt_elapsed(remain),
-        rate,
-        extra,
-    )
 
 
 def is_image_attachment(filename: str, mime: str) -> bool:
@@ -143,9 +110,7 @@ def classify_email_attachment(fm: dict[str, Any], body: str = "") -> tuple[str, 
     text_source = str(fm.get("text_source") or "").strip()
     suffix = Path(safe_filename(filename)).suffix.lower() if filename else ""
 
-    real_extract = (
-        status == STATUS_EXTRACTED and text_source in DONE_TEXT_SOURCES and bool((body or "").strip())
-    )
+    real_extract = status == STATUS_EXTRACTED and text_source in DONE_TEXT_SOURCES and bool((body or "").strip())
     if real_extract:
         return "keep", "keep_extracted"
 
@@ -235,12 +200,6 @@ def _unlink_from_message(
     *,
     dry_run: bool,
 ) -> bool:
-    from archive_sync.attachment_text import (
-        extract_attachments_section,
-        merge_message_body,
-        render_attachment_list,
-        strip_attachments_section,
-    )
     from archive_vault.schema import validate_card_strict
     from archive_vault.vault import read_note, write_card
 
@@ -343,7 +302,7 @@ def run_junk_attachment_purge(
                 }
             )
         if i == 1 or i % progress_every == 0 or i == len(paths):
-            _log_progress("junk-attachment scan", i, len(paths), t0, extra=f"delete={len(deletes)}")
+            log_progress(log, "junk-attachment scan", i, len(paths), t0, extra=f"delete={len(deletes)}")
 
     purged_uids = [str(item["uid"]) for item in deletes if item.get("uid")]
     rels = [str(item["rel_path"]) for item in deletes if item.get("rel_path")]

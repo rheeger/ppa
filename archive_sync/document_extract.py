@@ -20,6 +20,7 @@ from pathlib import Path
 
 from archive_sync.anydoc_ocr import is_needs_ocr, to_markdown_local_first
 from archive_sync.extract_cache import CachedExtract, get_extract_cache
+from archive_sync.file_hash import bytes_sha256
 
 log = logging.getLogger("ppa.document_extract")
 
@@ -150,6 +151,8 @@ SKIP_EXTENSIONS = frozenset(
 # Types we will actually convert. Anything else is a quiet skip.
 EXTRACTABLE_EXTENSIONS = ANYDOC_EXTENSIONS | {".html", ".htm", ".txt", ".md"}
 PLAIN_TEXT_EXTENSIONS = frozenset({".txt", ".md"})
+# Real documents (not rasters). Junk emit/purge keeps these even without extract.
+DOC_SUFFIXES = EXTRACTABLE_EXTENSIONS - TINY_IMAGE_EXTENSIONS - {".tif", ".tiff"}
 
 
 class UnsupportedExtract(Exception):
@@ -195,10 +198,6 @@ class ExtractResult:
     extracted_text_sha: str = ""
     filename: str = ""
     reason: str = ""
-
-
-def bytes_sha256(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
 
 
 def trim_text(text: str, *, limit: int = MAX_EXTRACT_CHARS) -> str:
@@ -264,12 +263,7 @@ def _reuse_if_unchanged(
     existing_text_source: str,
     filename: str,
 ) -> ExtractResult | None:
-    if (
-        existing_sha
-        and existing_sha == sha
-        and existing_status == STATUS_EXTRACTED
-        and existing_text.strip()
-    ):
+    if existing_sha and existing_sha == sha and existing_status == STATUS_EXTRACTED and existing_text.strip():
         return ExtractResult(
             status=STATUS_EXTRACTED,
             text=existing_text,
@@ -288,6 +282,19 @@ def _reuse_if_unchanged(
     return None
 
 
+def html_to_markdown(raw: str) -> str:
+    """Shared html2text settings for ingest and extract."""
+
+    import html2text
+
+    converter = html2text.HTML2Text()
+    converter.ignore_links = False
+    converter.ignore_images = True
+    converter.body_width = 0
+    converter.ignore_tables = False
+    return converter.handle(raw)
+
+
 def convert_document_to_markdown(
     source_path: Path,
     *,
@@ -303,9 +310,7 @@ def convert_document_to_markdown(
     suffix = source_path.suffix.lower()
     if suffix in ANYDOC_EXTENSIONS:
         try:
-            text, source = to_markdown_local_first(
-                source_path, allow_hosted=allow_hosted, data=data
-            )
+            text, source = to_markdown_local_first(source_path, allow_hosted=allow_hosted, data=data)
             if text:
                 return text, source
         except Exception as exc:
@@ -317,19 +322,12 @@ def convert_document_to_markdown(
             log.debug("anydoc convert failed path=%s err=%s", source_path, exc)
             raise
     if suffix in {".html", ".htm"}:
-        import html2text
-
-        converter = html2text.HTML2Text()
-        converter.ignore_links = False
-        converter.ignore_images = True
-        converter.body_width = 0
-        converter.ignore_tables = False
         raw = (
             data.decode("utf-8", errors="ignore")
             if data is not None
             else source_path.read_text(encoding="utf-8", errors="ignore")
         )
-        text = converter.handle(raw).strip()
+        text = html_to_markdown(raw).strip()
         if text:
             return text, "html2text"
         raise UnsupportedExtract("empty html2text output")
@@ -488,9 +486,7 @@ def extract_from_bytes(
                     reason="unsupported",
                 )
             log.warning("document extract failed filename=%s err=%s", name, exc)
-            return ExtractResult(
-                status=STATUS_FAILED, filename=name, extracted_text_sha=sha, reason=str(exc)
-            )
+            return ExtractResult(status=STATUS_FAILED, filename=name, extracted_text_sha=sha, reason=str(exc))
         text = trim_text(str(text or "").strip())
         if not text:
             status = STATUS_NEEDS_OCR if tiny else STATUS_FAILED

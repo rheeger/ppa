@@ -6,12 +6,17 @@ from pathlib import Path
 
 import pytest
 
-from archive_sync.extract_cache import reset_extract_cache_for_tests
 from archive_sync.adapters.gmail_messages import GmailMessagesAdapter, _attachment_uid
-from archive_sync.attachment_text import (
+from archive_sync.attachment_list import (
     ATTACHMENTS_LIST_SENTINEL,
     ATTACHMENTS_SECTION_HEADING,
     ATTACHMENTS_SECTION_SENTINEL,
+    merge_message_body,
+    preserve_message_attachments_section,
+    strip_attachments_section,
+    strip_ocr_dump_section,
+)
+from archive_sync.attachment_text import (
     STATUS_ALREADY_CACHED,
     STATUS_EXTRACTED,
     STATUS_FETCHED,
@@ -24,15 +29,12 @@ from archive_sync.attachment_text import (
     extract_job,
     extract_jobs,
     is_skippable_non_doc,
-    merge_message_body,
-    preserve_message_attachments_section,
     render_attachments_section,
     resolve_local_attachment,
     run_attachment_fetch,
     run_attachment_text_extraction,
-    strip_attachments_section,
-    strip_ocr_dump_section,
 )
+from archive_sync.extract_cache import reset_extract_cache_for_tests
 from archive_vault.schema import EmailAttachmentCard
 from archive_vault.vault import read_note, write_card
 

@@ -101,11 +101,7 @@ ROOTS: dict[str, Path] = {
 
 # Labels assigned at ingest as custom:{path.name.lower()} for roots not in ROOTS.
 CUSTOM_ROOTS: dict[str, Path] = {
-    "custom:requested record": Path.home()
-    / "Documents"
-    / "Health & Personal"
-    / "05_Amelia"
-    / "Requested Record",
+    "custom:requested record": Path.home() / "Documents" / "Health & Personal" / "05_Amelia" / "Requested Record",
 }
 
 ROOT_PATH_TO_LABEL = {path.expanduser().resolve(): label for label, path in ROOTS.items()}
@@ -126,6 +122,7 @@ def resolve_library_root(library_root: str) -> Path | None:
         return path if path.is_dir() else None
     except OSError:
         return None
+
 
 INCLUDED_EXTENSIONS = {
     ".pdf",
@@ -338,7 +335,9 @@ def _derive_title(path: Path, text: str, *, preferred: str = "") -> tuple[str, b
 
 
 def _sha256_bytes(value: bytes) -> str:
-    return hashlib.sha256(value).hexdigest()
+    from archive_sync.file_hash import bytes_sha256
+
+    return bytes_sha256(value)
 
 
 def _sha256_text(value: str) -> str:
@@ -608,14 +607,9 @@ def _iter_plain_rows(text: str, *, delimiter: str) -> list[str]:
 
 
 def _html_to_markdown(raw: str) -> str:
-    import html2text
+    from archive_sync.document_extract import html_to_markdown
 
-    converter = html2text.HTML2Text()
-    converter.ignore_links = False
-    converter.ignore_images = True
-    converter.body_width = 0
-    converter.ignore_tables = False
-    return converter.handle(raw)
+    return html_to_markdown(raw)
 
 
 def _extract_text_file(path: Path) -> tuple[str, str]:
@@ -664,14 +658,14 @@ def _anydoc_document_type(suffix: str) -> str:
 
 
 def _try_anydoc(path: Path) -> dict[str, Any] | None:
-    """Convert via anydoc. Local ``ocr=reject`` first; hosted only on NeedsOcr."""
+    """Convert via the shared extract library. Local reject first; hosted on NeedsOcr."""
 
     try:
         import anydoc  # noqa: F401
     except ImportError:
         return None
-    from archive_sync.anydoc_ocr import is_needs_ocr, to_markdown_local_first
-    from archive_sync.document_extract import is_tiny_image
+    from archive_sync.anydoc_ocr import is_needs_ocr
+    from archive_sync.document_extract import UnsupportedExtract, convert_document_to_markdown, is_tiny_image
 
     try:
         size = _path_size(path)
@@ -679,10 +673,14 @@ def _try_anydoc(path: Path) -> dict[str, Any] | None:
         return None
     allow_hosted = not is_tiny_image(path.name, size)
     try:
-        raw, text_source = to_markdown_local_first(path, allow_hosted=allow_hosted)
+        raw, text_source = convert_document_to_markdown(path, allow_hosted=allow_hosted)
     except Exception as exc:
         name = type(exc).__name__
-        if is_needs_ocr(exc) or name in {"EncryptedError", "UnsupportedError", "HostedError"}:
+        if (
+            is_needs_ocr(exc)
+            or isinstance(exc, UnsupportedExtract)
+            or name in {"EncryptedError", "UnsupportedError", "HostedError"}
+        ):
             logger.debug("anydoc skip path=%s err=%s", path.name, exc)
         else:
             logger.warning("anydoc failed path=%s err=%s", path, exc)

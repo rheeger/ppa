@@ -19,7 +19,9 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from archive_sync.document_extract import bytes_sha256, is_lockfile
-from archive_sync.extract_cache import get_extract_cache, is_sha256
+from archive_sync.extract_cache import get_extract_cache
+from archive_sync.file_hash import is_sha256
+from archive_sync.job_progress import log_progress
 from archive_vault.provenance import ProvenanceEntry, merge_provenance
 from archive_vault.schema import validate_card_strict
 from archive_vault.vault import read_note, write_card
@@ -36,30 +38,6 @@ CREATE TABLE IF NOT EXISTS file_cards (
 );
 CREATE INDEX IF NOT EXISTS file_cards_uid ON file_cards(uid);
 """
-
-
-def _fmt_elapsed(seconds: float) -> str:
-    total = int(round(max(0.0, seconds)))
-    m, s = divmod(total, 60)
-    return f"{m}:{s:02d}"
-
-
-def _log_progress(prefix: str, i: int, n: int, t0: float, extra: str = "") -> None:
-    elapsed = time.monotonic() - t0
-    rate = i / elapsed if elapsed > 0 else 0.0
-    remain = (n - i) / rate if rate > 0 else 0.0
-    pct = (100.0 * i / n) if n else 100.0
-    log.info(
-        "%s %s/%s (%.1f%%) elapsed=%s eta_remaining=%s rate_per_s=%.2f %s",
-        prefix,
-        i,
-        n,
-        pct,
-        _fmt_elapsed(elapsed),
-        _fmt_elapsed(remain),
-        rate,
-        extra,
-    )
 
 
 def wikilink_uid(uid: str) -> str:
@@ -153,9 +131,7 @@ class FileIdentityIndex:
         if not is_sha256(key):
             return []
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT uid FROM file_cards WHERE sha256 = ? ORDER BY uid", (key,)
-            ).fetchall()
+            rows = self._conn.execute("SELECT uid FROM file_cards WHERE sha256 = ? ORDER BY uid", (key,)).fetchall()
         return [str(row[0]) for row in rows if row[0]]
 
     def rows_for_sha(self, sha256: str) -> list[tuple[str, str]]:
@@ -301,7 +277,9 @@ def register_ingested_file(
     if not peers:
         _write_identity_fields(vault, rel_path, content_sha=sha, duplicates=[], dry_run=dry_run)
         return []
-    _write_identity_fields(vault, rel_path, content_sha=sha, duplicates=[wikilink_uid(p) for p in peers], dry_run=dry_run)
+    _write_identity_fields(
+        vault, rel_path, content_sha=sha, duplicates=[wikilink_uid(p) for p in peers], dry_run=dry_run
+    )
     for peer_uid, peer_rel in rows:
         if peer_uid == uid or not peer_rel:
             continue
@@ -380,7 +358,7 @@ def run_file_duplicate_linking(
                 missing_paths.append(key)
                 path_to_rels[key].append(rel)
         if i == 1 or i % 5000 == 0 or i == len(cards):
-            _log_progress("link-file-duplicates scan", i, len(cards), t0, extra=f"reused={reused}")
+            log_progress(log, "link-file-duplicates scan", i, len(cards), t0, extra=f"reused={reused}")
 
     unique_missing = list(dict.fromkeys(missing_paths))
     log.info("link-file-duplicates hash-missing paths=%s reused=%s", len(unique_missing), reused)
@@ -423,7 +401,7 @@ def run_file_duplicate_linking(
                 dirty.append(fm["uid"])
                 cards_linked += 1
         if i == 1 or i % 25 == 0 or i == len(group_items):
-            _log_progress("link-file-duplicates write", i, len(group_items), t1, extra=f"sha={sha[:12]}")
+            log_progress(log, "link-file-duplicates write", i, len(group_items), t1, extra=f"sha={sha[:12]}")
 
     sha_only: list[tuple[str, dict[str, Any]]] = []
     if not incremental:
@@ -440,7 +418,7 @@ def run_file_duplicate_linking(
             if _write_identity_fields(vault, rel, content_sha=sha, duplicates=[], dry_run=dry_run):
                 dirty.append(fm["uid"])
             if i == 1 or i % 5000 == 0 or i == len(sha_only):
-                _log_progress("link-file-duplicates stamp-sha", i, max(1, len(sha_only)), t2)
+                log_progress(log, "link-file-duplicates stamp-sha", i, max(1, len(sha_only)), t2)
 
     log.info(
         "link-file-duplicates done cards=%s reused=%s computed=%s groups=%s linked=%s dirty=%s cache_hits_at_start=%s",

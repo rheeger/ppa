@@ -11,18 +11,17 @@ Override: ``PPA_ANYDOC_EXTRACT_CACHE``.
 from __future__ import annotations
 
 import logging
-import re
 import sqlite3
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, Iterable
+from typing import Any, Iterable, Iterator
+
+from archive_sync.file_hash import is_sha256
 
 log = logging.getLogger("ppa.extract_cache")
-
-_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS extracts (
     sha256 TEXT PRIMARY KEY,
@@ -37,9 +36,7 @@ CREATE TABLE IF NOT EXISTS inflight (
 );
 """
 _SEED_TYPES = ("document", "email_attachment")
-_REUSABLE_SOURCES = frozenset(
-    {"anydoc", "anydoc_hosted", "html2text", "markitdown", "plain"}
-)
+_REUSABLE_SOURCES = frozenset({"anydoc", "anydoc_hosted", "html2text", "markitdown", "plain"})
 _REUSABLE_STATUS = "content_extracted"
 
 
@@ -54,10 +51,6 @@ class CachedExtract:
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def is_sha256(value: str) -> bool:
-    return bool(_SHA256_RE.fullmatch((value or "").strip().lower()))
 
 
 def default_extract_cache_path() -> Path:

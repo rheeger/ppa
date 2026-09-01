@@ -23,11 +23,17 @@ from archive_sync.adapters.gmail_http_errors import (
     GmailPermissionDenied,
     classify_gmail_error,
 )
-from archive_sync.extract_cache import get_extract_cache, seed_from_scan_cache
+from archive_sync.attachment_list import (
+    ATTACHMENTS_DIR,
+    extract_attachments_section,
+    merge_message_body,
+    render_attachment_list,
+    strip_attachments_section,
+    strip_ocr_dump_section,
+)
 from archive_sync.document_extract import (
     DONE_SKIP_STATUSES,
     MAX_FILE_BYTES,
-    TINY_IMAGE_BYTES,
     STATUS_EXTRACTED,
     STATUS_FAILED,
     STATUS_LOCKFILE,
@@ -37,6 +43,7 @@ from archive_sync.document_extract import (
     STATUS_SUPPRESSED,
     STATUS_TINY_IMAGE,
     STATUS_TOO_LARGE,
+    TINY_IMAGE_BYTES,
     ExtractResult,
     bytes_sha256,
     extract_from_bytes,
@@ -48,6 +55,8 @@ from archive_sync.document_extract import (
     is_tiny_image,
     safe_filename,
 )
+from archive_sync.extract_cache import get_extract_cache, seed_from_scan_cache
+from archive_sync.job_progress import fmt_elapsed, log_progress
 from archive_vault.provenance import ProvenanceEntry, merge_provenance
 from archive_vault.schema import validate_card_strict
 from archive_vault.vault import read_note, write_card
@@ -58,44 +67,6 @@ STATUS_FETCHED = "fetched"
 STATUS_ALREADY_CACHED = "already_cached"
 RETRYABLE_FETCH_STATUSES = frozenset({STATUS_MISSING, STATUS_FETCH_DENIED})
 RASTER_FETCH_SKIP = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".heic", ".svg"}
-
-
-def _fmt_elapsed(seconds: float) -> str:
-    total = int(round(max(0.0, seconds)))
-    m, s = divmod(total, 60)
-    return f"{m}:{s:02d}"
-
-
-def _log_progress(prefix: str, i: int, n: int, t0: float, extra: str = "") -> None:
-    elapsed = time.monotonic() - t0
-    rate = i / elapsed if elapsed > 0 else 0.0
-    remain = (n - i) / rate if rate > 0 else 0.0
-    pct = (100.0 * i / n) if n else 100.0
-    log.info(
-        "%s %s/%s (%.1f%%) elapsed=%s eta_remaining=%s rate_per_s=%.2f %s",
-        prefix,
-        i,
-        n,
-        pct,
-        _fmt_elapsed(elapsed),
-        _fmt_elapsed(remain),
-        rate,
-        extra,
-    )
-
-ATTACHMENTS_DIR = "Attachments"
-ATTACHMENTS_SECTION_HEADING = "## Attachments"
-ATTACHMENTS_LIST_SENTINEL = "<!-- ppa-attachment-list -->"
-# Legacy OCR dump written by 535679b — strip on sight, never re-emit.
-ATTACHMENTS_SECTION_SENTINEL = "<!-- ppa-attachment-text -->"
-_OCR_DUMP_RE = re.compile(
-    rf"\n*{re.escape(ATTACHMENTS_SECTION_SENTINEL)}\n{re.escape(ATTACHMENTS_SECTION_HEADING)}\n.*\Z",
-    re.DOTALL,
-)
-_LIST_RE = re.compile(
-    rf"\n*{re.escape(ATTACHMENTS_LIST_SENTINEL)}\n{re.escape(ATTACHMENTS_SECTION_HEADING)}\n.*\Z",
-    re.DOTALL,
-)
 
 FetchBytesFn = Callable[[str, str, str], bytes]
 
@@ -173,76 +144,14 @@ def cache_attachment_bytes(vault: Path, uid: str, filename: str, data: bytes) ->
     return path
 
 
-def strip_ocr_dump_section(body: str) -> str:
-    """Remove a legacy OCR dump from an email message body."""
-
-    return _OCR_DUMP_RE.sub("", str(body or "")).rstrip()
-
-
-def strip_attachments_section(body: str) -> str:
-    text = strip_ocr_dump_section(body)
-    return _LIST_RE.sub("", text).rstrip()
-
-
-def extract_attachments_section(body: str) -> str:
-    text = strip_ocr_dump_section(body)
-    match = _LIST_RE.search(text)
-    if not match:
-        return ""
-    return match.group(0).strip()
-
-
-def render_attachment_list(items: list[tuple[str, str]]) -> str:
-    """Filename + wikilink list only — never extracted markdown."""
-
-    lines: list[str] = []
-    seen: set[str] = set()
-    for uid, filename in items:
-        slug = str(uid or "").strip().strip("[]")
-        name = safe_filename(filename)
-        if not slug or slug in seen:
-            continue
-        seen.add(slug)
-        lines.append(f"- [[{slug}]] {name}")
-    if not lines:
-        return ""
-    return f"{ATTACHMENTS_LIST_SENTINEL}\n{ATTACHMENTS_SECTION_HEADING}\n\n" + "\n".join(lines)
-
-
 def render_attachments_section(extractions: list[AttachmentExtraction]) -> str:
     """Compatibility wrapper: list only, no OCR text."""
 
     return render_attachment_list([(item.uid, item.filename) for item in extractions])
 
 
-def merge_message_body(raw_body: str, section: str) -> str:
-    stripped = strip_attachments_section(raw_body)
-    section = (section or "").strip()
-    if not section:
-        return stripped
-    if stripped:
-        return f"{stripped}\n\n{section}"
-    return section
-
-
-def preserve_message_attachments_section(incoming_body: str, existing_body: str) -> str:
-    """Keep a filename list; drop any legacy OCR dump."""
-
-    incoming = strip_ocr_dump_section(incoming_body)
-    existing = strip_ocr_dump_section(existing_body)
-    incoming_section = extract_attachments_section(incoming)
-    if incoming_section:
-        return merge_message_body(strip_attachments_section(incoming), incoming_section)
-    existing_section = extract_attachments_section(existing)
-    if existing_section:
-        return merge_message_body(strip_attachments_section(incoming), existing_section)
-    return incoming
-
-
 def extract_local_file(path: Path, *, skip_hosted: bool = False) -> AttachmentExtraction:
-    return AttachmentExtraction.from_result(
-        extract_from_path(path, filename=path.name, skip_hosted=skip_hosted)
-    )
+    return AttachmentExtraction.from_result(extract_from_path(path, filename=path.name, skip_hosted=skip_hosted))
 
 
 def extract_job(
@@ -254,24 +163,14 @@ def extract_job(
 ) -> AttachmentExtraction:
     filename = safe_filename(job.filename)
     if job.skip_extract:
-        return AttachmentExtraction(
-            status=STATUS_SUPPRESSED, filename=filename, uid=job.uid, reason="suppressed"
-        )
+        return AttachmentExtraction(status=STATUS_SUPPRESSED, filename=filename, uid=job.uid, reason="suppressed")
     if is_lockfile(filename):
-        return AttachmentExtraction(
-            status=STATUS_LOCKFILE, filename=filename, uid=job.uid, reason="lockfile"
-        )
+        return AttachmentExtraction(status=STATUS_LOCKFILE, filename=filename, uid=job.uid, reason="lockfile")
     if is_skippable_non_doc(filename, job.mime_type):
-        return AttachmentExtraction(
-            status=STATUS_NON_DOC, filename=filename, uid=job.uid, reason="non_doc"
-        )
+        return AttachmentExtraction(status=STATUS_NON_DOC, filename=filename, uid=job.uid, reason="non_doc")
     if job.size_bytes and job.size_bytes > MAX_FILE_BYTES:
-        return AttachmentExtraction(
-            status=STATUS_TOO_LARGE, filename=filename, uid=job.uid, reason="too_large"
-        )
-    skip_hosted = job.skip_hosted or (
-        job.is_inline and is_tiny_image(filename, job.size_bytes, job.mime_type)
-    )
+        return AttachmentExtraction(status=STATUS_TOO_LARGE, filename=filename, uid=job.uid, reason="too_large")
+    skip_hosted = job.skip_hosted or (job.is_inline and is_tiny_image(filename, job.size_bytes, job.mime_type))
 
     path = resolve_local_attachment(vault, job.uid, filename)
     if path is None and (job.inline_bytes or fetch_bytes is not None):
@@ -407,7 +306,7 @@ def extract_jobs(
         for idx, job in enumerate(jobs, start=1):
             item = _run(job)
             if idx == 1 or idx % 25 == 0 or idx == len(jobs):
-                _log_progress(prefix, idx, len(jobs), t0, extra=f"uid={job.uid} status={item.status}")
+                log_progress(log, prefix, idx, len(jobs), t0, extra=f"uid={job.uid} status={item.status}")
             results.append(item)
         return results
     by_uid: dict[str, AttachmentExtraction] = {}
@@ -425,7 +324,8 @@ def extract_jobs(
                 )
             done += 1
             if done == 1 or done % 25 == 0 or done == len(jobs):
-                _log_progress(
+                log_progress(
+                    log,
                     prefix,
                     done,
                     len(jobs),
@@ -668,9 +568,7 @@ def _eligible_attachment_jobs(
     if not fetch_only:
         for rel in scan_cache.rel_paths_by_type().get("email_thread") or []:
             tfm = scan_cache.frontmatter_for_rel_path(rel) or {}
-            thread_class[str(tfm.get("uid") or Path(rel).stem)] = str(
-                tfm.get("triage_classification") or ""
-            )
+            thread_class[str(tfm.get("uid") or Path(rel).stem)] = str(tfm.get("triage_classification") or "")
 
     jobs: list[tuple[str, AttachmentJob]] = []
     skipped_missing = 0
@@ -717,9 +615,7 @@ def _eligible_attachment_jobs(
             if sha and sha == current and status in {STATUS_EXTRACTED, *DONE_SKIP_STATUSES}:
                 continue
         thread_slug = str(fm.get("thread") or "").strip().strip("[]")
-        skip_extract = (not fetch_only) and is_suppressed_classification(
-            thread_class.get(thread_slug, "")
-        )
+        skip_extract = (not fetch_only) and is_suppressed_classification(thread_class.get(thread_slug, ""))
         body = ""
         if not fetch_only and status == STATUS_EXTRACTED:
             try:
@@ -800,7 +696,7 @@ def run_attachment_fetch(
     log.info(
         "extract-attachment-text fetch-only done elapsed=%s downloaded=%s already_cached=%s "
         "denied=%s failed=%s missing=%s bytes_written=%s",
-        _fmt_elapsed(time.monotonic() - t0),
+        fmt_elapsed(time.monotonic() - t0),
         downloaded,
         already_cached + skip_counts["skipped_existing"],
         denied,

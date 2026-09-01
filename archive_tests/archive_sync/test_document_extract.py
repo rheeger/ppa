@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from archive_sync.extract_cache import reset_extract_cache_for_tests
 from archive_sync.document_extract import (
+    DOC_SUFFIXES,
     STATUS_EXTRACTED,
     STATUS_NEEDS_OCR,
     STATUS_NON_DOC,
@@ -20,6 +20,8 @@ from archive_sync.document_extract import (
     is_suppressed_classification,
     is_tiny_image,
 )
+from archive_sync.extract_cache import reset_extract_cache_for_tests
+from archive_sync.file_hash import bytes_sha256 as shared_bytes_sha256
 
 
 class _NeedsOcrError(Exception):
@@ -34,6 +36,31 @@ def _isolate_extract_cache(monkeypatch, tmp_path: Path) -> None:
     reset_extract_cache_for_tests()
 
 
+def test_shared_hash_is_the_library_helper() -> None:
+    assert bytes_sha256 is shared_bytes_sha256
+    assert bytes_sha256(b"same-bytes") == shared_bytes_sha256(b"same-bytes")
+
+
+def test_doc_suffixes_are_extractable_minus_rasters() -> None:
+    assert DOC_SUFFIXES == {
+        ".pdf",
+        ".doc",
+        ".docx",
+        ".rtf",
+        ".ppt",
+        ".pptx",
+        ".xls",
+        ".xlsx",
+        ".csv",
+        ".html",
+        ".htm",
+        ".txt",
+        ".md",
+    }
+    assert ".png" not in DOC_SUFFIXES
+    assert ".tif" not in DOC_SUFFIXES
+
+
 def test_skips_audio_video_archives() -> None:
     assert is_skippable_non_doc("song.mp3", "audio/mpeg") is True
     assert is_skippable_non_doc("clip.mp4", "video/mp4") is True
@@ -45,9 +72,7 @@ def test_tiny_inline_image_skip() -> None:
     assert is_tiny_image("logo.png", 12_000, "image/png") is True
     assert is_tiny_image("scan.png", 80_000, "image/png") is False
     data = b"\x89PNG" + b"x" * 100
-    result = extract_from_bytes(
-        data, filename="logo.png", mime_type="image/png", is_inline=True
-    )
+    result = extract_from_bytes(data, filename="logo.png", mime_type="image/png", is_inline=True)
     assert result.status == STATUS_TINY_IMAGE
     assert result.extracted_text_sha == bytes_sha256(data)
 

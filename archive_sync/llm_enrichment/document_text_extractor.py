@@ -41,7 +41,7 @@ _RICH_EXTENSIONS = frozenset(
 )
 
 
-def needs_markitdown_extraction(card_fm: dict[str, Any]) -> bool:
+def needs_document_extraction(card_fm: dict[str, Any]) -> bool:
     """Whether this card should be run through the shared extract stack."""
 
     ts = str(card_fm.get("text_source") or "").strip().lower()
@@ -59,6 +59,9 @@ def needs_markitdown_extraction(card_fm: dict[str, Any]) -> bool:
     if isinstance(flags, list) and "metadata_only" in {str(x) for x in flags}:
         return True
     return False
+
+
+needs_markitdown_extraction = needs_document_extraction
 
 
 def resolve_source_file(library_root: str, relative_path: str) -> Path | None:
@@ -104,7 +107,7 @@ def reextract_one_card(
     if str(fm.get("type") or "") != "document":
         return {"rel_path": rel_path, "status": "skipped", "reason": "not_document"}
 
-    if not needs_markitdown_extraction(fm):
+    if not needs_document_extraction(fm):
         return {"rel_path": rel_path, "status": "skipped", "reason": "not_eligible"}
 
     src = resolve_source_file(str(fm.get("library_root") or ""), str(fm.get("relative_path") or ""))
@@ -201,7 +204,7 @@ def run_document_text_extraction(
     eligible: list[str] = []
     for rel_path in paths:
         fm = scan_cache.frontmatter_for_rel_path(rel_path)
-        if not needs_markitdown_extraction(fm):
+        if not needs_document_extraction(fm):
             continue
         eligible.append(rel_path)
         if limit is not None and len(eligible) >= limit:

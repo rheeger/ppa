@@ -9,6 +9,7 @@ import pytest
 from archive_sync.extract_cache import reset_extract_cache_for_tests
 from archive_sync.llm_enrichment.document_text_extractor import (
     extract_markdown_text,
+    needs_document_extraction,
     needs_markitdown_extraction,
     resolve_source_file,
 )
@@ -23,7 +24,8 @@ def _isolate_extract_cache(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_needs_markitdown_plain_rtf() -> None:
-    assert needs_markitdown_extraction({"text_source": "plain", "extension": "rtf"}) is True
+    assert needs_document_extraction is needs_markitdown_extraction
+    assert needs_document_extraction({"text_source": "plain", "extension": "rtf"}) is True
 
 
 def test_needs_markitdown_idempotent() -> None:

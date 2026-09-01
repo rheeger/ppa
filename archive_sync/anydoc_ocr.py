@@ -18,7 +18,6 @@ cannot skip the local attempt.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
 from pathlib import Path
@@ -80,8 +79,7 @@ def anydoc_hosted_ocr_kwargs() -> dict[str, str] | None:
     if not _REJECT_LOGGED:
         _REJECT_LOGGED = True
         log.warning(
-            "anydoc hosted OCR disabled: set FIRECRAWL_API_KEY or write %s "
-            "(scanned PDFs stay NeedsOcr / reject)",
+            "anydoc hosted OCR disabled: set FIRECRAWL_API_KEY or write %s (scanned PDFs stay NeedsOcr / reject)",
             firecrawl_key_path(),
         )
     return None
@@ -107,11 +105,12 @@ def to_markdown_local_first(
     import anydoc
 
     from archive_sync.extract_cache import get_extract_cache
+    from archive_sync.file_hash import bytes_sha256
 
     path_str = str(path)
     sha = ""
     try:
-        sha = hashlib.sha256(data if data is not None else Path(path_str).read_bytes()).hexdigest()
+        sha = bytes_sha256(data if data is not None else Path(path_str).read_bytes())
     except OSError:
         sha = ""
     cache = get_extract_cache()
