@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 import time
@@ -13,6 +14,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from archive_cli.index_config import get_github_stage_workers
 from archive_vault.identity import IdentityCache
 from archive_vault.identity_resolver import merge_into_existing
 from archive_vault.provenance import ProvenanceEntry
@@ -28,13 +30,14 @@ from archive_vault.vault import read_note
 
 from .base import BaseAdapter, FetchedBatch, deterministic_provenance
 
+LOG = logging.getLogger("ppa.github")
+
 REPO_SOURCE = "github.repo"
 COMMIT_SOURCE = "github.commit"
 THREAD_SOURCE = "github.thread"
 MESSAGE_SOURCE = "github.message"
 DEFAULT_BATCH_SIZE = 200
 RATE_LIMIT_FLOOR = 250
-DEFAULT_STAGE_WORKERS = 2
 MAX_RETRIES = 6
 PRIMARY_RATE_LIMIT_WAIT_RETRIES = 2
 MAX_RATE_LIMIT_SLEEP_SECONDS = 3600
@@ -147,7 +150,7 @@ query($owner: String!, $name: String!, $pageSize: Int!, $endCursor: String) {
 """.strip()
 
 COMMITS_QUERY = """
-query($owner: String!, $name: String!, $qualifiedName: String!, $pageSize: Int!, $endCursor: String) {
+query($owner: String!, $name: String!, $qualifiedName: String!, $pageSize: Int!, $endCursor: String, $since: GitTimestamp) {
   rateLimit {
     cost
     remaining
@@ -158,7 +161,7 @@ query($owner: String!, $name: String!, $qualifiedName: String!, $pageSize: Int!,
       name
       target {
         ... on Commit {
-          history(first: $pageSize, after: $endCursor) {
+          history(first: $pageSize, after: $endCursor, since: $since) {
             pageInfo {
               hasNextPage
               endCursor
@@ -209,7 +212,7 @@ query($owner: String!, $name: String!, $qualifiedName: String!, $pageSize: Int!,
         ... on Tag {
           target {
             ... on Commit {
-              history(first: $pageSize, after: $endCursor) {
+              history(first: $pageSize, after: $endCursor, since: $since) {
                 pageInfo {
                   hasNextPage
                   endCursor
@@ -319,6 +322,86 @@ def _parse_iso(value: Any) -> datetime | None:
         return None
 
 
+def _aware_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def parse_sync_watermark(value: Any) -> datetime | None:
+    """Parse ``last_sync`` / GitHub timestamps into an aware UTC datetime."""
+
+    parsed = _parse_iso(value)
+    if parsed is None:
+        return None
+    return _aware_utc(parsed)
+
+
+_ITEM_ACTIVITY_KEYS = (
+    "updated_at",
+    "pushed_at",
+    "committed_at",
+    "authored_at",
+    "sent_at",
+    "last_message_at",
+    "merged_at",
+    "closed_at",
+    "updated",
+    "created_at",
+    "created",
+    "committedDate",
+    "authoredDate",
+    "updatedAt",
+    "pushedAt",
+    "createdAt",
+)
+
+
+def item_activity_at(item: dict[str, Any]) -> datetime | None:
+    """Latest activity timestamp on a staged GitHub record or repo list row."""
+
+    latest: datetime | None = None
+    for key in _ITEM_ACTIVITY_KEYS:
+        parsed = parse_sync_watermark(item.get(key))
+        if parsed is None:
+            continue
+        if latest is None or parsed > latest:
+            latest = parsed
+    return latest
+
+
+def item_is_newer_than(item: dict[str, Any], since: datetime) -> bool:
+    """True when the record is strictly after ``since``. Missing dates are not newer."""
+
+    activity = item_activity_at(item)
+    if activity is None:
+        return False
+    return activity > _aware_utc(since)
+
+
+def repo_row_changed_since(repo: dict[str, Any], since: datetime) -> bool:
+    """True when a GitHub repo list row has activity after ``since``.
+
+    Unknown timestamps are treated as changed so a new/unparsed repo is fetched.
+    """
+
+    activity = item_activity_at(repo)
+    if activity is None:
+        return True
+    return activity > _aware_utc(since)
+
+
+def github_incremental_watermark(cursor: dict[str, Any], *, catch_up: bool = False) -> datetime | None:
+    """Return ``last_sync`` as UTC, or ``None`` for a full stage apply.
+
+    ``catch_up`` ignores the watermark (same idea as Gmail catch-up).
+    """
+
+    if catch_up:
+        return None
+    return parse_sync_watermark(cursor.get("last_sync"))
+
+
 def _summary_from_text(value: str, *, fallback: str, limit: int = 120) -> str:
     text = _clean(value.splitlines()[0] if value else "")
     if not text:
@@ -383,6 +466,7 @@ class GitHubHistoryAdapter(BaseAdapter):
 
     def __init__(self) -> None:
         self._last_request_at = 0.0
+        self._last_repo_list_skipped = 0
 
     def _throttle_request(self) -> None:
         now = time.monotonic()
@@ -546,7 +630,12 @@ class GitHubHistoryAdapter(BaseAdapter):
             print(f"[github-history] graphql rate-limit remaining={remaining} wait={wait:.0f}s reset={reset_at}")
             time.sleep(wait)
 
-    def _list_visible_repositories(self, *, max_repos: int | None = None) -> list[dict[str, Any]]:
+    def _list_visible_repositories(
+        self,
+        *,
+        max_repos: int | None = None,
+        since: datetime | None = None,
+    ) -> list[dict[str, Any]]:
         payload = self._gh_api(
             "user/repos",
             params={
@@ -572,8 +661,23 @@ class GitHubHistoryAdapter(BaseAdapter):
                     continue
                 seen.add(full_name)
                 repos.append(repo)
-                if max_repos is not None and len(repos) >= max(0, int(max_repos)):
-                    return repos
+        visible = len(repos)
+        if since is not None:
+            changed = [repo for repo in repos if repo_row_changed_since(repo, since)]
+            skipped = visible - len(changed)
+            self._last_repo_list_skipped = skipped
+            LOG.info(
+                "github repo list incremental visible=%s changed=%s skipped=%s since=%s",
+                visible,
+                len(changed),
+                skipped,
+                since.isoformat(),
+            )
+            repos = changed
+        else:
+            self._last_repo_list_skipped = 0
+        if max_repos is not None:
+            return repos[: max(0, int(max_repos))]
         return repos
 
     def _fetch_ref_names(self, *, owner: str, repo: str, ref_prefix: str) -> list[str]:
@@ -617,6 +721,7 @@ class GitHubHistoryAdapter(BaseAdapter):
         repo: str,
         connection_name: str,
         page_size_candidates: tuple[int, ...] = GRAPHQL_PAGE_SIZE_CANDIDATES,
+        updated_since: datetime | None = None,
     ) -> list[dict[str, Any]]:
         cursor: str | None = None
         page_size_index = 0
@@ -649,9 +754,17 @@ class GitHubHistoryAdapter(BaseAdapter):
             self._respect_rate_limit(payload)
             connection = payload.get("data", {}).get("repository", {}).get(connection_name, {}) or {}
             nodes = connection.get("nodes") or []
-            rows.extend(node for node in nodes if isinstance(node, dict))
+            hit_old = False
+            for node in nodes:
+                if not isinstance(node, dict):
+                    continue
+                if updated_since is not None and not item_is_newer_than(node, updated_since):
+                    # ISSUES/PULLS queries are UPDATED_AT DESC.
+                    hit_old = True
+                    break
+                rows.append(node)
             page_info = connection.get("pageInfo") or {}
-            if not page_info.get("hasNextPage"):
+            if hit_old or not page_info.get("hasNextPage"):
                 break
             cursor = _clean(page_info.get("endCursor", ""))
             if not cursor:
@@ -667,10 +780,12 @@ class GitHubHistoryAdapter(BaseAdapter):
         max_commits: int | None = None,
         seen_shas: set[str] | None = None,
         stop_when_page_seen: bool = False,
+        since: datetime | None = None,
     ) -> list[dict[str, Any]]:
         cursor: str | None = None
         commits: list[dict[str, Any]] = []
         page_size_index = 0
+        since_iso = since.isoformat().replace("+00:00", "Z") if since is not None else None
         while True:
             payload: dict[str, Any] | None = None
             last_error: RuntimeError | None = None
@@ -685,6 +800,7 @@ class GitHubHistoryAdapter(BaseAdapter):
                             "qualifiedName": qualified_name,
                             "pageSize": page_size,
                             "endCursor": cursor,
+                            "since": since_iso,
                         },
                         max_retries=1,
                     )
@@ -707,10 +823,14 @@ class GitHubHistoryAdapter(BaseAdapter):
                 )
             nodes = history.get("nodes") or []
             page_new_count = 0
+            hit_old = False
             if isinstance(nodes, list):
                 for node in nodes:
                     if not isinstance(node, dict):
                         continue
+                    if since is not None and not item_is_newer_than(node, since):
+                        hit_old = True
+                        break
                     sha = _clean(node.get("oid", "")).lower()
                     if seen_shas is not None and sha and sha in seen_shas:
                         commits.append(node)
@@ -718,6 +838,8 @@ class GitHubHistoryAdapter(BaseAdapter):
                     if sha:
                         page_new_count += 1
                     commits.append(node)
+            if hit_old:
+                break
             if stop_when_page_seen and seen_shas is not None and nodes and page_new_count == 0:
                 break
             if max_commits is not None and len(commits) >= max(0, int(max_commits)):
@@ -737,6 +859,7 @@ class GitHubHistoryAdapter(BaseAdapter):
         repo: str,
         max_commits: int | None = None,
         default_branch: str = "",
+        since: datetime | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         repo_meta = {"nameWithOwner": f"{owner}/{repo}"}
         branch_names = self._fetch_ref_names(owner=owner, repo=repo, ref_prefix="refs/heads/")
@@ -761,6 +884,7 @@ class GitHubHistoryAdapter(BaseAdapter):
                 max_commits=max_commits,
                 seen_shas=seen_shas,
                 stop_when_page_seen=bool(default_ref) and qualified_name != default_ref,
+                since=since,
             )
             for commit in branch_commits:
                 sha = _clean(commit.get("oid", "")).lower()
@@ -788,12 +912,13 @@ class GitHubHistoryAdapter(BaseAdapter):
         payload = self._gh_api(f"repos/{owner}/{repo}")
         return payload if isinstance(payload, dict) else {}
 
-    def _repo_issues(self, owner: str, repo: str) -> list[dict[str, Any]]:
+    def _repo_issues(self, owner: str, repo: str, *, since: datetime | None = None) -> list[dict[str, Any]]:
         rows = self._paged_graphql_connection(
             ISSUES_QUERY,
             owner=owner,
             repo=repo,
             connection_name="issues",
+            updated_since=since,
         )
         normalized: list[dict[str, Any]] = []
         for row in rows:
@@ -826,12 +951,13 @@ class GitHubHistoryAdapter(BaseAdapter):
             )
         return normalized
 
-    def _repo_pulls(self, owner: str, repo: str) -> list[dict[str, Any]]:
+    def _repo_pulls(self, owner: str, repo: str, *, since: datetime | None = None) -> list[dict[str, Any]]:
         rows = self._paged_graphql_connection(
             PULLS_QUERY,
             owner=owner,
             repo=repo,
             connection_name="pullRequests",
+            updated_since=since,
         )
         normalized: list[dict[str, Any]] = []
         for row in rows:
@@ -1559,6 +1685,7 @@ class GitHubHistoryAdapter(BaseAdapter):
         max_commits_per_repo: int | None,
         max_threads_per_repo: int | None,
         max_messages_per_thread: int | None,
+        since: datetime | None = None,
     ) -> dict[str, Any]:
         full_name = _clean(repo_row.get("full_name", ""))
         owner, repo = full_name.split("/", 1)
@@ -1569,9 +1696,10 @@ class GitHubHistoryAdapter(BaseAdapter):
             repo=repo,
             max_commits=max_commits_per_repo,
             default_branch=_clean(repo_detail.get("default_branch", "")),
+            since=since,
         )
-        issues = self._repo_issues(owner, repo)
-        pulls = self._repo_pulls(owner, repo)
+        issues = self._repo_issues(owner, repo, since=since)
+        pulls = self._repo_pulls(owner, repo, since=since)
         selected_issues, selected_pulls = self._select_discussion_threads(
             issues=issues,
             pulls=pulls,
@@ -1610,6 +1738,10 @@ class GitHubHistoryAdapter(BaseAdapter):
             max_threads=max_threads_per_repo,
             max_messages_per_thread=max_messages_per_thread,
         )
+        if since is not None:
+            commit_items = [item for item in commit_items if item_is_newer_than(item, since)]
+            thread_items = [item for item in thread_items if item_is_newer_than(item, since)]
+            message_items = [item for item in message_items if item_is_newer_than(item, since)]
         return {
             "repo": repo_item,
             "commits": commit_items,
@@ -1629,6 +1761,7 @@ class GitHubHistoryAdapter(BaseAdapter):
         workers: int | None = None,
         progress_every: int = 10,
         verbose: bool = False,
+        since: datetime | str | None = None,
     ) -> dict[str, Any]:
         stage_path = Path(stage_dir).expanduser().resolve()
         stage_path.mkdir(parents=True, exist_ok=True)
@@ -1648,15 +1781,43 @@ class GitHubHistoryAdapter(BaseAdapter):
                 existing_state = json.loads(state_path.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
                 existing_state = {}
-        completed_repos = set(existing_state.get("completed_repos", [])) if isinstance(existing_state, dict) else set()
+        if isinstance(since, datetime):
+            since_dt = _aware_utc(since)
+        else:
+            since_dt = parse_sync_watermark(since)
+        since_iso = since_dt.isoformat().replace("+00:00", "Z") if since_dt is not None else ""
+        prior_completed = (
+            set(existing_state.get("completed_repos", []) or []) if isinstance(existing_state, dict) else set()
+        )
+        if since_dt is None:
+            # Full extract: skip repos already written by a prior (possibly complete) run.
+            completed_repos = prior_completed
+        else:
+            # Incremental: ignore a finished full extract. Resume only an in-progress
+            # delta with the same watermark so a kill mid-run does not re-fetch.
+            resume_incremental = (
+                isinstance(existing_state, dict)
+                and existing_state.get("complete") is not True
+                and str(existing_state.get("since") or "") == since_iso
+            )
+            completed_repos = prior_completed if resume_incremental else set()
         failures: list[dict[str, str]] = []
         counts = Counter()
         started_at = time.perf_counter()
-        repos = self._list_visible_repositories(max_repos=max_repos)
-        pending_repos = [repo for repo in repos if _clean(repo.get("full_name", "")) not in completed_repos]
-        worker_count = max(
-            1,
-            int(workers or os.environ.get("HFA_GITHUB_STAGE_WORKERS") or DEFAULT_STAGE_WORKERS),
+        listed_repos = self._list_visible_repositories(max_repos=max_repos, since=since_dt)
+        pending_repos = [repo for repo in listed_repos if _clean(repo.get("full_name", "")) not in completed_repos]
+        worker_count = max(1, int(workers) if workers is not None else get_github_stage_workers())
+        written_items: list[dict[str, Any]] = []
+        LOG.info(
+            "github stage start mode=%s listed=%s pending=%s already_done=%s workers=%s since=%s verbose=%s stage_dir=%s",
+            "incremental" if since_dt is not None else "full",
+            len(listed_repos),
+            len(pending_repos),
+            len(completed_repos),
+            worker_count,
+            since_iso or "none",
+            verbose,
+            stage_path,
         )
 
         handles = {name: path.open("a", encoding="utf-8") for name, path in stage_files.items()}
@@ -1665,15 +1826,17 @@ class GitHubHistoryAdapter(BaseAdapter):
             handle = handles[name]
             for record in records:
                 handle.write(json.dumps(record, sort_keys=True) + "\n")
+                written_items.append(record)
             handle.flush()
 
         def _write_state(complete: bool = False) -> None:
             payload = {
-                "repo_count": len(repos),
+                "repo_count": len(listed_repos),
                 "completed_repos": sorted(completed_repos),
                 "failures": failures,
                 "counts": dict(counts),
                 "complete": complete,
+                "since": since_iso,
                 "updated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             }
             state_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
@@ -1688,6 +1851,7 @@ class GitHubHistoryAdapter(BaseAdapter):
                         max_commits_per_repo=max_commits_per_repo,
                         max_threads_per_repo=max_threads_per_repo,
                         max_messages_per_thread=max_messages_per_thread,
+                        since=since_dt,
                     ): _clean(repo_row.get("full_name", ""))
                     for repo_row in pending_repos
                 }
@@ -1711,13 +1875,18 @@ class GitHubHistoryAdapter(BaseAdapter):
                     completed_repos.add(full_name)
                     processed += 1
                     _write_state(complete=False)
-                    if verbose and progress_every and processed % max(1, int(progress_every)) == 0:
+                    if progress_every and processed % max(1, int(progress_every)) == 0:
                         elapsed = time.perf_counter() - started_at
-                        print(
-                            f"[github-history] processed={processed}/{len(pending_repos)} "
-                            f"repos={counts['repos']} commits={counts['commits']} "
-                            f"threads={counts['threads']} messages={counts['messages']} "
-                            f"elapsed_s={elapsed:.1f}"
+                        LOG.info(
+                            "github stage progress processed=%s/%s repos=%s commits=%s "
+                            "threads=%s messages=%s elapsed_s=%.1f",
+                            processed,
+                            len(pending_repos),
+                            counts["repos"],
+                            counts["commits"],
+                            counts["threads"],
+                            counts["messages"],
+                            elapsed,
                         )
         finally:
             for handle in handles.values():
@@ -1726,14 +1895,28 @@ class GitHubHistoryAdapter(BaseAdapter):
         elapsed_seconds = round(time.perf_counter() - started_at, 3)
         _write_state(complete=True)
         manifest = {
-            "repo_count": len(repos),
+            "repo_count": len(listed_repos),
             "processed_repos": len(completed_repos),
+            "pending_repos": len(pending_repos),
             "counts": dict(counts),
             "failures": failures,
             "elapsed_seconds": elapsed_seconds,
+            "since": since_iso,
+            "mode": "incremental" if since_dt is not None else "full",
+            "skipped_unchanged_repos": int(getattr(self, "_last_repo_list_skipped", 0) or 0),
+            "items": written_items,
             "stage_files": {name: str(path) for name, path in stage_files.items()},
         }
-        manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+        manifest_for_disk = {key: value for key, value in manifest.items() if key != "items"}
+        manifest_path.write_text(json.dumps(manifest_for_disk, indent=2, sort_keys=True), encoding="utf-8")
+        LOG.info(
+            "github stage done mode=%s processed=%s items=%s failures=%s elapsed_s=%s",
+            manifest["mode"],
+            manifest["processed_repos"],
+            len(written_items),
+            len(failures),
+            elapsed_seconds,
+        )
         return manifest
 
     def _iter_staged_batches(
@@ -1742,10 +1925,15 @@ class GitHubHistoryAdapter(BaseAdapter):
         *,
         batch_size: int,
         max_items: int | None = None,
+        since: datetime | None = None,
+        progress_every: int = 0,
     ) -> Iterable[FetchedBatch]:
         stage_path = Path(stage_dir).expanduser().resolve()
         sequence = 0
         emitted = 0
+        scanned = 0
+        skipped = 0
+        started_at = time.perf_counter()
         batch_items: list[dict[str, Any]] = []
         stage_files = [
             stage_path / "repos.jsonl",
@@ -1753,6 +1941,10 @@ class GitHubHistoryAdapter(BaseAdapter):
             stage_path / "threads.jsonl",
             stage_path / "messages.jsonl",
         ]
+
+        def _skip_details() -> dict[str, int]:
+            return {"unchanged_since_last_sync": skipped} if skipped else {}
+
         for path in stage_files:
             if not path.exists():
                 continue
@@ -1761,18 +1953,76 @@ class GitHubHistoryAdapter(BaseAdapter):
                     line = raw_line.strip()
                     if not line:
                         continue
-                    batch_items.append(json.loads(line))
+                    scanned += 1
+                    item = json.loads(line)
+                    if since is not None and not item_is_newer_than(item, since):
+                        skipped += 1
+                        if progress_every and scanned % max(1, int(progress_every)) == 0:
+                            LOG.info(
+                                "github stage scan scanned=%s emitted=%s skipped=%s elapsed_s=%.1f",
+                                scanned,
+                                emitted,
+                                skipped,
+                                time.perf_counter() - started_at,
+                            )
+                        continue
+                    batch_items.append(item)
                     emitted += 1
-                    if max_items is not None and emitted > max(0, int(max_items)):
-                        break
+                    if max_items is not None and emitted >= max(0, int(max_items)):
+                        yield FetchedBatch(
+                            items=list(batch_items),
+                            sequence=sequence,
+                            skipped_count=skipped,
+                            skip_details=_skip_details(),
+                        )
+                        return
                     if len(batch_items) >= batch_size:
-                        yield FetchedBatch(items=list(batch_items), sequence=sequence)
+                        yield FetchedBatch(
+                            items=list(batch_items),
+                            sequence=sequence,
+                            skipped_count=skipped if sequence == 0 else 0,
+                            skip_details=_skip_details() if sequence == 0 else {},
+                        )
                         sequence += 1
                         batch_items = []
-                if max_items is not None and emitted > max(0, int(max_items)):
-                    break
-        if batch_items:
-            yield FetchedBatch(items=list(batch_items), sequence=sequence)
+                        skipped = 0
+        if batch_items or (sequence == 0 and skipped):
+            yield FetchedBatch(
+                items=list(batch_items),
+                sequence=sequence,
+                skipped_count=skipped,
+                skip_details=_skip_details(),
+            )
+
+    def _yield_item_batches(
+        self,
+        items: list[dict[str, Any]],
+        *,
+        batch_size: int,
+        max_items: int | None,
+        skipped_count: int = 0,
+        skip_details: dict[str, int] | None = None,
+    ) -> Iterable[FetchedBatch]:
+        limited = items[: max(0, int(max_items))] if max_items is not None else items
+        details = dict(skip_details or {})
+        if not limited:
+            yield FetchedBatch(
+                items=[],
+                sequence=0,
+                skipped_count=skipped_count,
+                skip_details=details,
+            )
+            return
+        sequence = 0
+        for start in range(0, len(limited), batch_size):
+            chunk = limited[start : start + batch_size]
+            yield FetchedBatch(
+                items=list(chunk),
+                sequence=sequence,
+                skipped_count=skipped_count if sequence == 0 else 0,
+                skip_details=details if sequence == 0 else {},
+            )
+            sequence += 1
 
     def fetch_batches(
         self,
@@ -1788,7 +2038,65 @@ class GitHubHistoryAdapter(BaseAdapter):
             1,
             int(kwargs.get("batch_size") or os.environ.get("HFA_GITHUB_IMPORT_BATCH_SIZE") or DEFAULT_BATCH_SIZE),
         )
-        yield from self._iter_staged_batches(stage_dir, batch_size=batch_size, max_items=kwargs.get("max_items"))
+        catch_up = bool(kwargs.get("catch_up"))
+        since = github_incremental_watermark(cursor, catch_up=catch_up)
+        refresh_stage = kwargs.get("refresh_stage")
+        if refresh_stage is None:
+            refresh_stage = since is not None
+        progress_every = int(kwargs.get("progress_every") or 0)
+        max_items = kwargs.get("max_items")
+
+        if since is not None and refresh_stage:
+            LOG.info(
+                "github incremental refresh since=%s stage_dir=%s catch_up=%s",
+                since.isoformat(),
+                stage_dir,
+                catch_up,
+            )
+            manifest = self.stage_history(
+                vault_path,
+                stage_dir,
+                max_repos=kwargs.get("max_repos"),
+                max_commits_per_repo=kwargs.get("max_commits_per_repo"),
+                max_threads_per_repo=kwargs.get("max_threads_per_repo"),
+                max_messages_per_thread=kwargs.get("max_messages_per_thread"),
+                workers=kwargs.get("workers"),
+                progress_every=progress_every or 10,
+                since=since,
+            )
+            items = list(manifest.get("items") or [])
+            skipped_repos = int(getattr(self, "_last_repo_list_skipped", 0) or 0)
+            skip_details = {
+                "unchanged_since_last_sync": skipped_repos,
+                "delta_items": len(items),
+            }
+            LOG.info(
+                "github incremental refresh done listed=%s pending=%s items=%s elapsed_s=%s",
+                manifest.get("repo_count"),
+                manifest.get("pending_repos"),
+                len(items),
+                manifest.get("elapsed_seconds"),
+            )
+            yield from self._yield_item_batches(
+                items,
+                batch_size=batch_size,
+                max_items=max_items,
+                skipped_count=skipped_repos,
+                skip_details=skip_details,
+            )
+            return
+
+        if since is not None:
+            LOG.info("github stage apply incremental since=%s stage_dir=%s", since.isoformat(), stage_dir)
+        else:
+            LOG.info("github stage apply full catch_up=%s stage_dir=%s", catch_up, stage_dir)
+        yield from self._iter_staged_batches(
+            stage_dir,
+            batch_size=batch_size,
+            max_items=max_items,
+            since=since,
+            progress_every=progress_every,
+        )
 
     def fetch(
         self,
