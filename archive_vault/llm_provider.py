@@ -42,6 +42,31 @@ _LLM_HTTP_TIMEOUT: float = 60.0
 
 _llm_log = logging.getLogger("ppa.llm_provider")
 
+GEMINI_KEY_FILENAME = "gemini_key.txt"
+
+
+def gemini_key_path(*, home: Path | None = None) -> Path:
+    return (home or Path.home()) / ".ppa" / GEMINI_KEY_FILENAME
+
+
+def load_gemini_api_key(*, home: Path | None = None) -> str:
+    """``GEMINI_API_KEY`` from env, else ``~/.ppa/gemini_key.txt``.
+
+    When the file is used, copy it into ``GEMINI_API_KEY`` so worker processes
+    see the same value. Never logs the key.
+    """
+
+    existing = (os.environ.get("GEMINI_API_KEY") or "").strip()
+    if existing:
+        return existing
+    try:
+        key = gemini_key_path(home=home).read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    if key:
+        os.environ["GEMINI_API_KEY"] = key
+    return key
+
 
 _MAX_RETRIES = 5
 _RETRY_BASE_WAIT = 2.0
@@ -94,7 +119,7 @@ class GeminiProvider:
         self.model = model
 
     def _api_key(self) -> str | None:
-        return os.environ.get("GEMINI_API_KEY")
+        return load_gemini_api_key() or None
 
     def _generate_url(self, model: str | None = None) -> str:
         m = model or self.model
