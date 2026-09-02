@@ -65,7 +65,7 @@ def test_build_maintain_argv_flags() -> None:
     assert "--catch-up" not in argv
     assert "--allow-full-embedding" not in argv
     assert "--allow-all-linkers" not in argv
-    assert "--allow-broad-llm" not in argv
+    assert "--allow-broad-llm" in argv
     assert argv.count("--source-updater") == 9
 
 
@@ -109,6 +109,8 @@ def test_render_plist_substitutes_paths() -> None:
     assert "/usr/local/bin" in rendered
     assert "/usr/bin:/bin:/usr/sbin:/sbin" in rendered
     assert "__PPA_TOOL_PATH__" not in rendered
+    assert "<key>GEMINI_API_KEY</key>" not in rendered
+    assert "gemini_key.txt" in rendered
 
 
 def test_dry_run_exits_zero(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -125,6 +127,7 @@ def test_dry_run_exits_zero(tmp_path: Path, monkeypatch, capsys) -> None:
     # dry-run logs to stderr, not stdout
     err = capsys.readouterr().err
     assert "--run-source-updaters" in err
+    assert "--allow-broad-llm" in err
     assert "--catch-up" not in err
     assert "photos" not in err.lower() or "parked" in err.lower()
 
@@ -189,6 +192,36 @@ def test_apply_runtime_env_injects_tool_path(monkeypatch) -> None:
     assert path.startswith("/opt/homebrew/bin:")
     assert "/usr/local/bin" in path
     assert "/usr/bin:/bin:/usr/sbin:/sbin" in path
+
+
+def test_load_gemini_key_prefers_env(monkeypatch) -> None:
+    mod = _load_mod()
+    monkeypatch.setenv("GEMINI_API_KEY", "from-env")
+    assert mod.load_gemini_key() == "from-env"
+
+
+def test_load_gemini_key_reads_file(tmp_path: Path, monkeypatch) -> None:
+    mod = _load_mod()
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setattr(mod.Path, "home", staticmethod(lambda: tmp_path))
+    key_file = tmp_path / ".ppa" / "gemini_key.txt"
+    key_file.parent.mkdir(parents=True)
+    key_file.write_text("from-file\n", encoding="utf-8")
+    key_file.chmod(0o600)
+    assert mod.load_gemini_key() == "from-file"
+
+
+def test_apply_runtime_env_exports_gemini_key(tmp_path: Path, monkeypatch) -> None:
+    mod = _load_mod()
+    monkeypatch.setenv("PPA_INDEX_DSN", "postgresql://archive:archive@127.0.0.1:50731/archive")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setattr(mod.Path, "home", staticmethod(lambda: tmp_path))
+    key_file = tmp_path / ".ppa" / "gemini_key.txt"
+    key_file.parent.mkdir(parents=True)
+    key_file.write_text("gemini-from-file\n", encoding="utf-8")
+    key_file.chmod(0o600)
+    env = mod.apply_runtime_env()
+    assert env.get("GEMINI_API_KEY") == "gemini-from-file"
 
 
 def test_apply_runtime_env_preserves_explicit_enrichment_model(monkeypatch) -> None:

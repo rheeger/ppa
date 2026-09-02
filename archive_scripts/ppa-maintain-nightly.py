@@ -15,7 +15,9 @@ skips junk email-attachment cards on Gmail apply, incrementally purges any
 that slipped through, and hash-links document/attachment duplicates
 (``file_identity``). No separate ``embed-pending`` or ``link-file-duplicates``
 step. No ``--catch-up``. No Photos / Apple Health. No ``--allow-full-embedding``
-/ IVFFlat / force-full rebuild.
+/ IVFFlat / force-full rebuild. Passes ``--allow-broad-llm`` so dirty
+``email_thread_enrichment`` (Gemini) can run; ``GEMINI_API_KEY`` is loaded at
+runtime from env or ``~/.ppa/gemini_key.txt`` (never hardcoded in the plist).
 
 Source keys match ``default_maintain_source_keys`` plus GOOGLE_ACCOUNT expansion
 (calendar, contacts, otter, file-libraries, beeper, imessage, gmail-messages,
@@ -230,15 +232,25 @@ def resolve_python(*, env: dict[str, str] | None = None) -> Path:
     )
 
 
-def load_openai_key() -> str:
-    existing = (os.environ.get("OPENAI_API_KEY") or "").strip()
+def _load_key_from_env_or_file(env_name: str, filename: str) -> str:
+    existing = (os.environ.get(env_name) or "").strip()
     if existing:
         return existing
-    key_file = Path.home() / ".ppa" / "openai_key.txt"
+    key_file = Path.home() / ".ppa" / filename
     try:
         return key_file.read_text(encoding="utf-8").strip()
     except OSError:
         return ""
+
+
+def load_openai_key() -> str:
+    return _load_key_from_env_or_file("OPENAI_API_KEY", "openai_key.txt")
+
+
+def load_gemini_key() -> str:
+    """``GEMINI_API_KEY`` from env, else ``~/.ppa/gemini_key.txt`` (mode 0600)."""
+
+    return _load_key_from_env_or_file("GEMINI_API_KEY", "gemini_key.txt")
 
 
 def build_maintain_argv(
@@ -258,6 +270,7 @@ def build_maintain_argv(
         "--apply-source-updaters",
         "--run-processors",
         "--apply-processors",
+        "--allow-broad-llm",
     ]
     for key in source_keys:
         argv.extend(["--source-updater", key])
@@ -372,6 +385,9 @@ def apply_runtime_env() -> dict[str, str]:
     key = load_openai_key()
     if key:
         os.environ["OPENAI_API_KEY"] = key
+    gemini_key = load_gemini_key()
+    if gemini_key:
+        os.environ["GEMINI_API_KEY"] = gemini_key
     os.environ["PYTHONPATH"] = _pythonpath()
     # Prepend Homebrew + mcporter; keep a richer login-shell PATH if already set.
     os.environ["PATH"] = nightly_tool_path(existing=os.environ.get("PATH"))
@@ -435,6 +451,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if not load_openai_key():
         LOG.error("OPENAI_API_KEY missing (set env or ~/.ppa/openai_key.txt); dirty embed will skip")
+    if not load_gemini_key():
+        LOG.error(
+            "GEMINI_API_KEY missing (set env or ~/.ppa/gemini_key.txt); "
+            "email_thread_enrichment will skip. Drop the key file (mode 0600) or: "
+            "op read 'op://Arnold/GEMINI_API_KEY/credential'"
+        )
 
     json_path = log_file.with_suffix(".json")
     LOG.info("invoking maintain json_report=%s", json_path)

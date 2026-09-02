@@ -1,12 +1,15 @@
 import json
+from pathlib import Path
 from unittest.mock import patch
 
 from archive_vault.llm_provider import (
     DEFAULT_LLM_CONFIG,
     PROVIDER_REGISTRY,
+    GeminiProvider,
     OllamaProvider,
     decide_same_person,
     get_provider,
+    load_gemini_api_key,
     load_llm_config,
 )
 
@@ -124,3 +127,18 @@ def test_ollama_complete_plain_text() -> None:
     with patch("archive_vault.llm_provider.request.urlopen", return_value=_FakeHTTP(raw)):
         p = OllamaProvider(model="m")
         assert p.complete("test?") == "YES"
+
+
+def test_load_gemini_api_key_prefers_env(monkeypatch) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "env-key")
+    assert load_gemini_api_key() == "env-key"
+
+
+def test_load_gemini_api_key_reads_file(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    key_file = tmp_path / ".ppa" / "gemini_key.txt"
+    key_file.parent.mkdir(parents=True)
+    key_file.write_text("file-key\n", encoding="utf-8")
+    key_file.chmod(0o600)
+    assert load_gemini_api_key(home=tmp_path) == "file-key"
+    assert GeminiProvider()._api_key() == "file-key"

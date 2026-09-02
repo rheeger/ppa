@@ -11,6 +11,7 @@
 	</array>
 	<key>WorkingDirectory</key>
 	<string>__PPA_REPO__</string>
+	<!-- OPENAI_API_KEY / GEMINI_API_KEY: wrapper loads ~/.ppa/openai_key.txt and ~/.ppa/gemini_key.txt at runtime. Never put secrets in this plist. -->
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>PPA_ENRICHMENT_MODEL</key>
