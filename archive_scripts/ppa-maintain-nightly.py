@@ -29,8 +29,10 @@ import argparse
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 
@@ -50,6 +52,10 @@ DEFAULT_ENRICHMENT_MODEL = "openai:gpt-4o-mini"
 LAUNCHD_LABEL = "com.rheeger.ppa.maintain-nightly"
 PLIST_NAME = f"{LAUNCHD_LABEL}.plist"
 FAILED_UPDATER_STATUSES = frozenset({"failed", "blocked"})
+# launchd gui agents get /usr/bin:/bin:/usr/sbin:/sbin — no Homebrew, no nvm.
+HOMEBREW_BIN = "/opt/homebrew/bin"
+USR_LOCAL_BIN = "/usr/local/bin"
+LAUNCHD_DEFAULT_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
 
 # Live keys maintain already enumerates once GOOGLE_ACCOUNT is set, minus parked.
 # Explicit --source-updater keeps nightly deterministic if env is incomplete.
@@ -144,6 +150,62 @@ def _pythonpath() -> str:
     return f"{REPO_ROOT}{os.pathsep}{extra}" if extra else str(REPO_ROOT)
 
 
+def _mcporter_bin_dir(
+    *,
+    home: Path | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> Path | None:
+    """Directory that contains ``mcporter`` (nvm node bin, or MCPORTER_CMD)."""
+
+    env = environ if environ is not None else os.environ
+    for key in ("MCPORTER_CMD", "MCPORTER_BIN"):
+        explicit = (env.get(key) or "").strip()
+        if not explicit:
+            continue
+        path = Path(explicit).expanduser()
+        if path.is_file():
+            return path.parent
+        if path.is_dir():
+            return path
+    which = shutil.which("mcporter", path=env.get("PATH"))
+    if which:
+        return Path(which).parent
+    nvm_root = (home or Path.home()) / ".nvm" / "versions" / "node"
+    if nvm_root.is_dir():
+        versions = sorted((p for p in nvm_root.iterdir() if p.is_dir()), key=lambda p: p.name, reverse=True)
+        for version in versions:
+            candidate = version / "bin" / "mcporter"
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return candidate.parent
+    return None
+
+
+def nightly_tool_path(
+    *,
+    existing: str | None = None,
+    home: Path | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> str:
+    """Prepend Homebrew + mcporter dirs. Never drop a richer existing PATH."""
+
+    env = environ if environ is not None else os.environ
+    current = existing if existing is not None else env.get("PATH", "")
+    tail = [part for part in current.split(os.pathsep) if part]
+    if not tail:
+        tail = LAUNCHD_DEFAULT_PATH.split(os.pathsep)
+    prefixes = [HOMEBREW_BIN, USR_LOCAL_BIN]
+    mcporter_dir = _mcporter_bin_dir(home=home, environ=env)
+    if mcporter_dir is not None:
+        prefixes.append(str(mcporter_dir))
+    seen = set(tail)
+    head: list[str] = []
+    for prefix in prefixes:
+        if prefix not in seen:
+            head.append(prefix)
+            seen.add(prefix)
+    return os.pathsep.join(head + tail)
+
+
 def resolve_python(*, env: dict[str, str] | None = None) -> Path:
     environ = env if env is not None else os.environ
     explicit = (environ.get("PPA_PYTHON") or "").strip()
@@ -224,7 +286,11 @@ def plist_template_path() -> Path:
 
 def render_plist(*, repo_root: Path, python: Path, template: str | None = None) -> str:
     text = template if template is not None else plist_template_path().read_text(encoding="utf-8")
-    return text.replace("__PPA_REPO__", str(repo_root)).replace("__PPA_PYTHON__", str(python))
+    return (
+        text.replace("__PPA_REPO__", str(repo_root))
+        .replace("__PPA_PYTHON__", str(python))
+        .replace("__PPA_TOOL_PATH__", nightly_tool_path(existing=LAUNCHD_DEFAULT_PATH))
+    )
 
 
 def launch_agents_dir() -> Path:
@@ -307,6 +373,8 @@ def apply_runtime_env() -> dict[str, str]:
     if key:
         os.environ["OPENAI_API_KEY"] = key
     os.environ["PYTHONPATH"] = _pythonpath()
+    # Prepend Homebrew + mcporter; keep a richer login-shell PATH if already set.
+    os.environ["PATH"] = nightly_tool_path(existing=os.environ.get("PATH"))
     return os.environ
 
 
@@ -325,7 +393,7 @@ def main(argv: list[str] | None = None) -> int:
         apply_runtime_env()
         python = resolve_python()
         dest = install_launchd(repo_root=REPO_ROOT, python=python, load=args.install)
-        LOG.info("wrote LaunchAgent dest=%s load=%s", dest, args.install)
+        LOG.info("wrote LaunchAgent dest=%s load=%s PATH=%s", dest, args.install, os.environ.get("PATH"))
         if args.install:
             LOG.info("nightly maintain scheduled for 02:00 local; tail %s", default_log_path(REPO_ROOT))
         else:
@@ -339,7 +407,7 @@ def main(argv: list[str] | None = None) -> int:
     apply_runtime_env()
     log_file = default_log_path(REPO_ROOT)
     configure_wrapper_logging(verbose=args.verbose, log_file=log_file)
-    LOG.info("nightly maintain start log_file=%s", log_file)
+    LOG.info("nightly maintain start log_file=%s PATH=%s", log_file, os.environ.get("PATH"))
 
     google_account = (os.environ.get("GOOGLE_ACCOUNT") or DEFAULT_GOOGLE_ACCOUNT).strip()
     source_keys = nightly_source_keys(google_account)
