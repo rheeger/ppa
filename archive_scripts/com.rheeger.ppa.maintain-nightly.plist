@@ -11,6 +11,11 @@
 	</array>
 	<key>WorkingDirectory</key>
 	<string>__PPA_REPO__</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PPA_ENRICHMENT_MODEL</key>
+		<string>openai:gpt-4o-mini</string>
+	</dict>
 	<key>StartCalendarInterval</key>
 	<dict>
 		<key>Hour</key>

@@ -102,6 +102,8 @@ def test_render_plist_substitutes_paths() -> None:
     assert "<integer>2</integer>" in rendered
     assert "__PPA_REPO__" not in rendered
     assert "RunAtLoad" in rendered
+    assert "PPA_ENRICHMENT_MODEL" in rendered
+    assert "openai:gpt-4o-mini" in rendered
 
 
 def test_dry_run_exits_zero(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -133,9 +135,19 @@ def test_apply_runtime_env_sets_noninteractive(monkeypatch) -> None:
     mod = _load_mod()
     monkeypatch.setenv("PPA_INDEX_DSN", "postgresql://archive:archive@127.0.0.1:50731/archive")
     monkeypatch.delenv("PPA_NONINTERACTIVE", raising=False)
+    monkeypatch.delenv("PPA_ENRICHMENT_MODEL", raising=False)
     env = mod.apply_runtime_env()
     assert env.get("PPA_NONINTERACTIVE") == "1"
     assert env.get("OTTER_FETCH_MODE") == "mcp"
+    assert env.get("PPA_ENRICHMENT_MODEL") == "openai:gpt-4o-mini"
+
+
+def test_apply_runtime_env_preserves_explicit_enrichment_model(monkeypatch) -> None:
+    mod = _load_mod()
+    monkeypatch.setenv("PPA_INDEX_DSN", "postgresql://archive:archive@127.0.0.1:50731/archive")
+    monkeypatch.setenv("PPA_ENRICHMENT_MODEL", "ollama:llama3.2:3b")
+    env = mod.apply_runtime_env()
+    assert env.get("PPA_ENRICHMENT_MODEL") == "ollama:llama3.2:3b"
 
 
 def test_default_maintain_source_keys_excludes_parked() -> None:
