@@ -531,10 +531,12 @@ def run_processors(
             )
 
     # Enrich recorded state per processor when building plan — attach best-known prior
+    log.info("processor plan enrich start snapshots=%s", len(snapshots))
+    prior_by_uid = state_store.get_input_states_for_uids([snap.input_uid for snap in snapshots])
     enriched: list[ProcessorInputSnapshot] = []
     for snap in snapshots:
         # Prefer materialization prior for shared hash fields; plan evaluates per-processor
-        prior = state_store.get_input_state(PROCESSOR_MATERIALIZATION, snap.input_uid)
+        prior = (prior_by_uid.get(snap.input_uid) or {}).get(PROCESSOR_MATERIALIZATION)
         if prior and prior.status == INPUT_STATUS_COMPLETE:
             snap = ProcessorInputSnapshot(
                 input_uid=snap.input_uid,
@@ -555,6 +557,13 @@ def run_processors(
         enriched.append(snap)
 
     plan = build_processor_plan(enriched, processor_keys=processor_keys)
+    log.info(
+        "processor plan built inputs=%s dirty=%s stale=%s skipped=%s",
+        plan.input_count,
+        plan.dirty_count,
+        plan.stale_count,
+        plan.skipped_count,
+    )
     proc_key = processor_keys[0] if processor_keys and len(processor_keys) == 1 else "all"
     decl = declaration_for_key(proc_key) if proc_key != "all" else None
     report = ProcessorRunReport(

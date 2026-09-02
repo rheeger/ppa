@@ -622,3 +622,74 @@ def test_maintain_processors_invoke_duplicate_linking_and_junk_purge(
     assert rep.junk_attachments_purged == 2
     assert rep.file_duplicates_linked == 3
     assert not any(e.get("step") == "file_hygiene" for e in rep.errors)
+
+
+def test_maintain_skips_second_rebuild_when_processors_applied(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = mock.MagicMock()
+    conn = mock.MagicMock()
+    rows = [
+        {"card_uid": "u1", "action": "created", "source_adapter": "gmail", "logged_at": "2026-01-02T00:00:00Z"},
+        {"card_uid": "u2", "action": "created", "source_adapter": "gmail", "logged_at": "2026-01-02T00:00:01Z"},
+    ]
+
+    def exec_side(sql, params=None):
+        m = mock.MagicMock()
+        s = str(sql)
+        if "last_maintenance_at" in s and "SELECT" in s:
+            m.fetchone.return_value = {"value": "2026-01-01T00:00:00Z"}
+        elif "ingestion_log" in s and "COUNT" not in s.upper():
+            m.fetchall.return_value = rows
+        elif "enrichment_queue" in s or "retrieval_gaps" in s:
+            m.fetchone.return_value = {"c": 0}
+        else:
+            m.fetchone.return_value = None
+            m.fetchall.return_value = []
+        return m
+
+    conn.execute.side_effect = exec_side
+    store.vault = tmp_path
+    store.index.schema = "ppa"
+    store.index._connect.return_value = _connect_ctx(conn)
+
+    monkeypatch.setattr(
+        "archive_cli.commands.maintain._run_file_hygiene",
+        lambda *a, **k: ({"purged": 0}, {"cards_linked": 0}, []),
+    )
+    monkeypatch.setattr(
+        "archive_cli.commands.maintain._run_processors",
+        lambda *a, **k: (
+            1,
+            [
+                {
+                    "report": {
+                        "warnings": ["materialization incremental rebuild cards=2 dirty_uids=2"],
+                        "errors": [],
+                    },
+                    "item_results": [],
+                }
+            ],
+            2,
+        ),
+    )
+    monkeypatch.setattr(
+        "archive_sync.extractors.runner.ExtractionRunner",
+        lambda *a, **k: mock.Mock(run=lambda: mock.Mock(extracted_cards=0)),
+    )
+    monkeypatch.setattr(
+        "archive_sync.extractors.entity_resolution.run_entity_resolution",
+        lambda *a, **k: {},
+    )
+
+    rep = run_maintenance(
+        store=store,
+        logger=logging.getLogger("t"),
+        dry_run=False,
+        run_processors=True,
+        apply_processors=True,
+    )
+    store.rebuild.assert_not_called()
+    assert rep.cards_rebuilt == 2
+    assert any("already rematerialized" in s for s in rep.skipped_steps)

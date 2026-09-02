@@ -56,6 +56,7 @@ fn archive_crate(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cache_iter::notes_from_cache, m)?)?;
     m.add_function(wrap_pyfunction!(cache_iter::frontmatter_dicts_from_cache, m)?)?;
     m.add_function(wrap_pyfunction!(cache_iter::note_paths_from_cache, m)?)?;
+    m.add_function(wrap_pyfunction!(cache_iter::frontmatter_for_uids, m)?)?;
     m.add_class::<progress::ProgressCallback>()?;
     m.add_function(wrap_pyfunction!(validator::validate_vault_from_cache, m)?)?;
     m.add_class::<materializer::body::BodyCache>()?;

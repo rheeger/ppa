@@ -551,6 +551,16 @@ class BaseAdapter(ABC):
         def _write_progress() -> None:
             if dry_run:
                 return
+            if progress_every and processed_successfully and processed_successfully % max(1, progress_every) == 0:
+                logger.info(
+                    "adapter write progress source_id=%s processed=%s created=%s merged=%s conflicted=%s errors=%s",
+                    self.source_id,
+                    processed_successfully,
+                    result.created,
+                    result.merged,
+                    result.conflicted,
+                    len(result.errors),
+                )
             _log(
                 f"write progress start: processed={processed_successfully} created={result.created} "
                 f"merged={result.merged} conflicted={result.conflicted} errors={len(result.errors)}"

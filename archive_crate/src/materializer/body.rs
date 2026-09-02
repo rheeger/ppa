@@ -64,6 +64,37 @@ fn load_body_cache_map(cache_path: &str) -> Result<HashMap<String, Vec<u8>>, Str
     Ok(map)
 }
 
+fn load_body_cache_map_for_paths(
+    cache_path: &str,
+    rel_paths: &[String],
+) -> Result<HashMap<String, Vec<u8>>, String> {
+    if rel_paths.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let conn = Connection::open(cache_path).map_err(|e| e.to_string())?;
+    let mut map = HashMap::with_capacity(rel_paths.len());
+    for chunk in rel_paths.chunks(500) {
+        let placeholders: Vec<&str> = chunk.iter().map(|_| "?").collect();
+        let sql = format!(
+            "SELECT rel_path, body_compressed FROM notes \
+             WHERE body_compressed IS NOT NULL AND rel_path IN ({})",
+            placeholders.join(",")
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            chunk.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+        let rows = stmt
+            .query_map(params.as_slice(), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })
+            .map_err(|e| e.to_string())?;
+        for row in rows.filter_map(|r| r.ok()) {
+            map.insert(row.0, row.1);
+        }
+    }
+    Ok(map)
+}
+
 /// Opaque handle holding pre-loaded compressed bodies. Created once, passed to every batch call.
 #[pyclass]
 pub struct BodyCache {
@@ -73,8 +104,19 @@ pub struct BodyCache {
 #[pymethods]
 impl BodyCache {
     #[staticmethod]
-    fn load(cache_path: String) -> PyResult<Self> {
-        let map = load_body_cache_map(&cache_path)
+    fn load(py: Python<'_>, cache_path: String) -> PyResult<Self> {
+        let map = py
+            .allow_threads(|| load_body_cache_map(&cache_path))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+        Ok(BodyCache { inner: Arc::new(map) })
+    }
+
+    /// Load compressed bodies for *rel_paths* only — nightly rematerialize of a
+    /// dirty allowlist must not hydrate 1.3M entries.
+    #[staticmethod]
+    fn load_for_paths(py: Python<'_>, cache_path: String, rel_paths: Vec<String>) -> PyResult<Self> {
+        let map = py
+            .allow_threads(|| load_body_cache_map_for_paths(&cache_path, &rel_paths))
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
         Ok(BodyCache { inner: Arc::new(map) })
     }

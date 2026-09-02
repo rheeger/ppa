@@ -232,3 +232,61 @@ pub fn note_paths_from_cache(
     let list = PyList::new_bound(py, &paths);
     Ok(list.to_object(py))
 }
+
+/// Bulk UID → `{uid, rel_path, card_type, frontmatter}` from the vault-scan cache.
+/// GIL is released during SQLite; used by the processor planner instead of per-UID lookups.
+#[pyfunction]
+pub fn frontmatter_for_uids(
+    py: Python<'_>,
+    cache_path: String,
+    uids: Vec<String>,
+) -> PyResult<PyObject> {
+    let rows = py
+        .allow_threads(|| -> Result<Vec<(String, String, String, String)>, String> {
+            if uids.is_empty() {
+                return Ok(Vec::new());
+            }
+            let conn =
+                Connection::open(&cache_path).map_err(|e| format!("open cache: {e}"))?;
+            let mut out = Vec::with_capacity(uids.len());
+            for chunk in uids.chunks(500) {
+                let placeholders: Vec<&str> = chunk.iter().map(|_| "?").collect();
+                let sql = format!(
+                    "SELECT uid, rel_path, card_type, frontmatter_json FROM notes WHERE uid IN ({})",
+                    placeholders.join(",")
+                );
+                let mut stmt = conn.prepare(&sql).map_err(|e| format!("prepare: {e}"))?;
+                let params: Vec<&dyn rusqlite::types::ToSql> =
+                    chunk.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+                let mapped = stmt
+                    .query_map(params.as_slice(), |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, String>(3)?,
+                        ))
+                    })
+                    .map_err(|e| format!("query: {e}"))?;
+                for row in mapped {
+                    out.push(row.map_err(|e| format!("row: {e}"))?);
+                }
+            }
+            Ok(out)
+        })
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
+
+    let json_mod = py.import_bound("json")?;
+    let json_loads = json_mod.getattr("loads")?;
+    let list = PyList::empty_bound(py);
+    for (uid, rel_path, card_type, fm_json) in rows {
+        let d = PyDict::new_bound(py);
+        d.set_item("uid", uid)?;
+        d.set_item("rel_path", rel_path)?;
+        d.set_item("card_type", card_type)?;
+        let fm_obj = json_loads.call1((fm_json,))?;
+        d.set_item("frontmatter", fm_obj)?;
+        list.append(d)?;
+    }
+    Ok(list.to_object(py))
+}

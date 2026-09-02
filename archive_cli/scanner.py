@@ -299,6 +299,25 @@ def _build_manifest_rows_from_canonical(
     return out
 
 
+def _rows_from_frontmatter_maps(
+    items: Iterable[dict[str, Any]],
+) -> list[CanonicalRow]:
+    rows: list[CanonicalRow] = []
+    for item in items:
+        rel_path = str(item.get("rel_path") or "").strip()
+        fm = item.get("frontmatter") or {}
+        if not rel_path or not isinstance(fm, dict):
+            continue
+        rows.append(
+            CanonicalRow(
+                rel_path=rel_path,
+                frontmatter=fm,
+                card=validate_card_permissive(fm),
+            )
+        )
+    return rows
+
+
 def _collect_canonical_rows(
     vault: Path,
     *,
@@ -306,8 +325,55 @@ def _collect_canonical_rows(
     executor_kind: str = "thread",
     progress_every: int = 0,
     cache: VaultScanCache | None = None,
+    uid_allowlist: set[str] | frozenset[str] | list[str] | None = None,
 ) -> tuple[list[CanonicalRow], dict[str, str], int, list[tuple[Any, ...]], str, dict[str, tuple[int, int]]]:
     from .loader import _log_rebuild_step, _RebuildProgressReporter
+
+    allow = {str(uid).strip() for uid in (uid_allowlist or set()) if str(uid).strip()} or None
+    if cache is not None and cache.tier() >= 1 and allow is not None:
+        _log_rebuild_step(
+            1,
+            6,
+            "discover canonical note paths",
+            f"vault={vault} (allowlist={len(allow)} from cache, no full-scan)",
+        )
+        rel_paths = cache.all_rel_paths()
+        file_stats = cache.file_stats()
+        vault_fingerprint = cache.vault_fingerprint()
+        slug_map: dict[str, str] = {}
+        for rel_path in rel_paths:
+            _register_slug(slug_map, rel_path)
+        fm_rows = cache.frontmatter_rows_for_uids(allow)
+        person_items: list[dict[str, Any]] = []
+        try:
+            from archive_cli.ppa_engine import ppa_engine
+            from archive_cli.vault_cache import VaultScanCache as _VSC
+
+            cache_path = _VSC.cache_path_for_vault(vault)
+            if ppa_engine() == "rust" and cache_path.exists():
+                import archive_crate
+
+                raw_people = archive_crate.frontmatter_dicts_from_cache(str(cache_path), types=["person"])
+                person_items = [dict(item) for item in (raw_people or [])]
+        except Exception:
+            person_items = []
+        rows_by_uid: dict[str, CanonicalRow] = {}
+        for row in _rows_from_frontmatter_maps(person_items):
+            uid = str(row.card.uid).strip()
+            if uid:
+                rows_by_uid[uid] = row
+        for row in _rows_from_frontmatter_maps(fm_rows):
+            uid = str(row.card.uid).strip()
+            if uid:
+                rows_by_uid[uid] = row
+        rows = list(rows_by_uid.values())
+        _log_rebuild_step(
+            1,
+            6,
+            "discover canonical note paths complete",
+            f"notes={len(rel_paths)} allowlist_rows={len(rows)} slug_map={len(slug_map)}",
+        )
+        return rows, slug_map, 0, [], vault_fingerprint, file_stats
 
     if cache is not None and cache.tier() >= 1:
         _log_rebuild_step(1, 6, "discover canonical note paths", f"vault={vault} (from cache)")
