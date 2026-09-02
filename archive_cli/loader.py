@@ -935,9 +935,37 @@ class LoaderMixin:
                 import archive_crate
 
                 if _cache_sqlite.exists():
-                    logger.info("Loading body cache from %s", _cache_sqlite)
-                    _body_cache = archive_crate.BodyCache.load(str(_cache_sqlite))
-                    logger.info("Body cache loaded: %d entries", len(_body_cache))
+                    rels = [r.rel_path for r in rows_to_process]
+                    full_load = len(rels) > 50_000
+                    logger.info(
+                        "Loading body cache from %s paths=%s full=%s",
+                        _cache_sqlite,
+                        len(rels),
+                        full_load,
+                    )
+                    t_body = time.time()
+                    memo = getattr(self, "_process_body_cache", None)
+                    memo_key = (str(_cache_sqlite), frozenset(rels) if not full_load else ("*",))
+                    if memo is not None and memo[0] == memo_key:
+                        _body_cache = memo[1]
+                        logger.info("Body cache process-hit entries=%d", len(_body_cache))
+                    elif full_load or not hasattr(archive_crate.BodyCache, "load_for_paths"):
+                        _body_cache = archive_crate.BodyCache.load(str(_cache_sqlite))
+                        self._process_body_cache = (memo_key, _body_cache)
+                        logger.info(
+                            "Body cache loaded: %d entries elapsed=%.1fs",
+                            len(_body_cache),
+                            time.time() - t_body,
+                        )
+                    else:
+                        _body_cache = archive_crate.BodyCache.load_for_paths(str(_cache_sqlite), rels)
+                        self._process_body_cache = (memo_key, _body_cache)
+                        logger.info(
+                            "Body cache loaded: %d/%d paths elapsed=%.1fs",
+                            len(_body_cache),
+                            len(rels),
+                            time.time() - t_body,
+                        )
                 if use_rust_all_rows:
                     logger.info("Using materialize_all_rows (single Rust call, maps converted once)")
                     _all_batches: list[ProjectionRowBuffer] = archive_crate.materialize_all_rows(
@@ -1314,6 +1342,7 @@ class LoaderMixin:
             executor_kind=executor_kind,
             progress_every=progress_every,
             cache=_vault_cache,
+            uid_allowlist=allowlist,
         )
         scan_seconds = round(time.time() - scan_started_at, 6)
         run_id = _compute_run_id(vault_fingerprint)
@@ -1644,6 +1673,13 @@ class LoaderMixin:
                     },
                 )
                 conn.commit()
+                materialized = len(rows_to_process)
+                final_counts["cards_materialized"] = materialized
+                if allowlist is not None:
+                    # Nightly reports cards_rebuilt from counts["cards"]. Do not
+                    # return the full projection table size (1.3M) for a 210-UID run.
+                    final_counts["cards_indexed"] = final_counts.get("cards", 0)
+                    final_counts["cards"] = materialized
                 metrics = {
                     "scan_seconds": round(scan_seconds, 6),
                     "map_seconds": round(map_seconds, 6),
@@ -1656,6 +1692,7 @@ class LoaderMixin:
                     "commit_interval": commit_interval,
                     "rebuild_mode": "incremental_allowlist" if allowlist is not None else "incremental",
                     "allowlist_count": len(allowlist) if allowlist is not None else 0,
+                    "cards_materialized": materialized,
                     "rows_per_second": round(len(rows_to_process) / max(total_seconds, 0.001), 3),
                 }
                 return RebuildRunResult(counts=final_counts, metrics=metrics)

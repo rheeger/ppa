@@ -306,20 +306,44 @@ class ProcessorStateStore:
         return record
 
     def get_input_state(self, processor_key: str, input_uid: str) -> ProcessorInputStateRecord | None:
+        rows = self.get_input_states_for_uids([input_uid]).get(str(input_uid).strip())
+        if not rows:
+            return None
+        return rows.get(processor_key)
+
+    def get_input_states_for_uids(
+        self,
+        uids: list[str],
+    ) -> dict[str, dict[str, ProcessorInputStateRecord]]:
+        """One query: ``uid -> {processor_key: record}`` for the given UIDs."""
+
+        wanted = [str(uid).strip() for uid in uids if str(uid).strip()]
+        out: dict[str, dict[str, ProcessorInputStateRecord]] = {}
+        if not wanted:
+            return out
         if self._conn is not None:
             self.ensure_tables()
-            row = self._conn.execute(
-                f"""
-                SELECT * FROM {self._schema}.processor_input_state
-                WHERE processor_key = %s AND input_uid = %s
-                """,
-                (processor_key, input_uid),
-            ).fetchone()
-            return _row_to_input_state(row) if row else None
+            chunk_size = 500
+            for i in range(0, len(wanted), chunk_size):
+                chunk = wanted[i : i + chunk_size]
+                rows = self._conn.execute(
+                    f"""
+                    SELECT * FROM {self._schema}.processor_input_state
+                    WHERE input_uid = ANY(%s)
+                    """,
+                    (chunk,),
+                ).fetchall()
+                for row in rows:
+                    rec = _row_to_input_state(row)
+                    out.setdefault(rec.input_uid, {})[rec.processor_key] = rec
+            return out
         for item in self._load_meta().get("input_state", []):
-            if item.get("processor_key") == processor_key and item.get("input_uid") == input_uid:
-                return _row_to_input_state(item)
-        return None
+            uid = str(item.get("input_uid") or "").strip()
+            if uid not in wanted:
+                continue
+            rec = _row_to_input_state(item)
+            out.setdefault(uid, {})[rec.processor_key] = rec
+        return out
 
     def upsert_input_state(self, record: ProcessorInputStateRecord) -> ProcessorInputStateRecord:
         if self._conn is not None:

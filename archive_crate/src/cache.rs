@@ -112,6 +112,30 @@ fn meta_set(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<()> {
     Ok(())
 }
 
+fn meta_get(conn: &Connection, key: &str) -> rusqlite::Result<Option<String>> {
+    let mut stmt = conn.prepare("SELECT value FROM cache_meta WHERE key = ?")?;
+    let mut rows = stmt.query(params![key])?;
+    match rows.next()? {
+        Some(row) => Ok(Some(row.get(0)?)),
+        None => Ok(None),
+    }
+}
+
+fn infer_tier_from_notes(conn: &Connection) -> i32 {
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM notes WHERE body_compressed IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    if count > 0 {
+        2
+    } else {
+        1
+    }
+}
+
 /// Fingerprint only: `(stats_dict, fingerprint_hex)` matching Python `_compute_vault_fingerprint`.
 #[pyfunction]
 pub fn vault_fingerprint(py: Python<'_>, vault_path: String) -> PyResult<(PyObject, String)> {
@@ -311,7 +335,6 @@ fn build_vault_cache_inner(
     incremental: bool,
     cache_version: &str,
 ) -> Result<(usize, usize, usize, usize, String), String> {
-    let tier_ge2 = tier >= 2;
     let vault = PathBuf::from(vault_path);
     let rel_paths = walk::collect_note_paths(vault_path)
         .map_err(|e| e.to_string())?;
@@ -325,6 +348,29 @@ fn build_vault_cache_inner(
     conn.busy_timeout(std::time::Duration::from_secs(120))
         .map_err(|e| e.to_string())?;
     init_db(&conn).map_err(|e| e.to_string())?;
+
+    // Never downgrade a tier-2 cache to tier-1 on incremental rebuild. Nightly
+    // callers often request tier=1; rewriting dirty rows with NULL bodies then
+    // fails linkers with "tier 2 required for body access".
+    let stored_tier = meta_get(&conn, "tier")
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse::<i32>().ok())
+        .unwrap_or(0);
+    let inferred = infer_tier_from_notes(&conn);
+    let effective_tier = if incremental {
+        let preserved = tier.max(stored_tier).max(inferred);
+        if preserved != tier {
+            eprintln!(
+                "[archive_crate] vault-cache incremental preserving tier={} (requested={} stored={} inferred={})",
+                preserved, tier, stored_tier, inferred
+            );
+        }
+        preserved
+    } else {
+        tier
+    };
+    let tier_ge2 = effective_tier >= 2;
 
     let (paths_to_build, deleted_count, unchanged_count) = if incremental {
         let cached_stats = load_cached_stats(&conn).map_err(|e| e.to_string())?;
@@ -389,7 +435,7 @@ fn build_vault_cache_inner(
         .map(|d| d.as_secs_f64())
         .unwrap_or(0.0);
     meta_set(&conn, "vault_fingerprint", &fp).map_err(|e| e.to_string())?;
-    meta_set(&conn, "tier", &tier.to_string()).map_err(|e| e.to_string())?;
+    meta_set(&conn, "tier", &effective_tier.to_string()).map_err(|e| e.to_string())?;
     meta_set(&conn, "cache_version", cache_version)
         .map_err(|e| e.to_string())?;
     meta_set(&conn, "generated_at", &now.to_string()).map_err(|e| e.to_string())?;

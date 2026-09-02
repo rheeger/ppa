@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import time
@@ -937,9 +938,16 @@ def build_seed_link_catalog(
             if day:
                 media_by_day.setdefault(day, []).append(sketch)
 
-    for rel_path, fm in cache.all_frontmatters():
-        body = cache.body_for_rel_path(rel_path)
-        ch = cache.raw_content_sha256_for_rel_path(rel_path)
+    from archive_cli.vault_cache_runtime import body_for_rel_path, raw_content_sha256_for_rel_path
+    from archive_sync.cli_logging import log_ratio_progress
+
+    catalog_log = logging.getLogger("ppa.seed_links")
+    started = time.monotonic()
+    rel_items = list(cache.all_frontmatters())
+    catalog_log.info("seed-link catalog start notes=%s", len(rel_items))
+    for i, (rel_path, fm) in enumerate(rel_items, start=1):
+        body = body_for_rel_path(cache, rel_path, vault)
+        ch = raw_content_sha256_for_rel_path(cache, rel_path, vault)
         sketch = _sketch_from_frontmatter(
             rel_path=rel_path,
             frontmatter=fm,
@@ -947,6 +955,15 @@ def build_seed_link_catalog(
             content_hash=ch,
         )
         _ingest(sketch, fm)
+        log_ratio_progress(
+            catalog_log,
+            "seed-link catalog",
+            i,
+            len(rel_items),
+            started,
+            every=5000,
+        )
+    catalog_log.info("seed-link catalog done notes=%s elapsed=%.1fs", len(rel_items), time.monotonic() - started)
 
     catalog = SeedLinkCatalog(
         cards_by_uid=cards_by_uid,

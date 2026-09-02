@@ -3,12 +3,28 @@
 from __future__ import annotations
 
 import json
+import logging
+import time
 from pathlib import Path
 from typing import Any, Iterable
 
+from archive_sync.cli_logging import log_ratio_progress
+
 from .constants import CORPUS_ACTIVE
 from .staleness import ProcessorInputSnapshot
-from .state_store import ProcessorStateStore
+from .state_store import ProcessorInputStateRecord, ProcessorStateStore
+
+logger = logging.getLogger("ppa.processors")
+
+_PRIOR_PROCESSOR_KEYS = (
+    "materialization",
+    "email_typed_extraction",
+    "email_thread_enrichment",
+    "embedding",
+    "linkers",
+    "entity_resolution",
+    "email_promotion_policy",
+)
 
 
 def load_dirty_uids(path: Path) -> list[str]:
@@ -95,18 +111,7 @@ def load_input_snapshots_from_file(path: Path) -> list[ProcessorInputSnapshot] |
     return snapshots
 
 
-def _resolve_note_meta(vault_path: str | Path | None, uid: str) -> dict[str, Any]:
-    if not vault_path:
-        return {}
-    try:
-        from archive_vault.vault import read_note_by_uid
-
-        found = read_note_by_uid(vault_path, uid)
-    except Exception:
-        return {}
-    if not found:
-        return {}
-    _rel, fm, body, _prov = found
+def _note_meta_from_frontmatter(uid: str, fm: dict[str, Any], *, body: str = "") -> dict[str, Any]:
     card_type = str(fm.get("type") or "")
     body_sha = str(fm.get("body_sha") or fm.get("content_hash") or "")
     if not body_sha and body:
@@ -122,6 +127,61 @@ def _resolve_note_meta(vault_path: str | Path | None, uid: str) -> dict[str, Any
         "processor_decision": str(fm.get("processor_decision") or ""),
         "corpus_state": str(fm.get("corpus_state") or fm.get("corpus_decision") or ""),
     }
+
+
+def _resolve_notes_bulk(vault_path: str | Path | None, uids: list[str]) -> dict[str, dict[str, Any]]:
+    """Resolve frontmatter for dirty UIDs via Rust cache batch, then Python IN-query."""
+
+    if not vault_path or not uids:
+        return {}
+    vault = Path(vault_path)
+    cache_path = vault / "_meta" / "vault-scan-cache.sqlite3"
+    rows: list[dict[str, Any]] = []
+    try:
+        from archive_cli.ppa_engine import ppa_engine
+
+        if ppa_engine() == "rust" and cache_path.exists():
+            import archive_crate
+
+            if hasattr(archive_crate, "frontmatter_for_uids"):
+                raw = archive_crate.frontmatter_for_uids(str(cache_path), uids)
+                rows = [dict(item) for item in (raw or [])]
+    except Exception:
+        logger.debug("processor plan rust frontmatter_for_uids failed; using vault cache", exc_info=True)
+        rows = []
+    if not rows:
+        try:
+            from archive_cli.vault_cache import VaultScanCache
+
+            cache = VaultScanCache.build_or_load(vault, tier=1, progress_every=5000)
+            rows = cache.frontmatter_rows_for_uids(uids)
+        except Exception:
+            logger.warning("processor plan vault-cache bulk resolve failed", exc_info=True)
+            rows = []
+    out: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        uid = str(row.get("uid") or "").strip()
+        fm = row.get("frontmatter") or {}
+        if uid and isinstance(fm, dict):
+            out[uid] = _note_meta_from_frontmatter(uid, fm)
+    return out
+
+
+def _resolve_note_meta(vault_path: str | Path | None, uid: str) -> dict[str, Any]:
+    """Fallback for a single UID missing from the cache (just-written notes)."""
+
+    if not vault_path:
+        return {}
+    try:
+        from archive_vault.vault import read_note_by_uid
+
+        found = read_note_by_uid(vault_path, uid)
+    except Exception:
+        return {}
+    if not found:
+        return {}
+    _rel, fm, body, _prov = found
+    return _note_meta_from_frontmatter(uid, fm, body=body)
 
 
 def _resolve_corpus_state(
@@ -180,6 +240,94 @@ def _resolve_processor_decision(
         return fallback
 
 
+def _resolve_corpus_state_bulk(uids: list[str], *, store: Any | None, default: str = CORPUS_ACTIVE) -> dict[str, str]:
+    out = {uid: default for uid in uids}
+    if store is None or not uids:
+        return out
+    index = getattr(store, "index", None)
+    if index is None:
+        return out
+    schema = str(getattr(index, "schema", "ppa"))
+    try:
+        from archive_cli.corpus_hygiene.state_store import corpus_state_table_exists
+
+        with index._connect() as conn:
+            if not corpus_state_table_exists(conn, schema):
+                return out
+            rows = conn.execute(
+                f"SELECT card_uid, corpus_state FROM {schema}.card_corpus_state WHERE card_uid = ANY(%s)",
+                (uids,),
+            ).fetchall()
+        for row in rows:
+            uid = str(row["card_uid"] if isinstance(row, dict) else row[0])
+            state = str(row["corpus_state"] if isinstance(row, dict) else row[1] or default)
+            if uid:
+                out[uid] = state or default
+    except Exception:
+        logger.debug("processor plan bulk corpus_state failed", exc_info=True)
+    return out
+
+
+def _resolve_processor_decision_bulk(
+    uids: list[str],
+    *,
+    store: Any | None,
+    fallback: str = "",
+) -> dict[str, str]:
+    out = {uid: fallback for uid in uids}
+    if store is None or not uids:
+        return out
+    index = getattr(store, "index", None)
+    if index is None:
+        return out
+    schema = str(getattr(index, "schema", "ppa"))
+    try:
+        with index._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT DISTINCT ON (thread_uid) thread_uid, processor_decision
+                FROM {schema}.email_corpus_decisions
+                WHERE thread_uid = ANY(%s)
+                ORDER BY thread_uid, applied_at DESC NULLS LAST
+                """,
+                (uids,),
+            ).fetchall()
+        for row in rows:
+            uid = str(row["thread_uid"] if isinstance(row, dict) else row[0])
+            decision = str(row["processor_decision"] if isinstance(row, dict) else row[1] or fallback)
+            if uid:
+                out[uid] = decision or fallback
+    except Exception:
+        logger.debug("processor plan bulk processor_decision failed", exc_info=True)
+    return out
+
+
+def _prior_from_records(records: dict[str, ProcessorInputStateRecord] | None) -> tuple[str, str, str, bool, bool]:
+    recorded_hash = ""
+    recorded_version = ""
+    recorded_corpus = ""
+    output_exists = False
+    output_failed = False
+    if not records:
+        return recorded_hash, recorded_version, recorded_corpus, output_exists, output_failed
+    for key in _PRIOR_PROCESSOR_KEYS:
+        prior = records.get(key)
+        if prior is None:
+            continue
+        if prior.input_hash and not recorded_hash:
+            recorded_hash = prior.input_hash
+        if prior.processor_version and not recorded_version:
+            recorded_version = prior.processor_version
+        if prior.input_corpus_state and not recorded_corpus:
+            recorded_corpus = prior.input_corpus_state
+        if prior.status == "complete":
+            output_exists = True
+        if prior.status == "failed":
+            output_failed = True
+        break
+    return recorded_hash, recorded_version, recorded_corpus, output_exists, output_failed
+
+
 def resolve_snapshots_for_uids(
     uids: Iterable[str],
     *,
@@ -189,23 +337,42 @@ def resolve_snapshots_for_uids(
     default_card_type: str = "email_thread",
     default_processor_decision: str = "",
     source_dirty: bool = True,
+    progress_every: int = 500,
 ) -> list[ProcessorInputSnapshot]:
-    """Resolve card_type / corpus_state / hash fields for dirty UIDs."""
+    """Resolve card_type / corpus_state / hash fields for dirty UIDs (bulk SQL / cache)."""
+
+    wanted = [str(uid).strip() for uid in uids if str(uid).strip()]
+    if not wanted:
+        return []
+    started = time.monotonic()
+    logger.info("processor plan resolve start uids=%s", len(wanted))
+    notes_by_uid = _resolve_notes_bulk(vault_path, wanted)
+    missing = [uid for uid in wanted if uid not in notes_by_uid]
+    if missing:
+        logger.info("processor plan cache miss uids=%s falling back to per-uid read", len(missing))
+        for i, uid in enumerate(missing, start=1):
+            notes_by_uid[uid] = _resolve_note_meta(vault_path, uid)
+            log_ratio_progress(
+                logger,
+                "processor plan note fallback",
+                i,
+                len(missing),
+                started,
+                every=max(1, progress_every),
+            )
+    corpus_by_uid = _resolve_corpus_state_bulk(wanted, store=store)
+    decision_by_uid = _resolve_processor_decision_bulk(wanted, store=store, fallback=default_processor_decision)
+    priors: dict[str, dict[str, ProcessorInputStateRecord]] = {}
+    if state_store is not None:
+        priors = state_store.get_input_states_for_uids(wanted)
 
     snapshots: list[ProcessorInputSnapshot] = []
-    for uid in uids:
-        uid = str(uid).strip()
-        if not uid:
-            continue
-        note = _resolve_note_meta(vault_path, uid)
+    build_started = time.monotonic()
+    for i, uid in enumerate(wanted, start=1):
+        note = notes_by_uid.get(uid) or {}
         card_type = note.get("card_type") or default_card_type
-        corpus_from_note = note.get("corpus_state") or ""
-        corpus_state = corpus_from_note or _resolve_corpus_state(uid, store=store)
-        processor_decision = (
-            note.get("processor_decision")
-            or _resolve_processor_decision(uid, store=store, fallback=default_processor_decision)
-            or default_processor_decision
-        )
+        corpus_state = note.get("corpus_state") or corpus_by_uid.get(uid) or CORPUS_ACTIVE
+        processor_decision = note.get("processor_decision") or decision_by_uid.get(uid) or default_processor_decision
         field_values: dict[str, Any] = {
             "body_sha": note.get("body_sha") or uid,
             "thread_uid": note.get("thread_uid") or uid,
@@ -214,38 +381,9 @@ def resolve_snapshots_for_uids(
             "corpus_state": corpus_state,
             "processor_decision": processor_decision,
         }
-        recorded_hash = ""
-        recorded_version = ""
-        recorded_corpus = ""
-        output_exists = False
-        output_failed = False
-        # Prefer materialization input state as the generic prior (any processor)
-        if state_store is not None:
-            # Check any prior state for this UID across processors for hash reuse
-            for key in (
-                "materialization",
-                "email_typed_extraction",
-                "email_thread_enrichment",
-                "embedding",
-                "linkers",
-                "entity_resolution",
-                "email_promotion_policy",
-            ):
-                prior = state_store.get_input_state(key, uid)
-                if prior is None:
-                    continue
-                if prior.input_hash and not recorded_hash:
-                    recorded_hash = prior.input_hash
-                if prior.processor_version and not recorded_version:
-                    recorded_version = prior.processor_version
-                if prior.input_corpus_state and not recorded_corpus:
-                    recorded_corpus = prior.input_corpus_state
-                if prior.status == "complete":
-                    output_exists = True
-                if prior.status == "failed":
-                    output_failed = True
-                break
-
+        recorded_hash, recorded_version, recorded_corpus, output_exists, output_failed = _prior_from_records(
+            priors.get(uid)
+        )
         snapshots.append(
             ProcessorInputSnapshot(
                 input_uid=uid,
@@ -262,6 +400,19 @@ def resolve_snapshots_for_uids(
                 output_failed=output_failed,
             )
         )
+        log_ratio_progress(
+            logger,
+            "processor plan snapshots",
+            i,
+            len(wanted),
+            build_started,
+            every=max(1, progress_every),
+        )
+    logger.info(
+        "processor plan resolve done snapshots=%s elapsed=%.1fs",
+        len(snapshots),
+        time.monotonic() - started,
+    )
     return snapshots
 
 

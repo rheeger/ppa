@@ -64,6 +64,45 @@ def test_load_dirty_uids_jsonl(tmp_path: Path) -> None:
     assert load_dirty_uids(path) == ["uid-a", "uid-b", "uid-c"]
 
 
+def test_resolve_snapshots_bulk_skips_per_uid_note_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    reads: list[str] = []
+
+    def boom(vault, uid):
+        reads.append(str(uid))
+        raise AssertionError(f"per-uid read_note_by_uid must not run for cached UIDs: {uid}")
+
+    monkeypatch.setattr("archive_vault.vault.read_note_by_uid", boom)
+    monkeypatch.setattr(
+        "archive_sync.processors.dirty_io._resolve_notes_bulk",
+        lambda vault_path, uids: {
+            uid: {
+                "card_type": "email_thread",
+                "body_sha": f"sha-{uid}",
+                "thread_uid": uid,
+                "frontmatter_hash": "fh",
+                "chunk_hash": f"sha-{uid}",
+                "processor_decision": "",
+                "corpus_state": "active",
+            }
+            for uid in uids
+        },
+    )
+    caplog.set_level("INFO", logger="ppa.processors")
+    snaps = resolve_snapshots_for_uids(
+        ["uid-a", "uid-b", "uid-c"],
+        vault_path=tmp_path,
+        progress_every=1,
+    )
+    assert reads == []
+    assert [s.input_uid for s in snaps] == ["uid-a", "uid-b", "uid-c"]
+    assert any("processor plan resolve start" in r.message for r in caplog.records)
+    assert any("processor plan snapshots" in r.message for r in caplog.records)
+
+
 def test_dirty_uids_jsonl_plan_apply_executes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -435,6 +435,33 @@ def _run_processors(
     return 1, [result.to_dict()], int(result.report.output_count or 0)
 
 
+def _cards_rebuilt_from_processor_reports(reports: list[dict[str, Any]]) -> int:
+    """Parse materialization card count from processor warnings."""
+
+    import re
+
+    best = 0
+    for report in reports:
+        inner = report.get("report") or report
+        for warning in inner.get("warnings") or []:
+            match = re.search(r"materialization incremental rebuild cards=(\d+)", str(warning))
+            if match:
+                best = max(best, int(match.group(1)))
+        for item in report.get("item_results") or inner.get("item_results") or []:
+            if item.get("processor_key") == "materialization" and item.get("status") == "complete":
+                best = max(best, 1)
+    return best
+
+
+def _processor_materialization_failed(reports: list[dict[str, Any]]) -> bool:
+    for report in reports:
+        inner = report.get("report") or report
+        for err in inner.get("errors") or []:
+            if "materialization" in str(err).lower():
+                return True
+    return False
+
+
 def run_maintenance(
     *,
     store: DefaultArchiveStore,
@@ -457,6 +484,13 @@ def run_maintenance(
 ) -> MaintenanceReport:
     report = MaintenanceReport()
     report.started_at = datetime.now(timezone.utc).isoformat()
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        try:
+            from archive_cli.vault_cache_runtime import install_process_reuse
+
+            install_process_reuse()
+        except Exception:
+            logger.exception("maintain_vault_cache_process_reuse_failed")
     idx = store.index
     schema = str(getattr(idx, "schema", "ppa"))
 
@@ -521,6 +555,13 @@ def run_maintenance(
                 "groups": link.get("groups"),
                 "incremental": True,
             }
+            if apply_hygiene and (report.junk_attachments_purged or report.file_duplicates_linked):
+                try:
+                    from archive_cli.vault_cache_runtime import mark_vault_written
+
+                    mark_vault_written(store.vault)
+                except Exception:
+                    logger.debug("maintain mark_vault_written after hygiene failed", exc_info=True)
             if not apply_hygiene:
                 report.skipped_steps.append("file_hygiene (dry-run)")
         except Exception as exc:
@@ -596,7 +637,7 @@ def run_maintenance(
         if hygiene_dirty and not dry_run and not processors_applied:
             try:
                 counts = store.rebuild(force_full=False, uid_allowlist=set(hygiene_dirty))
-                report.cards_rebuilt = int(counts.get("cards", 0) or 0)
+                report.cards_rebuilt = int(counts.get("cards_materialized") or counts.get("cards") or 0)
             except Exception as exc:
                 logger.exception("maintain_rebuild_failed")
                 report.errors.append({"step": "incremental_rebuild", "error": str(exc)})
@@ -671,8 +712,18 @@ def run_maintenance(
             rebuild_uids = set(tailed_uids)
             if hygiene_dirty and not processors_applied:
                 rebuild_uids.update(hygiene_dirty)
-            counts = store.rebuild(force_full=False, uid_allowlist=rebuild_uids)
-            report.cards_rebuilt = int(counts.get("cards", 0) or 0)
+            already = _cards_rebuilt_from_processor_reports(report.processor_reports)
+            if processors_applied and not _processor_materialization_failed(report.processor_reports):
+                logger.info(
+                    "maintain skip second rematerialize processors_already_rebuilt cards=%s tailed_uids=%s",
+                    already,
+                    len(rebuild_uids),
+                )
+                report.cards_rebuilt = already or len(rebuild_uids)
+                report.skipped_steps.append("incremental_rebuild (processors already rematerialized allowlist)")
+            else:
+                counts = store.rebuild(force_full=False, uid_allowlist=rebuild_uids)
+                report.cards_rebuilt = int(counts.get("cards_materialized") or counts.get("cards") or 0)
         except Exception as exc:
             logger.exception("maintain_rebuild_failed")
             report.errors.append({"step": "incremental_rebuild", "error": str(exc)})

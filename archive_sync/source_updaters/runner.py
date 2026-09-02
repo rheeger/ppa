@@ -557,6 +557,14 @@ def run_source_updater(
         state_store.record_run(report)
         _commit_state_store(state_store)
 
+    if (result.created or result.merged) and apply:
+        try:
+            from archive_cli.vault_cache_runtime import mark_vault_written
+
+            mark_vault_written(vault_path)
+        except Exception:
+            logger.debug("source updater mark_vault_written failed", exc_info=True)
+
     elapsed = time.perf_counter() - ingest_started
     logger.info(
         "source updater done source_key=%s status=%s created=%s merged=%s errors=%s dirty_uids=%s elapsed=%.1fs",
