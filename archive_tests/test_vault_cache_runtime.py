@@ -8,7 +8,10 @@ import pytest
 
 from archive_cli.vault_cache import VaultScanCache
 from archive_cli.vault_cache_runtime import (
+    begin_defer_vault_written,
     clear_process_cache,
+    end_defer_vault_written,
+    flush_deferred_vault_written,
     install_process_reuse,
     mark_vault_written,
     process_reuse_installed,
@@ -51,3 +54,18 @@ def test_mark_written_forces_refresh(tmp_path: Path) -> None:
     second = VaultScanCache.build_or_load(vault, tier=1, progress_every=0)
     assert second is not first
     assert second.note_count() == first.note_count()
+
+
+def test_deferred_mark_vault_written_batches_invalidation(tmp_path: Path) -> None:
+    vault = load_fixture_vault(tmp_path / "vault", include_graphs=True)
+    install_process_reuse()
+    first = VaultScanCache.build_or_load(vault, tier=1, progress_every=0)
+    begin_defer_vault_written()
+    mark_vault_written(vault)
+    mark_vault_written(vault)
+    second = VaultScanCache.build_or_load(vault, tier=1, progress_every=0)
+    assert second is first
+    end_defer_vault_written(flush=False)
+    assert flush_deferred_vault_written() == 1
+    third = VaultScanCache.build_or_load(vault, tier=1, progress_every=0)
+    assert third is not first

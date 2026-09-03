@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 import urllib.parse
 import urllib.request
 from datetime import date
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 from archive_auth import account_name_from_email, build_google_cli_token_manager
@@ -18,6 +20,8 @@ from archive_vault.uid import generate_uid
 
 from .base import BaseAdapter, FetchedBatch, deterministic_provenance
 from .datetime_canon import to_utc_z_iso
+
+logger = logging.getLogger("ppa.calendar")
 
 EVENT_SOURCE = "calendar.event"
 
@@ -49,6 +53,10 @@ def _clean(value: str) -> str:
 class CalendarEventsAdapter(BaseAdapter):
     source_id = "calendar-events"
     preload_existing_uid_index = False
+    enable_person_resolution = False
+
+    def should_enable_person_resolution(self, **kwargs) -> bool:
+        return False
 
     def _ensure_token_manager(self, account_email: str) -> None:
         account = account_email.strip().lower()
@@ -188,7 +196,14 @@ class CalendarEventsAdapter(BaseAdapter):
         """One Rust (or single-cursor) dump of calendar-related frontmatter. Builds cache on miss."""
 
         from archive_cli.vault_cache import VaultScanCache
+        from archive_sync.cli_logging import format_mins_secs
 
+        cached_vault = getattr(self, "_calendar_lookup_vault", "")
+        cached_rows = getattr(self, "_calendar_lookup_rows", None)
+        if cached_vault == vault_path and cached_rows is not None:
+            return cached_rows
+
+        started = perf_counter()
         vault = Path(vault_path)
         scan_cache = VaultScanCache.build_or_load(vault, tier=1, progress_every=0)
         cache_path = VaultScanCache.cache_path_for_vault(vault)
@@ -197,12 +212,20 @@ class CalendarEventsAdapter(BaseAdapter):
             try:
                 import archive_crate
 
-                return list(
+                rows = list(
                     archive_crate.frontmatter_dicts_from_cache(
                         str(cache_path),
                         types=types,
                     )
                 )
+                logger.info(
+                    "calendar lookup rows=%s elapsed=%s source=rust",
+                    len(rows),
+                    format_mins_secs(perf_counter() - started),
+                )
+                self._calendar_lookup_vault = vault_path
+                self._calendar_lookup_rows = rows
+                return rows
             except Exception:
                 pass
         by_type, _rel_by_uid, uid_by_path, _uid_by_stem, frontmatter_by_uid = scan_cache.slice_lookup_tables()
@@ -214,6 +237,13 @@ class CalendarEventsAdapter(BaseAdapter):
                 if not fm:
                     continue
                 rows.append({"rel_path": rel, "frontmatter": fm})
+        logger.info(
+            "calendar lookup rows=%s elapsed=%s",
+            len(rows),
+            format_mins_secs(perf_counter() - started),
+        )
+        self._calendar_lookup_vault = vault_path
+        self._calendar_lookup_rows = rows
         return rows
 
     @staticmethod

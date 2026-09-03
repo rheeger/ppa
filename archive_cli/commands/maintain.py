@@ -135,6 +135,7 @@ class MaintenanceReport:
     source_updater_snapshots: int = 0
     source_updater_runs: int = 0
     source_updater_reports: list[dict[str, Any]] = field(default_factory=list)
+    source_updater_partial: bool = False
     processor_status_snapshots: int = 0
     processor_runs: int = 0
     processor_reports: list[dict[str, Any]] = field(default_factory=list)
@@ -189,8 +190,9 @@ def _run_source_updaters(
     source_keys: list[str] | None = None,
     max_items: int | None = None,
     catch_up: bool = False,
+    strict: bool = False,
     logger: logging.Logger,
-) -> tuple[int, list[dict[str, Any]]]:
+) -> tuple[int, list[dict[str, Any]], bool]:
     """Execute enabled source updaters (Section D Phase 2). Isolates per-source failures."""
 
     from pathlib import Path
@@ -223,7 +225,7 @@ def _run_source_updaters(
         )
     if not keys:
         logger.info("run_source_updaters skipped: no executable source keys configured")
-        return 0, []
+        return 0, [], False
 
     try:
         with store.index._connect() as conn:
@@ -240,6 +242,7 @@ def _run_source_updaters(
                 state_store=state_store,
                 max_items=max_items,
                 catch_up=catch_up,
+                strict=strict,
             )
             conn.commit()
     except Exception:
@@ -255,8 +258,10 @@ def _run_source_updaters(
             state_store=state_store,
             max_items=max_items,
             catch_up=catch_up,
+            strict=strict,
         )
-    return len(multi.reports), [r.to_dict() for r in multi.reports]
+    partial = multi.completion_state == "partial"
+    return len(multi.reports), [r.to_dict() for r in multi.reports], partial
 
 
 def _record_processor_status_snapshots(store: DefaultArchiveStore, schema: str) -> int:
@@ -474,6 +479,7 @@ def run_maintenance(
     apply_source_updaters: bool = False,
     source_updater_max_items: int | None = None,
     source_updater_catch_up: bool = False,
+    source_updater_strict: bool = False,
     run_processors: bool = False,
     apply_processors: bool = False,
     dirty_uids_path: str = "",
@@ -498,18 +504,29 @@ def run_maintenance(
         try:
             # Default dry-run unless explicitly applying source updaters.
             apply = bool(apply_source_updaters) and not dry_run
-            count, payloads = _run_source_updaters(
+            count, payloads, partial = _run_source_updaters(
                 store,
                 schema,
                 apply=apply,
                 source_keys=source_updater_keys,
                 max_items=source_updater_max_items,
                 catch_up=source_updater_catch_up,
+                strict=source_updater_strict,
                 logger=logger,
             )
             report.source_updater_runs = count
             report.source_updater_reports = payloads
-            if not apply:
+            report.source_updater_partial = partial
+            if apply and not dry_run:
+                try:
+                    from archive_cli.vault_cache_runtime import rebuild_vault_cache_after_writes
+
+                    rebuild_vault_cache_after_writes(store.vault, tier=1, progress_every=5000)
+                except Exception:
+                    logger.exception("maintain_vault_cache_rebuild_after_updaters_failed")
+            if partial and not source_updater_strict:
+                report.skipped_steps.append("source_updater_hard_fail (partial success; use --strict to fail)")
+            elif not apply:
                 report.skipped_steps.append("source_updater_cursor_commit (dry-run)")
         except Exception as exc:
             logger.exception("maintain_run_source_updaters_failed")

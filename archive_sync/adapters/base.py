@@ -492,15 +492,25 @@ class BaseAdapter(ABC):
         if not isinstance(cursor, dict):
             cursor = {}
         enable_person_resolution = bool(self.should_enable_person_resolution(**kwargs))
-        identity_cache = (
-            _run_logged("load identity cache", lambda: IdentityCache(vault)) if enable_person_resolution else None
-        )
+        shared_identity_cache = kwargs.get("shared_identity_cache")
+        shared_people_index = kwargs.get("shared_people_index")
+        if enable_person_resolution and shared_identity_cache is not None:
+            identity_cache = shared_identity_cache
+            _log("identity cache reuse shared maintain index")
+        else:
+            identity_cache = (
+                _run_logged("load identity cache", lambda: IdentityCache(vault)) if enable_person_resolution else None
+            )
         _log("ingest start")
         preload_started_at = perf_counter()
         if enable_person_resolution:
-            people_index = _run_logged(
-                "load person index", lambda: PersonIndex(vault, log=_log, progress_every=progress_every)
-            )
+            if shared_people_index is not None:
+                people_index = shared_people_index
+                _log(f"person index reuse shared maintain index records={len(people_index.records)}")
+            else:
+                people_index = _run_logged(
+                    "load person index", lambda: PersonIndex(vault, log=_log, progress_every=progress_every)
+                )
             person_uid_index = _run_logged(
                 "build person uid index",
                 lambda: {
@@ -911,6 +921,8 @@ class BaseAdapter(ABC):
                 delta_people_index = PersonIndex(vault, preload=False)
                 _log(f"batch {batch.sequence} chunk {chunk_start}:{chunk_end} delta people index init done")
                 commit_started_at = perf_counter()
+                from archive_sync.cli_logging import log_ratio_progress
+
                 _log(
                     f"batch {batch.sequence} chunk {chunk_start}:{chunk_end} "
                     f"serial commit start: people={len(prepared_people)}"
@@ -920,6 +932,14 @@ class BaseAdapter(ABC):
                 ):
                     try:
                         action = _commit_person(prepared, resolve_hint, delta_people_index)
+                        log_ratio_progress(
+                            logger,
+                            f"adapter write progress source_id={self.source_id}",
+                            commit_index,
+                            len(prepared_people),
+                            commit_started_at,
+                            every=max(1, min(progress_every, 250)),
+                        )
                         _log(
                             f"batch {batch.sequence} chunk {chunk_start}:{chunk_end} "
                             f"commit {commit_index}/{len(prepared_people)} action={action} "

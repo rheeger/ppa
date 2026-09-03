@@ -67,19 +67,53 @@ class PersonIndex:
         if preload:
             self._load()
 
+    def _load_people_rows_from_cache(self) -> list[dict[str, Any]] | None:
+        """Load ``People/`` frontmatter from the vault scan cache (no full-vault walk)."""
+
+        try:
+            from archive_cli.vault_cache import VaultScanCache
+
+            cache_path = VaultScanCache.cache_path_for_vault(self.vault_path)
+            if not cache_path.is_file():
+                return None
+            import archive_crate
+
+            return list(archive_crate.frontmatter_dicts_from_cache(str(cache_path), types=["person"]))
+        except Exception:
+            return None
+
     def _load(self) -> None:
         if self._log is not None:
             self._log(f"person index preload start: vault={self.vault_path}")
         loaded = 0
-        for rel_path, _ in iter_notes(self.vault_path):
-            if not rel_path.parts or rel_path.parts[0] != "People":
-                continue
-            frontmatter, _, _ = read_note(self.vault_path, str(rel_path))
-            data = validate_card_permissive(frontmatter).model_dump(mode="python")
-            self.upsert(f"[[{rel_path.stem}]]", data)
-            loaded += 1
-            if self._log is not None and self._progress_every and loaded % self._progress_every == 0:
-                self._log(f"person index preload progress: loaded={loaded}")
+        cache_rows = self._load_people_rows_from_cache()
+        if cache_rows is not None:
+            if self._log is not None:
+                self._log(f"person index preload source=cache rows={len(cache_rows)}")
+            for row in cache_rows:
+                rel = str(row.get("rel_path") or "")
+                if not rel.startswith("People/"):
+                    continue
+                fm = dict(row.get("frontmatter") or {})
+                if not fm:
+                    continue
+                data = validate_card_permissive(fm).model_dump(mode="python")
+                self.upsert(f"[[{Path(rel).stem}]]", data)
+                loaded += 1
+                if self._log is not None and self._progress_every and loaded % self._progress_every == 0:
+                    self._log(f"person index preload progress: loaded={loaded}")
+        else:
+            if self._log is not None:
+                self._log("person index preload source=vault People/ only")
+            for rel_path, _ in iter_notes(self.vault_path):
+                if not rel_path.parts or rel_path.parts[0] != "People":
+                    continue
+                frontmatter, _, _ = read_note(self.vault_path, str(rel_path))
+                data = validate_card_permissive(frontmatter).model_dump(mode="python")
+                self.upsert(f"[[{rel_path.stem}]]", data)
+                loaded += 1
+                if self._log is not None and self._progress_every and loaded % self._progress_every == 0:
+                    self._log(f"person index preload progress: loaded={loaded}")
         if self._log is not None:
             self._log(f"person index preload done: loaded={loaded}")
 

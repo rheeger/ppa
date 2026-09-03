@@ -277,10 +277,12 @@ def build_maintain_argv(
     return argv
 
 
-def maintain_failed(report: dict[str, object]) -> str | None:
+def maintain_failed(report: dict[str, object], *, strict: bool = False) -> str | None:
     errors = report.get("errors") or []
     if isinstance(errors, list) and errors:
         return f"maintain report errors={len(errors)}"
+    if report.get("source_updater_partial") and not strict:
+        return None
     updater_reports = report.get("source_updater_reports") or []
     if isinstance(updater_reports, list):
         bad = [
@@ -485,10 +487,15 @@ def main(argv: list[str] | None = None) -> int:
         except json.JSONDecodeError:
             LOG.error("maintain stdout was not JSON log_file=%s", log_file)
             return 1
-    reason = maintain_failed(report)
+    reason = maintain_failed(report, strict=False)
     if reason:
         LOG.error("maintain failed: %s log_file=%s", reason, log_file)
         return 1
+    if report.get("source_updater_partial"):
+        LOG.warning(
+            "nightly maintain partial: some source updaters failed; processors ran on successful dirties log_file=%s",
+            log_file,
+        )
     LOG.info(
         "nightly maintain done nothing_to_do=%s cards_rebuilt=%s updater_runs=%s "
         "junk_purged=%s file_dups_linked=%s log_file=%s",

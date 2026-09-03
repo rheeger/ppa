@@ -274,6 +274,89 @@ def _empty_list_gws(list_calls: list[dict]):
     return fake_gws
 
 
+def test_fetch_emits_only_dirty_correspondents(tmp_vault):
+    adapter = GmailCorrespondentsAdapter()
+    responses = iter(
+        [
+            {"messages": [{"id": "m1"}], "nextPageToken": None},
+            {
+                "id": "m1",
+                "internalDate": "1700000000000",
+                "payload": {
+                    "headers": [
+                        {"name": "From", "value": "Alice Example <alice@example.com>"},
+                    ]
+                },
+            },
+        ]
+    )
+    adapter._gws = lambda args: next(responses)  # type: ignore[method-assign]
+    cursor = {
+        "last_sync": "2026-03-09T00:55:05",
+        "correspondent_state": {
+            "alice@example.com": {
+                "name": "Alice Example",
+                "email": "alice@example.com",
+                "count": 5,
+                "last_seen": "2026-03-09T12:00:00+00:00",
+            },
+            "bob@example.com": {
+                "name": "Bob Example",
+                "email": "bob@example.com",
+                "count": 2,
+                "last_seen": "2026-03-08T10:00:00+00:00",
+            },
+        },
+        "vault_scanned_messages": 100,
+    }
+    items = adapter.fetch(
+        str(tmp_vault),
+        cursor,
+        account_email="me@example.com",
+        dry_run=True,
+    )
+    emails = {item["email"] for item in items}
+    assert emails == {"alice@example.com"}
+    assert items[0]["count"] == 6
+    patch = adapter.finalize_cursor(cursor)
+    assert patch is not None
+    assert patch["correspondent_state"]["alice@example.com"]["count"] == 6
+    assert patch["correspondent_state"]["bob@example.com"]["count"] == 2
+
+
+def test_fetch_dirty_correspondents_cursor_survives_checkpoint(tmp_vault):
+    adapter = GmailCorrespondentsAdapter()
+    cursor = {
+        "last_sync": "2026-03-09T00:55:05",
+        "correspondent_state": {
+            "alice@example.com": {
+                "name": "Alice Example",
+                "email": "alice@example.com",
+                "count": 2,
+                "last_seen": "2026-03-10T12:00:00+00:00",
+            },
+        },
+        "vault_scanned_messages": 10,
+        "page_token": "page-2",
+        "scanned_messages": 1,
+        "correspondent_counts": {
+            "alice@example.com": {
+                "name": "Alice Example",
+                "email": "alice@example.com",
+                "count": 2,
+                "last_seen": "2026-03-10T12:00:00+00:00",
+            }
+        },
+    }
+    adapter._gws = _empty_list_gws([])  # type: ignore[method-assign]
+    items = adapter.fetch(str(tmp_vault), cursor, account_email="me@example.com", dry_run=True)
+    assert items == []
+    patch = adapter.finalize_cursor(cursor)
+    assert patch is not None
+    assert patch["correspondent_state"]["alice@example.com"]["count"] == 2
+    assert patch["correspondent_state"]["alice@example.com"]["last_seen"] == "2026-03-10T12:00:00+00:00"
+
+
 def test_gmail_after_query_uses_exclusive_utc_date():
     assert gmail_after_query("2026-03-09T00:55:05") == "after:2026/03/09"
     assert gmail_after_query("2026-03-09T00:55:05+00:00") == "after:2026/03/09"

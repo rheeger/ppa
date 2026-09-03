@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import subprocess
 import tempfile
@@ -434,25 +435,37 @@ def mint_access_token(
     encoded = urllib.parse.urlencode(data).encode("utf-8")
     req = urllib.request.Request(client_config.get("token_uri", DEFAULT_TOKEN_URI), data=encoded)
     req.add_header("Content-Type", "application/x-www-form-urlencoded")
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        body = _read_http_error_body(exc)
-        if _should_retry_mint_without_scopes(
-            had_scopes=bool(resolved_scopes),
-            status=int(exc.code),
-            body=body,
-        ):
-            # Local refresh tokens often grant `calendar` but not `calendar.readonly`.
-            # Retrying without a scope restriction uses the original grant.
-            return mint_access_token(
-                refresh_token=refresh_token,
-                client_config=client_config,
-                scopes=None,
-            )
-        description = _token_error_description(body, str(exc))
-        raise RuntimeError(f"Token refresh failed: {description}") from exc
+    from archive_sync.transient_retry import call_with_transient_retry
+
+    _log = logging.getLogger("ppa.auth")
+
+    def _mint_once() -> dict:
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            body = _read_http_error_body(exc)
+            if _should_retry_mint_without_scopes(
+                had_scopes=bool(resolved_scopes),
+                status=int(exc.code),
+                body=body,
+            ):
+                # Local refresh tokens often grant `calendar` but not `calendar.readonly`.
+                # Retrying without a scope restriction uses the original grant.
+                return mint_access_token(
+                    refresh_token=refresh_token,
+                    client_config=client_config,
+                    scopes=None,
+                )
+            description = _token_error_description(body, str(exc))
+            raise RuntimeError(f"Token refresh failed: {description}") from exc
+
+    payload = call_with_transient_retry(
+        _mint_once,
+        logger=_log,
+        label="oauth token mint",
+        attempts=5,
+    )
     if "error" in payload:
         description = payload.get("error_description", payload["error"])
         raise RuntimeError(f"Token refresh failed: {description}")

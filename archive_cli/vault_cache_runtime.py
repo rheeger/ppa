@@ -8,12 +8,16 @@ the in-memory cache is still valid.
 Installed by ``ppa maintain`` only (``install_process_reuse``). Tests keep the
 stock path unless they opt in. Writing adapters must call ``mark_vault_written``
 so the next load incrementally refreshes.
+
+During a source-updater batch, call ``begin_defer_vault_written`` / ``flush_deferred_vault_written``
+so all updaters reuse one warm cache; fingerprint once after the batch.
 """
 
 from __future__ import annotations
 
 import logging
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +28,8 @@ logger = logging.getLogger("ppa.vault_cache")
 _LOCK = threading.RLock()
 _CACHES: dict[str, VaultScanCache] = {}
 _DIRTY: set[str] = set()
+_DEFERRED_WRITTEN: set[str] = set()
+_DEFER_DEPTH = 0
 _INSTALLED = False
 _ORIG_BUILD = VaultScanCache.build_or_load
 
@@ -32,19 +38,88 @@ def _vault_key(vault: Path | str) -> str:
     return str(Path(vault).resolve())
 
 
+def defer_vault_written_active() -> bool:
+    with _LOCK:
+        return _DEFER_DEPTH > 0
+
+
+def begin_defer_vault_written() -> None:
+    """Coalesce ``mark_vault_written`` until ``flush_deferred_vault_written``."""
+
+    global _DEFER_DEPTH
+    with _LOCK:
+        _DEFER_DEPTH += 1
+    logger.info("vault-cache defer_vault_written begin depth=%s", _DEFER_DEPTH)
+
+
+def end_defer_vault_written(*, flush: bool = True) -> None:
+    """Leave defer mode; optionally flush pending invalidations."""
+
+    global _DEFER_DEPTH
+    with _LOCK:
+        _DEFER_DEPTH = max(0, _DEFER_DEPTH - 1)
+        depth = _DEFER_DEPTH
+    logger.info("vault-cache defer_vault_written end depth=%s flush=%s", depth, flush)
+    if depth == 0 and flush:
+        flush_deferred_vault_written()
+
+
+def flush_deferred_vault_written() -> int:
+    """Apply all deferred ``mark_vault_written`` calls (does not rebuild)."""
+
+    with _LOCK:
+        pending = set(_DEFERRED_WRITTEN)
+        _DEFERRED_WRITTEN.clear()
+        for key in pending:
+            _DIRTY.add(key)
+    if pending:
+        logger.info("vault-cache flush_deferred count=%s", len(pending))
+    return len(pending)
+
+
 def mark_vault_written(vault: Path | str) -> None:
     """Next ``build_or_load`` for this vault must refresh (fingerprint + incremental)."""
 
     key = _vault_key(vault)
     with _LOCK:
+        if _DEFER_DEPTH > 0:
+            _DEFERRED_WRITTEN.add(key)
+            logger.info("vault-cache mark_written deferred vault=%s", key)
+            return
         _DIRTY.add(key)
     logger.info("vault-cache mark_written vault=%s", key)
+
+
+def rebuild_vault_cache_after_writes(
+    vault: Path | str,
+    *,
+    tier: int = 1,
+    progress_every: int = 5000,
+) -> VaultScanCache:
+    """Flush deferred invalidations and run one incremental cache rebuild."""
+
+    flush_deferred_vault_written()
+    started = time.monotonic()
+    logger.info("vault-cache maintain rebuild start vault=%s tier=%s", _vault_key(vault), tier)
+    cache = VaultScanCache.build_or_load(
+        Path(vault),
+        tier=tier,
+        progress_every=progress_every,
+    )
+    logger.info(
+        "vault-cache maintain rebuild done vault=%s notes=%s elapsed=%.1fs",
+        _vault_key(vault),
+        cache.note_count(),
+        time.monotonic() - started,
+    )
+    return cache
 
 
 def clear_process_cache() -> None:
     with _LOCK:
         _CACHES.clear()
         _DIRTY.clear()
+        _DEFERRED_WRITTEN.clear()
 
 
 def process_reuse_installed() -> bool:
@@ -99,11 +174,12 @@ def install_process_reuse() -> None:
 def uninstall_process_reuse() -> None:
     """Restore stock ``build_or_load``. Used by unit tests."""
 
-    global _INSTALLED
+    global _INSTALLED, _DEFER_DEPTH
     if not _INSTALLED:
         return
     VaultScanCache.build_or_load = _ORIG_BUILD  # type: ignore[method-assign]
     _INSTALLED = False
+    _DEFER_DEPTH = 0
     clear_process_cache()
     logger.info("vault-cache process reuse uninstalled")
 
