@@ -75,6 +75,17 @@ The production vault lives on a LUKS-encrypted volume at `/srv/hfa-secure`.
 - Maintenance: `make ppa-maintain-status`
 - Full verification: `bash archive_scripts/ppa-verify-v2.sh`
 
+## Serving index
+
+MCP/CLI query `<vault>/_meta/rust-search-index`, published by `ppa maintain` / `rebuild-indexes`. Postgres FTS/pgvector is not a production fallback.
+
+```bash
+ppa serving-index-status
+ppa serving-index-verify
+```
+
+Restart `ppa-mcp` after publish or a crate rebuild. Seed benches and the cutover contract: [serving-index-cutover.md](../reports/serving-index-cutover.md).
+
 ## Latency Targets
 
 | Query Type                   | Target |

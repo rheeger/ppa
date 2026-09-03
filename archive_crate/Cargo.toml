@@ -26,6 +26,10 @@ chrono = { version = "0.4", default-features = false, features = ["std", "alloc"
 chrono-tz = "0.10"
 jiff = "0.2"
 bytecount = "0.6"
+tantivy = "0.22"
+memmap2 = "0.9"
+# tantivy 0.22 pulls `time`; 0.3.55+ needs rustc 1.88. Pin for CI rustc 1.85.
+time = "=0.3.41"
 
 [build-dependencies]
 pyo3-build-config = "0.22"

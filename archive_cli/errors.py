@@ -21,6 +21,13 @@ class IndexUnavailableError(PpaError):
     """Index or store could not be constructed (e.g. missing DSN, DB error)."""
 
 
+class ServingIndexUnavailableError(PpaError):
+    """Rust serving index is missing, corrupt, or format-mismatched."""
+
+    def __init__(self, message: str = "serving_index_unavailable"):
+        super().__init__(message)
+
+
 class EmbeddingError(PpaError):
     """Embedding provider or vector operation failed."""
 

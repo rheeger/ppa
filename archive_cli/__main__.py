@@ -187,6 +187,8 @@ def main() -> None:
     rebuild_parser.add_argument("--force-full-rebuild", action="store_true")
     rebuild_parser.add_argument("--disable-manifest-cache", action="store_true")
     subparsers.add_parser("index-status")
+    subparsers.add_parser("serving-index-status", help="Admin: serving-index ACTIVE generation and DIRTY")
+    subparsers.add_parser("serving-index-verify", help="Admin: open ACTIVE and run a sample search")
     subparsers.add_parser("projection-inventory")
     subparsers.add_parser("projection-status")
     projection_explain_parser = subparsers.add_parser("projection-explain")
@@ -2383,6 +2385,22 @@ def main() -> None:
             store = resolve_store()
             result = status_cmd.index_status(store=store, logger=_cli_log)
             _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
+        return
+    if args.command == "serving-index-status":
+        try:
+            store = resolve_store()
+            result = admin_cmd.serving_index_status(store=store, logger=_cli_log)
+            _print_json(result)
+        except PpaError as exc:
+            print(str(exc))
+        return
+    if args.command == "serving-index-verify":
+        try:
+            store = resolve_store()
+            result = admin_cmd.serving_index_verify(store=store, logger=_cli_log)
+            _print_json(result)
         except PpaError as exc:
             print(str(exc))
         return

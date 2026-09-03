@@ -93,6 +93,8 @@ This is where PPA deliberately differs from naive semantic search. Similarity is
 
 ### Retrieval
 
+MCP and CLI query the Rust serving index (`<vault>/_meta/rust-search-index`), not live Postgres FTS/pgvector. Vault Markdown stays canonical for `read`. Postgres is the derived warehouse. `ppa maintain` / `rebuild-indexes` publish `ACTIVE`; see [serving-index cutover](archive_docs/reports/serving-index-cutover.md).
+
 PPA supports several retrieval paths over the same archive:
 
 - `archive_read` and `archive_read_many` for canonical evidence
@@ -121,16 +123,16 @@ Full rebuilds remain available as a reset button, but the normal operating model
 
 ### Performance And Correctness
 
-PPA includes a Rust performance layer, `archive_crate`, for high-volume vault and index work. It accelerates vault walking, scan-cache building, manifest scanning, validation, row materialization, chunk construction, and batch operations while keeping adapters, enrichment, orchestration, and MCP in Python.
+PPA includes a Rust performance layer, `archive_crate`, for high-volume vault and index work. It accelerates vault walking, scan-cache building, manifest scanning, validation, row materialization, chunk construction, batch operations, and the serving-index query path (Tantivy + IVF mmap). Adapters, enrichment, orchestration, and MCP stay in Python.
 
-Correctness is treated as a product feature. Health checks validate vault structure, migrations, embeddings, graph behavior, and known query/answer pairs. Rebuild and linker workflows are covered by regression tests, and the Python engine remains available as a fallback via `PPA_ENGINE=python`.
+Correctness is treated as a product feature. Health checks validate vault structure, migrations, embeddings, graph behavior, and known query/answer pairs. Rebuild and linker workflows are covered by regression tests. `PPA_ENGINE=python` is the legacy fallback for scan/cache/materialize only — it does not select a query engine.
 
 ## Architecture
 
 ```text
 Sources and exports
   -> canonical Markdown vault
-  -> Postgres + pgvector index
+  -> Postgres warehouse (derived) + Rust serving index (query)
   -> CLI and MCP tools
   -> humans, editors, agents, assistants
 ```

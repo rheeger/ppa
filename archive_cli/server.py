@@ -34,7 +34,7 @@ from .commands import search as search_cmd
 from .commands import seed_links as seed_cmd
 from .commands import status as status_cmd
 from .commands._resolve import resolve_index, resolve_store
-from .errors import InvalidInputError, PpaError, SeedLinksDisabledError
+from .errors import InvalidInputError, PpaError, SeedLinksDisabledError, ServingIndexUnavailableError
 from .index_config import get_seed_links_enabled
 from .index_store import get_default_embedding_model, get_default_embedding_version
 from .mcp_instructions import TOOL_DESCRIPTIONS, build_server_instructions
@@ -157,6 +157,8 @@ def _tool_profile_error(tool_name: str) -> str | None:
 
 def _ppa_err(tool: str, exc: BaseException) -> str:
     _log.error("tool=%s ppa_error=%s", tool, str(exc))
+    if isinstance(exc, ServingIndexUnavailableError):
+        return json.dumps({"error": "serving_index_unavailable", "tool": tool})
     return str(exc)
 
 
@@ -557,15 +559,15 @@ def archive_rebuild_indexes() -> str:
         return profile_error
     t0 = _log_tool_call("archive_rebuild_indexes")
     try:
-        index = resolve_index()
-        counts = index.rebuild()
+        store = resolve_store()
+        counts = admin.rebuild_indexes(store=store, logger=_log)
         _log_tool_done(
             "archive_rebuild_indexes",
             t0,
             cards=counts.get("cards"),
             chunks=counts.get("chunks"),
         )
-        return fmt.format_rebuild_indexes(index.location, counts)
+        return fmt.format_rebuild_indexes(store.index.location, counts)
     except PpaError as exc:
         return _ppa_err("archive_rebuild_indexes", exc)
 

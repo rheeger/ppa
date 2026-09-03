@@ -13,7 +13,7 @@ mod pyutil;
 mod quality;
 mod registry;
 mod text_hash;
-mod time_parse;
+pub(crate) mod time_parse;
 
 pub use batch::{materialize_all_rows, materialize_row_batch};
 pub use copy_buffer::CopyBuffer;
