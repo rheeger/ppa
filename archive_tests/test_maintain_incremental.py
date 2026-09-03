@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from archive_cli.seed_links import SeedLinkCatalog, build_seed_link_catalog, run_seed_link_backfill
+from archive_cli.seed_links import expand_catalog_neighbor_closure
 from archive_sync.source_updaters.constants import RUN_STATUS_FAILED, RUN_STATUS_SUCCESS
 from archive_sync.source_updaters.runner import run_source_updaters
 from archive_sync.transient_retry import is_transient_error
@@ -16,6 +17,164 @@ from archive_sync.transient_retry import is_transient_error
 def test_is_transient_error_broken_pipe() -> None:
     assert is_transient_error(BrokenPipeError(32, "Broken pipe"))
     assert is_transient_error(OSError("deadlock detected"))
+
+
+def test_build_seed_link_catalog_scoped_does_not_enumerate_all_notes(monkeypatch, tmp_path: Path) -> None:
+    cache = MagicMock()
+    cache.all_frontmatters.return_value = [("People/a.md", {"uid": "uid-all"})] * 999
+    cache.frontmatter_rows_for_uids.return_value = [
+        {
+            "uid": "uid-a",
+            "rel_path": "Email/2026/a.md",
+            "frontmatter": {"uid": "uid-a", "type": "email_message", "slug": "a"},
+        }
+    ]
+    cache.rel_path_to_uid.return_value = {"Email/2026/a.md": "uid-a"}
+    cache.rel_paths_by_type.return_value = {"person": []}
+
+    monkeypatch.setattr(
+        "archive_cli.seed_links.expand_catalog_neighbor_closure",
+        lambda _cache, uids, **kwargs: set(uids),
+    )
+    monkeypatch.setattr(
+        "archive_cli.seed_links._sketch_from_frontmatter",
+        lambda **kwargs: MagicMock(
+            uid="uid-a",
+            rel_path=kwargs["rel_path"],
+            slug="a",
+            card_type="email_message",
+            summary="A",
+            frontmatter=kwargs["frontmatter"],
+            body="",
+            content_hash="hash",
+            activity_at="",
+            wikilinks=[],
+            emails=set(),
+        ),
+    )
+
+    build_seed_link_catalog("/tmp/vault", cache=cache, catalog_uids={"uid-a"})
+    cache.all_frontmatters.assert_not_called()
+    cache.frontmatter_rows_for_uids.assert_called()
+
+
+def test_expand_catalog_neighbor_closure_adds_wikilink_neighbor() -> None:
+    cache = MagicMock()
+    cache.frontmatter_rows_for_uids.side_effect = [
+        [
+            {
+                "uid": "uid-a",
+                "rel_path": "Email/2026/a.md",
+                "frontmatter": {"uid": "uid-a", "type": "email_message", "people": ["[[person-b]]"]},
+            }
+        ],
+        [],
+    ]
+    cache.rel_path_to_uid.return_value = {
+        "Email/2026/a.md": "uid-a",
+        "People/b.md": "uid-b",
+    }
+    cache.wikilinks_for_rel_path.return_value = ["person-b"]
+    cache.rel_path_for_slug.return_value = "People/b.md"
+    cache.rel_paths_by_type.return_value = {"person": []}
+
+    expanded = expand_catalog_neighbor_closure(cache, {"uid-a"})
+    assert expanded == {"uid-a", "uid-b"}
+
+
+def test_run_source_updaters_defers_vault_cache_invalidation(monkeypatch, tmp_path: Path) -> None:
+    from archive_sync.source_updaters import runner as sur
+
+    events: list[str] = []
+
+    monkeypatch.setattr(
+        "archive_cli.vault_cache_runtime.begin_defer_vault_written",
+        lambda: events.append("begin"),
+    )
+    monkeypatch.setattr(
+        "archive_cli.vault_cache_runtime.end_defer_vault_written",
+        lambda **kwargs: events.append("end"),
+    )
+
+    def _fake_run(**kwargs):
+        from archive_sync.source_updaters.batch import SourceUpdaterRunReport
+
+        rep = SourceUpdaterRunReport(
+            run_id="r1",
+            source_key=kwargs["source_key"],
+            source_type="test",
+            archive_instance="inst",
+            status=RUN_STATUS_SUCCESS,
+        )
+        return sur.SourceUpdaterRunResult(report=rep, exit_hint=0)
+
+    monkeypatch.setattr(sur, "run_source_updater", _fake_run)
+
+    multi = run_source_updaters(
+        source_keys=["good:local", "good2:local"],
+        vault_path=tmp_path,
+        apply=True,
+        defer_vault_cache_invalidation=True,
+    )
+    assert multi.exit_code == 0
+    assert events == ["begin", "end"]
+
+
+def test_calendar_adapter_skips_person_index(tmp_path: Path, monkeypatch) -> None:
+    from archive_sync.adapters.calendar_events import CalendarEventsAdapter
+
+    adapter = CalendarEventsAdapter()
+    assert adapter.enable_person_resolution is False
+    assert adapter.should_enable_person_resolution() is False
+
+    built = {"n": 0}
+
+    def _boom(*_a, **_k):
+        built["n"] += 1
+        raise AssertionError("PersonIndex should not be built for calendar ingest")
+
+    monkeypatch.setattr("archive_vault.identity_resolver.PersonIndex", _boom)
+    adapter.fetch = lambda vault_path, cursor, config=None, **kwargs: []  # type: ignore[method-assign]
+    result = adapter.ingest(str(tmp_path), account_email="me@example.com", dry_run=True)
+    assert built["n"] == 0
+    assert result.created == 0
+
+
+def test_person_index_load_uses_people_cache_slice(tmp_path: Path, monkeypatch) -> None:
+    from archive_vault.identity_resolver import PersonIndex
+
+    calls = {"iter_notes": 0, "cache": 0}
+
+    def _fake_cache_rows(_vault):
+        calls["cache"] += 1
+        return [
+            {
+                "rel_path": "People/alice.md",
+                "frontmatter": {
+                    "uid": "hfa-person-alice",
+                    "type": "person",
+                    "source": ["test"],
+                    "source_id": "alice@example.com",
+                    "created": "2026-01-01",
+                    "updated": "2026-01-01",
+                    "summary": "Alice Example",
+                    "first_name": "Alice",
+                    "last_name": "Example",
+                },
+            }
+        ]
+
+    monkeypatch.setattr(PersonIndex, "_load_people_rows_from_cache", _fake_cache_rows)
+
+    def _iter_notes_should_not_run(*_a, **_k):
+        calls["iter_notes"] += 1
+        yield from []
+
+    monkeypatch.setattr("archive_vault.identity_resolver.iter_notes", _iter_notes_should_not_run)
+    idx = PersonIndex(tmp_path, preload=True)
+    assert calls["cache"] == 1
+    assert calls["iter_notes"] == 0
+    assert len(idx.records) == 1
 
 
 def test_build_seed_link_catalog_reuse_existing() -> None:

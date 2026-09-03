@@ -377,6 +377,34 @@ class SourceUpdaterMultiRunResult:
         }
 
 
+def _shared_person_ingest_kwargs(
+    vault_path: str | Path,
+    adapter: BaseAdapter,
+    shared: dict[str, Any],
+    *,
+    ingest_kwargs: dict[str, Any],
+) -> dict[str, Any]:
+    """Reuse one maintain-scoped PersonIndex for adapters that need people."""
+
+    if not adapter.should_enable_person_resolution(**ingest_kwargs):
+        return ingest_kwargs
+    if shared.get("people_index") is None:
+        from archive_vault.identity import IdentityCache
+        from archive_vault.identity_resolver import PersonIndex
+
+        logger.info("maintain shared person index build start vault=%s", vault_path)
+        shared["people_index"] = PersonIndex(str(vault_path), progress_every=5000)
+        shared["identity_cache"] = IdentityCache(Path(vault_path))
+        logger.info(
+            "maintain shared person index build done records=%s",
+            len(shared["people_index"].records),
+        )
+    out = dict(ingest_kwargs)
+    out["shared_people_index"] = shared["people_index"]
+    out["shared_identity_cache"] = shared["identity_cache"]
+    return out
+
+
 def run_source_updater(
     *,
     source_key: str,
@@ -394,6 +422,7 @@ def run_source_updater(
     catch_up: bool = False,
     stage_dir: str | None = None,
     strict: bool = False,
+    shared_person_context: dict[str, Any] | None = None,
 ) -> SourceUpdaterRunResult:
     """Run one source updater. Dry-run by default; ``apply`` persists and advances cursor."""
 
@@ -433,6 +462,12 @@ def run_source_updater(
     # vault presence for the gate uses the vault-scan cache, not a full markdown
     # walk. Catch-up must not disable the gate either — including uncapped runs.
     apply_max_items_kwarg(decl.adapter_source_id, ingest_kwargs, max_items)
+    ingest_kwargs = _shared_person_ingest_kwargs(
+        vault,
+        adapter_obj,
+        shared_person_context if shared_person_context is not None else {},
+        ingest_kwargs=ingest_kwargs,
+    )
 
     cursor_key = adapter_obj.get_cursor_key(**ingest_kwargs)
     cursor_before = dict(load_sync_state(vault).get(cursor_key, {}) or {})
@@ -604,12 +639,20 @@ def run_source_updaters(
     catch_up: bool = False,
     stage_dir: str | None = None,
     strict: bool = False,
+    defer_vault_cache_invalidation: bool = True,
 ) -> SourceUpdaterMultiRunResult:
     """Run multiple sources with failure isolation."""
 
     multi = SourceUpdaterMultiRunResult()
     worst = 0
     ok_statuses = {RUN_STATUS_SUCCESS, RUN_STATUS_PARTIAL}
+    shared_person: dict[str, Any] = {}
+    defer_ctx = None
+    if defer_vault_cache_invalidation and apply:
+        from archive_cli.vault_cache_runtime import begin_defer_vault_written
+
+        begin_defer_vault_written()
+        defer_ctx = True
     logger.info(
         "source updaters run start count=%d apply=%s max_items=%s sources=%s",
         len(source_keys),
@@ -639,6 +682,7 @@ def run_source_updaters(
             catch_up=catch_up,
             stage_dir=stage_dir,
             strict=strict,
+            shared_person_context=shared_person,
         )
         multi.reports.append(one.report)
         if one.exit_hint > worst:
@@ -661,6 +705,10 @@ def run_source_updaters(
         )
     else:
         multi.exit_code = worst
+    if defer_ctx:
+        from archive_cli.vault_cache_runtime import end_defer_vault_written
+
+        end_defer_vault_written(flush=False)
     logger.info(
         "source updaters run done count=%d exit_code=%s completion=%s statuses=%s",
         len(multi.reports),

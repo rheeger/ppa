@@ -517,6 +517,13 @@ def run_maintenance(
             report.source_updater_runs = count
             report.source_updater_reports = payloads
             report.source_updater_partial = partial
+            if apply and not dry_run:
+                try:
+                    from archive_cli.vault_cache_runtime import rebuild_vault_cache_after_writes
+
+                    rebuild_vault_cache_after_writes(store.vault, tier=1, progress_every=5000)
+                except Exception:
+                    logger.exception("maintain_vault_cache_rebuild_after_updaters_failed")
             if partial and not source_updater_strict:
                 report.skipped_steps.append("source_updater_hard_fail (partial success; use --strict to fail)")
             elif not apply:
