@@ -443,6 +443,9 @@ def live_archive(
     monkeypatch.setenv("PPA_INDEX_DSN", pgvector_dsn)
     monkeypatch.setenv("PPA_INDEX_SCHEMA", schema_name)
     monkeypatch.setenv("PPA_VECTOR_DIMENSION", "8")
+    monkeypatch.setenv("PPA_EMBEDDING_MODEL", "fixture-semantic-v1")
+    monkeypatch.setenv("PPA_EMBEDDING_VERSION", "1")
+    monkeypatch.setenv("PPA_SERVING_INDEX_PATH", str(vault / "_meta" / "rust-search-index"))
 
     index = PostgresArchiveIndex(vault, dsn=pgvector_dsn)
     index.schema = schema_name
@@ -777,6 +780,13 @@ def test_live_postgres_vector_search_groups_to_card_level_and_supports_filters(
     embed_result = archive_embed_pending(limit=50, embedding_model=provider.model, embedding_version=1)
     assert "- embedded:" in embed_result
     assert "- failed: 0" in embed_result
+    from archive_cli.serving_index import publish_serving_index
+    from archive_cli.store import DefaultArchiveStore
+    from archive_cli import serving_index as si
+
+    si._HANDLE = None
+    published = publish_serving_index(DefaultArchiveStore(vault=_vault, index=index))
+    assert published.get("ok"), published
 
     vector_result = archive_vector_search(
         "donor support at Endaoment",
@@ -838,6 +848,13 @@ def test_live_postgres_hybrid_search_prefers_exact_anchor_and_boosts_graph_neigh
     _vault, index, provider = live_archive
     index.rebuild()
     index.embed_pending(provider=provider, embedding_model=provider.model, embedding_version=1, limit=50)
+    from archive_cli.serving_index import publish_serving_index
+    from archive_cli.store import DefaultArchiveStore
+    from archive_cli import serving_index as si
+
+    si._HANDLE = None
+    published = publish_serving_index(DefaultArchiveStore(vault=_vault, index=index))
+    assert published.get("ok"), published
 
     hybrid_rows = index.hybrid_search(
         query="jane@example.com",

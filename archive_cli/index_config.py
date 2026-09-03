@@ -293,6 +293,38 @@ def get_seed_links_enabled() -> bool:
     return _ppa_env_bool("PPA_SEED_LINKS_ENABLED")
 
 
+def get_serving_index_path(vault: Path | None = None) -> Path:
+    raw = _ppa_env("PPA_SERVING_INDEX_PATH")
+    if raw:
+        return Path(raw)
+    root = Path(vault) if vault is not None else Path(_ppa_env("PPA_PATH", default="."))
+    return root / "_meta" / "rust-search-index"
+
+
+def get_serving_index_max_rss_mb() -> int:
+    return max(_ppa_env_int("PPA_SERVING_INDEX_MAX_RSS_MB", default=8192), 256)
+
+
+def get_query_embed_cache_path(vault: Path | None = None) -> Path:
+    raw = _ppa_env("PPA_QUERY_EMBED_CACHE_PATH")
+    if raw:
+        return Path(raw)
+    root = Path(vault) if vault is not None else Path(_ppa_env("PPA_PATH", default="."))
+    return root / "_meta" / "query-embed-cache.sqlite"
+
+
+def get_query_embed_cache_ram_entries() -> int:
+    return max(_ppa_env_int("PPA_QUERY_EMBED_CACHE_RAM_ENTRIES", default=2048), 0)
+
+
+def get_query_embed_cache_max_rows() -> int:
+    return max(_ppa_env_int("PPA_QUERY_EMBED_CACHE_MAX_ROWS", default=50000), 1)
+
+
+def get_query_embed_cache_max_age_days() -> int:
+    return max(_ppa_env_int("PPA_QUERY_EMBED_CACHE_MAX_AGE_DAYS", default=30), 1)
+
+
 # ---------------------------------------------------------------------------
 # Dataclasses
 # ---------------------------------------------------------------------------

@@ -42,6 +42,18 @@ def rebuild_indexes(
     """Rebuild derived index tables; forwards kwargs to ``store.rebuild``."""
     logger.info("rebuild_indexes_start kwargs=%s", kwargs)
     result = store.rebuild(**kwargs)
+    try:
+        from archive_cli.index_store import PostgresArchiveIndex
+        from archive_cli.serving_index import publish_serving_index
+
+        if isinstance(getattr(store, "index", None), PostgresArchiveIndex):
+            published = publish_serving_index(store, logger=logger)
+            result = dict(result)
+            result["serving_index"] = published
+            if not published.get("ok"):
+                logger.error("serving_index_refresh_failed")
+    except Exception:
+        logger.exception("serving_index_refresh_failed")
     logger.info("rebuild_indexes_done")
     return result
 
@@ -60,6 +72,24 @@ def embed_pending(
         result.get("embedded"),
         result.get("failed"),
     )
+    return result
+
+
+def serving_index_status(*, store: DefaultArchiveStore, logger: logging.Logger) -> dict[str, Any]:
+    from archive_cli.serving_index import serving_index_status as _status
+
+    logger.info("serving_index_status_start")
+    result = _status(store.vault)
+    logger.info("serving_index_status_done generation=%s", result.get("serving_index_generation"))
+    return result
+
+
+def serving_index_verify(*, store: DefaultArchiveStore, logger: logging.Logger) -> dict[str, Any]:
+    from archive_cli.serving_index import verify_serving_index
+
+    logger.info("serving_index_verify_start")
+    result = verify_serving_index(store.vault)
+    logger.info("serving_index_verify_done generation=%s", result.get("generation"))
     return result
 
 

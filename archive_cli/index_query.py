@@ -1,4 +1,9 @@
-"""Query, search, and read methods mixin for PostgresArchiveIndex."""
+"""Query, search, and read methods mixin for PostgresArchiveIndex.
+
+After serving-index cutover this module is the **test oracle** only. MCP/CLI
+query tools go through ``DefaultArchiveStore`` → ``ServingIndexHandle``. Do not
+route production search/scan/kNN back into ``QueryMixin``.
+"""
 
 from __future__ import annotations
 
@@ -22,6 +27,7 @@ from .index_config import (
     _vector_literal,
     get_seed_links_enabled,
 )
+from .query_timing import QueryPhaseTimes, add_ms
 from .materializer import _normalize_exact_text, _normalize_slug
 from .projections.registry import PROJECTION_REGISTRY, TYPED_PROJECTIONS, projection_for_card_type
 
@@ -646,8 +652,11 @@ class QueryMixin:
             return [], []
         cap = max(candidate_limit, 1)
 
-        def _lexical_job() -> list[dict[str, Any]]:
-            return self._lexical_candidates(
+        phases = QueryPhaseTimes()
+
+        def _lexical_job() -> tuple[list[dict[str, Any]], float]:
+            started = time.monotonic()
+            rows = self._lexical_candidates(
                 query=cleaned,
                 type_filter=type_filter,
                 source_filter=source_filter,
@@ -656,10 +665,14 @@ class QueryMixin:
                 end_date=end_date,
                 limit=cap,
             )
+            return rows, (time.monotonic() - started) * 1000.0
 
-        def _vector_job() -> list[dict[str, Any]]:
+        def _vector_job() -> tuple[list[dict[str, Any]], float, float]:
+            t_conn = time.monotonic()
             with self._connect() as conn:
-                return self._aggregate_vector_candidates(
+                connect_ms = (time.monotonic() - t_conn) * 1000.0
+                t_sql = time.monotonic()
+                rows = self._aggregate_vector_candidates(
                     self._vector_candidate_rows(
                         conn,
                         query_vector=query_vector,
@@ -674,33 +687,37 @@ class QueryMixin:
                     ),
                     limit=cap,
                 )
+            return rows, connect_ms, (time.monotonic() - t_sql) * 1000.0
 
         # See archive_cli/log.py — stderr-only logging; never print to stdout in MCP mode.
         with ThreadPoolExecutor(max_workers=2) as pool:
             fut_lex = pool.submit(_lexical_job)
             fut_vec = pool.submit(_vector_job)
             try:
-                t_lex = time.monotonic()
-                lexical_rows = fut_lex.result()
+                lexical_rows, lexical_ms = fut_lex.result()
+                phases.lexical_sql_ms = round(lexical_ms, 3)
                 logger.info(
-                    "lexical_candidates done rows=%d elapsed_ms=%d",
+                    "lexical_candidates done rows=%d lexical_sql_ms=%.1f",
                     len(lexical_rows),
-                    int((time.monotonic() - t_lex) * 1000),
+                    phases.lexical_sql_ms,
                 )
             except Exception as exc:
                 logger.error("lexical retrieval failed: %r", exc)
                 raise
             try:
-                t_vec = time.monotonic()
-                vector_rows = fut_vec.result()
+                vector_rows, connect_ms, vector_ms = fut_vec.result()
+                phases.connect_ms = round(connect_ms, 3)
+                phases.vector_sql_ms = round(vector_ms, 3)
                 logger.info(
-                    "vector_candidates done rows=%d elapsed_ms=%d",
+                    "vector_candidates done rows=%d connect_ms=%.1f vector_sql_ms=%.1f",
                     len(vector_rows),
-                    int((time.monotonic() - t_vec) * 1000),
+                    phases.connect_ms,
+                    phases.vector_sql_ms,
                 )
             except Exception as exc:
                 logger.error("vector retrieval failed: %r", exc)
                 raise
+        self._last_hybrid_phase_times = phases
         return lexical_rows, vector_rows
 
     def fetch_graph_neighbors_for_uids(
@@ -712,8 +729,14 @@ class QueryMixin:
         if not anchor_uids:
             return {}
         self.ensure_ready()
+        t0 = time.monotonic()
         with self._connect() as conn:
-            return self._graph_neighbor_uids(conn, anchor_uids, edge_type_filter=edge_type_filter)
+            out = self._graph_neighbor_uids(conn, anchor_uids, edge_type_filter=edge_type_filter)
+        prev = getattr(self, "_last_hybrid_phase_times", None)
+        if isinstance(prev, QueryPhaseTimes):
+            add_ms(prev, "graph_sql_ms", t0)
+        logger.info("graph_neighbors done anchors=%d neighbors=%d graph_sql_ms=%.1f", len(anchor_uids), len(out), (time.monotonic() - t0) * 1000.0)
+        return out
 
     def hybrid_search(
         self,

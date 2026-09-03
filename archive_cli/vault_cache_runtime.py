@@ -88,6 +88,12 @@ def mark_vault_written(vault: Path | str) -> None:
             return
         _DIRTY.add(key)
     logger.info("vault-cache mark_written vault=%s", key)
+    try:
+        from archive_cli.serving_index import mark_serving_index_dirty
+
+        mark_serving_index_dirty(vault, "vault_written")
+    except Exception:
+        logger.debug("serving_index mark_dirty after vault_written failed", exc_info=True)
 
 
 def rebuild_vault_cache_after_writes(

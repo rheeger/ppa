@@ -19,6 +19,7 @@ mod person_index;
 mod progress;
 mod validator;
 mod scanner;
+mod serving_index;
 mod walk;
 
 #[pymodule]
@@ -61,5 +62,6 @@ fn archive_crate(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(validator::validate_vault_from_cache, m)?)?;
     m.add_class::<materializer::body::BodyCache>()?;
     m.add_class::<materializer::CopyBuffer>()?;
+    serving_index::register(m)?;
     Ok(())
 }

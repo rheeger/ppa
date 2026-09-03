@@ -21,6 +21,10 @@ def test_archive_crate_imports():
     assert hasattr(archive_crate, "build_person_index")
     assert hasattr(archive_crate, "PersonResolutionIndex")
     assert hasattr(archive_crate, "resolve_person_batch")
+    assert hasattr(archive_crate, "serving_index_open")
+    assert hasattr(archive_crate, "serving_index_build")
+    assert hasattr(archive_crate, "serving_index_publish")
+    assert hasattr(archive_crate, "serving_index_search")
 
 
 def test_walk_vault_returns_list(tmp_path):

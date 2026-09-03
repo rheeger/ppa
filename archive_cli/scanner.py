@@ -394,8 +394,28 @@ def _collect_canonical_rows(
         slug_map: dict[str, str] = {}
         duplicate_uid_count = 0
         duplicate_uid_groups: dict[str, list[CanonicalRow]] = {}
-        for index, rel_path in enumerate(rel_paths, start=1):
-            frontmatter = cache.frontmatter_for_rel_path(rel_path)
+        rust_items: list[dict[str, Any]] | None = None
+        try:
+            from archive_cli.ppa_engine import ppa_engine
+            from archive_cli.vault_cache import VaultScanCache as _VSC
+
+            cache_path = _VSC.cache_path_for_vault(vault)
+            if ppa_engine() == "rust" and cache_path.exists():
+                import archive_crate
+
+                rust_items = [dict(item) for item in (archive_crate.frontmatter_dicts_from_cache(str(cache_path)) or [])]
+        except Exception:
+            rust_items = None
+        iterable: list[tuple[str, dict[str, Any]]]
+        if rust_items is not None:
+            iterable = [
+                (str(item.get("rel_path") or ""), dict(item.get("frontmatter") or {}))
+                for item in rust_items
+                if item.get("rel_path")
+            ]
+        else:
+            iterable = [(rel_path, cache.frontmatter_for_rel_path(rel_path)) for rel_path in rel_paths]
+        for index, (rel_path, frontmatter) in enumerate(iterable, start=1):
             card = validate_card_permissive(frontmatter)
             row = CanonicalRow(rel_path=rel_path, frontmatter=frontmatter, card=card)
             uid = str(row.card.uid).strip()

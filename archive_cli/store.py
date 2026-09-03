@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any
 
@@ -12,8 +13,18 @@ from .contracts import ArchiveStore
 from .embedding_provider import get_embedding_provider
 from .explain import retrieval_explain_payload, retrieval_explain_payload_v2
 from .features import archive_context, build_context_json, build_context_text
-from .index_config import get_seed_links_enabled
-from .index_store import PostgresArchiveIndex, get_default_embedding_model, get_default_embedding_version
+from .index_config import (
+    get_default_embedding_model,
+    get_default_embedding_version,
+    get_query_embed_cache_path,
+    get_query_embed_cache_ram_entries,
+    get_seed_links_enabled,
+    get_vector_dimension,
+)
+from .errors import ServingIndexUnavailableError
+from .index_store import PostgresArchiveIndex
+from .query_embed_cache import QueryEmbedCache, QueryEmbedSpec
+from .query_timing import QueryPhaseTimes, add_ms, log_phase_times
 from .projections.registry import projection_for_card_type
 from .query_planner import build_query_plan, effective_filters_from_plan
 from .reranker import blend_rerank_scores, reranker_for_config
@@ -68,6 +79,24 @@ class DefaultArchiveStore(ArchiveStore):
         self.vault = Path(vault or self.config.vault_path)
         self.index = index or PostgresArchiveIndex(self.vault, dsn=self.config.index_dsn)
         self.provider_factory = provider_factory or get_embedding_provider
+        self._query_embed_cache = QueryEmbedCache(
+            get_query_embed_cache_path(self.vault),
+            ram_entries=get_query_embed_cache_ram_entries(),
+        )
+        self._last_phase_times: QueryPhaseTimes | None = None
+
+    def _is_warehouse_index(self) -> bool:
+        return isinstance(self.index, PostgresArchiveIndex)
+
+    def _serving(self):
+        from .serving_index import get_serving_handle
+
+        return get_serving_handle(self.vault)
+
+    def _try_serving_query(self):
+        if not self._is_warehouse_index():
+            return None
+        return self._serving()
 
     def bootstrap(self) -> dict[str, Any]:
         return self.index.bootstrap()
@@ -85,7 +114,19 @@ class DefaultArchiveStore(ArchiveStore):
             "uid_allowlist",
         }
         filtered = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
-        return self.index.rebuild_with_metrics(**filtered).counts
+        metrics_fn = getattr(self.index, "rebuild_with_metrics", None)
+        if callable(metrics_fn):
+            counts = metrics_fn(**filtered).counts
+        else:
+            counts = self.index.rebuild()
+        if self._is_warehouse_index():
+            try:
+                from .serving_index import mark_serving_index_dirty
+
+                mark_serving_index_dirty(self.vault, "rebuild")
+            except Exception:
+                pass
+        return counts
 
     def status(self) -> dict[str, Any]:
         payload = self.index.status()
@@ -101,6 +142,16 @@ class DefaultArchiveStore(ArchiveStore):
         payload["runtime_mode"] = str(self.config.runtime.get("mode", "stdio"))
         payload["retrieval"] = dict(self.config.retrieval)
         payload["local_model_runtime"] = dict(self.config.runtime.get("local_model_runtime") or {})
+        try:
+            from .serving_index import serving_index_status
+
+            payload.update(serving_index_status(self.vault))
+        except Exception:
+            payload.setdefault("serving_index_generation", "")
+            payload.setdefault("serving_index_dirty_records", 0)
+        payload["query_embed_cache_rows"] = self._query_embed_cache.stats().get("rows", 0)
+        payload["query_embed_cache_hits"] = self._query_embed_cache.stats().get("hits", 0)
+        payload["query_embed_cache_misses"] = self._query_embed_cache.stats().get("misses", 0)
         return payload
 
     def read(self, path_or_uid: str) -> dict[str, Any]:
@@ -111,7 +162,14 @@ class DefaultArchiveStore(ArchiveStore):
                 "content": path.read_text(encoding="utf-8") if path.exists() else "",
                 "found": path.exists(),
             }
-        rel_path = self.index.read_path_for_uid(path_or_uid)
+        rel_path = None
+        if self._is_warehouse_index():
+            try:
+                rel_path = self._serving().read_path(path_or_uid)
+            except ServingIndexUnavailableError:
+                rel_path = None
+        if not rel_path:
+            rel_path = self.index.read_path_for_uid(path_or_uid)
         if rel_path is None:
             return {"path_or_uid": path_or_uid, "content": "", "found": False}
         return {
@@ -139,6 +197,10 @@ class DefaultArchiveStore(ArchiveStore):
             "org_filter": org_filter,
             "limit": limit,
         }
+        serving = self._try_serving_query()
+        if serving is not None:
+            rows = serving.query(**kwargs, start_date=start_date, end_date=end_date)
+            return {"rows": rows}
         query_fn = self.index.query_cards
         # Date filters are additive; FakeIndex and older indexes may omit them.
         try:
@@ -148,9 +210,15 @@ class DefaultArchiveStore(ArchiveStore):
         return {"rows": rows}
 
     def search(self, query: str, *, limit: int = 20, **kwargs: Any) -> dict[str, Any]:
+        serving = self._try_serving_query()
+        if serving is not None:
+            return {"rows": serving.search(query, limit=limit, **kwargs)}
         return {"rows": self.index.search(query, limit=limit, **kwargs)}
 
     def card_stack_pointers(self, uids: list[str]) -> dict[str, dict[str, Any]]:
+        serving = self._try_serving_query()
+        if serving is not None:
+            return serving.pointers(uids)
         fn = getattr(self.index, "card_stack_pointers", None)
         if callable(fn):
             return fn(uids)
@@ -172,16 +240,28 @@ class DefaultArchiveStore(ArchiveStore):
 
         cap = clamp_evidence_limit(limit)
         cleaned = query.strip()
+        serving = self._try_serving_query()
         if cleaned:
-            rows = self.index.search(
-                cleaned,
-                limit=cap,
-                type_filter=type_filter,
-                source_filter=source_filter,
-                people_filter=people_filter,
-                start_date=start_date,
-                end_date=end_date,
-            )
+            if serving is not None:
+                rows = serving.search(
+                    cleaned,
+                    limit=cap,
+                    type_filter=type_filter,
+                    source_filter=source_filter,
+                    people_filter=people_filter,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+            else:
+                rows = self.index.search(
+                    cleaned,
+                    limit=cap,
+                    type_filter=type_filter,
+                    source_filter=source_filter,
+                    people_filter=people_filter,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
         else:
             result = self.query(
                 type_filter=type_filter,
@@ -199,9 +279,15 @@ class DefaultArchiveStore(ArchiveStore):
 
     def graph(self, note_path: str, *, hops: int = 2) -> dict[str, Any]:
         rel_path = note_path if note_path.endswith(".md") else f"{note_path}.md"
+        serving = self._try_serving_query()
+        if serving is not None:
+            return {"graph": serving.graph(rel_path, hops=hops), "rel_path": rel_path}
         return {"graph": self.index.graph(rel_path, hops=hops), "rel_path": rel_path}
 
     def timeline(self, *, start_date: str = "", end_date: str = "", limit: int = 20) -> dict[str, Any]:
+        serving = self._try_serving_query()
+        if serving is not None:
+            return {"rows": serving.timeline(start_date=start_date, end_date=end_date, limit=limit)}
         return {"rows": self.index.timeline(start_date=start_date, end_date=end_date, limit=limit)}
 
     def temporal_neighbors(
@@ -214,6 +300,16 @@ class DefaultArchiveStore(ArchiveStore):
         source_filter: str = "",
         people_filter: str = "",
     ) -> dict[str, Any]:
+        serving = self._try_serving_query()
+        if serving is not None:
+            return serving.temporal_neighbors(
+                timestamp,
+                direction=direction,
+                limit=limit,
+                type_filter=type_filter,
+                source_filter=source_filter,
+                people_filter=people_filter,
+            )
         return self.index.temporal_neighbors(
             timestamp,
             direction=direction,
@@ -232,11 +328,40 @@ class DefaultArchiveStore(ArchiveStore):
     ) -> dict[str, Any]:
         return self.index.knowledge_for_domain(domain, fallback_query=fallback_query, limit=limit)
 
+    def _embed_query(self, query: str, *, model: str, version: int, phases: QueryPhaseTimes) -> list[float]:
+        provider = self.provider_factory(model=model)
+        spec = QueryEmbedSpec(
+            model=model,
+            version=version,
+            provider=str(getattr(provider, "name", "unknown")),
+            dimension=int(getattr(provider, "dimension", 0) or get_vector_dimension()),
+        )
+        t0 = time.monotonic()
+        cached = self._query_embed_cache.get(query, spec)
+        if cached is not None:
+            phases.embed_cache_hit = True
+            add_ms(phases, "embed_ms", t0)
+            return cached
+        vector = provider.embed_texts([query.strip() or ""])[0]
+        spec = QueryEmbedSpec(model=spec.model, version=spec.version, provider=spec.provider, dimension=len(vector))
+        self._query_embed_cache.put(query, spec, vector)
+        phases.embed_cache_hit = False
+        add_ms(phases, "embed_ms", t0)
+        return vector
+
     def vector_search(self, query: str, **kwargs) -> dict[str, Any]:
+        t_total = time.monotonic()
+        phases = QueryPhaseTimes()
         model = kwargs.get("embedding_model", "") or get_default_embedding_model()
         version = kwargs.get("embedding_version", 0) or get_default_embedding_version()
-        provider = self.provider_factory(model=model)
-        query_vector = provider.embed_texts([query.strip() or ""])[0]
+        query_vector = self._embed_query(query, model=model, version=version, phases=phases)
+        serving = self._try_serving_query()
+        if serving is not None:
+            rows = serving.vector(query_vector, **kwargs)
+            add_ms(phases, "total_ms", t_total)
+            self._last_phase_times = phases
+            log_phase_times("vector_search", phases)
+            return {"rows": rows, "embedding_model": model, "embedding_version": version, "phase_times": phases.to_dict()}
         rows = self.index.vector_search(
             query_vector=query_vector,
             embedding_model=model,
@@ -365,10 +490,23 @@ class DefaultArchiveStore(ArchiveStore):
         }
 
     def hybrid_search(self, query: str, **kwargs) -> dict[str, Any]:
+        t_total = time.monotonic()
+        phases = QueryPhaseTimes()
         model = kwargs.get("embedding_model", "") or get_default_embedding_model()
         version = kwargs.get("embedding_version", 0) or get_default_embedding_version()
-        provider = self.provider_factory(model=model)
-        query_vector = provider.embed_texts([query.strip() or ""])[0]
+        query_vector = self._embed_query(query, model=model, version=version, phases=phases)
+        serving = self._try_serving_query()
+        if serving is not None:
+            rows = serving.hybrid(query, query_vector, **kwargs)
+            add_ms(phases, "total_ms", t_total)
+            self._last_phase_times = phases
+            log_phase_times("hybrid_search", phases)
+            return {
+                "rows": rows,
+                "embedding_model": model,
+                "embedding_version": version,
+                "phase_times": phases.to_dict(),
+            }
         rows, _trace = self._run_hybrid_retrieval(
             query=query,
             query_vector=query_vector,
@@ -382,7 +520,10 @@ class DefaultArchiveStore(ArchiveStore):
             graph_edge_type_filter=str(kwargs.get("graph_edge_type_filter", "")),
             limit=int(kwargs.get("limit", 20) or 20),
         )
-        return {"rows": rows, "embedding_model": model, "embedding_version": version}
+        add_ms(phases, "total_ms", t_total)
+        self._last_phase_times = phases
+        log_phase_times("hybrid_search", phases)
+        return {"rows": rows, "embedding_model": model, "embedding_version": version, "phase_times": phases.to_dict()}
 
     def embedding_status(self, *, embedding_model: str = "", embedding_version: int = 0) -> dict[str, Any]:
         model = embedding_model or get_default_embedding_model()
@@ -433,6 +574,13 @@ class DefaultArchiveStore(ArchiveStore):
         )
         if copy_result is not None:
             embed_result["copy_from_schema"] = copy_result
+        if self._is_warehouse_index():
+            try:
+                from .serving_index import mark_serving_index_dirty
+
+                mark_serving_index_dirty(self.vault, "embed_pending")
+            except Exception:
+                pass
         return embed_result
 
     def projection_inventory(self) -> dict[str, Any]:
@@ -516,11 +664,21 @@ class DefaultArchiveStore(ArchiveStore):
 
         model = kwargs.get("embedding_model", "") or get_default_embedding_model()
         version = kwargs.get("embedding_version", 0) or get_default_embedding_version()
-        provider = self.provider_factory(model=model)
-        query_vector = provider.embed_texts([query.strip() or ""])[0]
         limit = int(kwargs.get("limit", 20) or 20)
         trace: dict[str, Any] = {}
-        if mode == "vector":
+        if self._is_warehouse_index():
+            result = self.vector_search(query, **kwargs) if mode == "vector" else self.hybrid_search(query, **kwargs)
+            rows = list(result.get("rows") or [])
+            plan = build_query_plan(query, config=rc)
+            trace = {
+                "plan": plan,
+                "pipeline_meta": {"pipeline_version": PIPELINE_VERSION, "mode": mode, "engine": "serving_index"},
+                "subqueries": [query.strip()],
+                "reranker": {"enabled": False, "provider": "none"},
+            }
+        elif mode == "vector":
+            provider = self.provider_factory(model=model)
+            query_vector = provider.embed_texts([query.strip() or ""])[0]
             rows = self.index.vector_search(
                 query_vector=query_vector,
                 embedding_model=model,
@@ -540,6 +698,8 @@ class DefaultArchiveStore(ArchiveStore):
                 "reranker": {"enabled": False, "provider": "none"},
             }
         else:
+            provider = self.provider_factory(model=model)
+            query_vector = provider.embed_texts([query.strip() or ""])[0]
             rows, trace = self._run_hybrid_retrieval(
                 query=query,
                 query_vector=query_vector,
@@ -719,6 +879,16 @@ class DefaultArchiveStore(ArchiveStore):
         return sl["review_link_candidate"](self.index, **kwargs)
 
     def person(self, name: str) -> dict[str, Any]:
+        serving = self._try_serving_query()
+        if serving is not None:
+            hit = serving.person(name)
+            if hit:
+                rel_path = str(hit.get("rel_path") or "")
+                if rel_path:
+                    path = self.vault / rel_path
+                    if path.exists():
+                        return {"found": True, "content": path.read_text(encoding="utf-8"), "rel_path": rel_path}
+                return {"found": bool(hit.get("found")), "content": str(hit.get("content") or ""), **hit}
         rel_path = self.index.person_path(name)
         if rel_path:
             path = self.vault / rel_path

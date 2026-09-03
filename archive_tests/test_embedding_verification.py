@@ -448,6 +448,7 @@ def live_phase5_archive(
     monkeypatch.setenv("PPA_VECTOR_DIMENSION", "10")
     monkeypatch.setenv("PPA_EMBEDDING_MODEL", "fixture-phase5-v1")
     monkeypatch.setenv("PPA_EMBEDDING_VERSION", "1")
+    monkeypatch.setenv("PPA_SERVING_INDEX_PATH", str(vault / "_meta" / "rust-search-index"))
 
     index = PostgresArchiveIndex(vault, dsn=pgvector_dsn)
     index.schema = schema_name
@@ -503,6 +504,13 @@ class TestVectorSearchNewTypes:
         _vault, index, provider = live_phase5_archive
         archive_rebuild_indexes()
         archive_embed_pending(limit=0, embedding_model=provider.model, embedding_version=1)
+        from archive_cli.serving_index import publish_serving_index
+        from archive_cli.store import DefaultArchiveStore
+        from archive_cli import serving_index as si
+
+        si._HANDLE = None
+        published = publish_serving_index(DefaultArchiveStore(vault=_vault, index=index))
+        assert published.get("ok"), published
 
     def test_meal_order_findable_by_restaurant(self, live_phase5_archive):
         self._setup(live_phase5_archive)
@@ -541,6 +549,13 @@ class TestHybridSearchFusion:
         _vault, index, provider = live_phase5_archive
         archive_rebuild_indexes()
         archive_embed_pending(limit=0, embedding_model=provider.model, embedding_version=1)
+        from archive_cli.serving_index import publish_serving_index
+        from archive_cli.store import DefaultArchiveStore
+        from archive_cli import serving_index as si
+
+        si._HANDLE = None
+        published = publish_serving_index(DefaultArchiveStore(vault=_vault, index=index))
+        assert published.get("ok"), published
 
     def test_hybrid_includes_vector_scores(self, live_phase5_archive):
         self._setup(live_phase5_archive)
@@ -582,6 +597,13 @@ class TestManifestSemanticQueries:
         _vault, _index, provider = live_phase5_archive
         archive_rebuild_indexes()
         archive_embed_pending(limit=0, embedding_model=provider.model, embedding_version=1)
+        from archive_cli.serving_index import publish_serving_index
+        from archive_cli.store import DefaultArchiveStore
+        from archive_cli import serving_index as si
+
+        si._HANDLE = None
+        published = publish_serving_index(DefaultArchiveStore(vault=_vault, index=_index))
+        assert published.get("ok"), published
 
         for entry in self.active_queries:
             query = entry["query"]

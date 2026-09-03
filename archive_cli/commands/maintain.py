@@ -146,9 +146,72 @@ class MaintenanceReport:
     errors: list[dict[str, str]] = field(default_factory=list)
     skipped_steps: list[str] = field(default_factory=list)
     nothing_to_do: bool = False
+    serving_index: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {k: v for k, v in self.__dict__.items()}
+
+
+def _maybe_embed_pending(store: Any, report: MaintenanceReport, logger: logging.Logger, *, dry_run: bool) -> None:
+    if dry_run or not getattr(store, "embed_pending", None):
+        return
+    from archive_cli.index_store import PostgresArchiveIndex
+
+    if not isinstance(getattr(store, "index", None), PostgresArchiveIndex):
+        return
+    if int(report.cards_rebuilt or 0) <= 0 and report.nothing_to_do:
+        return
+    try:
+        report.serving_index.setdefault("embed_pending", store.embed_pending(limit=0))
+    except Exception as exc:
+        logger.exception("maintain_embed_pending_failed")
+        report.errors.append({"step": "embed_pending", "error": str(exc)})
+
+
+def _finish_maintain(
+    store: Any, report: MaintenanceReport, logger: logging.Logger, *, dry_run: bool
+) -> MaintenanceReport:
+    _maybe_embed_pending(store, report, logger, dry_run=dry_run)
+    _publish_serving_index(store, report, logger, dry_run=dry_run)
+    report.completed_at = datetime.now(timezone.utc).isoformat()
+    return report
+
+
+def _publish_serving_index(store: Any, report: MaintenanceReport, logger: logging.Logger, *, dry_run: bool) -> None:
+    """Sole publisher of ACTIVE. Failure leaves the last good generation in place."""
+    if dry_run:
+        report.skipped_steps.append("serving_index_publish (dry-run)")
+        return
+    from archive_cli.index_store import PostgresArchiveIndex
+    from archive_cli.serving_index import serving_index_status
+
+    if not isinstance(getattr(store, "index", None), PostgresArchiveIndex):
+        report.skipped_steps.append("serving_index_publish (no warehouse)")
+        return
+    status = serving_index_status(store.vault)
+    dirty = int(status.get("serving_index_dirty_records") or 0)
+    ready = bool(status.get("serving_index_ready"))
+    if report.nothing_to_do and ready and dirty <= 0 and int(report.cards_rebuilt or 0) <= 0:
+        report.skipped_steps.append("serving_index_publish (clean)")
+        report.serving_index = status
+        return
+    try:
+        from archive_cli.serving_index import publish_serving_index
+
+        result = publish_serving_index(store, logger=logger)
+        report.serving_index = result
+        if not result.get("ok"):
+            logger.error("serving_index_refresh_failed")
+            report.errors.append(
+                {
+                    "step": "serving_index_publish",
+                    "error": str(result.get("error") or "serving_index_refresh_failed"),
+                }
+            )
+    except Exception as exc:
+        logger.exception("serving_index_refresh_failed")
+        report.errors.append({"step": "serving_index_publish", "error": str(exc)})
+        report.serving_index = {"ok": False, "error": str(exc)}
 
 
 def _record_source_updater_snapshots(store: DefaultArchiveStore, schema: str) -> int:
@@ -640,14 +703,12 @@ def run_maintenance(
             except Exception as exc:
                 if _table_missing(exc):
                     report.skipped_steps.append("ingestion_log missing")
-                    report.completed_at = datetime.now(timezone.utc).isoformat()
-                    return report
+                    return _finish_maintain(store, report, logger, dry_run=dry_run)
                 raise
     except Exception as exc:
         logger.exception("maintain_tail_failed")
         report.errors.append({"step": "tail_ingestion_log", "error": str(exc)})
-        report.completed_at = datetime.now(timezone.utc).isoformat()
-        return report
+        return _finish_maintain(store, report, logger, dry_run=dry_run)
 
     if not new_rows:
         processors_applied = bool(run_processors) and bool(apply_processors) and not dry_run
@@ -665,8 +726,7 @@ def run_maintenance(
             and report.junk_attachments_purged == 0
             and report.file_duplicates_linked == 0
         )
-        report.completed_at = datetime.now(timezone.utc).isoformat()
-        return report
+        return _finish_maintain(store, report, logger, dry_run=dry_run)
 
     report.new_cards_ingested = len(new_rows)
     created_n = sum(1 for r in new_rows if r.get("action") == "created")
@@ -771,5 +831,4 @@ def run_maintenance(
         logger.exception("maintain_coverage_failed")
         report.errors.append({"step": "coverage_report", "error": str(exc)})
 
-    report.completed_at = datetime.now(timezone.utc).isoformat()
-    return report
+    return _finish_maintain(store, report, logger, dry_run=dry_run)

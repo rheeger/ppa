@@ -38,4 +38,5 @@ jobs:
             archive_tests/test_archive_crate_benchmark_tier1.py \
             archive_tests/test_archive_crate_materializer_chunker.py archive_tests/test_chunk_hash_parity.py \
             archive_tests/test_archive_crate_correctness.py \
-            archive_tests/test_ppa_engine_vault_cache.py -v
+            archive_tests/test_ppa_engine_vault_cache.py \
+            archive_tests/test_serving_index.py -v
