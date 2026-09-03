@@ -911,6 +911,8 @@ class BaseAdapter(ABC):
                 delta_people_index = PersonIndex(vault, preload=False)
                 _log(f"batch {batch.sequence} chunk {chunk_start}:{chunk_end} delta people index init done")
                 commit_started_at = perf_counter()
+                from archive_sync.cli_logging import log_ratio_progress
+
                 _log(
                     f"batch {batch.sequence} chunk {chunk_start}:{chunk_end} "
                     f"serial commit start: people={len(prepared_people)}"
@@ -920,6 +922,14 @@ class BaseAdapter(ABC):
                 ):
                     try:
                         action = _commit_person(prepared, resolve_hint, delta_people_index)
+                        log_ratio_progress(
+                            logger,
+                            f"adapter write progress source_id={self.source_id}",
+                            commit_index,
+                            len(prepared_people),
+                            commit_started_at,
+                            every=max(1, min(progress_every, 250)),
+                        )
                         _log(
                             f"batch {batch.sequence} chunk {chunk_start}:{chunk_end} "
                             f"commit {commit_index}/{len(prepared_people)} action={action} "

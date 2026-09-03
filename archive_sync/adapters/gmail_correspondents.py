@@ -960,14 +960,39 @@ class GmailCorrespondentsAdapter(BaseAdapter):
         email_root_exists = (Path(vault_path) / "Email").exists()
 
         if email_root_exists and not resuming:
-            local_counts, vault_scanned, vault_message_ids, vault_max_sent_at = self._vault_correspondent_state(
-                vault_path,
-                own,
-                account_emails=requested_account_filters or None,
-                log=_log,
-                progress_every=progress_every,
-            )
-            counts.update(local_counts)
+            cached_counts = cursor.get("correspondent_counts") or {}
+            vault_scanned_cached = int(cursor.get("vault_scanned_messages") or 0)
+            if (
+                not explicit_query
+                and list_mode == "incremental"
+                and cached_counts
+                and vault_scanned_cached > 0
+            ):
+                for email, row in cached_counts.items():
+                    key = str(email or "").strip().lower()
+                    if not key:
+                        continue
+                    counts[key]["name"] = str(row.get("name") or "")
+                    counts[key]["email"] = str(row.get("email") or key)
+                    counts[key]["count"] = int(row.get("count") or 0)
+                vault_scanned = vault_scanned_cached
+                vault_max_sent_at = str(cursor.get("vault_max_sent_at") or watermark or "")
+                _log(
+                    f"vault-local scan skipped source=cursor cached={len(counts)} "
+                    f"vault_scanned={vault_scanned}"
+                )
+            else:
+                local_counts, vault_scanned, vault_message_ids, vault_max_sent_at = self._vault_correspondent_state(
+                    vault_path,
+                    own,
+                    account_emails=requested_account_filters or None,
+                    log=_log,
+                    progress_every=progress_every,
+                )
+                counts.update(local_counts)
+                cursor["vault_scanned_messages"] = vault_scanned
+                if vault_max_sent_at:
+                    cursor["vault_max_sent_at"] = vault_max_sent_at
 
         if not account_email.strip() and email_root_exists:
             items = sorted(counts.values(), key=lambda x: (-x["count"], x["email"]))

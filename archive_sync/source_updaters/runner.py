@@ -393,6 +393,7 @@ def run_source_updater(
     max_items: int | None = None,
     catch_up: bool = False,
     stage_dir: str | None = None,
+    strict: bool = False,
 ) -> SourceUpdaterRunResult:
     """Run one source updater. Dry-run by default; ``apply`` persists and advances cursor."""
 
@@ -462,8 +463,15 @@ def run_source_updater(
         cursor_key,
     )
     ingest_started = time.perf_counter()
+    from archive_sync.transient_retry import call_with_transient_retry
+
     try:
-        result = adapter_obj.ingest(str(vault), dry_run=dry_run, **ingest_kwargs)
+        result = call_with_transient_retry(
+            lambda: adapter_obj.ingest(str(vault), dry_run=dry_run, **ingest_kwargs),
+            logger=logger,
+            label=f"source updater ingest source_key={decl.source_key}",
+            attempts=5,
+        )
     except Exception as exc:
         restore()
         elapsed = time.perf_counter() - ingest_started
@@ -595,11 +603,13 @@ def run_source_updaters(
     max_items: int | None = None,
     catch_up: bool = False,
     stage_dir: str | None = None,
+    strict: bool = False,
 ) -> SourceUpdaterMultiRunResult:
     """Run multiple sources with failure isolation."""
 
     multi = SourceUpdaterMultiRunResult()
     worst = 0
+    ok_statuses = {RUN_STATUS_SUCCESS, RUN_STATUS_PARTIAL}
     logger.info(
         "source updaters run start count=%d apply=%s max_items=%s sources=%s",
         len(source_keys),
@@ -628,6 +638,7 @@ def run_source_updaters(
             max_items=max_items,
             catch_up=catch_up,
             stage_dir=stage_dir,
+            strict=strict,
         )
         multi.reports.append(one.report)
         if one.exit_hint > worst:
@@ -638,11 +649,23 @@ def run_source_updaters(
                 worst = 2
             elif one.exit_hint == 1 and worst == 0:
                 worst = 1
-    multi.exit_code = worst
+    successes = sum(1 for report in multi.reports if report.status in ok_statuses)
+    failures = len(multi.reports) - successes
+    if worst == 1 and not strict and successes > 0:
+        multi.exit_code = 0
+        multi.completion_state = "partial"
+        logger.warning(
+            "source updaters partial success ok=%s failed=%s strict=false — continuing maintain",
+            successes,
+            failures,
+        )
+    else:
+        multi.exit_code = worst
     logger.info(
-        "source updaters run done count=%d exit_code=%s statuses=%s",
+        "source updaters run done count=%d exit_code=%s completion=%s statuses=%s",
         len(multi.reports),
-        worst,
+        multi.exit_code,
+        multi.completion_state,
         ",".join(f"{r.source_key}:{r.status}" for r in multi.reports),
     )
     return multi

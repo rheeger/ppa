@@ -1312,6 +1312,11 @@ def main() -> None:
         action="store_true",
         help="Opt-in for broad LLM processors during --run-processors",
     )
+    sub_maintain.add_argument(
+        "--strict",
+        action="store_true",
+        help="Fail maintain when any source updater fails (default: partial success continues processors)",
+    )
     deploy_parser = subparsers.add_parser("deploy", help="Phase 9 Arnold-side deployment sequence")
     deploy_parser.add_argument("--dry-run", action="store_true", help="Pre-flight only")
     deploy_parser.add_argument(
@@ -1391,8 +1396,13 @@ def main() -> None:
                 allow_full_embedding=getattr(args, "allow_full_embedding", False),
                 allow_all_linkers=getattr(args, "allow_all_linkers", False),
                 allow_broad_llm=getattr(args, "allow_broad_llm", False),
+                source_updater_strict=getattr(args, "strict", False),
             )
             _print_json(report.to_dict())
+            if report.source_updater_partial and not getattr(args, "strict", False):
+                _cli_log.warning(
+                    "maintain partial: source updater failures ignored; re-run with --strict to hard-fail"
+                )
         except PpaError as exc:
             _cli_fail(exc)
         return
