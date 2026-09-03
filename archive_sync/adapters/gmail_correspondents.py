@@ -994,9 +994,7 @@ class GmailCorrespondentsAdapter(BaseAdapter):
         own.update(a.lower() for a in own_map if "@" in a)
 
         baseline_state = _load_correspondent_state(cursor)
-        counts: dict[str, dict[str, Any]] = defaultdict(
-            lambda: {"name": "", "email": "", "count": 0, "last_seen": ""}
-        )
+        counts: dict[str, dict[str, Any]] = defaultdict(lambda: {"name": "", "email": "", "count": 0, "last_seen": ""})
         self._pending_correspondent_state = {}
         vault_message_ids: set[str] = set()
         vault_scanned = 0
@@ -1012,10 +1010,7 @@ class GmailCorrespondentsAdapter(BaseAdapter):
                     counts[email]["last_seen"] = str(row.get("last_seen") or "")
                 vault_scanned = int(cursor.get("vault_scanned_messages") or 0)
                 vault_max_sent_at = str(cursor.get("vault_max_sent_at") or watermark or "")
-                _log(
-                    f"correspondent state hydrate source=cursor cached={len(counts)} "
-                    f"vault_scanned={vault_scanned}"
-                )
+                _log(f"correspondent state hydrate source=cursor cached={len(counts)} vault_scanned={vault_scanned}")
             elif email_root_exists:
                 local_counts, vault_scanned, vault_message_ids, vault_max_sent_at = self._vault_correspondent_state(
                     vault_path,
@@ -1090,10 +1085,7 @@ class GmailCorrespondentsAdapter(BaseAdapter):
                     ) != str(base.get("last_seen") or ""):
                         dirty_items.append(item)
                 items = dirty_items
-                _log(
-                    f"emit dirty correspondents only changed={len(items)} "
-                    f"total_tracked={len(counts)}"
-                )
+                _log(f"emit dirty correspondents only changed={len(items)} total_tracked={len(counts)}")
             for item in items:
                 item["scanned_messages"] = scanned
                 item["next_page_token"] = next_token

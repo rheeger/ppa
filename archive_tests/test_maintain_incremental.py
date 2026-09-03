@@ -5,10 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
-
-from archive_cli.seed_links import SeedLinkCatalog, build_seed_link_catalog, run_seed_link_backfill
-from archive_cli.seed_links import expand_catalog_neighbor_closure
+from archive_cli.seed_links import (
+    SeedLinkCatalog,
+    build_seed_link_catalog,
+    expand_catalog_neighbor_closure,
+    run_seed_link_backfill,
+)
 from archive_sync.source_updaters.constants import RUN_STATUS_FAILED, RUN_STATUS_SUCCESS
 from archive_sync.source_updaters.runner import run_source_updaters
 from archive_sync.transient_retry import is_transient_error
@@ -301,7 +303,17 @@ def test_run_seed_link_backfill_builds_catalog_once(monkeypatch, tmp_path: Path)
 
     def _workers(*args, **kwargs):
         worker_calls.append(kwargs)
-        return {"workers": 1, "jobs_completed": 0, "jobs_failed": 0, "candidates": 0, "needs_review": 0, "auto_promoted": 0, "canonical_safe": 0, "llm_judged": 0, "module_metrics": {}}
+        return {
+            "workers": 1,
+            "jobs_completed": 0,
+            "jobs_failed": 0,
+            "candidates": 0,
+            "needs_review": 0,
+            "auto_promoted": 0,
+            "canonical_safe": 0,
+            "llm_judged": 0,
+            "module_metrics": {},
+        }
 
     def _promo(*args, **kwargs):
         promo_calls.append(kwargs)
@@ -329,8 +341,6 @@ def test_run_seed_link_backfill_builds_catalog_once(monkeypatch, tmp_path: Path)
 
 def test_run_source_updaters_partial_success_not_strict(monkeypatch, tmp_path: Path) -> None:
     from archive_sync.source_updaters import runner as sur
-
-    reports = []
 
     def _fake_run(**kwargs):
         key = kwargs["source_key"]

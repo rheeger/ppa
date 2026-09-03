@@ -12,8 +12,6 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
-logger = logging.getLogger("ppa.calendar")
-
 from archive_auth import account_name_from_email, build_google_cli_token_manager
 from archive_vault.identity import IdentityCache
 from archive_vault.schema import CalendarEventCard
@@ -22,6 +20,8 @@ from archive_vault.uid import generate_uid
 
 from .base import BaseAdapter, FetchedBatch, deterministic_provenance
 from .datetime_canon import to_utc_z_iso
+
+logger = logging.getLogger("ppa.calendar")
 
 EVENT_SOURCE = "calendar.event"
 

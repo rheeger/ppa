@@ -865,12 +865,12 @@ _EMAIL_SCALAR_FIELDS = ("from_email", "organizer_email", "account_email")
 
 def _emails_from_frontmatter(frontmatter: dict[str, Any]) -> set[str]:
     emails: set[str] = set()
-    for field in _EMAIL_SCALAR_FIELDS:
-        value = _clean_text(frontmatter.get(field, "")).lower()
+    for field_name in _EMAIL_SCALAR_FIELDS:
+        value = _clean_text(frontmatter.get(field_name, "")).lower()
         if value and "@" in value:
             emails.add(value)
-    for field in _EMAIL_LIST_FIELDS:
-        raw = frontmatter.get(field)
+    for field_name in _EMAIL_LIST_FIELDS:
+        raw = frontmatter.get(field_name)
         if isinstance(raw, list):
             for item in raw:
                 value = _clean_text(item).lower()
@@ -885,8 +885,8 @@ def _emails_from_frontmatter(frontmatter: dict[str, Any]) -> set[str]:
 
 def _uid_refs_from_frontmatter(frontmatter: dict[str, Any]) -> set[str]:
     refs: set[str] = set()
-    for field in _STRUCTURED_UID_FIELDS:
-        value = _clean_text(frontmatter.get(field, ""))
+    for field_name in _STRUCTURED_UID_FIELDS:
+        value = _clean_text(frontmatter.get(field_name, ""))
         if value:
             refs.add(value)
     for value in frontmatter.values():

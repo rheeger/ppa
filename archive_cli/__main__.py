@@ -1400,9 +1400,7 @@ def main() -> None:
             )
             _print_json(report.to_dict())
             if report.source_updater_partial and not getattr(args, "strict", False):
-                _cli_log.warning(
-                    "maintain partial: source updater failures ignored; re-run with --strict to hard-fail"
-                )
+                _cli_log.warning("maintain partial: source updater failures ignored; re-run with --strict to hard-fail")
         except PpaError as exc:
             _cli_fail(exc)
         return
