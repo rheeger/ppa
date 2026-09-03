@@ -390,6 +390,49 @@ def _managed_account_emails() -> set[str]:
     }
 
 
+def _normalize_correspondent_state_row(email: str, row: dict[str, Any]) -> dict[str, Any]:
+    key = str(email or row.get("email") or "").strip().lower()
+    return {
+        "name": str(row.get("name") or ""),
+        "email": key,
+        "count": int(row.get("count") or 0),
+        "last_seen": str(row.get("last_seen") or ""),
+    }
+
+
+def _load_correspondent_state(cursor: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    raw = cursor.get("correspondent_state") or {}
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for email, row in raw.items():
+        if not isinstance(row, dict):
+            continue
+        normalized = _normalize_correspondent_state_row(str(email), row)
+        if normalized["email"]:
+            out[normalized["email"]] = normalized
+    return out
+
+
+def _correspondent_state_payload(counts: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {
+        email: _normalize_correspondent_state_row(email, row)
+        for email, row in counts.items()
+        if str(email or "").strip()
+    }
+
+
+def _message_last_seen(msg: dict[str, Any]) -> str:
+    raw = msg.get("internalDate")
+    if raw in (None, ""):
+        return ""
+    try:
+        ts = int(raw) / 1000.0
+    except (TypeError, ValueError):
+        return ""
+    return datetime.fromtimestamp(ts, tz=timezone.utc).replace(microsecond=0).isoformat()
+
+
 class GmailCorrespondentsAdapter(BaseAdapter):
     source_id = "gmail-correspondents"
     preload_existing_uid_index = False
@@ -756,6 +799,8 @@ class GmailCorrespondentsAdapter(BaseAdapter):
         counts: dict[str, dict[str, Any]],
         pairs: list[tuple[str, str]],
         own: set[str],
+        *,
+        message_last_seen: str = "",
     ) -> None:
         per_message: dict[str, str] = {}
         for name, email in pairs:
@@ -775,6 +820,8 @@ class GmailCorrespondentsAdapter(BaseAdapter):
                 row["name"] = name
             row["email"] = email
             row["count"] += 1
+            if message_last_seen and message_last_seen > str(row.get("last_seen") or ""):
+                row["last_seen"] = message_last_seen
 
     def _email_rows_from_scan_cache(self, scan_cache) -> list[dict[str, Any]]:
         by_type, _rel_by_uid, uid_by_path, _uid_by_stem, frontmatter_by_uid = scan_cache.slice_lookup_tables()
@@ -919,14 +966,7 @@ class GmailCorrespondentsAdapter(BaseAdapter):
                 print(f"{self.source_id}: {message}", flush=True)
 
         def _counts_payload() -> dict[str, dict[str, Any]]:
-            return {
-                email: {
-                    "name": str(row.get("name") or ""),
-                    "email": str(row.get("email") or email),
-                    "count": int(row.get("count") or 0),
-                }
-                for email, row in counts.items()
-            }
+            return _correspondent_state_payload(counts)
 
         def _checkpoint(next_token: str | None, scanned_count: int) -> None:
             cursor["page_token"] = next_token
@@ -953,35 +993,30 @@ class GmailCorrespondentsAdapter(BaseAdapter):
         own_map = load_own_aliases(vault_path)
         own.update(a.lower() for a in own_map if "@" in a)
 
-        counts: dict[str, dict[str, Any]] = defaultdict(lambda: {"name": "", "email": "", "count": 0})
+        baseline_state = _load_correspondent_state(cursor)
+        counts: dict[str, dict[str, Any]] = defaultdict(
+            lambda: {"name": "", "email": "", "count": 0, "last_seen": ""}
+        )
+        self._pending_correspondent_state = {}
         vault_message_ids: set[str] = set()
         vault_scanned = 0
         vault_max_sent_at = ""
         email_root_exists = (Path(vault_path) / "Email").exists()
 
-        if email_root_exists and not resuming:
-            cached_counts = cursor.get("correspondent_counts") or {}
-            vault_scanned_cached = int(cursor.get("vault_scanned_messages") or 0)
-            if (
-                not explicit_query
-                and list_mode == "incremental"
-                and cached_counts
-                and vault_scanned_cached > 0
-            ):
-                for email, row in cached_counts.items():
-                    key = str(email or "").strip().lower()
-                    if not key:
-                        continue
-                    counts[key]["name"] = str(row.get("name") or "")
-                    counts[key]["email"] = str(row.get("email") or key)
-                    counts[key]["count"] = int(row.get("count") or 0)
-                vault_scanned = vault_scanned_cached
+        if not resuming:
+            if not explicit_query and list_mode == "incremental" and baseline_state:
+                for email, row in baseline_state.items():
+                    counts[email]["name"] = str(row.get("name") or "")
+                    counts[email]["email"] = str(row.get("email") or email)
+                    counts[email]["count"] = int(row.get("count") or 0)
+                    counts[email]["last_seen"] = str(row.get("last_seen") or "")
+                vault_scanned = int(cursor.get("vault_scanned_messages") or 0)
                 vault_max_sent_at = str(cursor.get("vault_max_sent_at") or watermark or "")
                 _log(
-                    f"vault-local scan skipped source=cursor cached={len(counts)} "
+                    f"correspondent state hydrate source=cursor cached={len(counts)} "
                     f"vault_scanned={vault_scanned}"
                 )
-            else:
+            elif email_root_exists:
                 local_counts, vault_scanned, vault_message_ids, vault_max_sent_at = self._vault_correspondent_state(
                     vault_path,
                     own,
@@ -1019,6 +1054,7 @@ class GmailCorrespondentsAdapter(BaseAdapter):
                 counts[key]["name"] = str(row.get("name") or "")
                 counts[key]["email"] = str(row.get("email") or key)
                 counts[key]["count"] = int(row.get("count") or 0)
+                counts[key]["last_seen"] = str(row.get("last_seen") or "")
 
         _log(
             f"api fetch start account={account_email or '-'} mode={list_mode} "
@@ -1034,13 +1070,35 @@ class GmailCorrespondentsAdapter(BaseAdapter):
 
         def _ingest_message(msg: dict[str, Any]) -> None:
             headers = msg.get("payload", {}).get("headers", [])
-            self._ingest_pairs(counts, _extract_addresses_from_headers(headers), own)
+            self._ingest_pairs(
+                counts,
+                _extract_addresses_from_headers(headers),
+                own,
+                message_last_seen=_message_last_seen(msg),
+            )
 
         def _finalize(next_token: str | None) -> list[dict[str, Any]]:
             items = sorted(counts.values(), key=lambda x: (-x["count"], x["email"]))
+            emit_dirty_only = next_token is None and bool(baseline_state) and list_mode != "full"
+            if emit_dirty_only:
+                dirty_items: list[dict[str, Any]] = []
+                for item in items:
+                    email = str(item.get("email") or "").strip().lower()
+                    base = baseline_state.get(email, {})
+                    if int(item.get("count") or 0) != int(base.get("count") or 0) or str(
+                        item.get("last_seen") or ""
+                    ) != str(base.get("last_seen") or ""):
+                        dirty_items.append(item)
+                items = dirty_items
+                _log(
+                    f"emit dirty correspondents only changed={len(items)} "
+                    f"total_tracked={len(counts)}"
+                )
             for item in items:
                 item["scanned_messages"] = scanned
                 item["next_page_token"] = next_token
+            if next_token is None:
+                self._pending_correspondent_state = _correspondent_state_payload(counts)
             return items
 
         while True:
@@ -1107,6 +1165,13 @@ class GmailCorrespondentsAdapter(BaseAdapter):
             f"vault_scanned={vault_scanned} elapsed={time.perf_counter() - started:.1f}s"
         )
         return _finalize(None)
+
+    def finalize_cursor(self, cursor: dict[str, Any], **kwargs) -> dict[str, Any] | None:
+        pending = getattr(self, "_pending_correspondent_state", None) or {}
+        if not pending:
+            return None
+        cursor.pop("correspondent_counts", None)
+        return {"correspondent_state": pending}
 
     def to_card(self, item: dict[str, Any]):
         today = date.today().isoformat()
