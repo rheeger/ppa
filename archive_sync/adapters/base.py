@@ -492,15 +492,25 @@ class BaseAdapter(ABC):
         if not isinstance(cursor, dict):
             cursor = {}
         enable_person_resolution = bool(self.should_enable_person_resolution(**kwargs))
-        identity_cache = (
-            _run_logged("load identity cache", lambda: IdentityCache(vault)) if enable_person_resolution else None
-        )
+        shared_identity_cache = kwargs.get("shared_identity_cache")
+        shared_people_index = kwargs.get("shared_people_index")
+        if enable_person_resolution and shared_identity_cache is not None:
+            identity_cache = shared_identity_cache
+            _log("identity cache reuse shared maintain index")
+        else:
+            identity_cache = (
+                _run_logged("load identity cache", lambda: IdentityCache(vault)) if enable_person_resolution else None
+            )
         _log("ingest start")
         preload_started_at = perf_counter()
         if enable_person_resolution:
-            people_index = _run_logged(
-                "load person index", lambda: PersonIndex(vault, log=_log, progress_every=progress_every)
-            )
+            if shared_people_index is not None:
+                people_index = shared_people_index
+                _log(f"person index reuse shared maintain index records={len(people_index.records)}")
+            else:
+                people_index = _run_logged(
+                    "load person index", lambda: PersonIndex(vault, log=_log, progress_every=progress_every)
+                )
             person_uid_index = _run_logged(
                 "build person uid index",
                 lambda: {

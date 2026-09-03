@@ -53,6 +53,10 @@ def _clean(value: str) -> str:
 class CalendarEventsAdapter(BaseAdapter):
     source_id = "calendar-events"
     preload_existing_uid_index = False
+    enable_person_resolution = False
+
+    def should_enable_person_resolution(self, **kwargs) -> bool:
+        return False
 
     def _ensure_token_manager(self, account_email: str) -> None:
         account = account_email.strip().lower()
