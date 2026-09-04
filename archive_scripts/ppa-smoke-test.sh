@@ -27,6 +27,10 @@ echo "--- stats ---"
 ppa_run stats
 
 echo ""
+echo "--- serving-index publish ---"
+python3 archive_scripts/publish-serving-index.py
+
+echo ""
 echo "--- search ---"
 ppa_run search "test" --limit 1
 

@@ -9,13 +9,13 @@ import pytest
 
 from archive_cli.errors import ServingIndexUnavailableError
 from archive_cli.index_store import PostgresArchiveIndex
-from archive_cli.store import DefaultArchiveStore
 from archive_cli.serving_index import (
     get_serving_handle,
     mark_serving_index_dirty,
     serving_index_status,
     verify_serving_index,
 )
+from archive_cli.store import DefaultArchiveStore
 
 pytest.importorskip("archive_crate", reason="build with: cd archive_crate && maturin develop")
 
@@ -131,12 +131,16 @@ def test_search_query_hybrid_on_mini_index(tmp_path, monkeypatch) -> None:
     assert listed and listed[0]["type"] == "person"
     vec_rows = handle.vector([1.0, 0.0, 0.0, 0.0], limit=5)
     assert vec_rows
+    assert "score" in vec_rows[0]
     hybrid = handle.hybrid("Jane", [1.0, 0.0, 0.0, 0.0], limit=5)
     assert hybrid
     person = handle.person("Jane Smith")
     assert person.get("found") is True
     graph = handle.graph("People/jane-smith.md", hops=1)
     assert graph
+    neighbors = handle.neighbor_uids(["hfa-email-111122223333"], hops=1)
+    assert "hfa-email-111122223333" in neighbors
+    assert "hfa-person-aaaabbbbcccc" in neighbors
     verified = verify_serving_index(tmp_path)
     assert verified["ok"] is True
 

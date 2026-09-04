@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any, Callable
 
 from archive_sync.adapters.base import BaseAdapter, IngestResult
-from archive_vault.schema import PersonCard
 from archive_vault.sync_state import load_sync_state
 
 from .batch import (
@@ -272,9 +271,8 @@ def _commit_state_store(state_store: SourceUpdaterStateStore | None) -> None:
 def _install_dirty_uid_tracker(adapter: BaseAdapter, dirty: list[str]) -> Callable[[], None]:
     """Track persisted card UIDs for downstream processors.
 
-    Non-person cards: UID from ``to_card`` (dry-run + apply) and ``after_card_write``.
-    Person cards: only ``after_card_write``, which ingest calls with the persisted
-    host card after merge/create. Conflicts write nothing and are not tracked.
+    Only ``after_card_write`` (actual create/merge). ``to_card`` used to mark every
+    yielded Beeper/iMessage card dirty even when the vault write was a no-op.
     """
 
     original_to_card = adapter.to_card
@@ -288,10 +286,7 @@ def _install_dirty_uid_tracker(adapter: BaseAdapter, dirty: list[str]) -> Callab
             dirty.append(text)
 
     def tracking_to_card(item: dict[str, Any]):
-        card, provenance, body = original_to_card(item)
-        if not isinstance(card, PersonCard):
-            _track(getattr(card, "uid", ""))
-        return card, provenance, body
+        return original_to_card(item)
 
     def tracking_after(
         vault_path,

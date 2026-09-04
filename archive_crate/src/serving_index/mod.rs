@@ -7,7 +7,7 @@ mod rank;
 mod schema;
 mod vector;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -293,6 +293,7 @@ pub fn serving_index_vector(
                 card,
                 serde_json::json!({
                     "matched_by": "vector",
+                    "score": sim,
                     "similarity": sim,
                     "vector_similarity": sim,
                     "chunk_type": ctype,
@@ -472,6 +473,31 @@ pub fn serving_index_pointers(
     let idx = handle.borrow();
     let map = idx.graph.pointers(&uids);
     json_to_py(py, serde_json::to_value(map).unwrap_or(serde_json::json!({})))
+}
+
+#[pyfunction]
+pub fn serving_index_neighbor_uids(
+    handle: &Bound<'_, ServingIndex>,
+    uids: Vec<String>,
+    hops: usize,
+) -> PyResult<Vec<String>> {
+    let idx = handle.borrow();
+    let hops = hops.clamp(1, 2);
+    let mut out = HashSet::new();
+    for uid in uids {
+        let uid = uid.trim();
+        if uid.is_empty() {
+            continue;
+        }
+        out.insert(uid.to_string());
+        for (node, targets) in idx.graph.hops(uid, hops) {
+            out.insert(node);
+            for (target, _) in targets {
+                out.insert(target);
+            }
+        }
+    }
+    Ok(out.into_iter().collect())
 }
 
 #[pyfunction]
@@ -715,6 +741,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(serving_index_graph, m)?)?;
     m.add_function(wrap_pyfunction!(serving_index_person, m)?)?;
     m.add_function(wrap_pyfunction!(serving_index_pointers, m)?)?;
+    m.add_function(wrap_pyfunction!(serving_index_neighbor_uids, m)?)?;
     m.add_function(wrap_pyfunction!(serving_index_timeline, m)?)?;
     m.add_function(wrap_pyfunction!(serving_index_temporal_neighbors, m)?)?;
     m.add_function(wrap_pyfunction!(serving_index_build, m)?)?;

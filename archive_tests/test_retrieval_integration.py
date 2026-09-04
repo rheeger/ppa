@@ -780,9 +780,9 @@ def test_live_postgres_vector_search_groups_to_card_level_and_supports_filters(
     embed_result = archive_embed_pending(limit=50, embedding_model=provider.model, embedding_version=1)
     assert "- embedded:" in embed_result
     assert "- failed: 0" in embed_result
+    from archive_cli import serving_index as si
     from archive_cli.serving_index import publish_serving_index
     from archive_cli.store import DefaultArchiveStore
-    from archive_cli import serving_index as si
 
     si._HANDLE = None
     published = publish_serving_index(DefaultArchiveStore(vault=_vault, index=index))
@@ -848,9 +848,9 @@ def test_live_postgres_hybrid_search_prefers_exact_anchor_and_boosts_graph_neigh
     _vault, index, provider = live_archive
     index.rebuild()
     index.embed_pending(provider=provider, embedding_model=provider.model, embedding_version=1, limit=50)
+    from archive_cli import serving_index as si
     from archive_cli.serving_index import publish_serving_index
     from archive_cli.store import DefaultArchiveStore
-    from archive_cli import serving_index as si
 
     si._HANDLE = None
     published = publish_serving_index(DefaultArchiveStore(vault=_vault, index=index))

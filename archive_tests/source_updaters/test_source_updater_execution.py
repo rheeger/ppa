@@ -183,7 +183,8 @@ def test_calendar_dry_run_does_not_advance_cursor(tmp_path: Path) -> None:
     assert result.report.cursor_after.get("sync_token") == "token-before"
     assert load_sync_state(vault)[cursor_key]["sync_token"] == "token-before"
     assert result.report.batch.promoted >= 1
-    assert result.report.batch.dirty_card_uids_count >= 1
+    # dry-run does not persist; dirty UIDs come only from after_card_write
+    assert result.report.batch.dirty_card_uids_count == 0
 
 
 def test_calendar_adapter_apply_without_live_oauth(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -6,7 +6,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-from archive_sync.adapters.base import deterministic_provenance
+from archive_sync.adapters.base import IngestResult, deterministic_provenance
 from archive_sync.adapters.beeper import BeeperAdapter, ParticipantRecord
 from archive_sync.source_updaters.runner import _install_dirty_uid_tracker
 from archive_vault.schema import PersonCard
@@ -692,6 +692,110 @@ def _beeper_incoming_person(adapter: BeeperAdapter) -> tuple[PersonCard, Path]:
     card, _, _ = adapter.to_card(item)
     assert isinstance(card, PersonCard)
     return card, adapter._beeper_person_rel_path(card)
+
+
+def test_beeper_to_card_does_not_mark_dirty(tmp_vault, tmp_path):
+    db_path, media_root = _create_index_db(tmp_path / "beeper-tocard-dirty")
+    _seed_discord_dm(db_path)
+    adapter = BeeperAdapter()
+    items = [
+        item
+        for batch in adapter.fetch_batches(
+            str(tmp_vault),
+            {},
+            db_path=str(db_path),
+            media_root=str(media_root),
+            max_threads=5,
+            batch_size=5,
+        )
+        for item in batch.items
+    ]
+    assert items
+    dirty: list[str] = []
+    restore = _install_dirty_uid_tracker(adapter, dirty)
+    try:
+        for item in items:
+            adapter.to_card(item)
+    finally:
+        restore()
+    assert dirty == []
+
+
+def test_beeper_unchanged_message_skipped_and_not_dirtied(tmp_vault, tmp_path):
+    db_path, media_root = _create_index_db(tmp_path / "beeper-unchanged")
+    _seed_discord_dm(db_path)
+    adapter = BeeperAdapter()
+    first = adapter.ingest(
+        str(tmp_vault),
+        db_path=str(db_path),
+        media_root=str(media_root),
+        max_threads=5,
+        batch_size=5,
+    )
+    assert first.created >= 1
+    message_files = sorted((tmp_vault / "Beeper").rglob("*.md"))
+    assert message_files
+    message_uids = []
+    for path in message_files:
+        frontmatter, _, _ = read_note(tmp_vault, str(path.relative_to(tmp_vault)))
+        message_uids.append(str(frontmatter["uid"]))
+
+    (tmp_vault / "_meta" / "sync-state.json").write_text("{}", encoding="utf-8")
+    dirty: list[str] = []
+    restore = _install_dirty_uid_tracker(adapter, dirty)
+    try:
+        second = adapter.ingest(
+            str(tmp_vault),
+            db_path=str(db_path),
+            media_root=str(media_root),
+            max_threads=5,
+            batch_size=5,
+        )
+    finally:
+        restore()
+
+    assert second.skip_details.get("unchanged", 0) >= 1
+    assert second.created == 0
+    for uid in message_uids:
+        assert uid not in dirty
+
+
+def test_beeper_apply_nonperson_skips_unchanged_without_after_write(tmp_vault, tmp_path):
+    db_path, media_root = _create_index_db(tmp_path / "beeper-apply-skip")
+    _seed_discord_dm(db_path)
+    adapter = BeeperAdapter()
+    adapter.ingest(
+        str(tmp_vault),
+        db_path=str(db_path),
+        media_root=str(media_root),
+        max_threads=5,
+        batch_size=5,
+    )
+    (tmp_vault / "_meta" / "sync-state.json").write_text("{}", encoding="utf-8")
+    items = [
+        item
+        for batch in adapter.fetch_batches(
+            str(tmp_vault),
+            {},
+            db_path=str(db_path),
+            media_root=str(media_root),
+            max_threads=5,
+            batch_size=5,
+        )
+        for item in batch.items
+        if item.get("kind") == "message"
+    ]
+    assert items
+    dirty: list[str] = []
+    restore = _install_dirty_uid_tracker(adapter, dirty)
+    try:
+        result = IngestResult()
+        adapter._apply_nonperson_item(tmp_vault, items[0], result=result, dry_run=False)
+    finally:
+        restore()
+    assert result.skip_details.get("unchanged") == 1
+    assert result.merged == 0
+    assert dirty == []
 
 
 def test_beeper_person_create_dirties_created_uid(tmp_vault, tmp_path):

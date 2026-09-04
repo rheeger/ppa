@@ -124,6 +124,18 @@ def test_estimate_cost_usd_local_zero() -> None:
     assert _estimate_cost_usd(1_000_000, 1_000_000, "gemma4:31b") == 0.0
 
 
+def test_email_thread_eligible_zero_logs_skip_breakdown() -> None:
+    import inspect
+
+    src = inspect.getsource(CardEnrichmentRunner._run_email_thread)
+    assert "skipped_populated=%s" in src
+    assert "skipped_prefilter=%s" in src
+    assert "skipped_no_thread=%s" in src
+    assert "skipped_uid_filter=%s" in src
+    assert "self.metrics.skipped_populated" in src
+    assert "self.metrics.skipped_prefilter" in src
+
+
 def test_card_runner_checkpoint_writes(tmp_path: Path) -> None:
     """Checkpoint file is written with metrics snapshot (no full run)."""
 

@@ -737,6 +737,21 @@ class VaultScanCache:
             out[str(uid)] = str(rp)
         return out
 
+    def uid_for_rel_path(self, rel_path: str) -> str:
+        """Point lookup — never dump the notes table."""
+
+        rel = str(rel_path or "").strip()
+        if not rel:
+            return ""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT uid FROM notes WHERE rel_path = ? LIMIT 1",
+                (rel,),
+            ).fetchone()
+        if not row or not row[0]:
+            return ""
+        return str(row[0])
+
     def frontmatter_rows_for_uids(self, uids: set[str] | frozenset[str] | list[str]) -> list[dict[str, Any]]:
         """One IN-query dump of uid / rel_path / frontmatter for the given UIDs."""
 

@@ -920,10 +920,44 @@ def _wikilink_neighbor_uids(
             continue
         rel = cache.rel_path_for_slug(slug)
         if rel:
-            uid = uid_by_rel.get(rel, "")
+            uid = uid_by_rel.get(rel) or cache.uid_for_rel_path(rel)
             if uid:
                 neighbors.add(uid)
     return neighbors
+
+
+def _neighbor_uids_from_serving_index(
+    vault_path: Path | str | None,
+    seed_uids: set[str],
+    *,
+    max_hops: int = 1,
+) -> set[str] | None:
+    """1-hop (or 2-hop) UID closure from the Rust serving-index graph. No SQLite walk."""
+
+    if vault_path is None:
+        return None
+    try:
+        from archive_cli.errors import ServingIndexUnavailableError
+        from archive_cli.serving_index import get_serving_handle
+    except ImportError:
+        return None
+    try:
+        handle = get_serving_handle(Path(vault_path))
+        out = {
+            str(uid).strip()
+            for uid in handle.neighbor_uids(sorted(seed_uids), hops=max(1, int(max_hops)))
+            if str(uid).strip()
+        }
+        out.update(seed_uids)
+        return out
+    except ServingIndexUnavailableError:
+        return None
+    except Exception:
+        logging.getLogger("ppa.seed_links").warning(
+            "seed-link catalog serving-index neighbor lookup failed; using scoped cache rows",
+            exc_info=True,
+        )
+        return None
 
 
 def expand_catalog_neighbor_closure(
@@ -931,17 +965,27 @@ def expand_catalog_neighbor_closure(
     seed_uids: set[str] | frozenset[str],
     *,
     max_hops: int = 1,
+    vault_path: Path | str | None = None,
 ) -> set[str]:
-    """Expand dirty UIDs by wikilink / structured refs and matching People emails."""
+    """Expand dirty UIDs by serving-index graph, else scoped cache rows. Never dump notes."""
 
     wanted = {str(uid).strip() for uid in seed_uids if str(uid).strip()}
     if not wanted:
         return set()
-    uid_by_rel = cache.rel_path_to_uid()
-    rel_by_uid = {uid: rel for rel, uid in uid_by_rel.items()}
+    catalog_log = logging.getLogger("ppa.seed_links")
+    catalog_log.info("seed-link catalog neighbor closure start seed=%s", len(wanted))
+    from_index = _neighbor_uids_from_serving_index(vault_path, wanted, max_hops=max_hops)
+    if from_index is not None:
+        catalog_log.info(
+            "seed-link catalog neighbor closure source=serving_index seed=%s expanded=%s",
+            len(wanted),
+            len(from_index),
+        )
+        return from_index
+
     frontier = set(wanted)
     expanded = set(wanted)
-    collected_emails: set[str] = set()
+    uid_by_rel: dict[str, str] = {}
     for _hop in range(max(1, int(max_hops))):
         if not frontier:
             break
@@ -949,9 +993,10 @@ def expand_catalog_neighbor_closure(
         next_frontier: set[str] = set()
         for row in rows:
             uid = str(row.get("uid") or "").strip()
-            rel = str(row.get("rel_path") or rel_by_uid.get(uid, "")).strip()
+            rel = str(row.get("rel_path") or "").strip()
+            if rel and uid:
+                uid_by_rel[rel] = uid
             fm = dict(row.get("frontmatter") or {})
-            collected_emails.update(_emails_from_frontmatter(fm))
             for ref_uid in _uid_refs_from_frontmatter(fm):
                 if ref_uid and ref_uid not in expanded:
                     next_frontier.add(ref_uid)
@@ -961,25 +1006,10 @@ def expand_catalog_neighbor_closure(
                         next_frontier.add(neighbor_uid)
         expanded.update(next_frontier)
         frontier = next_frontier
-
-    if collected_emails:
-        person_rels = cache.rel_paths_by_type().get("person", [])
-        for rel in person_rels:
-            if not str(rel).startswith("People/"):
-                continue
-            try:
-                fm = cache.frontmatter_for_rel_path(rel)
-            except KeyError:
-                continue
-            if _emails_from_frontmatter(fm) & collected_emails:
-                uid = uid_by_rel.get(rel, "")
-                if uid:
-                    expanded.add(uid)
-    logging.getLogger("ppa.seed_links").info(
-        "seed-link catalog neighbor closure seed=%s expanded=%s emails=%s",
+    catalog_log.info(
+        "seed-link catalog neighbor closure source=cache seed=%s expanded=%s",
         len(wanted),
         len(expanded),
-        len(collected_emails),
     )
     return expanded
 
@@ -1088,21 +1118,26 @@ def build_seed_link_catalog(
     started = time.monotonic()
     scoped_uids: set[str] | None = None
     if catalog_uids is not None:
-        scoped_uids = expand_catalog_neighbor_closure(cache, set(catalog_uids))
+        scoped_uids = expand_catalog_neighbor_closure(cache, set(catalog_uids), vault_path=vault)
         scoped_rows = cache.frontmatter_rows_for_uids(scoped_uids)
         rel_items = [(str(row["rel_path"]), dict(row["frontmatter"])) for row in scoped_rows]
+        uid_by_rel = {str(row["rel_path"]): str(row.get("uid") or "") for row in scoped_rows if row.get("rel_path")}
     else:
         rel_items = list(cache.all_frontmatters())
+        uid_by_rel = {}
     load_all_bodies = body_uids is None
     body_uid_set = {str(uid).strip() for uid in (body_uids or ()) if str(uid).strip()}
-    uid_by_rel = cache.rel_path_to_uid()
     if scoped_uids is not None:
         mode = f"scoped notes={len(rel_items)} bodies={len(body_uid_set)}"
     else:
         mode = "full" if load_all_bodies else f"incremental bodies={len(body_uid_set)}"
     catalog_log.info("seed-link catalog start notes=%s mode=%s", len(rel_items), mode)
     for i, (rel_path, fm) in enumerate(rel_items, start=1):
-        uid = uid_by_rel.get(rel_path, "")
+        uid = str(uid_by_rel.get(rel_path) or fm.get("uid") or "").strip()
+        if not uid:
+            uid = cache.uid_for_rel_path(rel_path)
+            if uid:
+                uid_by_rel[rel_path] = uid
         if load_all_bodies or uid in body_uid_set:
             body = body_for_rel_path(cache, rel_path, vault)
             ch = raw_content_sha256_for_rel_path(cache, rel_path, vault)
@@ -2361,7 +2396,6 @@ def enqueue_seed_link_jobs(
     force_selected = bool(selected)
     if cache is None:
         cache = VaultScanCache.build_or_load(vault, tier=1, progress_every=0)
-    known_exact_slugs = cache.all_stems()
     prepared = 0
     inserted = 0
     commit_every = max(int(commit_every), 1)
@@ -2369,6 +2403,7 @@ def enqueue_seed_link_jobs(
     if scoped_uids:
         scoped_rows = cache.frontmatter_rows_for_uids(scoped_uids)
         enqueue_items = [(str(row["rel_path"]), dict(row["frontmatter"])) for row in scoped_rows]
+        known_exact_slugs = {Path(str(row["rel_path"])).stem for row in scoped_rows if row.get("rel_path")}
         enqueue_log.info(
             "seed-link enqueue scoped uids=%s resolved=%s",
             len(scoped_uids),
@@ -2376,6 +2411,7 @@ def enqueue_seed_link_jobs(
         )
     else:
         enqueue_items = list(cache.all_frontmatters())
+        known_exact_slugs = cache.all_stems()
         enqueue_log.info("seed-link enqueue full vault notes=%s", len(enqueue_items))
     with index._connect() as conn:
         pending_since_commit = 0
@@ -3274,7 +3310,7 @@ def run_seed_link_backfill(
         body_uids=body_uids,
         catalog_uids=scoped if incremental else None,
     )
-    orphaned_before = _count_orphaned_links(index.vault, cache=seed_cache)
+    orphaned_before = 0 if incremental else _count_orphaned_links(index.vault, cache=seed_cache)
     enqueue_result = run_seed_link_enqueue(
         index,
         modules=modules,
@@ -3299,7 +3335,10 @@ def run_seed_link_backfill(
             cache=seed_cache,
             catalog=catalog,
         )
-    gate = run_seed_link_report(index, rebuild_if_dirty=bool(apply_promotions))
+    if incremental:
+        gate = {"orphaned_links_after": orphaned_before, "rebuilt": False}
+    else:
+        gate = run_seed_link_report(index, rebuild_if_dirty=bool(apply_promotions))
     return {
         "workers": int(worker_result["workers"]),
         "jobs_prepared": int(enqueue_result["prepared"]),

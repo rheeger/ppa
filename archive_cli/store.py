@@ -11,6 +11,7 @@ from archive_vault.vault import find_note_by_slug
 from .config import load_archive_config
 from .contracts import ArchiveStore
 from .embedding_provider import get_embedding_provider
+from .errors import ServingIndexUnavailableError
 from .explain import retrieval_explain_payload, retrieval_explain_payload_v2
 from .features import archive_context, build_context_json, build_context_text
 from .index_config import (
@@ -21,12 +22,11 @@ from .index_config import (
     get_seed_links_enabled,
     get_vector_dimension,
 )
-from .errors import ServingIndexUnavailableError
 from .index_store import PostgresArchiveIndex
-from .query_embed_cache import QueryEmbedCache, QueryEmbedSpec
-from .query_timing import QueryPhaseTimes, add_ms, log_phase_times
 from .projections.registry import projection_for_card_type
+from .query_embed_cache import QueryEmbedCache, QueryEmbedSpec
 from .query_planner import build_query_plan, effective_filters_from_plan
+from .query_timing import QueryPhaseTimes, add_ms, log_phase_times
 from .reranker import blend_rerank_scores, reranker_for_config
 from .retrieval_pipeline import (
     PIPELINE_VERSION,
@@ -361,7 +361,12 @@ class DefaultArchiveStore(ArchiveStore):
             add_ms(phases, "total_ms", t_total)
             self._last_phase_times = phases
             log_phase_times("vector_search", phases)
-            return {"rows": rows, "embedding_model": model, "embedding_version": version, "phase_times": phases.to_dict()}
+            return {
+                "rows": rows,
+                "embedding_model": model,
+                "embedding_version": version,
+                "phase_times": phases.to_dict(),
+            }
         rows = self.index.vector_search(
             query_vector=query_vector,
             embedding_model=model,
