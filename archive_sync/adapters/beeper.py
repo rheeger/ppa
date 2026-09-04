@@ -149,6 +149,18 @@ def _wikilink_from_uid(uid: str) -> str:
     return f"[[{uid}]]"
 
 
+def _beeper_card_unchanged(vault: Path, rel_path: Path, card: Any, body: str) -> bool:
+    """Skip rewrite when body + uid already match (ignore ``updated`` churn)."""
+
+    try:
+        frontmatter, existing_body, _ = read_note(vault, str(rel_path))
+    except Exception:
+        return False
+    if str(frontmatter.get("uid") or "") != str(getattr(card, "uid", "") or ""):
+        return False
+    return (existing_body or "").strip() == (body or "").strip()
+
+
 def _dedupe(values: list[str]) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
@@ -1270,12 +1282,30 @@ class BeeperAdapter(BaseAdapter):
         rel_path = Path(self._card_rel_path(vault, card))
         target = vault / rel_path
         if target.exists():
+            if _beeper_card_unchanged(vault, rel_path, card, body):
+                result.skipped += 1
+                result.skip_details["unchanged"] = result.skip_details.get("unchanged", 0) + 1
+                return
             if not dry_run:
                 self.merge_card(vault, rel_path, card, body, provenance)
+                self.after_card_write(
+                    vault,
+                    card,
+                    rel_path,
+                    raw_item=item,
+                    action="merge",
+                )
             result.merged += 1
             return
         if not dry_run:
             write_card(vault, str(rel_path), card, body=body, provenance=provenance)
+            self.after_card_write(
+                vault,
+                card,
+                rel_path,
+                raw_item=item,
+                action="create",
+            )
         result.created += 1
 
     def ingest(self, vault_path: str, dry_run: bool = False, **kwargs) -> IngestResult:
@@ -1438,7 +1468,11 @@ class BeeperAdapter(BaseAdapter):
                     except Exception as exc:
                         result.errors.append(f"person {plan.card.source_id}: {exc}")
                 processed_successfully += matched_existing
-                result.merged += matched_existing
+                if matched_existing:
+                    result.skipped += matched_existing
+                    result.skip_details["person_already_known"] = (
+                        result.skip_details.get("person_already_known", 0) + matched_existing
+                    )
 
                 for item in nonperson_items:
                     try:

@@ -1245,11 +1245,19 @@ class CardEnrichmentRunner:
             eligible.append(rel_path)
 
         log.info(
-            "enrich-cards: eligible_paths=%d (recent-first). limit=%s workers=%s parallel=%s",
+            "enrich-cards: eligible_paths=%d (recent-first). limit=%s workers=%s parallel=%s "
+            "skipped_populated=%s skipped_prefilter=%s skipped_no_thread=%s skipped_uid_filter=%s "
+            "gated=%s prefilter=%s",
             len(eligible),
             self.limit,
             self.workers,
             use_parallel,
+            self.metrics.skipped_populated,
+            self.metrics.skipped_prefilter,
+            self.metrics.skipped_no_thread,
+            self.metrics.skipped_uid_filter,
+            self.metrics.gated,
+            dict(self.metrics.prefilter_breakdown),
         )
 
         lock: threading.Lock | None = threading.Lock() if use_parallel else None

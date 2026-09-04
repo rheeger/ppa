@@ -1011,6 +1011,13 @@ class GmailCorrespondentsAdapter(BaseAdapter):
                 vault_scanned = int(cursor.get("vault_scanned_messages") or 0)
                 vault_max_sent_at = str(cursor.get("vault_max_sent_at") or watermark or "")
                 _log(f"correspondent state hydrate source=cursor cached={len(counts)} vault_scanned={vault_scanned}")
+            elif not explicit_query and list_mode == "incremental" and watermark:
+                vault_scanned = int(cursor.get("vault_scanned_messages") or 0)
+                vault_max_sent_at = str(cursor.get("vault_max_sent_at") or watermark)
+                _log(
+                    "correspondent state hydrate source=watermark skip_vault_scan "
+                    f"watermark={watermark} vault_scanned={vault_scanned}"
+                )
             elif email_root_exists:
                 local_counts, vault_scanned, vault_message_ids, vault_max_sent_at = self._vault_correspondent_state(
                     vault_path,

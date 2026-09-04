@@ -274,6 +274,50 @@ def _empty_list_gws(list_calls: list[dict]):
     return fake_gws
 
 
+def test_fetch_incremental_watermark_skips_vault_scan(tmp_vault, monkeypatch):
+    email_root = tmp_vault / "Email" / "2026-03"
+    email_root.mkdir(parents=True, exist_ok=True)
+    (email_root / "old.md").write_text(
+        """---
+type: email_message
+account_email: me@example.com
+from_email: stale@example.com
+to_emails:
+  - me@example.com
+---
+""",
+        encoding="utf-8",
+    )
+    adapter = GmailCorrespondentsAdapter()
+    monkeypatch.setattr(
+        adapter,
+        "_vault_correspondent_state",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("vault scan should be skipped")),
+    )
+    responses = iter(
+        [
+            {"messages": [{"id": "m1"}], "nextPageToken": None},
+            {
+                "id": "m1",
+                "internalDate": "1700000000000",
+                "payload": {
+                    "headers": [
+                        {"name": "From", "value": "New Person <new@example.com>"},
+                    ]
+                },
+            },
+        ]
+    )
+    adapter._gws = lambda args: next(responses)  # type: ignore[method-assign]
+    items = adapter.fetch(
+        str(tmp_vault),
+        {"last_sync": "2026-09-03T06:11:21+00:00"},
+        account_email="me@example.com",
+        dry_run=True,
+    )
+    assert {item["email"] for item in items} == {"new@example.com"}
+
+
 def test_fetch_emits_only_dirty_correspondents(tmp_vault):
     adapter = GmailCorrespondentsAdapter()
     responses = iter(

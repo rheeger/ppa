@@ -196,9 +196,9 @@ def _publish_serving_index(store: Any, report: MaintenanceReport, logger: loggin
         report.serving_index = status
         return
     try:
-        from archive_cli.serving_index import publish_serving_index
+        from archive_cli.serving_index import publish_serving_index, read_dirty_uids
 
-        result = publish_serving_index(store, logger=logger)
+        result = publish_serving_index(store, logger=logger, dirty_uids=read_dirty_uids(store.vault))
         report.serving_index = result
         if not result.get("ok"):
             logger.error("serving_index_refresh_failed")
@@ -584,7 +584,7 @@ def run_maintenance(
                 try:
                     from archive_cli.vault_cache_runtime import rebuild_vault_cache_after_writes
 
-                    rebuild_vault_cache_after_writes(store.vault, tier=1, progress_every=5000)
+                    rebuild_vault_cache_after_writes(store.vault, tier=2, progress_every=5000)
                 except Exception:
                     logger.exception("maintain_vault_cache_rebuild_after_updaters_failed")
             if partial and not source_updater_strict:

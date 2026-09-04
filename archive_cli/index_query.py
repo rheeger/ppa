@@ -27,9 +27,9 @@ from .index_config import (
     _vector_literal,
     get_seed_links_enabled,
 )
-from .query_timing import QueryPhaseTimes, add_ms
 from .materializer import _normalize_exact_text, _normalize_slug
 from .projections.registry import PROJECTION_REGISTRY, TYPED_PROJECTIONS, projection_for_card_type
+from .query_timing import QueryPhaseTimes, add_ms
 
 logger = logging.getLogger("ppa.index_query")
 
@@ -735,7 +735,12 @@ class QueryMixin:
         prev = getattr(self, "_last_hybrid_phase_times", None)
         if isinstance(prev, QueryPhaseTimes):
             add_ms(prev, "graph_sql_ms", t0)
-        logger.info("graph_neighbors done anchors=%d neighbors=%d graph_sql_ms=%.1f", len(anchor_uids), len(out), (time.monotonic() - t0) * 1000.0)
+        logger.info(
+            "graph_neighbors done anchors=%d neighbors=%d graph_sql_ms=%.1f",
+            len(anchor_uids),
+            len(out),
+            (time.monotonic() - t0) * 1000.0,
+        )
         return out
 
     def hybrid_search(

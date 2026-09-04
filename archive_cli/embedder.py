@@ -173,6 +173,11 @@ class EmbedderMixin:
                 SELECT string_agg(co.org, '|' ORDER BY co.org) AS orgs_agg
                 FROM {self.schema}.card_orgs co WHERE co.card_uid = card.uid
             ) org ON true
+            WHERE card.uid IN (
+                SELECT DISTINCT c.card_uid
+                FROM {self.schema}.embed_queue q
+                JOIN {self.schema}.chunks c ON c.chunk_key = q.chunk_key
+            )
             """
         )
         row = conn.execute(f"SELECT count(*) AS cnt FROM {self.schema}.card_embed_context").fetchone()

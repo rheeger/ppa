@@ -72,16 +72,39 @@ def test_expand_catalog_neighbor_closure_adds_wikilink_neighbor() -> None:
         ],
         [],
     ]
-    cache.rel_path_to_uid.return_value = {
-        "Email/2026/a.md": "uid-a",
-        "People/b.md": "uid-b",
-    }
     cache.wikilinks_for_rel_path.return_value = ["person-b"]
     cache.rel_path_for_slug.return_value = "People/b.md"
-    cache.rel_paths_by_type.return_value = {"person": []}
+    cache.uid_for_rel_path.return_value = "uid-b"
 
     expanded = expand_catalog_neighbor_closure(cache, {"uid-a"})
     assert expanded == {"uid-a", "uid-b"}
+    cache.rel_path_to_uid.assert_not_called()
+    cache.rel_paths_by_type.assert_not_called()
+
+
+def test_maintain_rebuilds_vault_cache_tier_2_after_updaters() -> None:
+    import inspect
+
+    from archive_cli.commands.maintain import run_maintenance
+
+    src = inspect.getsource(run_maintenance)
+    assert "rebuild_vault_cache_after_writes(store.vault, tier=2" in src
+
+
+def test_expand_catalog_neighbor_closure_uses_serving_index(monkeypatch) -> None:
+    cache = MagicMock()
+
+    class _Handle:
+        def neighbor_uids(self, uids, hops=1):
+            assert set(uids) == {"uid-a"}
+            assert hops == 1
+            return ["uid-a", "uid-b", "uid-c"]
+
+    monkeypatch.setattr("archive_cli.serving_index.get_serving_handle", lambda _vault: _Handle())
+    expanded = expand_catalog_neighbor_closure(cache, {"uid-a"}, vault_path="/tmp/vault")
+    assert expanded == {"uid-a", "uid-b", "uid-c"}
+    cache.frontmatter_rows_for_uids.assert_not_called()
+    cache.rel_path_to_uid.assert_not_called()
 
 
 def test_run_source_updaters_defers_vault_cache_invalidation(monkeypatch, tmp_path: Path) -> None:
@@ -259,6 +282,7 @@ def test_enqueue_seed_link_jobs_scoped_uses_uid_query(monkeypatch, tmp_path: Pat
 
     cache.frontmatter_rows_for_uids.assert_called_once()
     cache.all_frontmatters.assert_not_called()
+    cache.all_stems.assert_not_called()
     assert result["prepared"] >= 1
 
 
