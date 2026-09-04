@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from archive_cli.index_config import (
     get_query_embed_cache_max_age_days,
     get_query_embed_cache_max_rows,
@@ -78,6 +80,24 @@ def test_read_dirty_uids_ignores_empty_vault_written(tmp_path: Path, monkeypatch
         encoding="utf-8",
     )
     assert read_dirty_uids(tmp_path) == ["uid-real"]
+
+
+def test_publish_serving_index_none_dirty_uids_does_not_skip(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "archive_cli.serving_index.serving_index_status",
+        lambda _vault: {
+            "serving_index_ready": True,
+            "serving_index_generation": "gen-keep",
+            "serving_index_dirty_records": 2,
+            "serving_index_format": 1,
+        },
+    )
+    store = MagicMock()
+    store.vault = tmp_path
+    store.index.schema = "ppa"
+    store.index._connect.side_effect = RuntimeError("full-export-started")
+    with pytest.raises(RuntimeError, match="full-export-started"):
+        publish_serving_index(store)
 
 
 def test_publish_serving_index_skips_when_dirty_without_uids(tmp_path: Path, monkeypatch) -> None:

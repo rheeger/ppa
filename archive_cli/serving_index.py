@@ -224,21 +224,26 @@ def publish_serving_index(
     Called only from maintain / rebuild. Never from the MCP query path.
     Incremental when ACTIVE exists and ``dirty_uids`` is a non-empty concrete set:
     copy prior jsonl, patch those UIDs, hardlink embeddings.bin.
+    ``dirty_uids=None`` is a full rebuild publish. Maintain passes
+    ``read_dirty_uids()`` so an empty DIRTY skips the 25GB export.
     """
     log = logger or logging.getLogger("ppa.serving_index")
     vault = Path(store.vault)
     root = get_serving_index_path(vault)
     status = serving_index_status(vault)
-    source_uids = dirty_uids if dirty_uids is not None else read_dirty_uids(vault)
-    concrete = [str(uid).strip() for uid in source_uids if str(uid).strip()]
     active_gid = str(status.get("serving_index_generation") or "")
-    if status.get("serving_index_ready") and active_gid and not concrete:
-        log.info("serving_index_publish skip incremental_without_uids keep_generation=%s", active_gid)
-        return {"ok": True, "skipped": "dirty_without_uids", "generation": active_gid, **status}
+    if dirty_uids is None:
+        concrete: list[str] = []
+        incremental = False
+    else:
+        concrete = [str(uid).strip() for uid in dirty_uids if str(uid).strip()]
+        if status.get("serving_index_ready") and active_gid and not concrete:
+            log.info("serving_index_publish skip incremental_without_uids keep_generation=%s", active_gid)
+            return {"ok": True, "skipped": "dirty_without_uids", "generation": active_gid, **status}
+        incremental = bool(concrete and status.get("serving_index_ready") and active_gid)
     gid = dest_generation or str(int(time.time() * 1000))
     dest = root / "generations" / gid
     dest.mkdir(parents=True, exist_ok=True)
-    incremental = bool(concrete and status.get("serving_index_ready") and active_gid)
     prev = root / "generations" / active_gid if incremental else None
     if incremental:
         log.info("serving_index_export mode=incremental dirty_uids=%s from=%s", len(concrete), active_gid)
