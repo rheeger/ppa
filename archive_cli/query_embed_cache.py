@@ -181,8 +181,8 @@ class QueryEmbedCache:
         deleted_age = 0
         deleted_cap = 0
         cutoff = time.time() - max(int(max_age_days), 0) * 86400
-        cutoff_iso = datetime.fromtimestamp(cutoff, tz=timezone.utc).replace(microsecond=0).isoformat().replace(
-            "+00:00", "Z"
+        cutoff_iso = (
+            datetime.fromtimestamp(cutoff, tz=timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         )
         with self._lock:
             cur = self._conn.execute("DELETE FROM query_embed_cache WHERE created_at < ?", (cutoff_iso,))

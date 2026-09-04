@@ -403,7 +403,9 @@ def _collect_canonical_rows(
             if ppa_engine() == "rust" and cache_path.exists():
                 import archive_crate
 
-                rust_items = [dict(item) for item in (archive_crate.frontmatter_dicts_from_cache(str(cache_path)) or [])]
+                rust_items = [
+                    dict(item) for item in (archive_crate.frontmatter_dicts_from_cache(str(cache_path)) or [])
+                ]
         except Exception:
             rust_items = None
         iterable: list[tuple[str, dict[str, Any]]]
