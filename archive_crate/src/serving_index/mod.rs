@@ -293,6 +293,7 @@ pub fn serving_index_vector(
                 card,
                 serde_json::json!({
                     "matched_by": "vector",
+                    "score": sim,
                     "similarity": sim,
                     "vector_similarity": sim,
                     "chunk_type": ctype,

@@ -74,7 +74,11 @@ class ServingIndexHandle:
             "start_date": str(kwargs.get("start_date", "") or ""),
             "end_date": str(kwargs.get("end_date", "") or ""),
         }
-        return list(_crate().serving_index_vector(self._native, query_vector, req) or [])
+        rows = list(_crate().serving_index_vector(self._native, query_vector, req) or [])
+        for row in rows:
+            if row.get("score") is None:
+                row["score"] = row.get("vector_similarity") or row.get("similarity") or 0.0
+        return rows
 
     def hybrid(self, query: str, query_vector: list[float], **kwargs: Any) -> list[dict[str, Any]]:
         req = {

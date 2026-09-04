@@ -131,6 +131,7 @@ def test_search_query_hybrid_on_mini_index(tmp_path, monkeypatch) -> None:
     assert listed and listed[0]["type"] == "person"
     vec_rows = handle.vector([1.0, 0.0, 0.0, 0.0], limit=5)
     assert vec_rows
+    assert "score" in vec_rows[0]
     hybrid = handle.hybrid("Jane", [1.0, 0.0, 0.0, 0.0], limit=5)
     assert hybrid
     person = handle.person("Jane Smith")
