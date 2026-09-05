@@ -599,7 +599,7 @@ def run_source_updater(
         try:
             from archive_cli.vault_cache_runtime import mark_vault_written
 
-            mark_vault_written(vault_path)
+            mark_vault_written(vault_path, uids=dirty)
         except Exception:
             logger.debug("source updater mark_vault_written failed", exc_info=True)
 

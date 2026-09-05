@@ -429,6 +429,152 @@ def test_run_source_updaters_strict_fails_on_error(monkeypatch, tmp_path: Path) 
     assert multi.exit_code == 1
 
 
+def _warehouse_store(tmp_path: Path):
+    from unittest.mock import MagicMock
+
+    from archive_cli.index_store import PostgresArchiveIndex
+
+    store = MagicMock()
+    store.vault = tmp_path
+    store.index = MagicMock(spec=PostgresArchiveIndex)
+    store.index.schema = "ppa"
+    return store
+
+
+def test_collect_maintain_publish_uids_unions_report_sources(tmp_path: Path, monkeypatch) -> None:
+    from archive_cli.commands.maintain import MaintenanceReport, collect_maintain_publish_uids
+
+    monkeypatch.setattr("archive_cli.serving_index.read_dirty_uids", lambda _vault: ["uid-dirty-file"])
+    report = MaintenanceReport(
+        publish_uids=["uid-rebuilt"],
+        source_updater_reports=[{"dirty_card_uids": ["uid-updater", ""]}],
+        processor_reports=[
+            {
+                "item_results": [
+                    {
+                        "processor_key": "materialization",
+                        "input_uid": "uid-processor",
+                        "output_uids": ["uid-output"],
+                        "status": "complete",
+                    }
+                ]
+            }
+        ],
+    )
+    assert collect_maintain_publish_uids(report, tmp_path) == [
+        "uid-rebuilt",
+        "uid-updater",
+        "uid-processor",
+        "uid-output",
+        "uid-dirty-file",
+    ]
+
+
+def test_maintain_publish_passes_rebuilt_and_updater_uids(tmp_path: Path, monkeypatch) -> None:
+    import logging
+
+    from archive_cli.commands.maintain import MaintenanceReport, _publish_serving_index
+
+    store = _warehouse_store(tmp_path)
+    monkeypatch.setattr("archive_cli.index_store.PostgresArchiveIndex", type(store.index))
+
+    called: dict[str, list[str] | None] = {}
+
+    def fake_publish(_store, *, logger=None, dirty_uids=None, **_k):
+        called["dirty_uids"] = list(dirty_uids or [])
+        return {"ok": True, "generation": "gen-new"}
+
+    monkeypatch.setattr(
+        "archive_cli.serving_index.serving_index_status",
+        lambda _vault: {
+            "serving_index_ready": True,
+            "serving_index_generation": "gen-old",
+            "serving_index_dirty_records": 7,
+        },
+    )
+    monkeypatch.setattr("archive_cli.serving_index.read_dirty_uids", lambda _vault: [])
+    monkeypatch.setattr("archive_cli.serving_index.publish_serving_index", fake_publish)
+
+    report = MaintenanceReport(
+        cards_rebuilt=213,
+        nothing_to_do=False,
+        publish_uids=["uid-rebuilt-1", "uid-rebuilt-2"],
+        source_updater_reports=[{"dirty_card_uids": ["uid-updater-1"]}],
+    )
+    _publish_serving_index(store, report, logging.getLogger("t"), dry_run=False)
+    assert called["dirty_uids"] == ["uid-rebuilt-1", "uid-rebuilt-2", "uid-updater-1"]
+    assert called["dirty_uids"] != []
+    assert report.serving_index["generation"] == "gen-new"
+    assert not any(e.get("step") == "serving_index_publish" for e in report.errors)
+    assert "serving_index_publish (clean)" not in report.skipped_steps
+
+
+def test_maintain_publish_does_not_skip_when_cards_rebuilt(tmp_path: Path, monkeypatch) -> None:
+    import logging
+
+    from archive_cli.commands.maintain import MaintenanceReport, _publish_serving_index
+
+    store = _warehouse_store(tmp_path)
+    monkeypatch.setattr("archive_cli.index_store.PostgresArchiveIndex", type(store.index))
+    called: dict[str, object] = {}
+
+    def fake_publish(_store, *, logger=None, dirty_uids=None, **_k):
+        called["dirty_uids"] = list(dirty_uids or [])
+        return {"ok": True, "generation": "gen-new"}
+
+    monkeypatch.setattr(
+        "archive_cli.serving_index.serving_index_status",
+        lambda _vault: {
+            "serving_index_ready": True,
+            "serving_index_generation": "1788472066779",
+            "serving_index_dirty_records": 7,
+        },
+    )
+    monkeypatch.setattr("archive_cli.serving_index.read_dirty_uids", lambda _vault: [])
+    monkeypatch.setattr("archive_cli.serving_index.publish_serving_index", fake_publish)
+
+    report = MaintenanceReport(
+        cards_rebuilt=213,
+        nothing_to_do=False,
+        publish_uids=["hfa-email-message-38ba2d7505bf"],
+    )
+    _publish_serving_index(store, report, logging.getLogger("t"), dry_run=False)
+    assert called["dirty_uids"] == ["hfa-email-message-38ba2d7505bf"]
+    assert report.serving_index.get("skipped") is None
+    assert "serving_index_publish (clean)" not in report.skipped_steps
+
+
+def test_maintain_publish_skips_when_clean(tmp_path: Path, monkeypatch) -> None:
+    import logging
+
+    from archive_cli.commands.maintain import MaintenanceReport, _publish_serving_index
+
+    store = _warehouse_store(tmp_path)
+    monkeypatch.setattr("archive_cli.index_store.PostgresArchiveIndex", type(store.index))
+    called: list[str] = []
+
+    def fake_publish(*_a, **_k):
+        called.append("publish")
+        raise AssertionError("publish must not run when nothing changed")
+
+    monkeypatch.setattr(
+        "archive_cli.serving_index.serving_index_status",
+        lambda _vault: {
+            "serving_index_ready": True,
+            "serving_index_generation": "gen-keep",
+            "serving_index_dirty_records": 0,
+        },
+    )
+    monkeypatch.setattr("archive_cli.serving_index.read_dirty_uids", lambda _vault: [])
+    monkeypatch.setattr("archive_cli.serving_index.publish_serving_index", fake_publish)
+
+    report = MaintenanceReport(nothing_to_do=True, cards_rebuilt=0, new_cards_ingested=0)
+    _publish_serving_index(store, report, logging.getLogger("t"), dry_run=False)
+    assert called == []
+    assert "serving_index_publish (clean)" in report.skipped_steps
+    assert report.serving_index.get("serving_index_generation") == "gen-keep"
+
+
 def test_maintain_failed_allows_partial(monkeypatch) -> None:
     import importlib.util
     from pathlib import Path

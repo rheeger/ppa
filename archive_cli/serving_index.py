@@ -228,8 +228,8 @@ def publish_serving_index(
     Called only from maintain / rebuild. Never from the MCP query path.
     Incremental when ACTIVE exists and ``dirty_uids`` is a non-empty concrete set:
     copy prior jsonl, patch those UIDs, hardlink embeddings.bin.
-    ``dirty_uids=None`` is a full rebuild publish. Maintain passes
-    ``read_dirty_uids()`` so an empty DIRTY skips the 25GB export.
+    ``dirty_uids=None`` is a full rebuild publish. Maintain passes the
+    run's concrete UID set so an empty DIRTY cannot skip a night that wrote cards.
     """
     log = logger or logging.getLogger("ppa.serving_index")
     vault = Path(store.vault)
@@ -246,6 +246,8 @@ def publish_serving_index(
             return {"ok": True, "skipped": "dirty_without_uids", "generation": active_gid, **status}
         incremental = bool(concrete and status.get("serving_index_ready") and active_gid)
     gid = dest_generation or str(int(time.time() * 1000))
+    if incremental:
+        log.info("serving_index_publish incremental uids=%s generation=%s", len(concrete), gid)
     dest = root / "generations" / gid
     dest.mkdir(parents=True, exist_ok=True)
     prev = root / "generations" / active_gid if incremental else None
@@ -583,8 +585,15 @@ def publish_serving_index(
     rss_cap = get_serving_index_max_rss_mb()
     est_mb = (embed_count * dim * 4) / (1024 * 1024)
     if est_mb > rss_cap:
-        log.error("serving_index_refresh_failed reason=rss_cap estimated_mb=%.1f cap=%s", est_mb, rss_cap)
-        return {"ok": False, "error": "serving_index_refresh_failed", "estimated_mb": est_mb}
+        if incremental:
+            log.warning(
+                "serving_index_publish incremental rss_over_cap estimated_mb=%.1f cap=%s hardlinked_embeddings=1",
+                est_mb,
+                rss_cap,
+            )
+        else:
+            log.error("serving_index_refresh_failed reason=rss_cap estimated_mb=%.1f cap=%s", est_mb, rss_cap)
+            return {"ok": False, "error": "serving_index_refresh_failed", "estimated_mb": est_mb}
     crate.serving_index_publish(str(root), gid)
     crate.serving_index_truncate_dirty(str(root))
     cache = QueryEmbedCache(get_query_embed_cache_path(vault), ram_entries=get_query_embed_cache_ram_entries())
