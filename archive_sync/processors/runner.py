@@ -558,9 +558,7 @@ def run_processors(
 
     plan = build_processor_plan(enriched, processor_keys=processor_keys)
     materialize_uids = {
-        item.input_uid
-        for item in plan.items
-        if item.processor_key == PROCESSOR_MATERIALIZATION and not item.skipped
+        item.input_uid for item in plan.items if item.processor_key == PROCESSOR_MATERIALIZATION and not item.skipped
     }
     planned_dirty = {snap.input_uid for snap in enriched if snap.source_dirty}
     dirty_unplanned = sorted(planned_dirty - materialize_uids)
