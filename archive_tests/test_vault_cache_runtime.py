@@ -56,6 +56,25 @@ def test_mark_written_forces_refresh(tmp_path: Path) -> None:
     assert second.note_count() == first.note_count()
 
 
+def test_deferred_mark_vault_written_emits_uids_on_flush(tmp_path: Path, monkeypatch) -> None:
+    from archive_cli.errors import ServingIndexUnavailableError
+    from archive_cli.serving_index import read_dirty_uids
+
+    root = tmp_path / "rust-search-index"
+    root.mkdir()
+    monkeypatch.setenv("PPA_SERVING_INDEX_PATH", str(root))
+    monkeypatch.setattr(
+        "archive_cli.serving_index._crate",
+        lambda: (_ for _ in ()).throw(ServingIndexUnavailableError("serving_index_unavailable")),
+    )
+    begin_defer_vault_written()
+    mark_vault_written(tmp_path, uids=["uid-deferred-a", "uid-deferred-b"])
+    assert read_dirty_uids(tmp_path) == []
+    end_defer_vault_written(flush=False)
+    assert flush_deferred_vault_written() == 1
+    assert read_dirty_uids(tmp_path) == ["uid-deferred-a", "uid-deferred-b"]
+
+
 def test_deferred_mark_vault_written_batches_invalidation(tmp_path: Path) -> None:
     vault = load_fixture_vault(tmp_path / "vault", include_graphs=True)
     install_process_reuse()

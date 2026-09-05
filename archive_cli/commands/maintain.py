@@ -17,6 +17,7 @@ from __future__ import annotations
 import importlib
 import logging
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
@@ -147,9 +148,54 @@ class MaintenanceReport:
     skipped_steps: list[str] = field(default_factory=list)
     nothing_to_do: bool = False
     serving_index: dict[str, Any] = field(default_factory=dict)
+    publish_uids: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {k: v for k, v in self.__dict__.items()}
+
+
+def _normalize_uids(values: Iterable[Any]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in values:
+        uid = str(raw or "").strip()
+        if uid and uid not in seen:
+            seen.add(uid)
+            out.append(uid)
+    return out
+
+
+def _uids_from_processor_reports(reports: list[dict[str, Any]]) -> list[str]:
+    collected: list[str] = []
+    for report in reports:
+        inner = report.get("report") or report
+        for uid in inner.get("output_uids") or []:
+            collected.append(uid)
+        for item in report.get("item_results") or inner.get("item_results") or []:
+            if item.get("input_uid"):
+                collected.append(item["input_uid"])
+            for uid in item.get("output_uids") or []:
+                collected.append(uid)
+    return _normalize_uids(collected)
+
+
+def collect_maintain_publish_uids(report: MaintenanceReport, vault: Any | None = None) -> list[str]:
+    """Concrete UIDs this maintain run wrote. Maintain is publisher of truth."""
+
+    from archive_sync.processors.dirty_io import dirty_uids_from_source_reports
+
+    collected: list[str] = list(report.publish_uids)
+    collected.extend(dirty_uids_from_source_reports(report.source_updater_reports or []))
+    collected.extend(_uids_from_processor_reports(report.processor_reports or []))
+    if vault is not None:
+        from archive_cli.serving_index import read_dirty_uids
+
+        collected.extend(read_dirty_uids(vault))
+    return _normalize_uids(collected)
+
+
+def _extend_publish_uids(report: MaintenanceReport, uids: Iterable[Any]) -> None:
+    report.publish_uids = _normalize_uids(list(report.publish_uids) + list(uids))
 
 
 def _maybe_embed_pending(store: Any, report: MaintenanceReport, logger: logging.Logger, *, dry_run: bool) -> None:
@@ -183,23 +229,43 @@ def _publish_serving_index(store: Any, report: MaintenanceReport, logger: loggin
         report.skipped_steps.append("serving_index_publish (dry-run)")
         return
     from archive_cli.index_store import PostgresArchiveIndex
-    from archive_cli.serving_index import serving_index_status
+    from archive_cli.serving_index import publish_serving_index, serving_index_status
 
     if not isinstance(getattr(store, "index", None), PostgresArchiveIndex):
         report.skipped_steps.append("serving_index_publish (no warehouse)")
         return
     status = serving_index_status(store.vault)
-    dirty = int(status.get("serving_index_dirty_records") or 0)
     ready = bool(status.get("serving_index_ready"))
-    if report.nothing_to_do and ready and dirty <= 0 and int(report.cards_rebuilt or 0) <= 0:
+    active_gid = str(status.get("serving_index_generation") or "")
+    concrete = collect_maintain_publish_uids(report, store.vault)
+    cards_rebuilt = int(report.cards_rebuilt or 0)
+    ingested = int(report.new_cards_ingested or 0)
+    publish_required = bool(concrete) or cards_rebuilt > 0 or ingested > 0
+    if ready and not publish_required:
+        logger.info("serving_index_publish skip-only-when-clean keep_generation=%s", active_gid)
         report.skipped_steps.append("serving_index_publish (clean)")
         report.serving_index = status
         return
+    if not concrete and publish_required:
+        error = "publish_required_without_uids"
+        logger.error(
+            "serving_index_publish failed error=%s cards_rebuilt=%s ingested=%s",
+            error,
+            cards_rebuilt,
+            ingested,
+        )
+        report.errors.append({"step": "serving_index_publish", "error": error})
+        report.serving_index = {"ok": False, "error": error, **status}
+        return
     try:
-        from archive_cli.serving_index import publish_serving_index, read_dirty_uids
-
-        result = publish_serving_index(store, logger=logger, dirty_uids=read_dirty_uids(store.vault))
+        logger.info("serving_index_publish incremental uids=%s", len(concrete))
+        result = publish_serving_index(store, logger=logger, dirty_uids=concrete)
         report.serving_index = result
+        if result.get("skipped"):
+            error = f"serving_index_publish_skipped:{result.get('skipped')}"
+            logger.error("serving_index_publish failed error=%s uids=%s", error, len(concrete))
+            report.errors.append({"step": "serving_index_publish", "error": error})
+            return
         if not result.get("ok"):
             logger.error("serving_index_refresh_failed")
             report.errors.append(
@@ -208,6 +274,12 @@ def _publish_serving_index(store: Any, report: MaintenanceReport, logger: loggin
                     "error": str(result.get("error") or "serving_index_refresh_failed"),
                 }
             )
+            return
+        logger.info(
+            "serving_index_publish incremental uids=%s generation=%s",
+            len(concrete),
+            result.get("generation"),
+        )
     except Exception as exc:
         logger.exception("serving_index_refresh_failed")
         report.errors.append({"step": "serving_index_publish", "error": str(exc)})
@@ -580,6 +652,9 @@ def run_maintenance(
             report.source_updater_runs = count
             report.source_updater_reports = payloads
             report.source_updater_partial = partial
+            from archive_sync.processors.dirty_io import dirty_uids_from_source_reports
+
+            _extend_publish_uids(report, dirty_uids_from_source_reports(payloads))
             if apply and not dry_run:
                 try:
                     from archive_cli.vault_cache_runtime import rebuild_vault_cache_after_writes
@@ -635,11 +710,12 @@ def run_maintenance(
                 "groups": link.get("groups"),
                 "incremental": True,
             }
+            _extend_publish_uids(report, hygiene_dirty)
             if apply_hygiene and (report.junk_attachments_purged or report.file_duplicates_linked):
                 try:
                     from archive_cli.vault_cache_runtime import mark_vault_written
 
-                    mark_vault_written(store.vault)
+                    mark_vault_written(store.vault, uids=hygiene_dirty)
                 except Exception:
                     logger.debug("maintain mark_vault_written after hygiene failed", exc_info=True)
             if not apply_hygiene:
@@ -667,6 +743,7 @@ def run_maintenance(
             report.processor_runs = count
             report.processor_reports = payloads
             report.processor_output_count = outputs
+            _extend_publish_uids(report, _uids_from_processor_reports(payloads))
             if not apply:
                 report.skipped_steps.append("processor_execution (dry-run)")
         except Exception as exc:
@@ -716,6 +793,7 @@ def run_maintenance(
             try:
                 counts = store.rebuild(force_full=False, uid_allowlist=set(hygiene_dirty))
                 report.cards_rebuilt = int(counts.get("cards_materialized") or counts.get("cards") or 0)
+                _extend_publish_uids(report, hygiene_dirty)
             except Exception as exc:
                 logger.exception("maintain_rebuild_failed")
                 report.errors.append({"step": "incremental_rebuild", "error": str(exc)})
@@ -731,6 +809,7 @@ def run_maintenance(
     report.new_cards_ingested = len(new_rows)
     created_n = sum(1 for r in new_rows if r.get("action") == "created")
     tailed_uids = {str(row.get("card_uid") or "").strip() for row in new_rows if str(row.get("card_uid") or "").strip()}
+    _extend_publish_uids(report, tailed_uids)
     created_uids = {
         str(row.get("card_uid") or "").strip()
         for row in new_rows
@@ -797,10 +876,12 @@ def run_maintenance(
                     len(rebuild_uids),
                 )
                 report.cards_rebuilt = already or len(rebuild_uids)
+                _extend_publish_uids(report, rebuild_uids)
                 report.skipped_steps.append("incremental_rebuild (processors already rematerialized allowlist)")
             else:
                 counts = store.rebuild(force_full=False, uid_allowlist=rebuild_uids)
                 report.cards_rebuilt = int(counts.get("cards_materialized") or counts.get("cards") or 0)
+                _extend_publish_uids(report, rebuild_uids)
         except Exception as exc:
             logger.exception("maintain_rebuild_failed")
             report.errors.append({"step": "incremental_rebuild", "error": str(exc)})

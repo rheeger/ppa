@@ -29,9 +29,14 @@ _LOCK = threading.RLock()
 _CACHES: dict[str, VaultScanCache] = {}
 _DIRTY: set[str] = set()
 _DEFERRED_WRITTEN: set[str] = set()
+_DEFERRED_UIDS: dict[str, set[str]] = {}
 _DEFER_DEPTH = 0
 _INSTALLED = False
 _ORIG_BUILD = VaultScanCache.build_or_load
+
+
+def _normalize_dirty_uids(uids: list[str] | None) -> list[str]:
+    return [str(uid).strip() for uid in (uids or []) if str(uid).strip()]
 
 
 def _vault_key(vault: Path | str) -> str:
@@ -69,29 +74,41 @@ def flush_deferred_vault_written() -> int:
 
     with _LOCK:
         pending = set(_DEFERRED_WRITTEN)
+        uids_by_vault = {key: set(_DEFERRED_UIDS.get(key, set())) for key in pending}
         _DEFERRED_WRITTEN.clear()
+        _DEFERRED_UIDS.clear()
         for key in pending:
             _DIRTY.add(key)
     if pending:
         logger.info("vault-cache flush_deferred count=%s", len(pending))
+        from archive_cli.serving_index import mark_serving_index_dirty
+
+        for key in pending:
+            try:
+                mark_serving_index_dirty(key, "vault_written", sorted(uids_by_vault.get(key, set())))
+            except Exception:
+                logger.debug("serving_index mark_dirty after deferred vault_written failed", exc_info=True)
     return len(pending)
 
 
-def mark_vault_written(vault: Path | str) -> None:
+def mark_vault_written(vault: Path | str, uids: list[str] | None = None) -> None:
     """Next ``build_or_load`` for this vault must refresh (fingerprint + incremental)."""
 
     key = _vault_key(vault)
+    uid_list = _normalize_dirty_uids(uids)
     with _LOCK:
         if _DEFER_DEPTH > 0:
             _DEFERRED_WRITTEN.add(key)
-            logger.info("vault-cache mark_written deferred vault=%s", key)
+            if uid_list:
+                _DEFERRED_UIDS.setdefault(key, set()).update(uid_list)
+            logger.info("vault-cache mark_written deferred vault=%s uids=%s", key, len(uid_list))
             return
         _DIRTY.add(key)
-    logger.info("vault-cache mark_written vault=%s", key)
+    logger.info("vault-cache mark_written vault=%s uids=%s", key, len(uid_list))
     try:
         from archive_cli.serving_index import mark_serving_index_dirty
 
-        mark_serving_index_dirty(vault, "vault_written")
+        mark_serving_index_dirty(vault, "vault_written", uid_list)
     except Exception:
         logger.debug("serving_index mark_dirty after vault_written failed", exc_info=True)
 
@@ -126,6 +143,7 @@ def clear_process_cache() -> None:
         _CACHES.clear()
         _DIRTY.clear()
         _DEFERRED_WRITTEN.clear()
+        _DEFERRED_UIDS.clear()
 
 
 def process_reuse_installed() -> bool:

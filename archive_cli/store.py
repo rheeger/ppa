@@ -123,7 +123,9 @@ class DefaultArchiveStore(ArchiveStore):
             try:
                 from .serving_index import mark_serving_index_dirty
 
-                mark_serving_index_dirty(self.vault, "rebuild")
+                allowlist = filtered.get("uid_allowlist") or []
+                dirty = [str(uid).strip() for uid in allowlist if str(uid).strip()]
+                mark_serving_index_dirty(self.vault, "rebuild", dirty)
             except Exception:
                 pass
         return counts

@@ -281,6 +281,7 @@ def test_maintenance_coverage_report_fields() -> None:
         "errors",
         "skipped_steps",
         "nothing_to_do",
+        "publish_uids",
     ):
         assert k in d
 

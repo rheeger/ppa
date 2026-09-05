@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from archive_cli.errors import ServingIndexUnavailableError
 from archive_cli.index_config import (
     get_query_embed_cache_max_age_days,
     get_query_embed_cache_max_rows,
@@ -14,6 +15,7 @@ from archive_cli.index_config import (
 )
 from archive_cli.query_explain import explain_sql
 from archive_cli.serving_index import (
+    mark_serving_index_dirty,
     merge_jsonl_by_key,
     publish_serving_index,
     read_dirty_uids,
@@ -64,6 +66,35 @@ def test_merge_jsonl_by_key_replaces_and_appends(tmp_path: Path) -> None:
     rows = [json.loads(line) for line in dest.read_text(encoding="utf-8").splitlines() if line.strip()]
     by_uid = {row["card_uid"]: row["summary"] for row in rows}
     assert by_uid == {"a": "new-a", "b": "keep-b", "c": "new-c"}
+
+
+def test_mark_vault_written_emits_uids(tmp_path: Path, monkeypatch) -> None:
+    from archive_cli.vault_cache_runtime import mark_vault_written
+
+    root = tmp_path / "rust-search-index"
+    root.mkdir()
+    monkeypatch.setenv("PPA_SERVING_INDEX_PATH", str(root))
+    monkeypatch.setattr(
+        "archive_cli.serving_index._crate",
+        lambda: (_ for _ in ()).throw(ServingIndexUnavailableError("serving_index_unavailable")),
+    )
+    mark_vault_written(tmp_path, uids=["uid-from-writer", ""])
+    assert read_dirty_uids(tmp_path) == ["uid-from-writer"]
+    rec = json.loads((root / "DIRTY").read_text(encoding="utf-8").splitlines()[0])
+    assert rec["reason"] == "vault_written"
+    assert rec["uids"] == ["uid-from-writer"]
+
+
+def test_mark_serving_index_dirty_rebuild_includes_allowlist(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "rust-search-index"
+    root.mkdir()
+    monkeypatch.setenv("PPA_SERVING_INDEX_PATH", str(root))
+    monkeypatch.setattr(
+        "archive_cli.serving_index._crate",
+        lambda: (_ for _ in ()).throw(ServingIndexUnavailableError("serving_index_unavailable")),
+    )
+    mark_serving_index_dirty(tmp_path, "rebuild", ["uid-allow-1", "uid-allow-2"])
+    assert read_dirty_uids(tmp_path) == ["uid-allow-1", "uid-allow-2"]
 
 
 def test_read_dirty_uids_ignores_empty_vault_written(tmp_path: Path, monkeypatch) -> None:
@@ -210,3 +241,63 @@ def test_publish_serving_index_incremental_skips_full_export(tmp_path: Path, mon
     cards = [json.loads(line) for line in (dest / "cards.jsonl").read_text(encoding="utf-8").splitlines()]
     assert {row["card_uid"] for row in cards} == {"old"}
     assert (dest / "embeddings.bin").stat().st_ino == (prev / "embeddings.bin").stat().st_ino
+
+
+def test_publish_serving_index_incremental_does_not_fail_rss_cap(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "rust-search-index"
+    prev = root / "generations" / "gen-prev"
+    prev.mkdir(parents=True)
+    (prev / "cards.jsonl").write_text(json.dumps({"card_uid": "old"}) + "\n", encoding="utf-8")
+    (prev / "chunks.jsonl").write_text(
+        json.dumps({"chunk_key": "ck-old", "card_uid": "old", "chunk_type": "body", "chunk_index": 0}) + "\n",
+        encoding="utf-8",
+    )
+    (prev / "edges.jsonl").write_text("\n", encoding="utf-8")
+    (prev / "embedding_keys.txt").write_text("ck-old\n", encoding="utf-8")
+    (prev / "embeddings.bin").write_bytes(b"abcd")
+    monkeypatch.setenv("PPA_SERVING_INDEX_PATH", str(root))
+    monkeypatch.setattr("archive_cli.serving_index.get_serving_index_max_rss_mb", lambda: 0)
+    monkeypatch.setattr(
+        "archive_cli.serving_index.serving_index_status",
+        lambda _vault: {
+            "serving_index_ready": True,
+            "serving_index_generation": "gen-prev",
+            "serving_index_dirty_records": 1,
+            "serving_index_format": 1,
+        },
+    )
+
+    class _Conn:
+        def execute(self, sql, _params=None):
+            return []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+    store = MagicMock()
+    store.vault = tmp_path
+    store.index.schema = "ppa"
+    store.index._connect.return_value = _Conn()
+    published: list[str] = []
+
+    class _Crate:
+        @staticmethod
+        def serving_index_build(*_a, **_k):
+            return {"ok": True}
+
+        @staticmethod
+        def serving_index_publish(_root, gid):
+            published.append(gid)
+
+        @staticmethod
+        def serving_index_truncate_dirty(*_a, **_k):
+            return None
+
+    monkeypatch.setattr("archive_cli.serving_index._crate", lambda: _Crate())
+    result = publish_serving_index(store, dirty_uids=["uid-new"], dest_generation="gen-rss")
+    assert result["ok"] is True
+    assert result["generation"] == "gen-rss"
+    assert published == ["gen-rss"]
