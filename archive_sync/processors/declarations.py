@@ -127,18 +127,25 @@ def _email_thread_enrichment() -> ProcessorDeclaration:
     )
 
 
+def _indexed_card_types() -> tuple[str, ...]:
+    """Every vault card type maintain can dirty — plus legacy aliases.
+
+    Materialization / embed / linkers used to allowlist only email, calendar,
+    and iMessage threads. Dirty person, Beeper, document, and git cards were
+    planned then silently dropped (``card_type not in input_card_types``).
+    """
+
+    from archive_vault.schema import CARD_TYPES
+
+    extra = ("photo_metadata", "health_record")
+    return tuple(dict.fromkeys([*CARD_TYPES, *extra]))
+
+
 def _materialization() -> ProcessorDeclaration:
     return ProcessorDeclaration(
         processor_key=PROCESSOR_MATERIALIZATION,
         processor_version=MATERIALIZATION_VERSION,
-        input_card_types=(
-            "email_thread",
-            "email_message",
-            "calendar_event",
-            "imessage_thread",
-            "photo_metadata",
-            "health_record",
-        ),
+        input_card_types=_indexed_card_types(),
         input_filters={},
         output_kinds=(OUTPUT_KIND_CARDS, OUTPUT_KIND_CHUNKS, OUTPUT_KIND_PROJECTIONS),
         output_identity="{processor_key}:{input_uid}:chunk",
@@ -155,7 +162,7 @@ def _embedding() -> ProcessorDeclaration:
     return ProcessorDeclaration(
         processor_key=PROCESSOR_EMBEDDING,
         processor_version=EMBEDDING_PROCESSOR_VERSION,
-        input_card_types=("email_thread", "email_message", "calendar_event", "imessage_thread"),
+        input_card_types=_indexed_card_types(),
         input_filters={"corpus_decision": "active"},
         output_kinds=(OUTPUT_KIND_EMBEDDINGS,),
         output_identity="{processor_key}:{input_uid}:{chunk_key}:{model_id}",
@@ -172,13 +179,7 @@ def _linkers() -> ProcessorDeclaration:
     return ProcessorDeclaration(
         processor_key=PROCESSOR_LINKERS,
         processor_version=LINKERS_PROCESSOR_VERSION,
-        input_card_types=(
-            "email_thread",
-            "email_message",
-            "calendar_event",
-            "imessage_thread",
-            "derived_card",
-        ),
+        input_card_types=tuple(dict.fromkeys([*_indexed_card_types(), "derived_card"])),
         input_filters={"corpus_decision": "active"},
         output_kinds=(OUTPUT_KIND_GRAPH_EDGES, OUTPUT_KIND_LINK_DECISIONS),
         output_identity="{processor_key}:{source_uid}:{target_uid}:{relation}:{linker_version}",
@@ -195,7 +196,7 @@ def _entity_resolution() -> ProcessorDeclaration:
     return ProcessorDeclaration(
         processor_key=PROCESSOR_ENTITY_RESOLUTION,
         processor_version=ENTITY_RESOLUTION_VERSION,
-        input_card_types=("email_thread", "email_message", "calendar_event", "imessage_thread"),
+        input_card_types=_indexed_card_types(),
         input_filters={"corpus_decision": "active"},
         output_kinds=(OUTPUT_KIND_PERSON_LINKS, OUTPUT_KIND_PLACE_LINKS, OUTPUT_KIND_ORG_LINKS),
         output_identity="{processor_key}:{input_uid}:{entity_mention_hash}",

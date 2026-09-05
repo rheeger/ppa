@@ -457,6 +457,35 @@ def _apply_default(
     )
 
 
+def test_apply_materialization_rebuilds_dirty_person_card(tmp_path: Path) -> None:
+    vault = _minimal_vault(tmp_path)
+    store = _MockStore(vault)
+    snap = ProcessorInputSnapshot(
+        input_uid="hfa-person-dirty-1",
+        card_type="person",
+        corpus_state=CORPUS_ACTIVE,
+        field_values={"body_sha": "p1", "frontmatter_hash": "fm1", "chunk_hash": "p1"},
+        source_dirty=True,
+        upstream_complete=True,
+    )
+    meta = vault / "_meta" / "processors.json"
+    state = ProcessorStateStore(None, meta_path=meta)
+    result = run_processors(
+        inputs=[snap],
+        vault_path=str(vault),
+        store=store,
+        state_store=state,
+        processor_keys=[PROCESSOR_MATERIALIZATION],
+        apply=True,
+        dry_run=False,
+        repo_root=tmp_path,
+    )
+    assert result.executed is True
+    assert store.rebuild_calls
+    assert store.rebuild_calls[0]["force_full"] is False
+    assert store.rebuild_calls[0]["uid_allowlist"] == {"hfa-person-dirty-1"}
+
+
 def test_apply_materialization_calls_incremental_rebuild(tmp_path: Path) -> None:
     vault = _minimal_vault(tmp_path)
     store = _MockStore(vault)

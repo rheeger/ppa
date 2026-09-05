@@ -557,13 +557,25 @@ def run_processors(
         enriched.append(snap)
 
     plan = build_processor_plan(enriched, processor_keys=processor_keys)
+    materialize_uids = {
+        item.input_uid for item in plan.items if item.processor_key == PROCESSOR_MATERIALIZATION and not item.skipped
+    }
+    planned_dirty = {snap.input_uid for snap in enriched if snap.source_dirty}
+    dirty_unplanned = sorted(planned_dirty - materialize_uids)
     log.info(
-        "processor plan built inputs=%s dirty=%s stale=%s skipped=%s",
+        "processor plan built inputs=%s dirty=%s stale=%s skipped=%s materialize_uids=%s dirty_without_materialization=%s",
         plan.input_count,
         plan.dirty_count,
         plan.stale_count,
         plan.skipped_count,
+        len(materialize_uids),
+        len(dirty_unplanned),
     )
+    if dirty_unplanned:
+        log.warning(
+            "dirty uids have no materialization plan sample=%s",
+            dirty_unplanned[:12],
+        )
     proc_key = processor_keys[0] if processor_keys and len(processor_keys) == 1 else "all"
     decl = declaration_for_key(proc_key) if proc_key != "all" else None
     report = ProcessorRunReport(

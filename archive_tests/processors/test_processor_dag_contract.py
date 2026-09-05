@@ -173,6 +173,34 @@ def test_dirty_input_triggers_only_expected_processors() -> None:
     assert all(i.skipped for i in embedding_items)
 
 
+@pytest.mark.parametrize(
+    "card_type",
+    [
+        "person",
+        "document",
+        "beeper_message",
+        "beeper_thread",
+        "imessage_message",
+        "git_commit",
+        "git_message",
+        "git_thread",
+    ],
+)
+def test_dirty_non_email_types_trigger_materialization_embed_linkers(card_type: str) -> None:
+    snap = ProcessorInputSnapshot(
+        input_uid=f"{card_type}-dirty-1",
+        card_type=card_type,
+        corpus_state=CORPUS_ACTIVE,
+        field_values={"body_sha": "sha-v1", "frontmatter_hash": "fm-v1"},
+        source_dirty=True,
+        upstream_complete=True,
+    )
+    triggered = processors_for_dirty_input(snap)
+    assert PROCESSOR_MATERIALIZATION in triggered
+    assert PROCESSOR_EMBEDDING in triggered
+    assert PROCESSOR_LINKERS in triggered
+
+
 def test_source_dirty_marks_stale() -> None:
     decl = next(d for d in iter_processor_declarations() if d.processor_key == PROCESSOR_MATERIALIZATION)
     snap = _active_email_snapshot(source_dirty=True, output_exists=True)
