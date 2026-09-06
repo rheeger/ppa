@@ -342,6 +342,24 @@ def get_serving_train_memory_mb() -> int:
     return max(_ppa_env_int("PPA_SERVING_TRAIN_MEMORY_MB", default=get_serving_index_max_rss_mb()), 64)
 
 
+def _ppa_env_float(canonical: str, default: float) -> float:
+    raw = _ppa_env(canonical, default=str(default))
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def get_publication_max_chain_depth() -> int:
+    """Bounded parent walk before an explicit compaction rebuild."""
+    return max(_ppa_env_int("PPA_PUBLICATION_MAX_CHAIN_DEPTH", default=8), 1)
+
+
+def get_publication_delta_ratio() -> float:
+    """Delta/live-vector ratio that triggers explicit compaction."""
+    return max(_ppa_env_float("PPA_PUBLICATION_DELTA_RATIO", default=0.5), 0.01)
+
+
 def get_query_embed_cache_path(vault: Path | None = None) -> Path:
     raw = _ppa_env("PPA_QUERY_EMBED_CACHE_PATH")
     if raw:

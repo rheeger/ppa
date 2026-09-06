@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 
 use pyo3::prelude::*;
 
+/// Immutable generation directories. ACTIVE is a pointer; parents stay until unpinned.
+
 pub fn generations_dir(index_root: &Path) -> PathBuf {
     index_root.join("generations")
 }

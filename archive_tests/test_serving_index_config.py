@@ -237,13 +237,24 @@ def test_publish_serving_index_incremental_skips_full_export(tmp_path: Path, mon
     assert "FROM ppa.cards c" in joined
     assert "c.uid = ANY(%s)" in joined
     assert "SELECT COUNT(*) AS c FROM ppa.cards" not in joined
-    assert "FROM ppa.embeddings" not in joined
+    assert "SELECT COUNT(*) AS c FROM ppa.embeddings" not in joined
+    if "FROM ppa.embeddings" in joined:
+        assert "c.card_uid = ANY(%s)" in joined
     dest = root / "generations" / "gen-new"
-    cards = [json.loads(line) for line in (dest / "cards.jsonl").read_text(encoding="utf-8").splitlines()]
-    assert {row["card_uid"] for row in cards} == {"old"}
+    cards = [
+        json.loads(line)
+        for line in (dest / "cards.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert {row["card_uid"] for row in cards} == set()
+    assert "old" not in {row.get("card_uid") for row in cards}
     assert (dest / "embeddings.bin").exists()
-    assert not prev.exists()
-    assert result["pruned_generations"] == ["gen-prev"]
+    assert prev.exists()
+    assert "gen-prev" not in result["pruned_generations"]
+    layout = json.loads((dest / "layout.json").read_text(encoding="utf-8"))
+    assert layout["mode"] == "delta"
+    assert layout["parent_generation"] == "gen-prev"
+    assert "uid-new" in layout["tombstone_uids"]
 
 
 def test_publish_serving_index_incremental_does_not_fail_rss_cap(tmp_path: Path, monkeypatch) -> None:
@@ -304,7 +315,7 @@ def test_publish_serving_index_incremental_does_not_fail_rss_cap(tmp_path: Path,
     assert result["ok"] is True
     assert result["generation"] == "gen-rss"
     assert published == ["gen-rss"]
-    assert not prev.exists()
+    assert prev.exists()
     assert (root / "generations" / "gen-rss").exists()
 
 

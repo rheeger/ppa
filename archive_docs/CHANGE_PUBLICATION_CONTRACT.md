@@ -124,7 +124,48 @@ The journal is additive under `_meta`. Removing `009` drops only the
 warehouse cursor table. Legacy DIRTY remains readable. Do not delete
 committed mutation rows to “undo” a card; write a new delete/update.
 
+## Generation layout (P02-B)
+
+Each generation is an immutable segment. Incremental publish writes only the
+dirty UID set, replacement chunks/edges, new vectors, and explicit tombstones.
+The reader walks `layout.json` oldest→newest, newest wins, tombstones hide.
+
+```json
+{
+  "layout_version": 1,
+  "mode": "full | delta | compact",
+  "parent_generation": "",
+  "base_generation": "",
+  "snapshot_id": "",
+  "source_watermark": 0,
+  "tombstone_uids": [],
+  "tombstone_chunk_keys": [],
+  "replaced_uids": [],
+  "embedding_spec": {}
+}
+```
+
+Rules:
+
+- Deleted UID = dirty UID with no warehouse row. Absence from a limited query
+  is not a tombstone.
+- Replacement-by-UID retires all prior chunk keys and incident edges for that
+  UID, then writes the new set.
+- New vectors carry a full `EmbeddingSpec`. Mixed model/dim/metric/normalization
+  vs the parent fails closed. Mixed `chunk_schema` on different live UIDs is
+  allowed.
+- Vector search unions IVF hits across segments, filters to live keys, then
+  ranks. Per-segment candidate budget is `max(k * chain_depth, candidate_budget)`.
+- Compaction is an explicit full rebuild (`mode=compact`) when chain depth or
+  delta/live-vector ratio exceeds `PPA_PUBLICATION_MAX_CHAIN_DEPTH` /
+  `PPA_PUBLICATION_DELTA_RATIO`. Small mutations must not secretly full-export.
+- GC keeps ACTIVE, the parent chain, and process-local pinned generations.
+  Interprocess leases are P02-C.
+
+`archive_engine.publication.publish_snapshot` is the publisher port P03 later
+calls as `publish(eligible_checkpoint, context) -> PublicationReceipt`.
+
 ## Out of scope (later slices)
 
-Generation layout, incremental/full equivalence, publisher lease, and
-embedder/loader emission are P02-B/C/D.
+Publisher lease, crash/concurrency promotion, and embedder/loader emission
+are P02-C/D.

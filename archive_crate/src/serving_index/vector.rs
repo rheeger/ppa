@@ -207,6 +207,21 @@ impl IvfMmapAnn {
             .collect()
     }
 
+    /// IVF hits restricted to currently live chunk keys (tombstones already applied).
+    pub fn knn_live(
+        &self,
+        query: &[f32],
+        k: usize,
+        live_keys: &HashSet<String>,
+        nprobe: usize,
+        budget: usize,
+        eligible: Option<&HashSet<usize>>,
+    ) -> KnnReport {
+        let mut report = self.knn_report(query, k, eligible, nprobe, budget);
+        report.hits.retain(|h| live_keys.contains(&h.key));
+        report
+    }
+
     pub fn knn_report(
         &self,
         query: &[f32],
