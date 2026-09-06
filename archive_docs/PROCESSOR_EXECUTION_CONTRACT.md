@@ -77,12 +77,22 @@ Restart retries `pending`, expired `running`, and `retryable_failure`.
 `complete` / `valid_no_output` for the current revision+digest are
 `already_current`.
 
-## What P03-A does not change
+## Embedding selection (P03-B)
 
-Thin adapters may still call `_complete_items` after aggregate work. The
-scheduler will not persist `complete` without an `OutputReceipt`. Embedding
-still collects UIDs and calls `embed_pending(limit=...)` with no allowlist —
-that is P03-B. Dynamic enqueue of created/changed UIDs is P03-C.
+Dirty embed must pass `uid_allowlist` and/or `chunk_key_allowlist` into
+`store.embed_pending`. The predicate is applied in SQL before `limit`, which
+is only a budget on the already-selected pending set. Compatible
+`EmbeddingSpec` cache hits reuse existing rows and do not call the model.
+Provider failure or leftover pending chunk keys leave that card
+`failed`/`pending` — they do not mark it complete.
+
+Unscoped backlog drain is reserved for the existing admin route
+(`ppa embed-pending`, MCP `archive_embed_pending`, maintain's explicit
+`unscoped=True` call).
+
+## What P03-A/B do not change
+
+Dynamic enqueue of created/changed UIDs is P03-C. Unified `maintain` is P03-D.
 
 ## Schema
 

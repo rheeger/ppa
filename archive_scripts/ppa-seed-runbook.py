@@ -1239,6 +1239,7 @@ class SeedRunbook:
                 embedding_model=self.manifest.embedding_model,
                 embedding_version=self.manifest.embedding_version,
                 limit=max(20, pending),
+                unscoped=True,
             )
             if _coerce_int(result.get("failed")) > 0:
                 raise PhaseFailure("Embedding run reported failed chunks", retryable=True)

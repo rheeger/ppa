@@ -208,7 +208,7 @@ def _maybe_embed_pending(store: Any, report: MaintenanceReport, logger: logging.
     if int(report.cards_rebuilt or 0) <= 0 and report.nothing_to_do:
         return
     try:
-        report.serving_index.setdefault("embed_pending", store.embed_pending(limit=0))
+        report.serving_index.setdefault("embed_pending", store.embed_pending(limit=0, unscoped=True))
     except Exception as exc:
         logger.exception("maintain_embed_pending_failed")
         report.errors.append({"step": "embed_pending", "error": str(exc)})

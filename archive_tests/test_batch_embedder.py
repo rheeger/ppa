@@ -107,3 +107,24 @@ class TestSubmitBatchesNoWork:
         )
         assert result["submitted_batches"] == 0
         assert result["total_requests"] == 0
+
+    def test_dirty_submit_requires_allowlist(self, tmp_path):
+        import logging
+
+        from archive_cli import batch_embedder as be
+
+        index = MagicMock()
+        index.schema = "ppa"
+        try:
+            be.submit_batches(
+                index=index,
+                logger_=logging.getLogger("ppa.test"),
+                embedding_model="text-embedding-3-small",
+                embedding_version=1,
+                unscoped=False,
+                artifact_dir=str(tmp_path),
+            )
+        except ValueError as exc:
+            assert "allowlist" in str(exc)
+        else:
+            raise AssertionError("unscoped dirty submit_batches should raise")

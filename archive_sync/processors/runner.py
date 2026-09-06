@@ -17,9 +17,11 @@ from .batch import ProcessorPlanItem, ProcessorRunReport
 from .constants import (
     BROAD_LLM_PROCESSOR_KEYS,
     EXPENSIVE_PROCESSOR_KEYS,
+    EMBEDDING_PROCESSOR_VERSION,
     INPUT_STATUS_BLOCKED_DEPENDENCY,
     INPUT_STATUS_COMPLETE,
     INPUT_STATUS_FAILED,
+    INPUT_STATUS_PENDING,
     INPUT_STATUS_SKIPPED,
     PROCESSOR_EMAIL_PROMOTION_POLICY,
     PROCESSOR_EMAIL_THREAD_ENRICHMENT,
@@ -294,9 +296,11 @@ def _execute_entity_resolution(ctx: ExecuteContext, items: list[ProcessorPlanIte
 
 
 def _execute_embedding(ctx: ExecuteContext, items: list[ProcessorPlanItem]) -> BatchExecuteResult:
-    """Thin adapter into existing ``store.embed_pending`` for dirty UIDs.
+    """Embed dirty cards by UID allowlist. Limit is a budget after selection.
 
-    Full-corpus embed (``limit=0``) requires ``allow_full_embedding``.
+    Full-corpus embed requires ``allow_full_embedding`` and uses the unscoped
+    admin route. Provider failure or leftover pending chunks do not mark a
+    card complete.
     """
 
     out = BatchExecuteResult()
@@ -306,31 +310,136 @@ def _execute_embedding(ctx: ExecuteContext, items: list[ProcessorPlanItem]) -> B
         out.results.extend(_complete_items(items))
         return out
     try:
+        from archive_cli.engine_factory import embedding_spec_from_env
         from archive_cli.index_config import get_embed_concurrency
 
         store = _require_store_attr(ctx, "embed_pending", "embedding")
         concurrency = get_embed_concurrency()
+        spec = embedding_spec_from_env()
         uids = [item.input_uid for item in items]
+        kwargs: dict[str, Any] = {"limit": 0, "embedding_spec": spec}
         if ctx.allow_full_embedding:
-            limit = 0
+            kwargs["unscoped"] = True
             log.info("embedding_full_backlog concurrency=%s opt_in=allow_full_embedding", concurrency)
         else:
-            limit = max(len(uids), 1)
+            kwargs["uid_allowlist"] = set(uids)
             log.info(
-                "embedding_dirty_pending uids=%s limit=%s concurrency=%s",
+                "embedding_dirty_pending uids=%s budget=unlimited_after_allowlist concurrency=%s",
                 len(uids),
-                limit,
                 concurrency,
             )
-        result = store.embed_pending(limit=limit)
-        embedded = result.get("embedded", result) if isinstance(result, dict) else result
-        out.warnings.append(f"embedding embedded={embedded} limit={limit} concurrency={concurrency}")
+        result = store.embed_pending(**kwargs)
+        if not isinstance(result, dict):
+            result = {"embedded": result, "failed": 0}
+        embedded = result.get("embedded", 0)
+        out.warnings.append(
+            f"embedding embedded={embedded} selected={result.get('selected', 0)} "
+            f"failed={result.get('failed', 0)} concurrency={concurrency}"
+        )
     except Exception as exc:
         out.errors.append(f"embedding: {exc}")
         log.exception("embedding_failed")
         out.results.extend(_fail_items(items, str(exc)))
         return out
-    out.results.extend(_complete_items(items))
+
+    last_error = str(result.get("last_error") or "")
+    if ctx.allow_full_embedding:
+        if int(result.get("failed") or 0) > 0:
+            out.results.extend(_fail_items(items, last_error or "embedding provider failed"))
+        else:
+            out.results.extend(_complete_items(items))
+        return out
+
+    selected_by_uid = result.get("chunk_keys_by_uid") or {}
+    completed_keys = {str(key) for key in (result.get("completed_chunk_keys") or [])}
+    failed_keys = {str(key) for key in (result.get("failed_chunk_keys") or [])}
+    pending_keys = {str(key) for key in (result.get("pending_chunk_keys") or [])}
+    spec_payload = result.get("embedding_spec")
+    from archive_engine.contracts import EmbeddingSpec
+
+    parsed_spec = None
+    if spec_payload is not None:
+        parsed_spec = (
+            spec_payload if isinstance(spec_payload, EmbeddingSpec) else EmbeddingSpec.from_payload(spec_payload)
+        )
+
+    def _receipt(*, status: str, keys: tuple[str, ...], error_reason: str = "") -> OutputReceipt:
+        return OutputReceipt(
+            processor=PROCESSOR_EMBEDDING,
+            processor_version=EMBEDDING_PROCESSOR_VERSION,
+            input_uid=item.input_uid,
+            input_revision=revision,
+            status=status,  # type: ignore[arg-type]
+            chunk_keys=keys,
+            embedding_spec=parsed_spec,
+            error_reason=error_reason,
+        )
+
+    for item in items:
+        keys = [str(key) for key in (selected_by_uid.get(item.input_uid) or [])]
+        keyset = set(keys)
+        item_failed = keyset & failed_keys
+        item_pending = keyset & pending_keys
+        revision = item.input_revision or item.current_input_hash
+        if item_failed:
+            out.results.append(
+                ItemExecuteResult(
+                    processor_key=item.processor_key,
+                    input_uid=item.input_uid,
+                    status=INPUT_STATUS_FAILED,
+                    output_identity=item.output_identity,
+                    input_hash=item.current_input_hash,
+                    input_revision=revision,
+                    error=last_error or "embedding provider failed",
+                    receipt=_receipt(
+                        status="failed",
+                        keys=tuple(keys),
+                        error_reason=last_error or "embedding provider failed",
+                    ),
+                )
+            )
+            continue
+        if item_pending:
+            out.results.append(
+                ItemExecuteResult(
+                    processor_key=item.processor_key,
+                    input_uid=item.input_uid,
+                    status=INPUT_STATUS_PENDING,
+                    output_identity=item.output_identity,
+                    input_hash=item.current_input_hash,
+                    input_revision=revision,
+                    receipt=_receipt(status="pending", keys=tuple(keys)),
+                    receipt_status=INPUT_STATUS_PENDING,
+                )
+            )
+            continue
+        if not keys:
+            out.results.append(
+                ItemExecuteResult(
+                    processor_key=item.processor_key,
+                    input_uid=item.input_uid,
+                    status=INPUT_STATUS_COMPLETE,
+                    output_identity=item.output_identity,
+                    input_hash=item.current_input_hash,
+                    input_revision=revision,
+                    valid_no_output=True,
+                    receipt=_receipt(status="completed", keys=()),
+                )
+            )
+            continue
+        done_keys = tuple(key for key in keys if key in completed_keys)
+        out.results.append(
+            ItemExecuteResult(
+                processor_key=item.processor_key,
+                input_uid=item.input_uid,
+                status=INPUT_STATUS_COMPLETE,
+                output_identity=item.output_identity,
+                output_uids=[item.input_uid],
+                input_hash=item.current_input_hash,
+                input_revision=revision,
+                receipt=_receipt(status="completed", keys=done_keys),
+            )
+        )
     return out
 
 

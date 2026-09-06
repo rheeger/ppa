@@ -157,6 +157,7 @@ def receipt_from_item_result(
     )
     if scheduler_status == RECEIPT_STATUS_VALID_NO_OUTPUT:
         outputs = ()
+    prior = result.receipt
     return OutputReceipt(
         processor=result.processor_key,
         processor_version=processor_version,
@@ -164,7 +165,9 @@ def receipt_from_item_result(
         input_revision=input_revision,
         status=output_receipt_status(scheduler_status),  # type: ignore[arg-type]
         outputs=outputs,
-        error_reason=result.error,
+        chunk_keys=() if prior is None else prior.chunk_keys,
+        embedding_spec=None if prior is None else prior.embedding_spec,
+        error_reason=result.error or ("" if prior is None else prior.error_reason),
         dependency_reason=result.skip_reason if scheduler_status == RECEIPT_STATUS_BLOCKED_DEPENDENCY else "",
     )
 

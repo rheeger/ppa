@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 from urllib import error, request
 
+from .embedder import embed_selection_sql, normalize_embed_allowlist, require_embed_selection
 from .features import build_context_prefix_for_embed_row
 from .index_config import (
     _ppa_env,
@@ -311,8 +312,18 @@ def _claim_pending_chunks_for_batch(
     embedding_version: int,
     limit: int,
     include_context_prefix: bool,
+    uid_allowlist: tuple[str, ...] | None = None,
+    chunk_key_allowlist: tuple[str, ...] | None = None,
 ) -> list[PendingChunk]:
-    """Return ``limit`` chunks that are not yet embedded AND not in any in-flight batch."""
+    """Return ``limit`` chunks that are not yet embedded AND not in any in-flight batch.
+
+    Allowlists are applied in SQL before ``LIMIT`` so the budget cannot substitute
+    for selection.
+    """
+    extra_sql, extra_params = embed_selection_sql(
+        uid_allowlist=uid_allowlist,
+        chunk_key_allowlist=chunk_key_allowlist,
+    )
     if include_context_prefix:
         rows = conn.execute(
             f"""
@@ -337,11 +348,11 @@ def _claim_pending_chunks_for_batch(
               AND b.embedding_version = %s
               AND b.ingested_at IS NULL
               AND b.status NOT IN ('failed', 'expired', 'cancelled')
-            WHERE e.chunk_key IS NULL AND b.openai_batch_id IS NULL
+            WHERE e.chunk_key IS NULL AND b.openai_batch_id IS NULL{extra_sql}
             ORDER BY c.rel_path, c.chunk_type, c.chunk_index
             LIMIT %s
             """,
-            (embedding_model, embedding_version, embedding_model, embedding_version, limit),
+            (embedding_model, embedding_version, embedding_model, embedding_version, *extra_params, limit),
         ).fetchall()
         out: list[PendingChunk] = []
         for row in rows:
@@ -372,11 +383,11 @@ def _claim_pending_chunks_for_batch(
           AND b.embedding_version = %s
           AND b.ingested_at IS NULL
           AND b.status NOT IN ('failed', 'expired', 'cancelled')
-        WHERE e.chunk_key IS NULL AND b.openai_batch_id IS NULL
+        WHERE e.chunk_key IS NULL AND b.openai_batch_id IS NULL{extra_sql}
         ORDER BY c.rel_path, c.chunk_type, c.chunk_index
         LIMIT %s
         """,
-        (embedding_model, embedding_version, embedding_model, embedding_version, limit),
+        (embedding_model, embedding_version, embedding_model, embedding_version, *extra_params, limit),
     ).fetchall()
     return [
         PendingChunk(
@@ -479,13 +490,27 @@ def submit_batches(
     requests_per_batch: int = DEFAULT_BATCH_REQUESTS,
     include_context_prefix: bool = True,
     artifact_dir: str | None = None,
+    uid_allowlist: list[str] | set[str] | tuple[str, ...] | None = None,
+    chunk_key_allowlist: list[str] | set[str] | tuple[str, ...] | None = None,
+    unscoped: bool = True,
 ) -> dict[str, Any]:
     """Submit up to ``max_batches`` OpenAI batches. Returns a summary dict.
 
     Each submitted batch covers up to ``requests_per_batch`` pending chunks.
     Pending chunks are those with no row in ``{schema}.embeddings`` for
     (model, version) AND not assigned to any still-active batch.
+
+    Default ``unscoped=True`` is the admin batch route. Dirty selection must
+    pass an allowlist; ``limit``/``requests_per_batch`` is a budget after that
+    predicate.
     """
+    uid_allowlist = normalize_embed_allowlist(uid_allowlist)
+    chunk_key_allowlist = normalize_embed_allowlist(chunk_key_allowlist)
+    require_embed_selection(
+        uid_allowlist=uid_allowlist,
+        chunk_key_allowlist=chunk_key_allowlist,
+        unscoped=unscoped,
+    )
     model = embedding_model.strip() or get_default_embedding_model()
     version = embedding_version or get_default_embedding_version()
     dimension = get_vector_dimension()
@@ -553,6 +578,8 @@ def submit_batches(
                 embedding_version=version,
                 limit=requests_per_batch,
                 include_context_prefix=include_context_prefix,
+                uid_allowlist=uid_allowlist,
+                chunk_key_allowlist=chunk_key_allowlist,
             )
         if not pending:
             logger_.info(
