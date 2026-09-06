@@ -41,12 +41,15 @@ CREATE INDEX IF NOT EXISTS file_cards_uid ON file_cards(uid);
 
 
 def wikilink_uid(uid: str) -> str:
-    cleaned = str(uid or "").strip().strip("[]")
-    return f"[[{cleaned}]]" if cleaned else ""
+    from archive_vault.canon.wikilink import uid_ref
+
+    return uid_ref(uid)
 
 
 def uid_from_wikilink(value: str) -> str:
-    return str(value or "").strip().strip("[]")
+    from archive_vault.canon.wikilink import parse
+
+    return parse(value)
 
 
 def source_sha_from_frontmatter(fm: dict[str, Any]) -> str:

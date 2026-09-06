@@ -401,13 +401,18 @@ def is_same_person(
             confidence += 50 if name_score < 90 else 60
             reasons.append("fuzzy_name")
 
-    candidate_emails = [item.lower() for item in _as_list(candidate, "emails")]
-    existing_emails = [item.lower() for item in _as_list(existing, "emails")]
-    if set(candidate_emails) & set(existing_emails):
+    from archive_vault.canon.email import canonical as _email
+    from archive_vault.canon.phone import canonical as _phone
+
+    candidate_emails = [_email(item) for item in _as_list(candidate, "emails")]
+    existing_emails = [_email(item) for item in _as_list(existing, "emails")]
+    if set(filter(None, candidate_emails)) & set(filter(None, existing_emails)):
         confidence += 100
         reasons.append("exact_email")
         support_score += 100
-    if set(_as_list(candidate, "phones")) & set(_as_list(existing, "phones")):
+    candidate_phones = {_phone(item) for item in _as_list(candidate, "phones")} - {""}
+    existing_phones = {_phone(item) for item in _as_list(existing, "phones")} - {""}
+    if candidate_phones & existing_phones:
         confidence += 100
         reasons.append("exact_phone")
         support_score += 100

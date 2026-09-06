@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from typing import Any
 
+from archive_vault.canon import email as canon_email
+from archive_vault.canon import handle as canon_handle
+from archive_vault.canon import phone as canon_phone
 from archive_vault.change_journal import OPERATION_CREATE, OPERATION_UPDATE, ChangeJournal
 from archive_vault.paths import normalize_vault_rel
 
@@ -33,21 +35,14 @@ def _normalize_identifier(prefix: str, value: str) -> str:
     raw = value.strip()
     if not raw:
         return ""
-    if prefix in {"email", "github", "linkedin", "twitter"}:
-        return raw.lower()
+    if prefix == "email":
+        return canon_email.canonical(raw)
+    if prefix in {"github", "linkedin", "twitter"}:
+        return canon_handle.canonical(raw, provider=prefix)
     if prefix == "name":
         return " ".join(raw.lower().split())
     if prefix == "phone":
-        digits = re.sub(r"\D", "", raw)
-        if not digits:
-            return ""
-        if raw.startswith("+"):
-            return f"+{digits}"
-        if len(digits) == 11 and digits.startswith("1"):
-            return f"+{digits}"
-        if len(digits) == 10:
-            return f"+1{digits}"
-        return digits
+        return canon_phone.canonical(raw)
     return raw
 
 

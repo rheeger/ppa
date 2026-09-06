@@ -242,15 +242,17 @@ def open_classify_index(vault_path: Path | None) -> ClassifyIndex | None:
 
 
 def _normalize_email_tuple(raw: Any) -> tuple[str, ...]:
+    from archive_vault.canon.email import canonical as _email
+
     if raw is None:
         return ()
     if isinstance(raw, str):
-        value = raw.strip().lower()
+        value = _email(raw)
         return (value,) if value else ()
     if isinstance(raw, (list, tuple)):
         out: list[str] = []
         for item in raw:
-            value = str(item).strip().lower()
+            value = _email(str(item))
             if value and value not in out:
                 out.append(value)
         return tuple(out)

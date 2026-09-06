@@ -9,7 +9,9 @@ from archive_sync.extractors.base import EmailExtractor, TemplateVersion
 
 
 def _normalize_restaurant_key(name: str) -> str:
-    return re.sub(r"\s+", " ", (name or "").strip().lower())
+    from archive_vault.canon.place import canonical as _place
+
+    return _place(name, profile="restaurant_receipt")
 
 
 def _parse_totals(body: str) -> dict[str, float]:

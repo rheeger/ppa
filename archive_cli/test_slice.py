@@ -67,7 +67,9 @@ def _rel_paths_by_uid(vault: Path) -> dict[str, Path]:
 
 
 def _normalize_slug(value: str) -> str:
-    return value.strip().replace(" ", "-").lower()
+    from archive_vault.canon.slug import canonical as _slug
+
+    return _slug(value)
 
 
 def _build_uid_by_stem(vault: Path, rel_by_uid: dict[str, Path]) -> dict[str, str]:

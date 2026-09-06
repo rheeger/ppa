@@ -50,7 +50,9 @@ class NoteManifestRow:
 
 
 def _normalize_slug(value: str) -> str:
-    return value.replace(" ", "-").lower().strip()
+    from archive_vault.canon.slug import canonical as _slug
+
+    return _slug(value)
 
 
 def _content_hash(frontmatter: dict[str, Any], body: str) -> str:

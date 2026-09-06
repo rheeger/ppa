@@ -69,19 +69,9 @@ def _string(value: Any) -> str:
 
 
 def _normalize_handle(value: str) -> str:
-    raw = _clean(value)
-    if not raw:
-        return ""
-    if "@" in raw:
-        return raw.lower()
-    digits = re.sub(r"\D", "", raw)
-    if digits:
-        if raw.startswith("+") or (len(digits) == 11 and digits.startswith("1")):
-            return f"+{digits}"
-        if len(digits) == 10:
-            return f"+1{digits}"
-        return digits
-    return raw.lower()
+    from archive_vault.canon.phone import contact_handle
+
+    return contact_handle(value)
 
 
 def _apple_time_to_iso(value: Any) -> str:

@@ -64,7 +64,9 @@ def build_target_field_index(rows: list[CanonicalRow]) -> dict[str, dict[str, st
 
 
 def _normalize_slug(value: str) -> str:
-    return value.replace(" ", "-").lower().strip()
+    from archive_vault.canon.slug import canonical as _slug
+
+    return _slug(value)
 
 
 def _normalize_exact_text(value: str) -> str:

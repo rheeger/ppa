@@ -67,37 +67,9 @@ def _coerce_list(value: Any) -> list[Any]:
 
 
 def _normalize_iso_datetime(value: Any) -> str:
-    if value in (None, ""):
-        return ""
-    if isinstance(value, (int, float)):
-        timestamp = float(value)
-        if timestamp > 10_000_000_000:
-            timestamp /= 1000.0
-        parsed = datetime.fromtimestamp(timestamp, tz=timezone.utc)
-        return parsed.isoformat().replace("+00:00", "Z")
-    cleaned = str(value).strip()
-    if not cleaned:
-        return ""
-    if cleaned.endswith("Z"):
-        cleaned = cleaned[:-1] + "+00:00"
-    try:
-        parsed = datetime.fromisoformat(cleaned)
-    except ValueError:
-        for fmt in ("%Y/%m/%d %H:%M:%S", "%Y/%m/%d"):
-            try:
-                parsed = datetime.strptime(cleaned, fmt)
-                if fmt == "%Y/%m/%d":
-                    return parsed.date().isoformat()
-                parsed = parsed.replace(tzinfo=timezone.utc)
-                return parsed.isoformat().replace("+00:00", "Z")
-            except ValueError:
-                continue
-        return ""
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    else:
-        parsed = parsed.astimezone(timezone.utc)
-    return parsed.isoformat().replace("+00:00", "Z")
+    from archive_vault.canon.instant import canonical as _instant
+
+    return _instant(value)
 
 
 def _format_otter_search_date(value: str | None) -> str:

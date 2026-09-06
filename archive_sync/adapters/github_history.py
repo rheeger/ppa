@@ -301,8 +301,9 @@ def _normalize_login(value: Any) -> str:
 
 
 def _normalize_email(value: Any) -> str:
-    text = _clean(value).lower()
-    return text if "@" in text else ""
+    from archive_vault.canon.email import require_at
+
+    return require_at(_clean(value))
 
 
 def _date_only(value: Any) -> str:

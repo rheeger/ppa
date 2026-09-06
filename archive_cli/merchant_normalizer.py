@@ -57,19 +57,9 @@ def _normalize_merchant(value: str | None) -> str:
     corporate suffix + collapse whitespace and punctuation. Returns an empty
     string for falsy input.
     """
-    if not value:
-        return ""
-    s = str(value)
-    # Processor prefixes: "SQ *BLUE BOTTLE" -> "BLUE BOTTLE".
-    s = _STRIP_PREFIX_RE.sub("", s)
-    # Amazon aliases: "AMZN MKTPLACE", "AMZN", "AMAZON" -> canonical "amazon".
-    s = _AMAZON_ALIASES_RE.sub("amazon", s)
-    s = _PUNCT.sub(" ", s)
-    s = s.lower().strip()
-    # Strip corporate suffix after punctuation normalization.
-    s = _SUFFIX_RE.sub("", s)
-    s = _WS.sub(" ", s).strip()
-    return s
+    from archive_vault.canon.place import canonical as _place
+
+    return _place(value, profile="merchant_bank")
 
 
 def _merchants_match(a: str | None, b: str | None) -> bool:
@@ -79,16 +69,6 @@ def _merchants_match(a: str | None, b: str | None) -> bool:
       (a) token-set similarity >= 0.70 via difflib.SequenceMatcher, OR
       (b) one is a substring of the other AND min(len) >= 4
     """
-    na = _normalize_merchant(a)
-    nb = _normalize_merchant(b)
-    if not na or not nb:
-        return False
-    if na == nb:
-        return True
-    ratio = SequenceMatcher(None, na, nb).ratio()
-    if ratio >= 0.70:
-        return True
-    shorter, longer = (na, nb) if len(na) <= len(nb) else (nb, na)
-    if len(shorter) >= 4 and shorter in longer:
-        return True
-    return False
+    from archive_vault.canon.place import merchants_match
+
+    return merchants_match(a, b)

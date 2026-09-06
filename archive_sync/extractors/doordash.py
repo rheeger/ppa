@@ -22,7 +22,9 @@ def _money(line: str) -> float | None:
 
 
 def _normalize_restaurant_key(name: str) -> str:
-    return re.sub(r"\s+", " ", (name or "").strip().lower())
+    from archive_vault.canon.place import canonical as _place
+
+    return _place(name, profile="restaurant_receipt")
 
 
 def _split_horizontal_runs(body: str) -> str:

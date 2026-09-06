@@ -18,8 +18,9 @@ from .base import BaseAdapter, deterministic_provenance
 
 
 def _extract_linkedin_username(url: str) -> str:
-    match = re.search(r"(?:https?://)?(?:[\w]+\.)?linkedin\.com/in/([^/?#]+)", url.strip())
-    return match.group(1).lower() if match else ""
+    from archive_vault.canon.handle import canonical as _handle
+
+    return _handle(url, provider="linkedin")
 
 
 def _normalize_name(value: str) -> str:
@@ -27,15 +28,9 @@ def _normalize_name(value: str) -> str:
 
 
 def _normalize_date(value: str, *formats: str) -> str:
-    raw = value.strip()
-    if not raw:
-        return ""
-    for fmt in formats:
-        try:
-            return datetime.strptime(raw, fmt).date().isoformat()
-        except ValueError:
-            continue
-    return raw
+    from archive_vault.canon.instant import date_canonical
+
+    return date_canonical(value, *formats) or value.strip()
 
 
 def _normalize_connected_on(value: str) -> str:
@@ -92,19 +87,9 @@ def _dedupe_preserve_order(values: list[str]) -> list[str]:
 
 
 def _normalize_phone(value: str) -> str:
-    raw = value.strip()
-    if not raw:
-        return ""
-    digits = re.sub(r"\D", "", raw)
-    if not digits:
-        return raw
-    if len(digits) == 10:
-        return f"+1{digits}"
-    if len(digits) == 11 and digits.startswith("1"):
-        return f"+{digits}"
-    if raw.startswith("+"):
-        return f"+{digits}"
-    return digits
+    from archive_vault.canon.phone import canonical as _phone
+
+    return _phone(value)
 
 
 def _resolve_export_paths(csv_path: str | None) -> tuple[Path | None, Path | None]:

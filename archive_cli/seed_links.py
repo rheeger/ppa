@@ -444,22 +444,27 @@ def _clean_text(value: str) -> str:
 
 
 def _normalize_slug(value: str) -> str:
-    return _clean_text(value).replace(" ", "-").lower()
+    from archive_vault.canon.slug import canonical as _slug
+
+    return _slug(value)
 
 
 def _normalize_email(value: str) -> str:
-    return _clean_text(value).lower()
+    from archive_vault.canon.email import canonical as _email
+
+    return _email(value)
 
 
 def _normalize_phone(value: str) -> str:
-    digits = re.sub(r"\D+", "", str(value or ""))
-    if len(digits) == 11 and digits.startswith("1"):
-        return digits[1:]
-    return digits
+    from archive_vault.canon.phone import canonical as _phone
+
+    return _phone(value)
 
 
 def _normalize_handle(value: str) -> str:
-    return _clean_text(value).removeprefix("@").strip("/").lower()
+    from archive_vault.canon.handle import canonical as _handle
+
+    return _handle(value)
 
 
 def _normalize_alias(value: str) -> str:
@@ -467,7 +472,9 @@ def _normalize_alias(value: str) -> str:
 
 
 def _normalize_location(value: str) -> str:
-    return _clean_text(value).lower()
+    from archive_vault.canon.place import canonical as _place
+
+    return _place(value, profile="restaurant_receipt")
 
 
 def _path_bucket(rel_path: str) -> str:
