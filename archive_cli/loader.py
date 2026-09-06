@@ -74,7 +74,12 @@ def resolve_uid_allowlist_rebuild(
 
 def _compute_run_id(vault_manifest_hash: str) -> str:
     """Deterministic run_id; schema bumps invalidate stale checkpoints."""
-    components = f"{vault_manifest_hash}:{INDEX_SCHEMA_VERSION}:{CHUNK_SCHEMA_VERSION}:{PROJECTION_REGISTRY_VERSION}"
+    from archive_vault.canon import CANON_SCHEMA_VERSION
+
+    components = (
+        f"{vault_manifest_hash}:{INDEX_SCHEMA_VERSION}:{CHUNK_SCHEMA_VERSION}:"
+        f"{PROJECTION_REGISTRY_VERSION}:{CANON_SCHEMA_VERSION}"
+    )
     return hashlib.sha256(components.encode()).hexdigest()[:16]
 
 

@@ -202,6 +202,7 @@ def load_serving_export_maps(conn: Any, schema: str, uids: list[str] | None = No
     orgs: dict[str, list[str]] = {}
     aliases: dict[str, list[str]] = {}
     emails: dict[str, list[str]] = {}
+    phones: dict[str, list[str]] = {}
     external_ids: dict[str, list[str]] = {}
     corpus_states: dict[str, str] = {}
 
@@ -215,12 +216,13 @@ def load_serving_export_maps(conn: Any, schema: str, uids: list[str] | None = No
         orgs.setdefault(str(row["card_uid"]), []).append(str(row["org"]))
     for row in _optional_rows(
         conn,
-        f"SELECT card_uid, aliases_json, emails_json FROM {schema}.people WHERE TRUE{people_clause}",
+        f"SELECT card_uid, aliases_json, emails_json, phones_json FROM {schema}.people WHERE TRUE{people_clause}",
         map_params,
     ):
         uid = str(row["card_uid"])
         aliases[uid] = _as_str_list(row.get("aliases_json"))
         emails[uid] = _as_str_list(row.get("emails_json"))
+        phones[uid] = _as_str_list(row.get("phones_json"))
     for row in _optional_rows(
         conn,
         f"SELECT card_uid, external_id FROM {schema}.external_ids WHERE TRUE{people_clause}",
@@ -256,6 +258,7 @@ def load_serving_export_maps(conn: Any, schema: str, uids: list[str] | None = No
         "orgs": orgs,
         "aliases": aliases,
         "emails": emails,
+        "phones": phones,
         "external_ids": external_ids,
         "corpus_states": corpus_states,
         "corpus_state_table": corpus_state_table,
@@ -289,6 +292,7 @@ def build_serving_card(row: Any, maps: dict[str, Any]) -> dict[str, Any]:
         "orgs": list(maps["orgs"].get(uid, [])),
         "aliases": list(maps["aliases"].get(uid, [])),
         "emails": list(maps["emails"].get(uid, [])),
+        "phones": list(maps.get("phones", {}).get(uid, [])),
         "external_ids": list(dict.fromkeys(maps["external_ids"].get(uid, []))),
         "corpus_state": state,
         "retrieval_weight": serving_retrieval_weight(state),

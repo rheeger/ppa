@@ -120,6 +120,40 @@ def _dedupe_rows(rows: list[tuple[Any, ...]]) -> list[tuple[Any, ...]]:
     return out
 
 
+def _identifier_search_tokens(frontmatter: dict[str, Any]) -> list[str]:
+    """E.164 / national / digits-only phone tokens plus canonical emails for FTS."""
+
+    from archive_vault.canon import phone as canon_phone
+    from archive_vault.canon.email import canonical as canon_email
+
+    tokens: list[str] = []
+    for key in ("phones", "participant_handles", "sender_handle"):
+        value = frontmatter.get(key)
+        items = value if isinstance(value, list) else [value] if value else []
+        for raw in items:
+            text = str(raw or "").strip()
+            if not text or "@" in text:
+                continue
+            tokens.extend(canon_phone.alias_forms(text))
+    for key in ("emails", "from_email", "participant_emails", "to_emails", "cc_emails"):
+        value = frontmatter.get(key)
+        items = value if isinstance(value, list) else [value] if value else []
+        for raw in items:
+            text = str(raw or "").strip()
+            if "@" not in text:
+                continue
+            canon = canon_email(text)
+            if canon:
+                tokens.append(canon)
+    seen: set[str] = set()
+    out: list[str] = []
+    for token in tokens:
+        if token and token not in seen:
+            seen.add(token)
+            out.append(token)
+    return out
+
+
 def _build_search_text(frontmatter: dict[str, Any], body: str) -> str:
     parts: list[str] = []
     for key, value in frontmatter.items():
@@ -130,6 +164,7 @@ def _build_search_text(frontmatter: dict[str, Any], body: str) -> str:
     body_cleaned = body.replace("\x00", "").strip()
     if body_cleaned:
         parts.append(body_cleaned)
+    parts.extend(_identifier_search_tokens(frontmatter))
     return "\n".join(parts)
 
 
@@ -178,6 +213,8 @@ def _body_wikilinks(body: str) -> list[tuple[str, str]]:
 
 
 def _build_person_lookup(rows: list[CanonicalRow]) -> dict[str, str]:
+    from archive_vault.canon import phone as canon_phone
+
     person_lookup: dict[str, str] = {}
     for row in rows:
         card = row.card
@@ -185,7 +222,8 @@ def _build_person_lookup(rows: list[CanonicalRow]) -> dict[str, str]:
             continue
         rel_path = row.rel_path
         stem = Path(rel_path).stem
-        for key in [stem, _normalize_slug(card.summary)]:
+        uid = str(getattr(card, "uid", "") or "")
+        for key in [stem, uid, _normalize_slug(card.summary), _normalize_exact_text(card.summary)]:
             if key:
                 person_lookup[key] = rel_path
         for alias in getattr(card, "aliases", []):
@@ -196,6 +234,9 @@ def _build_person_lookup(rows: list[CanonicalRow]) -> dict[str, str]:
             normalized = _normalize_exact_text(email)
             if normalized:
                 person_lookup[normalized] = rel_path
+        for raw_phone in getattr(card, "phones", []) or []:
+            for form in canon_phone.alias_forms(str(raw_phone)):
+                person_lookup[form] = rel_path
         for handle_field in ("linkedin", "github", "twitter", "instagram", "telegram", "discord"):
             normalized = _normalize_exact_text(str(getattr(card, handle_field, "") or ""))
             if normalized:

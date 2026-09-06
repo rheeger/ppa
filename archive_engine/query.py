@@ -593,13 +593,24 @@ def _compare_values(spec: FieldSpec, left: Any, op: str, right: Any) -> bool:
     return False
 
 
-def row_matches_predicate(row: Mapping[str, Any], predicate: Predicate | None) -> bool:
+def row_matches_predicate(
+    row: Mapping[str, Any],
+    predicate: Predicate | None,
+    *,
+    ignore_fields: frozenset[str] | set[str] = frozenset(),
+) -> bool:
     if predicate is None:
         return True
     if predicate.op == "and":
-        return all(row_matches_predicate(row, child) for child in predicate.predicates)
+        return all(
+            row_matches_predicate(row, child, ignore_fields=ignore_fields) for child in predicate.predicates
+        )
     if predicate.op == "or":
-        return any(row_matches_predicate(row, child) for child in predicate.predicates)
+        return any(
+            row_matches_predicate(row, child, ignore_fields=ignore_fields) for child in predicate.predicates
+        )
+    if predicate.field in ignore_fields:
+        return True
     spec = field_spec(predicate.field)
     value = _row_get(row, spec)
     if predicate.op == "exists":
@@ -694,6 +705,7 @@ def _eligible_rows(
     *,
     access: AccessContext,
     predicate: Predicate | None,
+    ignore_fields: frozenset[str] | set[str] = frozenset(),
 ) -> list[dict[str, Any]]:
     eligible: list[dict[str, Any]] = []
     for raw in rows:
@@ -702,7 +714,7 @@ def _eligible_rows(
             continue
         if str(row.get("corpus_state") or "") == "suppressed":
             continue
-        if not row_matches_predicate(row, predicate):
+        if not row_matches_predicate(row, predicate, ignore_fields=ignore_fields):
             continue
         if not _uid_of(row):
             continue
@@ -867,14 +879,25 @@ def execute_typed_query(
     if rows is not None:
         collected = [dict(row) for row in rows]
         scan_truncated = False
+        # Injected corpora still apply people eq against the row payload.
+        ignore_fields: frozenset[str] = frozenset()
     elif runtime is not None:
         collected, scan_truncated = _collect_from_runtime(runtime, validated)
+        # Serving typed_query and warehouse query already resolve people_filter
+        # (name/slug/UID/email/phone → person UIDs). Re-applying people eq here
+        # would compare those needles to card_people UIDs and drop true hits.
+        ignore_fields = frozenset({"people"})
     else:
         raise CapabilityUnavailableError("typed_query_requires_runtime_or_rows")
     if len(collected) > MAX_OUTPUT_ROWS:
         collected = collected[:MAX_OUTPUT_ROWS]
         scan_truncated = True
-    eligible = _eligible_rows(collected, access=validated.access, predicate=validated.predicate)
+    eligible = _eligible_rows(
+        collected,
+        access=validated.access,
+        predicate=validated.predicate,
+        ignore_fields=ignore_fields,
+    )
     ordered = _sort_eligible(eligible, validated.order_field, validated.order_direction)
     if cursor is not None:
         remaining = [row for row in ordered if _after_cursor(row, cursor)]

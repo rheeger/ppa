@@ -1374,7 +1374,7 @@ def get_link_surface_policies() -> list[LinkSurfacePolicy]:
             surface=SURFACE_CANONICAL_SAFE,
             promotion_target=PROMOTION_TARGET_CANONICAL_FIELD,
             canonical_field_name="people",
-            canonical_value_mode="summary",
+            canonical_value_mode="person_ref",
             auto_promote_floor=0.82,
             canonical_floor=0.93,
             description="Thread-to-person link from exact participant identifiers.",
@@ -1385,7 +1385,7 @@ def get_link_surface_policies() -> list[LinkSurfacePolicy]:
             surface=SURFACE_CANONICAL_SAFE,
             promotion_target=PROMOTION_TARGET_CANONICAL_FIELD,
             canonical_field_name="people",
-            canonical_value_mode="summary",
+            canonical_value_mode="person_ref",
             auto_promote_floor=0.82,
             canonical_floor=0.93,
             description="Message-to-person link from exact sender or participant identifiers.",
@@ -1396,7 +1396,7 @@ def get_link_surface_policies() -> list[LinkSurfacePolicy]:
             surface=SURFACE_CANONICAL_SAFE,
             promotion_target=PROMOTION_TARGET_CANONICAL_FIELD,
             canonical_field_name="people",
-            canonical_value_mode="summary",
+            canonical_value_mode="person_ref",
             auto_promote_floor=0.85,
             canonical_floor=0.95,
             description="Event-to-person link from exact organizer or attendee identifiers.",
@@ -1591,6 +1591,10 @@ def _candidate_evidence_hash(evidences: list[LinkEvidence]) -> str:
 def _target_reference_value(target: SeedCardSketch, mode: str) -> str:
     if mode == "summary":
         return target.summary
+    if mode == "person_ref":
+        from archive_vault.canon.wikilink import person_ref
+
+        return person_ref(target.slug)
     return target.slug
 
 
@@ -1707,9 +1711,10 @@ def _generate_person_link_candidates(
     handles: set[str],
     link_type: str,
     candidate_group: str,
+    phones: set[str] | None = None,
 ) -> list[SeedLinkCandidate]:
     results: list[SeedLinkCandidate] = []
-    matches = _person_matches_for_identifiers(catalog, emails=emails, handles=handles)
+    matches = _person_matches_for_identifiers(catalog, emails=emails, phones=phones, handles=handles)
     for target_uid, payload in matches.items():
         target = payload["target"]
         target_value = _target_reference_value(target, "summary")

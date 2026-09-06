@@ -31,6 +31,7 @@ from archive_cli.seed_links import (
     _message_thread_features,
     _normalize_email,
     _normalize_handle,
+    _normalize_phone,
     _normalize_slug,
     _slug_from_ref,
     get_link_surface_policies,
@@ -232,28 +233,32 @@ def _generate_communication_candidates(catalog: SeedLinkCatalog, source: SeedCar
                     features=features,
                     evidences=evidences,
                 )
+        handles = source.participant_handles | (
+            {_normalize_handle(source.frontmatter.get("sender_handle", ""))}
+            if _normalize_handle(source.frontmatter.get("sender_handle", ""))
+            else set()
+        )
+        phones = {_normalize_phone(item) for item in handles if item and "@" not in item} - {""}
         results.extend(
             _generate_person_link_candidates(
                 catalog,
                 source=source,
                 emails=set(),
-                handles=source.participant_handles
-                | (
-                    {_normalize_handle(source.frontmatter.get("sender_handle", ""))}
-                    if _normalize_handle(source.frontmatter.get("sender_handle", ""))
-                    else set()
-                ),
+                handles=handles,
+                phones=phones,
                 link_type=LINK_TYPE_MESSAGE_MENTIONS_PERSON,
                 candidate_group="participant_resolution",
             )
         )
     elif source.card_type == "imessage_thread":
+        phones = {_normalize_phone(item) for item in source.participant_handles if item and "@" not in item} - {""}
         results.extend(
             _generate_person_link_candidates(
                 catalog,
                 source=source,
                 emails=set(),
                 handles=source.participant_handles,
+                phones=phones,
                 link_type=LINK_TYPE_THREAD_HAS_PERSON,
                 candidate_group="participant_resolution",
             )

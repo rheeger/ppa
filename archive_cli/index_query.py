@@ -34,6 +34,99 @@ from .query_timing import QueryPhaseTimes, add_ms
 logger = logging.getLogger("ppa.index_query")
 
 
+def people_filter_terms(people_filter: str) -> dict[str, Any]:
+    """Resolve a people_filter needle into join-key forms (name/slug/UID/email/phone)."""
+
+    from archive_vault.canon import phone as canon_phone
+    from archive_vault.canon.email import canonical as canon_email
+    from archive_vault.canon.slug import canonical as canon_slug
+    from archive_vault.canon.wikilink import parse as parse_wikilink
+
+    raw = str(people_filter or "").strip()
+    parsed = parse_wikilink(raw)
+    phone_forms = [item for item in canon_phone.alias_forms(parsed) if item]
+    return {
+        "raw": raw,
+        "parsed": parsed,
+        "slug": canon_slug(parsed),
+        "summary_l": parsed.lower(),
+        "email": canon_email(parsed) if "@" in parsed else "",
+        "phone_forms": phone_forms or ["__no_phone__"],
+        "like": f"%{parsed}%",
+    }
+
+
+def _jsonb_text_array_sql(expr: str) -> str:
+    """Coerce jsonb that may be an array, a stringified array, or a scalar."""
+
+    return f"""(
+        CASE jsonb_typeof(COALESCE({expr}, '[]'::jsonb))
+            WHEN 'array' THEN COALESCE({expr}, '[]'::jsonb)
+            WHEN 'string' THEN
+                CASE
+                    WHEN left(trim(COALESCE({expr}, '[]'::jsonb) #>> '{{}}'), 1) = '['
+                    THEN COALESCE(NULLIF(trim(COALESCE({expr}, '[]'::jsonb) #>> '{{}}'), ''), '[]')::jsonb
+                    ELSE jsonb_build_array(COALESCE({expr}, '[]'::jsonb) #>> '{{}}')
+                END
+            ELSE '[]'::jsonb
+        END
+    )"""
+
+
+def people_filter_exists_sql(schema: str, card_uid_expr: str) -> str:
+    """Match card_people.person (UID) via exact needle or resolved person keys."""
+
+    emails = _jsonb_text_array_sql("p.emails_json")
+    aliases = _jsonb_text_array_sql("p.aliases_json")
+    phones = _jsonb_text_array_sql("p.phones_json")
+    return f"""EXISTS (
+        SELECT 1 FROM {schema}.card_people cp
+        WHERE cp.card_uid = {card_uid_expr}
+          AND (
+            cp.person = %s
+            OR lower(cp.person) = lower(%s)
+            OR cp.person IN (
+                SELECT c2.uid FROM {schema}.cards c2
+                LEFT JOIN {schema}.people p ON p.card_uid = c2.uid
+                WHERE c2.type = 'person'
+                  AND (
+                    c2.uid = %s
+                    OR lower(c2.slug) = lower(%s)
+                    OR lower(c2.summary) = lower(%s)
+                    OR lower(c2.search_text) LIKE lower(%s)
+                    OR EXISTS (
+                        SELECT 1 FROM jsonb_array_elements_text({emails}) e
+                        WHERE lower(e) = lower(%s)
+                    )
+                    OR EXISTS (
+                        SELECT 1 FROM jsonb_array_elements_text({aliases}) a
+                        WHERE lower(a) = lower(%s)
+                    )
+                    OR EXISTS (
+                        SELECT 1 FROM jsonb_array_elements_text({phones}) ph
+                        WHERE ph = ANY(%s)
+                    )
+                )
+            )
+          )
+    )"""
+
+
+def people_filter_exists_params(people_filter: str) -> list[Any]:
+    terms = people_filter_terms(people_filter)
+    return [
+        terms["raw"],
+        terms["raw"],
+        terms["parsed"],
+        terms["slug"],
+        terms["summary_l"],
+        terms["like"],
+        terms["email"] or terms["summary_l"],
+        terms["summary_l"],
+        terms["phone_forms"],
+    ]
+
+
 class QueryMixin:
     def status(self) -> dict[str, str]:
         self.ensure_ready()
@@ -173,10 +266,8 @@ class QueryMixin:
             )
             params.append(source_filter)
         if people_filter:
-            clauses.append(
-                f"EXISTS (SELECT 1 FROM {self.schema}.card_people cp WHERE cp.card_uid = {alias}.uid AND cp.person = %s)"
-            )
-            params.append(people_filter)
+            clauses.append(people_filter_exists_sql(self.schema, f"{alias}.uid"))
+            params.extend(people_filter_exists_params(people_filter))
         if org_filter:
             clauses.append(
                 f"EXISTS (SELECT 1 FROM {self.schema}.card_orgs co WHERE co.card_uid = {alias}.uid AND co.org = %s)"
@@ -295,10 +386,8 @@ class QueryMixin:
                        SELECT 1 FROM {self.schema}.external_ids ei
                        WHERE ei.card_uid = c.uid AND lower(ei.external_id) = %s
                    ) THEN 1 ELSE 0 END AS external_id_exact,
-                   CASE WHEN EXISTS (
-                       SELECT 1 FROM {self.schema}.card_people cp
-                       WHERE cp.card_uid = c.uid AND lower(cp.person) = %s
-                   ) THEN 1 ELSE 0 END AS person_exact
+                   CASE WHEN {people_filter_exists_sql(self.schema, "c.uid")}
+                   THEN 1 ELSE 0 END AS person_exact
             FROM {self.schema}.cards c
         """
 
@@ -322,12 +411,10 @@ class QueryMixin:
                   AND c.search_document @@ plainto_tsquery('english', %s)
             """
             fts_sql = _wrap_lexical_order(inner_fts)
+            person_params = people_filter_exists_params(query)
+            select_head_params = [query, normalized_query, normalized_query, normalized_query, *person_params]
             fts_params = [
-                query,
-                normalized_query,
-                normalized_query,
-                normalized_query,
-                normalized_query,
+                *select_head_params,
                 *params,
                 query,
                 branch_limit,
@@ -343,23 +430,16 @@ class QueryMixin:
                           SELECT 1 FROM {self.schema}.external_ids ei
                           WHERE ei.card_uid = c.uid AND lower(ei.external_id) = %s
                       )
-                      OR EXISTS (
-                          SELECT 1 FROM {self.schema}.card_people cp
-                          WHERE cp.card_uid = c.uid AND lower(cp.person) = %s
-                      )
+                      OR {people_filter_exists_sql(self.schema, "c.uid")}
                   )
             """
             exact_sql = _wrap_lexical_order(inner_exact)
             exact_params = [
-                query,
-                normalized_query,
-                normalized_query,
-                normalized_query,
-                normalized_query,
+                *select_head_params,
                 *params,
                 normalized_query,
                 normalized_query,
-                normalized_query,
+                *person_params,
                 branch_limit,
             ]
             exact_rows = [dict(r) for r in conn.execute(exact_sql, exact_params).fetchall()]

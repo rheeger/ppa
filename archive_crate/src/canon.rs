@@ -27,6 +27,23 @@ pub fn normalize_email(raw: &str) -> String {
     ws().replace_all(raw.trim(), " ").to_lowercase()
 }
 
+pub fn phone_alias_forms(raw: &str) -> Vec<String> {
+    let e164 = normalize_phone(raw);
+    if e164.is_empty() {
+        return Vec::new();
+    }
+    let digits: String = non_digit().replace_all(&e164, "").into_owned();
+    let mut forms = vec![e164, digits.clone()];
+    if digits.len() == 11 && digits.starts_with('1') {
+        forms.push(digits[1..].to_string());
+    }
+    let mut seen = std::collections::HashSet::new();
+    forms
+        .into_iter()
+        .filter(|item| !item.is_empty() && seen.insert(item.clone()))
+        .collect()
+}
+
 pub fn normalize_phone(raw: &str) -> String {
     let raw = raw.trim();
     if raw.is_empty() {

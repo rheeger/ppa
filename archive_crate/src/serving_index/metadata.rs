@@ -49,6 +49,8 @@ pub struct CardMeta {
     #[serde(default)]
     pub emails: Vec<String>,
     #[serde(default)]
+    pub phones: Vec<String>,
+    #[serde(default)]
     pub external_ids: Vec<String>,
     #[serde(default)]
     pub search_text: String,
@@ -220,6 +222,7 @@ pub struct MetadataStore {
     pub by_slug: HashMap<String, String>,
     pub by_path: HashMap<String, String>,
     pub by_email: HashMap<String, String>,
+    pub by_phone: HashMap<String, String>,
     pub by_external_id: HashMap<String, String>,
     /// Cards with a parseable `activity_at`, sorted by `(at_ms, uid)`.
     pub by_activity: Vec<ActivityEntry>,
@@ -259,6 +262,11 @@ impl MetadataStore {
                 self.by_email.insert(key, card.card_uid.clone());
             }
         }
+        for phone in &card.phones {
+            for form in crate::canon::phone_alias_forms(phone) {
+                self.by_phone.insert(form, card.card_uid.clone());
+            }
+        }
         for ext in &card.external_ids {
             let key = ext.trim().to_string();
             if !key.is_empty() {
@@ -267,6 +275,52 @@ impl MetadataStore {
             }
         }
         self.by_uid.insert(card.card_uid.clone(), card);
+    }
+
+    fn resolve_people_filter_uids(&self, people_filter: &str) -> HashSet<String> {
+        let parsed = crate::canon::parse_wikilink(people_filter);
+        let parsed_l = parsed.to_lowercase();
+        let slug = crate::canon::normalize_slug(&parsed);
+        let email = crate::canon::normalize_email(&parsed);
+        let mut uids = HashSet::new();
+        if let Some(card) = self.by_uid.get(&parsed) {
+            if card.r#type == "person" {
+                uids.insert(card.card_uid.clone());
+            }
+        }
+        if let Some(uid) = self.by_slug.get(&parsed_l).or_else(|| self.by_slug.get(&slug)) {
+            uids.insert(uid.clone());
+        }
+        if parsed.contains('@') {
+            if let Some(uid) = self.by_email.get(&email) {
+                uids.insert(uid.clone());
+            }
+        }
+        for form in crate::canon::phone_alias_forms(&parsed) {
+            if let Some(uid) = self.by_phone.get(&form) {
+                uids.insert(uid.clone());
+            }
+        }
+        if uids.is_empty() {
+            for card in self.by_uid.values() {
+                if card.r#type != "person" {
+                    continue;
+                }
+                if card.summary.to_lowercase() == parsed_l
+                    || card.aliases.iter().any(|alias| alias.to_lowercase() == parsed_l)
+                {
+                    uids.insert(card.card_uid.clone());
+                }
+            }
+        }
+        if uids.is_empty() && parsed.len() >= 7 {
+            for card in self.by_uid.values() {
+                if card.r#type == "person" && card.search_text.contains(&parsed) {
+                    uids.insert(card.card_uid.clone());
+                }
+            }
+        }
+        uids
     }
 
     pub fn from_cards(cards: impl IntoIterator<Item = CardMeta>) -> Self {
@@ -403,13 +457,20 @@ impl MetadataStore {
             return false;
         }
         if !people_filter.is_empty() {
-            let needle = people_filter.to_lowercase();
-            if !card
-                .people
-                .iter()
-                .any(|p| p.to_lowercase() == needle || p.to_lowercase().contains(&needle))
-            {
-                return false;
+            let resolved = self.resolve_people_filter_uids(people_filter);
+            if !resolved.is_empty() {
+                if !card.people.iter().any(|p| resolved.contains(p)) {
+                    return false;
+                }
+            } else {
+                let needle = people_filter.to_lowercase();
+                if !card
+                    .people
+                    .iter()
+                    .any(|p| p.to_lowercase() == needle || p.to_lowercase().contains(&needle))
+                {
+                    return false;
+                }
             }
         }
         if !org_filter.is_empty()
@@ -698,11 +759,29 @@ impl MetadataStore {
         }
     }
 
-    pub fn matches_typed_predicate(card: &CardMeta, pred: &TypedPredicate) -> Result<bool, String> {
+    fn people_predicate_matches(&self, card: &CardMeta, needle: &str) -> bool {
+        let resolved = self.resolve_people_filter_uids(needle);
+        if !resolved.is_empty() {
+            return card.people.iter().any(|person| resolved.contains(person));
+        }
+        let n = needle.to_lowercase();
+        card.people
+            .iter()
+            .any(|person| person.to_lowercase() == n || person.to_lowercase().contains(&n))
+    }
+
+    fn predicate_string(value: &serde_json::Value) -> String {
+        match value {
+            serde_json::Value::String(s) => s.clone(),
+            other => other.as_str().unwrap_or("").to_string(),
+        }
+    }
+
+    pub fn matches_typed_predicate(&self, card: &CardMeta, pred: &TypedPredicate) -> Result<bool, String> {
         match pred.op.as_str() {
             "and" => {
                 for child in &pred.predicates {
-                    if !Self::matches_typed_predicate(card, child)? {
+                    if !self.matches_typed_predicate(card, child)? {
                         return Ok(false);
                     }
                 }
@@ -713,7 +792,7 @@ impl MetadataStore {
                     return Ok(false);
                 }
                 for child in &pred.predicates {
-                    if Self::matches_typed_predicate(card, child)? {
+                    if self.matches_typed_predicate(card, child)? {
                         return Ok(true);
                     }
                 }
@@ -725,12 +804,21 @@ impl MetadataStore {
                 Ok(!value.is_empty())
             }
             "in" => {
+                if pred.field == "people" {
+                    let items = pred.value.as_array().cloned().unwrap_or_default();
+                    return Ok(items.iter().any(|item| {
+                        self.people_predicate_matches(card, &Self::predicate_string(item))
+                    }));
+                }
                 let value = Self::typed_field_value(card, &pred.field)
                     .ok_or_else(|| format!("unknown field: {}", pred.field))?;
                 let items = pred.value.as_array().cloned().unwrap_or_default();
                 Ok(items.iter().any(|item| value.matches_eq(item)))
             }
             "eq" | "lt" | "lte" | "gt" | "gte" => {
+                if pred.field == "people" && pred.op == "eq" {
+                    return Ok(self.people_predicate_matches(card, &Self::predicate_string(&pred.value)));
+                }
                 let value = Self::typed_field_value(card, &pred.field)
                     .ok_or_else(|| format!("unknown field: {}", pred.field))?;
                 Ok(value.compare(pred.op.as_str(), &pred.value))
@@ -769,7 +857,7 @@ impl MetadataStore {
                 }
                 match pred {
                     None => true,
-                    Some(node) => Self::matches_typed_predicate(card, node).unwrap_or(false),
+                    Some(node) => self.matches_typed_predicate(card, node).unwrap_or(false),
                 }
             })
             .collect();
@@ -1032,10 +1120,39 @@ mod access_tests {
             card_uid: uid.into(),
             r#type: "person".into(),
             summary: summary.into(),
+            slug: summary.to_lowercase().replace(' ', "-"),
             sources: vec!["test".into()],
             corpus_state: "active".into(),
             ..CardMeta::default()
         }
+    }
+
+    #[test]
+    fn people_filter_resolves_name_to_person_uid() {
+        let person = CardMeta {
+            phones: vec!["+19147153533".into()],
+            emails: vec!["sampanken@gmail.com".into()],
+            ..person("hfa-person-54fc3b19aeda", "Sam Panken")
+        };
+        let thread = CardMeta {
+            card_uid: "hfa-imessage-thread-45b3a963c99a".into(),
+            r#type: "imessage_thread".into(),
+            people: vec!["hfa-person-54fc3b19aeda".into()],
+            sources: vec!["imessage.thread".into()],
+            corpus_state: "active".into(),
+            ..CardMeta::default()
+        };
+        let store = MetadataStore::from_cards([person, thread.clone()]);
+        assert!(store.matches_filters(&thread, "imessage_thread", "", "Sam Panken", "", "", ""));
+        assert!(store.matches_filters(&thread, "imessage_thread", "", "sam-panken", "", "", ""));
+        assert!(store.matches_filters(&thread, "imessage_thread", "", "9147153533", "", "", ""));
+        let pred = TypedPredicate {
+            op: "eq".into(),
+            field: "people".into(),
+            value: serde_json::json!("Sam Panken"),
+            ..TypedPredicate::default()
+        };
+        assert!(store.matches_typed_predicate(&thread, &pred).unwrap());
     }
 
     #[test]

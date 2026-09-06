@@ -44,6 +44,8 @@ def main() -> int:
 
     copied_fixtures: list[str] = []
     for path in sorted(fixture_dir.glob("*.md")):
+        if path.name.lower() == "readme.md":
+            continue
         dest = slice_root / "_fixtures" / "identity-repair" / path.name
         if _copy_file(path, dest):
             copied_fixtures.append(str(dest.relative_to(slice_root)))

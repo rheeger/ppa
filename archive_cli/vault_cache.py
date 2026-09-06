@@ -752,6 +752,21 @@ class VaultScanCache:
             out[str(uid)] = str(rp)
         return out
 
+    def rel_path_for_uid(self, uid: str) -> str | None:
+        """Point lookup — never dump the notes table."""
+
+        value = str(uid or "").strip()
+        if not value:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT rel_path FROM notes WHERE uid = ? LIMIT 1",
+                (value,),
+            ).fetchone()
+        if not row or not row[0]:
+            return None
+        return str(row[0])
+
     def uid_for_rel_path(self, rel_path: str) -> str:
         """Point lookup — never dump the notes table."""
 
