@@ -46,6 +46,38 @@ def test_allowlist_strips_blank_uids() -> None:
     assert missing == set()
 
 
+def test_try_canonical_row_skips_schema_invalid_email() -> None:
+    from archive_cli.scanner import _try_canonical_row
+
+    skipped = _try_canonical_row(
+        "Email/broken.md",
+        {
+            "uid": "hfa-email-message-broken",
+            "type": "email_message",
+            "source": ["gmail.message"],
+            "source_id": "missing-ids",
+            "created": "2005-06-25",
+            "updated": "2026-03-08",
+        },
+    )
+    assert skipped is None
+    kept = _try_canonical_row(
+        "Email/ok.md",
+        {
+            "uid": "hfa-email-message-ok",
+            "type": "email_message",
+            "source": ["gmail.message"],
+            "source_id": "ok",
+            "created": "2005-06-25",
+            "updated": "2026-03-08",
+            "gmail_message_id": "m1",
+            "gmail_thread_id": "t1",
+        },
+    )
+    assert kept is not None
+    assert kept.card.uid == "hfa-email-message-ok"
+
+
 def test_collect_allowlist_does_not_full_scan_frontmatter(tmp_path: Path) -> None:
     from archive_cli.scanner import _collect_canonical_rows
     from archive_cli.vault_cache import VaultScanCache

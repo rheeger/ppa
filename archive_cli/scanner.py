@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import time
 import warnings
 from collections.abc import Iterable
@@ -12,15 +13,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from pydantic import ValidationError
+
 from archive_vault.schema import BaseCard, validate_card_permissive
-
-if TYPE_CHECKING:
-    from .vault_cache import VaultScanCache
-
 from archive_vault.vault import iter_note_paths, read_note_file, read_note_frontmatter_file
 
 from .index_config import HASH_SUFFIX_RE, SCAN_MANIFEST_VERSION
 from .projections.registry import projection_for_card_type
+
+if TYPE_CHECKING:
+    from .vault_cache import VaultScanCache
+
+log = logging.getLogger("ppa.scanner")
 
 
 @dataclass(slots=True)
@@ -146,6 +150,17 @@ def _row_sort_key(rel_path: str) -> tuple[int, int, str]:
     return (has_hash_suffix, len(rel_path), rel_path)
 
 
+def _try_canonical_row(rel_path: str, frontmatter: dict[str, Any]) -> CanonicalRow | None:
+    """Build a row or skip cards the schema cannot read."""
+
+    try:
+        card = validate_card_permissive(frontmatter)
+    except ValidationError as exc:
+        log.warning("scan skip invalid card rel=%s err=%s", rel_path, exc)
+        return None
+    return CanonicalRow(rel_path=rel_path, frontmatter=frontmatter, card=card)
+
+
 def _register_slug(slug_map: dict[str, str], rel_path: str) -> None:
     slug = Path(rel_path).stem
     existing = slug_map.get(slug)
@@ -156,14 +171,10 @@ def _register_slug(slug_map: dict[str, str], rel_path: str) -> None:
         slug_map[slug] = rel_path
 
 
-def _canonical_row_from_rel_path(task: tuple[str, str]) -> CanonicalRow:
+def _canonical_row_from_rel_path(task: tuple[str, str]) -> CanonicalRow | None:
     vault_root, rel_path = task
     note = read_note_frontmatter_file(Path(vault_root) / rel_path, vault_root=vault_root)
-    return CanonicalRow(
-        rel_path=note.rel_path.as_posix(),
-        frontmatter=note.frontmatter,
-        card=validate_card_permissive(note.frontmatter),
-    )
+    return _try_canonical_row(note.rel_path.as_posix(), note.frontmatter)
 
 
 def _iter_canonical_rows(
@@ -179,11 +190,9 @@ def _iter_canonical_rows(
             note = read_note_frontmatter_file(vault / rel_path, vault_root=vault)
             if reporter is not None:
                 reporter.update(index)
-            yield CanonicalRow(
-                rel_path=note.rel_path.as_posix(),
-                frontmatter=note.frontmatter,
-                card=validate_card_permissive(note.frontmatter),
-            )
+            row = _try_canonical_row(note.rel_path.as_posix(), note.frontmatter)
+            if row is not None:
+                yield row
         if reporter is not None:
             reporter.complete(len(rel_paths))
         return
@@ -197,7 +206,8 @@ def _iter_canonical_rows(
         for index, row in enumerate(executor.map(_canonical_row_from_rel_path, tasks, **map_kwargs), start=1):
             if reporter is not None:
                 reporter.update(index)
-            yield row
+            if row is not None:
+                yield row
     if reporter is not None:
         reporter.complete(len(rel_paths))
 
@@ -310,13 +320,9 @@ def _rows_from_frontmatter_maps(
         fm = item.get("frontmatter") or {}
         if not rel_path or not isinstance(fm, dict):
             continue
-        rows.append(
-            CanonicalRow(
-                rel_path=rel_path,
-                frontmatter=fm,
-                card=validate_card_permissive(fm),
-            )
-        )
+        row = _try_canonical_row(rel_path, fm)
+        if row is not None:
+            rows.append(row)
     return rows
 
 
@@ -420,8 +426,10 @@ def _collect_canonical_rows(
         else:
             iterable = [(rel_path, cache.frontmatter_for_rel_path(rel_path)) for rel_path in rel_paths]
         for index, (rel_path, frontmatter) in enumerate(iterable, start=1):
-            card = validate_card_permissive(frontmatter)
-            row = CanonicalRow(rel_path=rel_path, frontmatter=frontmatter, card=card)
+            row = _try_canonical_row(rel_path, frontmatter)
+            scan_reporter.update(index)
+            if row is None:
+                continue
             uid = str(row.card.uid).strip()
             if uid:
                 existing = rows_by_uid.get(uid)
@@ -436,7 +444,6 @@ def _collect_canonical_rows(
             else:
                 anonymous_rows.append(row)
             _register_slug(slug_map, row.rel_path)
-            scan_reporter.update(index)
         scan_reporter.complete(len(rel_paths))
         rows = list(rows_by_uid.values()) + anonymous_rows
     else:
