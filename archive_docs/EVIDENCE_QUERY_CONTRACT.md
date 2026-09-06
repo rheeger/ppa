@@ -1,7 +1,7 @@
-# Evidence query contract (P10-A)
+# Evidence query contract (P10-A / P10-B)
 
-**Version:** `p10a.1`  
-**Owner:** P10 evidence-query. Neighbor context (P10-B), workflows (P10-C), and CLI/MCP registration (P10-D) extend this document; they do not replace it.
+**Version:** `p10b.1`  
+**Owner:** P10 evidence-query. Workflows (P10-C) and CLI/MCP registration (P10-D) extend this document; they do not replace it.
 
 This is the first product surface that can read a **full eligible set** (or say that it did not). Clients synthesize answers from the returned rows. The archive does not answer for you.
 
@@ -58,8 +58,19 @@ Counts and sums are computed over the **full eligible set after AccessContext**,
 
 `archive_cli/commands/query.py` maps existing type/source/people/org filters onto this contract. Central parser / MCP registration waits for P09-C (P10-D). Simple query row membership is preserved.
 
+## Neighbor context (P10-B)
+
+After ranking, `archive_engine.context.expand_neighbors` adds at most one preceding and one following unit on the same thread / section / burst lane. Matched units and expansion units are separate lists with reasons (`ranked_hit`, `preceding_message`, `following_message`, `adjacent_chunk`).
+
+Every unit cites UID, chunk/message IDs, revision hash, and a half-open UTF-8 `SourceSpan`. Token estimates use the CLI whitespace-split bound (defaults: 2k per hit, 8k total). Overlapping expansions are dropped. Citations are never stripped to fit a budget — extra context units are skipped instead.
+
+If generation offsets no longer match the canonical file revision, the result is `stale-context/refresh-required` and no mismatched text is quoted. `span_unavailable` fails a span-required request even when the UID was retrieved. Denied and mixed-source neighbors are absent, not redacted. No `authorized=true` field is emitted.
+
+## Bounded graph (P10-B)
+
+`serving_index_graph_bounded` enforces depth (default 1, public max 2), max nodes/edges, elapsed budget, and optional relation-type filters **during** native BFS. High-degree hubs return a partial graph with `truncated`, `truncation_reason`, `frontier`, and surviving edge citations (`method`, `evidence_uids`). Denied neighbors are never entered.
+
 ## Later slices
 
-- **P10-B** (needs P01-D): neighbor context and bounded graph. Do not implement here.
 - **P10-C**: subscription lifecycle, trip costs, changes-since.
 - **P10-D**: saved scopes and installed CLI/MCP evidence bundles.

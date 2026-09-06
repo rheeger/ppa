@@ -423,6 +423,15 @@ def _access_req(kwargs: dict[str, Any]) -> dict[str, Any]:
     ):
         if key in kwargs:
             fields[key] = kwargs[key]
+    for key in (
+        "max_nodes",
+        "max_edges",
+        "max_depth",
+        "max_elapsed_ms",
+        "allowed_relation_types",
+    ):
+        if key in kwargs:
+            fields[key] = kwargs[key]
     return fields
 
 
@@ -501,6 +510,15 @@ class ServingIndexHandle:
 
     def graph(self, note_path: str, hops: int = 2, **kwargs: Any) -> dict[str, Any]:
         return dict(_crate().serving_index_graph(self._native, note_path, int(hops) or 1, _access_req(kwargs)) or {})
+
+    def graph_bounded(self, note_path: str, hops: int = 1, **kwargs: Any) -> dict[str, Any]:
+        return dict(
+            _crate().serving_index_graph_bounded(self._native, note_path, int(hops) or 1, _access_req(kwargs)) or {}
+        )
+
+    def adjacent_chunks(self, chunk_key: str) -> dict[str, Any] | None:
+        payload = _crate().serving_index_adjacent_chunks(self._native, chunk_key)
+        return dict(payload) if payload else None
 
     def person(self, name: str, **kwargs: Any) -> dict[str, Any]:
         return dict(_crate().serving_index_person(self._native, name, _access_req(kwargs)) or {})

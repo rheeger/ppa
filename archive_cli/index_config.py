@@ -293,6 +293,50 @@ def get_seed_links_enabled() -> bool:
     return _ppa_env_bool("PPA_SEED_LINKS_ENABLED")
 
 
+DEFAULT_CONTEXT_PRECEDING = 1
+DEFAULT_CONTEXT_FOLLOWING = 1
+DEFAULT_CONTEXT_MAX_TOKENS_PER_HIT = 2000
+DEFAULT_CONTEXT_MAX_TOKENS_TOTAL = 8000
+DEFAULT_GRAPH_MAX_DEPTH = 1
+DEFAULT_GRAPH_MAX_PUBLIC_DEPTH = 2
+DEFAULT_GRAPH_MAX_NODES = 256
+DEFAULT_GRAPH_MAX_EDGES = 512
+DEFAULT_GRAPH_MAX_ELAPSED_MS = 250
+
+
+def get_context_preceding() -> int:
+    return max(_ppa_env_int("PPA_CONTEXT_PRECEDING", DEFAULT_CONTEXT_PRECEDING), 0)
+
+
+def get_context_following() -> int:
+    return max(_ppa_env_int("PPA_CONTEXT_FOLLOWING", DEFAULT_CONTEXT_FOLLOWING), 0)
+
+
+def get_context_max_tokens_per_hit() -> int:
+    return max(_ppa_env_int("PPA_CONTEXT_MAX_TOKENS_PER_HIT", DEFAULT_CONTEXT_MAX_TOKENS_PER_HIT), 1)
+
+
+def get_context_max_tokens_total() -> int:
+    return max(_ppa_env_int("PPA_CONTEXT_MAX_TOKENS_TOTAL", DEFAULT_CONTEXT_MAX_TOKENS_TOTAL), 1)
+
+
+def get_graph_max_depth() -> int:
+    value = _ppa_env_int("PPA_GRAPH_MAX_DEPTH", DEFAULT_GRAPH_MAX_DEPTH)
+    return min(max(value, 1), DEFAULT_GRAPH_MAX_PUBLIC_DEPTH)
+
+
+def get_graph_max_nodes() -> int:
+    return max(_ppa_env_int("PPA_GRAPH_MAX_NODES", DEFAULT_GRAPH_MAX_NODES), 1)
+
+
+def get_graph_max_edges() -> int:
+    return max(_ppa_env_int("PPA_GRAPH_MAX_EDGES", DEFAULT_GRAPH_MAX_EDGES), 1)
+
+
+def get_graph_max_elapsed_ms() -> int:
+    return max(_ppa_env_int("PPA_GRAPH_MAX_ELAPSED_MS", DEFAULT_GRAPH_MAX_ELAPSED_MS), 0)
+
+
 def get_serving_index_path(vault: Path | None = None) -> Path:
     raw = _ppa_env("PPA_SERVING_INDEX_PATH")
     if raw:

@@ -97,6 +97,13 @@ class RetrievalAdapter:
             return serving.graph(rel_path, hops=hops, **kwargs, **self._policy())
         return self._index.graph(rel_path, hops=hops)
 
+    def graph_bounded(self, rel_path: str, *, hops: int = 1, **kwargs: Any) -> dict[str, Any]:
+        serving = self.serving_or_none()
+        if serving is not None and hasattr(serving, "graph_bounded"):
+            return dict(serving.graph_bounded(rel_path, hops=hops, **kwargs, **self._policy()) or {})
+        graph = self.graph(rel_path, hops=hops, **kwargs)
+        return {"graph": graph, "truncated": False, "truncation_reason": "", "nodes_visited": 0, "edges_emitted": 0}
+
     def timeline(self, **kwargs: Any) -> list[dict[str, Any]]:
         limit = int(kwargs.get("limit", 20) or 20)
         serving = self.serving_or_none()

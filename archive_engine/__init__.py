@@ -43,6 +43,8 @@ from archive_engine.errors import (
     IncompatibleStateError,
     QueryValidationError,
     RetryableEngineError,
+    SpanRequiredError,
+    StaleContextError,
 )
 from archive_engine.runtime import ArchiveRuntime
 from archive_engine.service import ArchiveEngineService
@@ -72,6 +74,8 @@ __all__ = [
     "QueryValidationError",
     "RetryableEngineError",
     "RunEvidence",
+    "SpanRequiredError",
+    "StaleContextError",
     "ServingEdge",
     "ServingManifest",
     "SourceSpan",
@@ -84,6 +88,7 @@ _SIBLING_MODULES = frozenset(
         "access",
         "analytics",
         "changes",
+        "context",
         "corrections",
         "execution_mode",
         "publication",

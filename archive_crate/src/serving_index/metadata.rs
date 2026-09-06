@@ -182,6 +182,38 @@ impl AccessPolicy {
     }
 }
 
+#[derive(Debug, Default, Clone)]
+pub struct ChunkAdjacency {
+    by_card_type: HashMap<(String, String), Vec<(i32, String)>>,
+}
+
+impl ChunkAdjacency {
+    pub fn insert(&mut self, card_uid: String, chunk_type: String, chunk_index: i32, chunk_key: String) {
+        self.by_card_type
+            .entry((card_uid, chunk_type))
+            .or_default()
+            .push((chunk_index, chunk_key));
+    }
+
+    pub fn finalize(&mut self) {
+        for slot in self.by_card_type.values_mut() {
+            slot.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
+        }
+    }
+
+    pub fn neighbors(&self, card_uid: &str, chunk_type: &str, chunk_index: i32) -> (Option<String>, Option<String>) {
+        let Some(slot) = self.by_card_type.get(&(card_uid.to_string(), chunk_type.to_string())) else {
+            return (None, None);
+        };
+        let Some(position) = slot.iter().position(|(index, _)| *index == chunk_index) else {
+            return (None, None);
+        };
+        let preceding = position.checked_sub(1).map(|index| slot[index].1.clone());
+        let following = slot.get(position + 1).map(|item| item.1.clone());
+        (preceding, following)
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct MetadataStore {
     pub by_uid: HashMap<String, CardMeta>,
@@ -958,6 +990,17 @@ mod access_tests {
     fn unrestricted_permits_unknown_lineage() {
         let policy = AccessPolicy::unrestricted();
         assert!(policy.permits(&card("u1", &[], "person")));
+    }
+
+    #[test]
+    fn adjacent_chunks_follow_sorted_index() {
+        let mut adj = ChunkAdjacency::default();
+        adj.insert("card".into(), "body".into(), 2, "ck-2".into());
+        adj.insert("card".into(), "body".into(), 0, "ck-0".into());
+        adj.insert("card".into(), "body".into(), 1, "ck-1".into());
+        adj.finalize();
+        assert_eq!(adj.neighbors("card", "body", 1), (Some("ck-0".into()), Some("ck-2".into())));
+        assert_eq!(adj.neighbors("card", "body", 0), (None, Some("ck-1".into())));
     }
 
     #[test]

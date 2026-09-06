@@ -20,9 +20,9 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule};
 use serde::Serialize;
 
-use crate::serving_index::graph::GraphStore;
+use crate::serving_index::graph::{GraphBudget, GraphStore, StoredEdge};
 use crate::serving_index::lexical::LexicalIndex;
-use crate::serving_index::metadata::{AccessPolicy, CardMeta, MetadataStore, TypedPredicate};
+use crate::serving_index::metadata::{AccessPolicy, CardMeta, ChunkAdjacency, MetadataStore, TypedPredicate};
 use crate::serving_index::vector::IvfMmapAnn;
 use crate::serving_index::vector_train::TrainConfig;
 
@@ -37,6 +37,7 @@ pub struct ServingIndex {
     lexical: Vec<LexicalIndex>,
     vectors: Vec<IvfMmapAnn>,
     chunk_to_card: HashMap<String, (String, String, i32)>,
+    chunk_adj: ChunkAdjacency,
     chunk_evidence: HashMap<String, serde_json::Value>,
     live_chunk_keys: HashSet<String>,
     chain_depth: usize,
@@ -81,6 +82,12 @@ fn open_generation(index_root: &Path) -> PyResult<ServingIndex> {
     let resolved = segments::resolve_live(index_root, &gid)?;
     let meta = MetadataStore::from_cards(resolved.cards.values().cloned());
     let graph = GraphStore::from_edges(resolved.edges.values().cloned());
+    let chunk_to_card = resolved.chunk_to_card();
+    let mut chunk_adj = ChunkAdjacency::default();
+    for (chunk_key, (card_uid, chunk_type, chunk_index)) in &chunk_to_card {
+        chunk_adj.insert(card_uid.clone(), chunk_type.clone(), *chunk_index, chunk_key.clone());
+    }
+    chunk_adj.finalize();
     let mut lexical = Vec::new();
     let mut vectors = Vec::new();
     let mut embedding_spec = resolved.embedding_spec.clone();
@@ -103,7 +110,8 @@ fn open_generation(index_root: &Path) -> PyResult<ServingIndex> {
         graph,
         lexical,
         vectors,
-        chunk_to_card: resolved.chunk_to_card(),
+        chunk_to_card,
+        chunk_adj,
         chunk_evidence: resolved.chunk_evidence(),
         live_chunk_keys: resolved.live_chunk_keys,
         chain_depth: resolved.chain.len().max(1),
@@ -177,6 +185,57 @@ fn access_policy(req: &Bound<'_, PyDict>) -> AccessPolicy {
         allowed_sources: sources,
         allowed_domains: domains,
     }
+}
+
+fn resolve_graph_start(idx: &ServingIndex, start: &str) -> String {
+    if idx.meta.by_uid.contains_key(start) {
+        return start.to_string();
+    }
+    idx.meta
+        .by_path
+        .get(start)
+        .cloned()
+        .or_else(|| idx.meta.by_path.get(&format!("{start}.md")).cloned())
+        .unwrap_or_else(|| start.to_string())
+}
+
+fn graph_map_to_json(
+    idx: &ServingIndex,
+    graph: HashMap<String, Vec<StoredEdge>>,
+    policy: &AccessPolicy,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut out = serde_json::Map::new();
+    for (node, targets) in graph {
+        let items: Vec<serde_json::Value> = targets
+            .into_iter()
+            .filter(|edge| card_allowed(idx, &edge.neighbor_uid, policy))
+            .map(|edge| {
+                let path = idx
+                    .meta
+                    .by_uid
+                    .get(&edge.neighbor_uid)
+                    .map(|c| c.rel_path.clone())
+                    .unwrap_or_else(|| edge.neighbor_uid.clone());
+                let mut item = edge.to_json(path);
+                if let Some(obj) = item.as_object_mut() {
+                    if edge.method == "inferred" {
+                        obj.insert("match_channel".into(), serde_json::json!("seed-link"));
+                    } else {
+                        obj.insert("match_channel".into(), serde_json::json!("graph"));
+                    }
+                }
+                item
+            })
+            .collect();
+        let key = idx
+            .meta
+            .by_uid
+            .get(&node)
+            .map(|c| c.rel_path.clone())
+            .unwrap_or(node);
+        out.insert(key, serde_json::Value::Array(items));
+    }
+    out
 }
 
 fn card_allowed(idx: &ServingIndex, uid: &str, policy: &AccessPolicy) -> bool {
@@ -841,50 +900,84 @@ pub fn serving_index_graph(
 ) -> PyResult<PyObject> {
     let idx = handle.borrow();
     let policy = req.as_ref().map(access_policy).unwrap_or_else(AccessPolicy::unrestricted);
-    let uid = if idx.meta.by_uid.contains_key(start) {
-        start.to_string()
-    } else {
-        idx.meta
-            .by_path
-            .get(start)
-            .cloned()
-            .or_else(|| idx.meta.by_path.get(&format!("{start}.md")).cloned())
-            .unwrap_or_else(|| start.to_string())
-    };
+    let uid = resolve_graph_start(&idx, start);
     let hops = hops.clamp(1, 2);
-    let graph = idx.graph.hops_where(&uid, hops, |node| card_allowed(&idx, node, &policy));
-    let mut out = serde_json::Map::new();
-    for (node, targets) in graph {
-        let items: Vec<serde_json::Value> = targets
-            .into_iter()
-            .filter(|edge| card_allowed(&idx, &edge.neighbor_uid, &policy))
-            .map(|edge| {
-                let path = idx
-                    .meta
-                    .by_uid
-                    .get(&edge.neighbor_uid)
-                    .map(|c| c.rel_path.clone())
-                    .unwrap_or_else(|| edge.neighbor_uid.clone());
-                let mut item = edge.to_json(path);
-                if edge.method == "inferred" {
-                    if let Some(obj) = item.as_object_mut() {
-                        obj.insert("match_channel".into(), serde_json::json!("seed-link"));
-                    }
-                } else if let Some(obj) = item.as_object_mut() {
-                    obj.insert("match_channel".into(), serde_json::json!("graph"));
-                }
-                item
-            })
-            .collect();
-        let key = idx
-            .meta
-            .by_uid
-            .get(&node)
-            .map(|c| c.rel_path.clone())
-            .unwrap_or(node);
-        out.insert(key, serde_json::Value::Array(items));
+    let bounded = idx
+        .graph
+        .hops_bounded(&uid, &GraphBudget::compat(hops), |node| card_allowed(&idx, node, &policy));
+    json_to_py(py, serde_json::Value::Object(graph_map_to_json(&idx, bounded.graph, &policy)))
+}
+
+#[pyfunction]
+#[pyo3(signature = (handle, start, hops, req=None))]
+pub fn serving_index_graph_bounded(
+    py: Python<'_>,
+    handle: &Bound<'_, ServingIndex>,
+    start: &str,
+    hops: usize,
+    req: Option<Bound<'_, PyDict>>,
+) -> PyResult<PyObject> {
+    let idx = handle.borrow();
+    let policy = req.as_ref().map(access_policy).unwrap_or_else(AccessPolicy::unrestricted);
+    let uid = resolve_graph_start(&idx, start);
+    let mut budget = GraphBudget::public(hops);
+    if let Some(req) = req.as_ref() {
+        let max_depth = req_i64(req, "max_depth", budget.max_depth as i64).clamp(1, 2) as usize;
+        budget.max_depth = max_depth;
+        let max_nodes = req_i64(req, "max_nodes", budget.max_nodes as i64);
+        if max_nodes > 0 {
+            budget.max_nodes = max_nodes as usize;
+        }
+        let max_edges = req_i64(req, "max_edges", budget.max_edges as i64);
+        if max_edges > 0 {
+            budget.max_edges = max_edges as usize;
+        }
+        let elapsed = req_i64(req, "max_elapsed_ms", budget.max_elapsed_ms as i64);
+        budget.max_elapsed_ms = if elapsed < 0 { 0 } else { elapsed as u64 };
+        let types = req_str_list(req, "allowed_relation_types");
+        if !types.is_empty() {
+            budget.allowed_relation_types = types.into_iter().collect();
+        }
     }
-    json_to_py(py, serde_json::Value::Object(out))
+    let bounded = idx
+        .graph
+        .hops_bounded(&uid, &budget, |node| card_allowed(&idx, node, &policy));
+    let payload = serde_json::json!({
+        "graph": graph_map_to_json(&idx, bounded.graph, &policy),
+        "truncated": bounded.truncated,
+        "truncation_reason": bounded.truncation_reason,
+        "nodes_visited": bounded.nodes_visited,
+        "edges_emitted": bounded.edges_emitted,
+        "max_nodes": budget.max_nodes,
+        "max_edges": budget.max_edges,
+        "depth": budget.max_depth,
+        "frontier": bounded.frontier,
+    });
+    json_to_py(py, payload)
+}
+
+#[pyfunction]
+pub fn serving_index_adjacent_chunks(
+    py: Python<'_>,
+    handle: &Bound<'_, ServingIndex>,
+    chunk_key: &str,
+) -> PyResult<PyObject> {
+    let idx = handle.borrow();
+    let Some((card_uid, chunk_type, chunk_index)) = idx.chunk_to_card.get(chunk_key) else {
+        return json_to_py(py, serde_json::Value::Null);
+    };
+    let (preceding, following) = idx.chunk_adj.neighbors(card_uid, chunk_type, *chunk_index);
+    json_to_py(
+        py,
+        serde_json::json!({
+            "chunk_key": chunk_key,
+            "card_uid": card_uid,
+            "chunk_type": chunk_type,
+            "chunk_index": chunk_index,
+            "preceding": preceding,
+            "following": following,
+        }),
+    )
 }
 
 #[pyfunction]
@@ -1309,6 +1402,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(serving_index_vector, m)?)?;
     m.add_function(wrap_pyfunction!(serving_index_hybrid, m)?)?;
     m.add_function(wrap_pyfunction!(serving_index_graph, m)?)?;
+    m.add_function(wrap_pyfunction!(serving_index_graph_bounded, m)?)?;
+    m.add_function(wrap_pyfunction!(serving_index_adjacent_chunks, m)?)?;
     m.add_function(wrap_pyfunction!(serving_index_person, m)?)?;
     m.add_function(wrap_pyfunction!(serving_index_pointers, m)?)?;
     m.add_function(wrap_pyfunction!(serving_index_neighbor_uids, m)?)?;

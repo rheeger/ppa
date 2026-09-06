@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
+use std::time::Instant;
 
 use pyo3::prelude::*;
 use serde::Deserialize;
@@ -42,6 +43,48 @@ pub struct StoredEdge {
     pub direction: String,
     pub source_uid: String,
     pub target_uid: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct GraphBudget {
+    pub max_depth: usize,
+    pub max_nodes: usize,
+    pub max_edges: usize,
+    pub max_elapsed_ms: u64,
+    pub allowed_relation_types: HashSet<String>,
+}
+
+impl GraphBudget {
+    pub fn public(hops: usize) -> Self {
+        Self {
+            max_depth: hops.clamp(1, 2),
+            max_nodes: 256,
+            max_edges: 512,
+            max_elapsed_ms: 250,
+            allowed_relation_types: HashSet::new(),
+        }
+    }
+
+    pub fn compat(hops: usize) -> Self {
+        Self {
+            max_depth: hops.max(1),
+            max_nodes: 10_000,
+            max_edges: 20_000,
+            max_elapsed_ms: 0,
+            allowed_relation_types: HashSet::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct BoundedGraph {
+    pub graph: HashMap<String, Vec<StoredEdge>>,
+    pub truncated: bool,
+    pub truncation_reason: String,
+    pub nodes_visited: usize,
+    pub edges_emitted: usize,
+    pub frontier: Vec<String>,
+    pub depth: usize,
 }
 
 impl StoredEdge {
@@ -192,33 +235,92 @@ impl GraphStore {
     where
         F: Fn(&str) -> bool,
     {
-        let mut graph: HashMap<String, Vec<StoredEdge>> = HashMap::new();
+        self.hops_bounded(start, &GraphBudget::compat(hops), allow).graph
+    }
+
+    pub fn hops_bounded<F>(&self, start: &str, budget: &GraphBudget, allow: F) -> BoundedGraph
+    where
+        F: Fn(&str) -> bool,
+    {
+        let started = Instant::now();
+        let mut out = BoundedGraph {
+            depth: budget.max_depth,
+            ..BoundedGraph::default()
+        };
         if !allow(start) {
-            return graph;
+            return out;
         }
         let mut seen = HashSet::new();
         let mut q = VecDeque::new();
         q.push_back((start.to_string(), 0usize));
         seen.insert(start.to_string());
+        out.nodes_visited = 1;
         while let Some((node, depth)) = q.pop_front() {
-            if depth >= hops {
+            if budget.max_elapsed_ms > 0 && started.elapsed().as_millis() as u64 >= budget.max_elapsed_ms {
+                out.truncated = true;
+                out.truncation_reason = "elapsed".into();
+                out.frontier.push(node);
+                while let Some((pending, _)) = q.pop_front() {
+                    out.frontier.push(pending);
+                }
+                break;
+            }
+            if depth >= budget.max_depth {
                 continue;
             }
             let mut targets = Vec::new();
             if let Some(nbrs) = self.adj.get(&node) {
-                for edge in nbrs {
+                let mut sorted: Vec<&StoredEdge> = nbrs.iter().collect();
+                sorted.sort_by(|left, right| {
+                    left.neighbor_uid
+                        .cmp(&right.neighbor_uid)
+                        .then(left.edge_type.cmp(&right.edge_type))
+                        .then(left.field_name.cmp(&right.field_name))
+                });
+                for edge in sorted {
                     if !allow(&edge.neighbor_uid) {
                         continue;
                     }
+                    if !budget.allowed_relation_types.is_empty()
+                        && !budget.allowed_relation_types.contains(&edge.edge_type)
+                    {
+                        continue;
+                    }
+                    if out.edges_emitted >= budget.max_edges {
+                        out.truncated = true;
+                        out.truncation_reason = "max_edges".into();
+                        if !seen.contains(&edge.neighbor_uid) {
+                            out.frontier.push(edge.neighbor_uid.clone());
+                        }
+                        continue;
+                    }
+                    if !seen.contains(&edge.neighbor_uid) && out.nodes_visited >= budget.max_nodes {
+                        out.truncated = true;
+                        if out.truncation_reason.is_empty() {
+                            out.truncation_reason = "max_nodes".into();
+                        }
+                        out.frontier.push(edge.neighbor_uid.clone());
+                        continue;
+                    }
                     targets.push(edge.clone());
+                    out.edges_emitted += 1;
                     if seen.insert(edge.neighbor_uid.clone()) {
                         q.push_back((edge.neighbor_uid.clone(), depth + 1));
+                        out.nodes_visited += 1;
                     }
                 }
             }
-            graph.insert(node, targets);
+            out.graph.insert(node, targets);
+            if out.truncated && (out.truncation_reason == "max_edges" || out.truncation_reason == "max_nodes") {
+                while let Some((pending, _)) = q.pop_front() {
+                    out.frontier.push(pending);
+                }
+                break;
+            }
         }
-        graph
+        out.frontier.sort();
+        out.frontier.dedup();
+        out
     }
 
     pub fn pointers(&self, uids: &[String]) -> HashMap<String, HashMap<String, Vec<String>>> {
@@ -283,6 +385,61 @@ mod tests {
         assert!(!hops.contains_key("b"));
         assert!(!hops.contains_key("c"));
         assert!(hops.get("a").map(|edges| edges.is_empty()).unwrap_or(true));
+    }
+
+    #[test]
+    fn hops_bounded_truncates_high_degree_hub() {
+        let mut contents = String::new();
+        for index in 0..80 {
+            contents.push_str(&format!(
+                r#"{{"source_uid":"hub","target_uid":"n{index:03}","edge_type":"wikilink","field_name":"body","method":"source_reported","evidence_uids":["ev-{index:03}"]}}"#
+            ));
+            contents.push('\n');
+        }
+        let (_dir, store) = write_edges("hub-cap", &contents);
+        let budget = GraphBudget {
+            max_depth: 1,
+            max_nodes: 100,
+            max_edges: 32,
+            max_elapsed_ms: 0,
+            allowed_relation_types: HashSet::new(),
+        };
+        let bounded = store.hops_bounded("hub", &budget, |_| true);
+        assert!(bounded.truncated);
+        assert_eq!(bounded.truncation_reason, "max_edges");
+        assert!(bounded.edges_emitted <= 32);
+        assert!(bounded.nodes_visited <= 100);
+        let hub = &bounded.graph["hub"];
+        assert_eq!(hub.len(), bounded.edges_emitted);
+        assert!(!hub[0].evidence_uids.is_empty());
+        assert_eq!(hub[0].method, "source_reported");
+        assert!(bounded.frontier.len() >= 1);
+    }
+
+    #[test]
+    fn hops_bounded_skips_denied_and_keeps_stable_order() {
+        let (_dir, store) = write_edges(
+            "deny-budget",
+            r#"{"source_uid":"hub","target_uid":"denied","edge_type":"wikilink","field_name":"body"}
+{"source_uid":"denied","target_uid":"secret","edge_type":"wikilink","field_name":"body"}
+{"source_uid":"hub","target_uid":"ok-b","edge_type":"wikilink","field_name":"body"}
+{"source_uid":"hub","target_uid":"ok-a","edge_type":"wikilink","field_name":"body"}
+"#,
+        );
+        let budget = GraphBudget {
+            max_depth: 2,
+            max_nodes: 16,
+            max_edges: 16,
+            max_elapsed_ms: 0,
+            allowed_relation_types: HashSet::new(),
+        };
+        let bounded = store.hops_bounded("hub", &budget, |uid| uid != "denied" && uid != "secret");
+        assert!(!bounded.graph.contains_key("denied"));
+        assert!(!bounded.graph.contains_key("secret"));
+        let hub = &bounded.graph["hub"];
+        let neighbors: Vec<&str> = hub.iter().map(|edge| edge.neighbor_uid.as_str()).collect();
+        assert_eq!(neighbors, vec!["ok-a", "ok-b"]);
+        assert!(!neighbors.contains(&"denied"));
     }
 
     #[test]

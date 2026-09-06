@@ -47,3 +47,11 @@ class CursorInvalidError(IncompatibleStateError):
 
 class PublisherBusyError(RetryableEngineError):
     """Another process holds the publication lease."""
+
+
+class StaleContextError(IncompatibleStateError):
+    """Generation offsets no longer match the canonical file revision."""
+
+
+class SpanRequiredError(IncompatibleStateError):
+    """A span-required request cannot quote because the source span is unavailable."""

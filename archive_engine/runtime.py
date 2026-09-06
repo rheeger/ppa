@@ -55,6 +55,9 @@ class ArchiveRuntime:
     def graph(self, rel_path: str, *, hops: int = 2, **kwargs: Any) -> Any:
         return self.retrieval.graph(rel_path, hops=hops, **kwargs)
 
+    def graph_bounded(self, rel_path: str, *, hops: int = 1, **kwargs: Any) -> dict[str, Any]:
+        return self.retrieval.graph_bounded(rel_path, hops=hops, **kwargs)
+
     def rebuild(self, **kwargs: Any) -> dict[str, Any]:
         return self.warehouse.rebuild(**kwargs)
 
