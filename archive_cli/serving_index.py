@@ -156,6 +156,41 @@ def read_dirty_uids(vault: Path | None = None) -> list[str]:
     return sorted(uids)
 
 
+def prune_retired_serving_generations(
+    vault: Path | None = None,
+    *,
+    keep: str | None = None,
+    logger: logging.Logger | None = None,
+) -> list[str]:
+    """Delete generation dirs that are not ACTIVE. Search only serves ACTIVE."""
+
+    log = logger or logging.getLogger("ppa.serving_index")
+    root = get_serving_index_path(vault)
+    gens = root / "generations"
+    if keep is None:
+        active_path = root / "ACTIVE"
+        try:
+            keep = active_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            keep = ""
+    keep = str(keep or "").strip()
+    removed: list[str] = []
+    if not gens.is_dir():
+        return removed
+    for child in sorted(gens.iterdir()):
+        if not child.is_dir():
+            continue
+        if keep and child.name == keep:
+            continue
+        try:
+            shutil.rmtree(child)
+            removed.append(child.name)
+            log.info("serving_index_prune_generation generation=%s", child.name)
+        except OSError:
+            log.exception("serving_index_prune_generation_failed generation=%s", child.name)
+    return removed
+
+
 def merge_jsonl_by_key(src: Path, dest: Path, *, key: str, replacements: list[dict[str, Any]]) -> int:
     """Rewrite dest from src, replacing objects that share ``key`` with ``replacements``."""
 
@@ -596,6 +631,7 @@ def publish_serving_index(
             return {"ok": False, "error": "serving_index_refresh_failed", "estimated_mb": est_mb}
     crate.serving_index_publish(str(root), gid)
     crate.serving_index_truncate_dirty(str(root))
+    pruned = prune_retired_serving_generations(vault, keep=gid, logger=log)
     cache = QueryEmbedCache(get_query_embed_cache_path(vault), ram_entries=get_query_embed_cache_ram_entries())
     cache.evict(max_rows=get_query_embed_cache_max_rows(), max_age_days=get_query_embed_cache_max_age_days())
     cache.close()
@@ -616,6 +652,7 @@ def publish_serving_index(
         "cards": card_count,
         "chunks": chunk_count,
         "embeddings": embed_count,
+        "pruned_generations": pruned,
     }
 
 

@@ -17,6 +17,7 @@ from archive_cli.query_explain import explain_sql
 from archive_cli.serving_index import (
     mark_serving_index_dirty,
     merge_jsonl_by_key,
+    prune_retired_serving_generations,
     publish_serving_index,
     read_dirty_uids,
 )
@@ -240,7 +241,9 @@ def test_publish_serving_index_incremental_skips_full_export(tmp_path: Path, mon
     dest = root / "generations" / "gen-new"
     cards = [json.loads(line) for line in (dest / "cards.jsonl").read_text(encoding="utf-8").splitlines()]
     assert {row["card_uid"] for row in cards} == {"old"}
-    assert (dest / "embeddings.bin").stat().st_ino == (prev / "embeddings.bin").stat().st_ino
+    assert (dest / "embeddings.bin").exists()
+    assert not prev.exists()
+    assert result["pruned_generations"] == ["gen-prev"]
 
 
 def test_publish_serving_index_incremental_does_not_fail_rss_cap(tmp_path: Path, monkeypatch) -> None:
@@ -301,3 +304,21 @@ def test_publish_serving_index_incremental_does_not_fail_rss_cap(tmp_path: Path,
     assert result["ok"] is True
     assert result["generation"] == "gen-rss"
     assert published == ["gen-rss"]
+    assert not prev.exists()
+    assert (root / "generations" / "gen-rss").exists()
+
+
+def test_prune_retired_serving_generations_keeps_only_active(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "rust-search-index"
+    gens = root / "generations"
+    (gens / "old-a").mkdir(parents=True)
+    (gens / "old-b").mkdir()
+    (gens / "live").mkdir()
+    (gens / "live" / "cards.jsonl").write_text("{}\n", encoding="utf-8")
+    (root / "ACTIVE").write_text("live\n", encoding="utf-8")
+    monkeypatch.setenv("PPA_SERVING_INDEX_PATH", str(root))
+    removed = prune_retired_serving_generations(tmp_path)
+    assert sorted(removed) == ["old-a", "old-b"]
+    assert (gens / "live" / "cards.jsonl").exists()
+    assert not (gens / "old-a").exists()
+    assert not (gens / "old-b").exists()
