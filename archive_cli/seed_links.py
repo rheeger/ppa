@@ -3139,6 +3139,7 @@ def run_seed_link_workers(
             return granted
 
     def worker_loop(worker_idx: int) -> SeedLinkRunSummary:
+        nonlocal progress_done
         worker_summary = SeedLinkRunSummary()
         with index._connect() as conn:
             while True:

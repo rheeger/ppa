@@ -193,6 +193,16 @@ def test_format1_active_linker_maintain_does_not_walk_slugs(monkeypatch, tmp_pat
     assert slug_calls == []
 
 
+def test_seed_link_workers_progress_uses_nonlocal() -> None:
+    import inspect
+
+    from archive_cli.seed_links import run_seed_link_workers
+
+    src = inspect.getsource(run_seed_link_workers)
+    assert "nonlocal progress_done" in src
+    assert "progress_done += 1" in src
+
+
 def test_expand_catalog_neighbor_closure_uses_serving_index(monkeypatch) -> None:
     cache = MagicMock()
 
