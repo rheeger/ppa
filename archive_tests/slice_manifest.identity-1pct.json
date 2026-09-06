@@ -1,0 +1,33 @@
+{
+  "fts_queries": [
+    {
+      "query": "Robbie Heeger",
+      "expected_types": ["person"],
+      "min_hits": 1,
+      "top_3_must_include_types": ["person"],
+      "description": "Primary user — must appear in any slice with primary_user_uid"
+    },
+    {
+      "query": "Sam Panken",
+      "expected_types": ["person"],
+      "min_hits": 1,
+      "top_3_must_include_types": ["person"],
+      "description": "Sam-class person pin"
+    }
+  ],
+  "temporal_queries": [],
+  "graph_queries": [
+    {
+      "start_uid": "hfa-person-54fc3b19aeda",
+      "description": "Graph from Sam Panken person card"
+    }
+  ],
+  "structural_invariants": {
+    "zero_orphaned_wikilinks": false,
+    "zero_orphaned_person_refs": false,
+    "all_edge_rules_fire": false,
+    "all_cards_have_summary": true,
+    "all_cards_have_activity_at": false
+  },
+  "card_counts_by_type": {}
+}
