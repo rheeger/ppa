@@ -1,9 +1,10 @@
-"""Typed evidence query service (P10-A).
+"""Typed evidence query service (P10-A / P10-D).
 
 Clients submit validated predicates over registered fields. Execution uses
 ``runtime.retrieval`` / ``runtime.query`` plus ``AccessContext``. Counts are
 computed over the full eligible set or marked incomplete. Arbitrary SQL is
-rejected. Saved-scope resolution is reserved for P09.
+rejected. Saved scopes resolve here: unknown presets fail closed, and an
+empty intersection is an empty-scope page — never unscoped search.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from archive_engine.contracts import AccessContext, EvidenceEnvelope
 from archive_engine.errors import CapabilityUnavailableError, QueryValidationError
 from archive_engine.query_cursor import QueryCursor, bind_cursor, decode_cursor
 from archive_engine.runtime import ArchiveRuntime
+from archive_engine.scopes import EffectiveScope, RequestFilters, SavedScope, resolve_effective_scope, scope_by_name
 
 QUERY_CONTRACT_VERSION = "p10a.1"
 MAX_AST_DEPTH = 4
@@ -149,7 +151,7 @@ class Predicate:
 
 @dataclass(frozen=True)
 class StructuredQueryRequest:
-    """Typed query. Saved scope names are accepted but not resolved until P09."""
+    """Typed query. Optional ``saved_scope_name`` is resolved against a catalog."""
 
     archive_id: str
     access: AccessContext
@@ -198,6 +200,8 @@ class QueryPage:
     complete: bool = False
     evidence: EvidenceEnvelope | None = None
     aggregate: Mapping[str, Any] | None = None
+    empty_scope: bool = False
+    saved_scope: Mapping[str, Any] | None = None
 
     def to_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -212,8 +216,11 @@ class QueryPage:
             "freshness": self.freshness,
             "truncated": self.truncated,
             "complete": self.complete,
+            "empty_scope": self.empty_scope,
             "contract_version": QUERY_CONTRACT_VERSION,
         }
+        if self.saved_scope is not None:
+            payload["saved_scope"] = dict(self.saved_scope)
         if self.evidence is not None:
             payload["evidence"] = self.evidence.to_payload()
         if self.aggregate is not None:
@@ -402,9 +409,60 @@ def _validate_value(spec: FieldSpec, value: Any) -> None:
         raise QueryValidationError(f"field {spec.name} requires a string")
 
 
+def _as_saved_scopes(scopes: Sequence[SavedScope] | Sequence[Mapping[str, object]] | None) -> tuple[SavedScope, ...]:
+    catalog: list[SavedScope] = []
+    for item in scopes or ():
+        if isinstance(item, SavedScope):
+            catalog.append(item)
+        else:
+            catalog.append(SavedScope.from_payload(item))
+    return tuple(catalog)
+
+
+def bind_request_scope(
+    request: StructuredQueryRequest,
+    scopes: Sequence[SavedScope] | Sequence[Mapping[str, object]] | None = None,
+) -> tuple[StructuredQueryRequest, EffectiveScope | None]:
+    """Resolve ``saved_scope_name``. Unknown names fail; empty intersection stays empty."""
+
+    name = request.saved_scope_name.strip()
+    if not name:
+        return request, None
+    found = scope_by_name(_as_saved_scopes(scopes), name)
+    if found is None:
+        raise QueryValidationError(f"unknown saved scope: {name}")
+    effective = resolve_effective_scope(
+        access=request.access,
+        scope=found,
+        request=RequestFilters.from_mapping(request.filters),
+    )
+    if effective.empty:
+        return request, effective
+    filters = dict(request.filters)
+    for key, value in effective.query_kwargs().items():
+        if value:
+            filters[key] = value
+    return (
+        StructuredQueryRequest(
+            archive_id=request.archive_id,
+            access=request.access,
+            predicate=request.predicate,
+            filters=filters,
+            fields=request.fields,
+            order_field=request.order_field,
+            order_direction=request.order_direction,
+            page_size=request.page_size,
+            cursor=request.cursor,
+            aggregate=request.aggregate,
+            as_of_checkpoint=request.as_of_checkpoint,
+            saved_scope_name=name,
+            snapshot=request.snapshot,
+        ),
+        effective,
+    )
+
+
 def validate_request(request: StructuredQueryRequest) -> StructuredQueryRequest:
-    if request.saved_scope_name.strip():
-        raise QueryValidationError("saved scopes are not available until P09")
     if request.access.archive_id != request.archive_id:
         raise QueryValidationError("AccessContext.archive_id must match the query archive_id")
     if request.access.deny:
@@ -444,7 +502,7 @@ def validate_request(request: StructuredQueryRequest) -> StructuredQueryRequest:
         cursor=request.cursor,
         aggregate=request.aggregate,
         as_of_checkpoint=request.as_of_checkpoint,
-        saved_scope_name="",
+        saved_scope_name=request.saved_scope_name.strip(),
         snapshot=request.snapshot,
     )
 
@@ -756,10 +814,27 @@ def execute_typed_query(
     *,
     rows: Sequence[Mapping[str, Any]] | None = None,
     warehouse_checkpoint: str = "",
+    scopes: Sequence[SavedScope] | Sequence[Mapping[str, object]] | None = None,
 ) -> QueryPage:
     """Run a typed query. ``rows`` supplies an isolated corpus for tests."""
 
-    validated = validate_request(request)
+    bound, effective = bind_request_scope(request, scopes)
+    if effective is not None and effective.empty:
+        return QueryPage(
+            rows=(),
+            effective_scope=_scope_pairs(bound.access, bound.filters),
+            matched_total=0,
+            total_status="exact",
+            snapshot=_snapshot_for(runtime, bound),
+            warehouse_checkpoint=warehouse_checkpoint,
+            coverage="empty_scope",
+            freshness="n/a",
+            truncated=False,
+            complete=True,
+            empty_scope=True,
+            saved_scope=effective.to_payload(),
+        )
+    validated = validate_request(bound)
     snapshot = _snapshot_for(runtime, validated)
     validated = StructuredQueryRequest(
         archive_id=validated.archive_id,
@@ -773,6 +848,7 @@ def execute_typed_query(
         cursor=validated.cursor,
         aggregate=validated.aggregate,
         as_of_checkpoint=validated.as_of_checkpoint,
+        saved_scope_name=validated.saved_scope_name,
         snapshot=snapshot,
     )
     policy_fp = policy_identity(validated.access)
@@ -871,6 +947,8 @@ def execute_typed_query(
         complete=complete,
         evidence=evidence,
         aggregate=aggregate,
+        empty_scope=False,
+        saved_scope=None if effective is None else effective.to_payload(),
     )
 
 
@@ -887,6 +965,7 @@ def request_from_simple_filters(
     cursor: str = "",
     order_field: str = "activity_at",
     order_direction: str = "desc",
+    saved_scope_name: str = "",
 ) -> StructuredQueryRequest:
     filters = {
         "type_filter": type_filter,
@@ -906,4 +985,5 @@ def request_from_simple_filters(
         page_size=limit,
         cursor=cursor,
         aggregate="count",
+        saved_scope_name=saved_scope_name,
     )

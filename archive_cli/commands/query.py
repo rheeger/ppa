@@ -22,20 +22,28 @@ def query(
     limit: int,
     store: DefaultArchiveStore,
     logger: logging.Logger,
+    start_date: str = "",
+    end_date: str = "",
+    saved_scope_name: str = "",
+    scopes: object = None,
+    warehouse_checkpoint: str = "",
 ) -> dict[str, Any]:
     """Structured card query; returns rows under ``rows`` key.
 
-    Compatibility mapping only: legacy type/source/people/org filters become a
-    typed predicate. Central parser registration stays with P09/P10-D.
+    Legacy type/source/people/org filters become a typed predicate. Saved
+    scopes resolve before execution; empty intersection is empty-scope.
     """
+    from .analytics import client_envelope, load_scopes
+
     t0 = time.monotonic()
     logger.info(
-        "query_start type=%r source=%r people=%r org=%r limit=%s",
+        "query_start type=%r source=%r people=%r org=%r limit=%s scope=%r",
         type_filter,
         source_filter,
         people_filter,
         org_filter,
         limit,
+        saved_scope_name,
     )
     request = request_from_simple_filters(
         access=store.access,
@@ -43,21 +51,33 @@ def query(
         source_filter=source_filter,
         people_filter=people_filter,
         org_filter=org_filter,
+        start_date=start_date,
+        end_date=end_date,
         limit=limit,
+        saved_scope_name=saved_scope_name,
     )
     try:
-        page = execute_typed_query(store.runtime, request)
-        result = page.to_legacy_result()
+        page = execute_typed_query(
+            store.runtime,
+            request,
+            scopes=load_scopes(scopes),
+            warehouse_checkpoint=warehouse_checkpoint,
+        )
+        result = client_envelope(page.to_legacy_result())
     except (QueryValidationError, CursorInvalidError):
         raise
     except Exception:
+        if saved_scope_name.strip():
+            raise
         logger.exception("typed_query_fallback_to_simple")
-        result = store.query(
-            type_filter=type_filter,
-            source_filter=source_filter,
-            people_filter=people_filter,
-            org_filter=org_filter,
-            limit=limit,
+        result = client_envelope(
+            store.query(
+                type_filter=type_filter,
+                source_filter=source_filter,
+                people_filter=people_filter,
+                org_filter=org_filter,
+                limit=limit,
+            )
         )
     elapsed_ms = int((time.monotonic() - t0) * 1000)
     rows = result.get("rows") or []

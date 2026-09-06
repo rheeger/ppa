@@ -69,6 +69,7 @@ TOOL_PROFILES: dict[str, frozenset[str] | None] = {
             "archive_search",
             "archive_read",
             "archive_query",
+            "archive_analytics",
             "archive_graph",
             "archive_person",
             "archive_timeline",
@@ -89,6 +90,7 @@ TOOL_PROFILES: dict[str, frozenset[str] | None] = {
         {
             "archive_search",
             "archive_query",
+            "archive_analytics",
             "archive_timeline",
             "archive_evidence",
             "archive_stats",
@@ -135,6 +137,7 @@ RETRIEVAL_TOOLS = frozenset(
     {
         "archive_search",
         "archive_query",
+        "archive_analytics",
         "archive_graph",
         "archive_person",
         "archive_timeline",

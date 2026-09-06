@@ -16,10 +16,51 @@ from typing import Any
 from archive_cli.index_config import _activity_date
 
 
-def _confidence_footer(*, confidence: str = "", row_count: int = 0) -> str:
-    if not confidence:
+def _completeness_footer(result: dict[str, Any] | None) -> str:
+    if not result:
         return ""
-    return f"\n--- Confidence: {confidence} | {row_count} results ---"
+    parts: list[str] = []
+    if result.get("empty_scope"):
+        parts.append("empty_scope")
+    label = str(result.get("completeness_label") or "").strip()
+    if label:
+        parts.append(f"completeness={label}")
+    if result.get("truncated"):
+        parts.append("truncated")
+    if result.get("stale"):
+        parts.append("stale")
+    if result.get("complete") is False:
+        parts.append("incomplete")
+    coverage = result.get("coverage")
+    if coverage:
+        parts.append(f"coverage={coverage}")
+    freshness = result.get("freshness")
+    if freshness:
+        parts.append(f"freshness={freshness}")
+    served = result.get("served_checkpoint") or result.get("snapshot")
+    materialized = result.get("materialized_checkpoint") or result.get("warehouse_checkpoint")
+    if served:
+        parts.append(f"served={served}")
+    if materialized:
+        parts.append(f"materialized={materialized}")
+    if served and materialized and served != materialized:
+        parts.append("checkpoint_diverged")
+    kinds = []
+    for item in result.get("evidence") or result.get("rows") or result.get("hits") or []:
+        if isinstance(item, dict) and item.get("evidence_kind"):
+            kinds.append(str(item["evidence_kind"]))
+    if kinds:
+        parts.append("kinds=" + ",".join(dict.fromkeys(kinds)))
+    if not parts:
+        return ""
+    return "\n--- " + " | ".join(parts) + " ---"
+
+
+def _confidence_footer(*, confidence: str = "", row_count: int = 0, result: dict[str, Any] | None = None) -> str:
+    confidence_line = ""
+    if confidence:
+        confidence_line = f"\n--- Confidence: {confidence} | {row_count} results ---"
+    return confidence_line + _completeness_footer(result)
 
 
 def _corpus_state_tag(row: dict) -> str:
@@ -46,7 +87,11 @@ def format_search(result: dict) -> str:
         base = "No matches"
     else:
         base = "\n".join(format_search_line(r) for r in rows)
-    return base + _confidence_footer(confidence=str(result.get("confidence", "")), row_count=len(rows))
+    return base + _confidence_footer(
+        confidence=str(result.get("confidence", "")),
+        row_count=len(rows),
+        result=result,
+    )
 
 
 def format_graph(rel_path: str, graph: dict[str, Any]) -> str:
@@ -100,6 +145,7 @@ def format_evidence(result: dict) -> str:
     return base + _confidence_footer(
         confidence=str(result.get("confidence", "")),
         row_count=len(hits),
+        result=result,
     )
 
 

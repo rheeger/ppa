@@ -166,8 +166,8 @@ def test_denied_access_rejects_before_query() -> None:
         _query(access, {"op": "eq", "field": "type", "value": "person"})
 
 
-def test_saved_scope_rejected_until_p09() -> None:
-    with pytest.raises(QueryValidationError, match="saved scopes"):
+def test_unknown_saved_scope_rejected() -> None:
+    with pytest.raises(QueryValidationError, match="unknown saved scope"):
         execute_typed_query(
             None,
             StructuredQueryRequest(
@@ -176,7 +176,41 @@ def test_saved_scope_rejected_until_p09() -> None:
                 saved_scope_name="family",
             ),
             rows=_rows_from_corpus(),
+            scopes=(),
         )
+
+
+def test_saved_scope_applies_without_widening() -> None:
+    from archive_engine.scopes import SavedScope
+
+    page = execute_typed_query(
+        None,
+        StructuredQueryRequest(
+            archive_id="archive-p10a",
+            access=_access(allowed_sources=("acceptance.p04b",)),
+            saved_scope_name="p04b",
+            filters={"type_filter": "person"},
+            aggregate="count",
+            page_size=20,
+        ),
+        rows=_rows_from_corpus(),
+        scopes=(SavedScope(name="p04b", sources=("acceptance.p04b",), card_types=("person",)),),
+    )
+    assert page.empty_scope is False
+    assert {row["uid"] for row in page.rows} >= {"hfa-person-p04balex0001", "hfa-person-p04balex0002"}
+    empty = execute_typed_query(
+        None,
+        StructuredQueryRequest(
+            archive_id="archive-p10a",
+            access=_access(allowed_sources=("gmail",)),
+            saved_scope_name="slack-only",
+        ),
+        rows=_rows_from_corpus(),
+        scopes=(SavedScope(name="slack-only", sources=("slack",)),),
+    )
+    assert empty.empty_scope is True
+    assert empty.rows == ()
+    assert empty.matched_total == 0
 
 
 def test_simple_filter_mapping_matches_type_membership() -> None:

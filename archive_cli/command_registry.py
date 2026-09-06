@@ -29,6 +29,7 @@ _PRODUCT_COMMANDS = frozenset(
         "restore",
         "activate-restore",
         "instance-status",
+        "analytics",
     }
 )
 
@@ -143,6 +144,51 @@ def register_product_commands(subparsers: argparse._SubParsersAction) -> None:
     )
     status.add_argument("--instance-dir", default="", help="Optional instance directory")
 
+    analytics = subparsers.add_parser(
+        "analytics",
+        help="Typed query, neighbor context, and deterministic workflows (read-only JSON)",
+        description=(
+            "Read-only evidence clients. Saved scopes narrow; they never widen access. "
+            "Workflows return facts, citations, and completeness — not advice or FX. "
+            "CLI and MCP share the same request/result contract."
+        ),
+    )
+    analytics_sub = analytics.add_subparsers(dest="analytics_command", required=True)
+    query = analytics_sub.add_parser("query", help="Typed filter query with optional saved scope")
+    _add_query_flags(query)
+    context = analytics_sub.add_parser("context", help="Expand matched hits with labeled neighbor context")
+    context.add_argument("--cards-json", default="", help="Isolated fixture cards JSON")
+    context.add_argument("--hit-uid", default="hfa-email-message-p04breply01")
+    context.add_argument("--saved-scope", dest="saved_scope_name", default="")
+    context.add_argument("--scopes-json", default="")
+    subscriptions = analytics_sub.add_parser("subscriptions", help="Subscription lifecycle (last-observed, not current)")
+    subscriptions.add_argument("--cards-json", default="", help="Isolated fixture cards JSON")
+    subscriptions.add_argument("--saved-scope", dest="saved_scope_name", default="")
+    subscriptions.add_argument("--scopes-json", default="")
+    trip = analytics_sub.add_parser("trip-costs", help="Reconciled trip membership and costs (no FX)")
+    trip.add_argument("--cards-json", default="", help="Isolated fixture cards JSON")
+    trip.add_argument("--saved-scope", dest="saved_scope_name", default="")
+    trip.add_argument("--scopes-json", default="")
+    changes = analytics_sub.add_parser("changes-since", help="Journal changes since a checkpoint")
+    changes.add_argument("--records-json", default="", help="Isolated journal records JSON")
+    changes.add_argument("--snapshot-id", default="p10d-journal")
+    changes.add_argument("--after-sequence", dest="after_sequence", type=int, default=0)
+    changes.add_argument("--cursor", default="")
+
+
+def _add_query_flags(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--type", dest="type_filter", default="")
+    parser.add_argument("--source", dest="source_filter", default="")
+    parser.add_argument("--people", dest="people_filter", default="")
+    parser.add_argument("--org", dest="org_filter", default="")
+    parser.add_argument("--start", dest="start_date", default="")
+    parser.add_argument("--end", dest="end_date", default="")
+    parser.add_argument("--limit", type=int, default=20)
+    parser.add_argument("--saved-scope", dest="saved_scope_name", default="")
+    parser.add_argument("--scopes-json", default="", help="Saved-scope catalog JSON (fixture or instance)")
+    parser.add_argument("--snapshot", default="")
+    parser.add_argument("--warehouse-checkpoint", dest="warehouse_checkpoint", default="")
+
 
 def dispatch_product_command(args: argparse.Namespace) -> bool:
     """Handle a registered product command. Returns False if not one of ours."""
@@ -154,6 +200,12 @@ def dispatch_product_command(args: argparse.Namespace) -> bool:
         payload = _dispatch(args)
     except (PpaError, ValueError, OSError) as exc:
         _fail(exc)
+    except Exception as exc:
+        from archive_engine.errors import ConfigError, QueryValidationError
+
+        if isinstance(exc, (ConfigError, QueryValidationError)):
+            _fail(exc)
+        raise
     _print_json(payload)
     return True
 
@@ -258,6 +310,11 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
             query_uid=args.query_uid,
             query_text=args.query_text,
         )
+
+    if args.command == "analytics":
+        from archive_cli.commands.analytics import dispatch_analytics_args
+
+        return dispatch_analytics_args(args)
 
     from archive_cli.commands.setup import detect_capabilities
 

@@ -80,3 +80,4 @@ def load_builtin_scenarios() -> None:
     from archive_tests.acceptance.scenarios import p10_queries as _p10_queries
     from archive_tests.acceptance.scenarios import p10_context as _p10_context
     from archive_tests.acceptance.scenarios import p10_workflows as _p10_workflows  # noqa: F401
+    from archive_tests.acceptance.scenarios import p10_clients as _p10_clients  # noqa: F401

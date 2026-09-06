@@ -546,7 +546,11 @@ def main() -> None:
     query_parser.add_argument("--source", dest="source_filter", default="")
     query_parser.add_argument("--people", dest="people_filter", default="")
     query_parser.add_argument("--org", dest="org_filter", default="")
+    query_parser.add_argument("--start", dest="start_date", default="")
+    query_parser.add_argument("--end", dest="end_date", default="")
     query_parser.add_argument("--limit", type=int, default=12)
+    query_parser.add_argument("--saved-scope", dest="saved_scope_name", default="")
+    query_parser.add_argument("--scopes-json", default="")
     graph_parser = subparsers.add_parser("graph", help="Wikilink graph from a note (JSON)")
     graph_parser.add_argument("note_path")
     graph_parser.add_argument("--hops", type=int, default=2)
@@ -586,6 +590,13 @@ def main() -> None:
         action="store_true",
         help="Stitch hits into a short dated outline citing UIDs (not extracts)",
     )
+    evidence_parser.add_argument(
+        "--expand-context",
+        action="store_true",
+        help="Label matched hits vs adjacent context when neighbor units are supplied",
+    )
+    evidence_parser.add_argument("--saved-scope", dest="saved_scope_name", default="")
+    evidence_parser.add_argument("--scopes-json", default="")
     tn_parser = subparsers.add_parser("temporal-neighbors", help="Cards near a timestamp (JSON)")
     tn_parser.add_argument("timestamp")
     tn_parser.add_argument("--direction", default="both", choices=("forward", "backward", "both"))
@@ -1500,7 +1511,11 @@ def main() -> None:
                 source_filter=args.source_filter,
                 people_filter=args.people_filter,
                 org_filter=args.org_filter,
+                start_date=getattr(args, "start_date", "") or "",
+                end_date=getattr(args, "end_date", "") or "",
                 limit=args.limit,
+                saved_scope_name=getattr(args, "saved_scope_name", "") or "",
+                scopes=getattr(args, "scopes_json", "") or "",
                 store=store,
                 logger=_cli_log,
             )
@@ -1546,6 +1561,9 @@ def main() -> None:
                 type_filter=args.type_filter,
                 source_filter=args.source_filter,
                 people_filter=args.people_filter,
+                saved_scope_name=getattr(args, "saved_scope_name", "") or "",
+                scopes=getattr(args, "scopes_json", "") or "",
+                expand_context=bool(getattr(args, "expand_context", False)),
                 start_date=args.start_date,
                 end_date=args.end_date,
                 limit=args.limit,

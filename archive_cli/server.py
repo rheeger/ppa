@@ -36,6 +36,7 @@ from archive_engine.access import (
 )
 
 from .commands import admin, attachments, explain
+from .commands import analytics as analytics_cmd
 from .commands import evidence as evidence_cmd
 from .commands import formatters as fmt
 from .commands import graph as graph_cmd
@@ -230,6 +231,9 @@ def archive_query(
     people_filter: str = "",
     org_filter: str = "",
     limit: int = 20,
+    saved_scope_name: str = "",
+    start_date: str = "",
+    end_date: str = "",
 ) -> str:
     """Structured query by frontmatter fields."""
 
@@ -240,6 +244,7 @@ def archive_query(
         people_filter=people_filter,
         org_filter=org_filter,
         limit=limit,
+        saved_scope_name=saved_scope_name,
     )
     try:
         profile_error = _tool_profile_error("archive_query")
@@ -251,7 +256,10 @@ def archive_query(
             source_filter=source_filter,
             people_filter=people_filter,
             org_filter=org_filter,
+            start_date=start_date,
+            end_date=end_date,
             limit=limit,
+            saved_scope_name=saved_scope_name,
             store=store,
             logger=_log,
         )
@@ -332,6 +340,8 @@ def archive_evidence(
     end_date: str = "",
     limit: int = 12,
     narrative: bool = False,
+    expand_context: bool = False,
+    saved_scope_name: str = "",
 ) -> str:
     """Compact chronological evidence listing."""
 
@@ -359,6 +369,8 @@ def archive_evidence(
             end_date=end_date,
             limit=limit,
             narrative=narrative,
+            expand_context=expand_context,
+            saved_scope_name=saved_scope_name,
             store=store,
             logger=_log,
         )
@@ -370,6 +382,63 @@ def archive_evidence(
         return _ppa_err("archive_evidence", exc)
     except Exception as exc:
         _log.error("tool=archive_evidence error=%s", str(exc))
+        raise
+
+
+@_tool("archive_analytics")
+def archive_analytics(
+    workflow: str,
+    type_filter: str = "",
+    source_filter: str = "",
+    people_filter: str = "",
+    org_filter: str = "",
+    start_date: str = "",
+    end_date: str = "",
+    limit: int = 20,
+    saved_scope_name: str = "",
+    scopes_json: str = "",
+    cards_json: str = "",
+    records_json: str = "",
+    hit_uid: str = "",
+    snapshot_id: str = "",
+) -> str:
+    """Typed query, neighbor context, or a deterministic workflow as JSON."""
+
+    t0 = _log_tool_call("archive_analytics", workflow=workflow, saved_scope_name=saved_scope_name)
+    try:
+        profile_error = _tool_profile_error("archive_analytics")
+        if profile_error:
+            return _log_tool_return_error("archive_analytics", profile_error)
+        store = None
+        access = None
+        if not cards_json and not records_json and workflow in {"query", "typed_query"}:
+            store = resolve_store()
+            access = store.access
+        payload = analytics_cmd.execute_client_request(
+            workflow,
+            access=access,
+            type_filter=type_filter,
+            source_filter=source_filter,
+            people_filter=people_filter,
+            org_filter=org_filter,
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
+            saved_scope_name=saved_scope_name,
+            scopes=scopes_json,
+            cards=cards_json,
+            records=records_json,
+            hit_uid=hit_uid or analytics_cmd.REPLY,
+            store=store,
+            snapshot_id=snapshot_id or "p10d-journal",
+        )
+        out = json.dumps(payload, indent=2, default=str)
+        _log_tool_done("archive_analytics", t0, workflow=workflow)
+        return out
+    except PpaError as exc:
+        return _ppa_err("archive_analytics", exc)
+    except Exception as exc:
+        _log.error("tool=archive_analytics error=%s", str(exc))
         raise
 
 

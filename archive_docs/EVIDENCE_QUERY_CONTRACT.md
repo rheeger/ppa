@@ -1,7 +1,7 @@
-# Evidence query contract (P10-A / P10-B)
+# Evidence query contract (P10-A / P10-B / P10-C / P10-D)
 
-**Version:** `p10c.1`  
-**Owner:** P10 evidence-query. CLI/MCP registration (P10-D) extends this document; it does not replace it.
+**Version:** `p10d.1`  
+**Owner:** P10 evidence-query. Client registration is installed. This document is the contract; P09 public docs stay P09-owned.
 
 This is the first product surface that can read a **full eligible set** (or say that it did not). Clients synthesize answers from the returned rows. The archive does not answer for you.
 
@@ -9,7 +9,7 @@ This is the first product surface that can read a **full eligible set** (or say 
 
 Typed queries go through `archive_engine.query.execute_typed_query` and an explicit `AccessContext`. Retrieval uses `runtime.retrieval` / `runtime.query`. Native serving implements filter + keyset pagination over registered metadata fields. Postgres is a **read-only warehouse analytical adapter** for allowlisted aggregates, not a semantic-search fallback.
 
-Saved scopes are **not resolved here**. A `saved_scope_name` is rejected until P09. Explicit request filters always work. Scope never grants authority.
+Saved scopes resolve through `archive_engine.scopes.resolve_effective_scope`. A named preset is looked up in the instance/fixture catalog. Unknown names fail closed (`QueryValidationError`). Request filters replace the same preset dimension. AccessContext is an upper bound and is never widened. An empty intersection is `empty_scope` with zero rows — never unscoped search.
 
 ## Typed request
 
@@ -56,7 +56,7 @@ Counts and sums are computed over the **full eligible set after AccessContext**,
 
 ## Compatibility
 
-`archive_cli/commands/query.py` maps existing type/source/people/org filters onto this contract. Central parser / MCP registration waits for P09-C (P10-D). Simple query row membership is preserved.
+`archive_cli/commands/query.py` maps existing type/source/people/org filters onto this contract. Simple query row membership is preserved. `ppa analytics` and `archive_analytics` share `archive_cli/commands/analytics.py`.
 
 ## Neighbor context (P10-B)
 
@@ -80,6 +80,19 @@ If generation offsets no longer match the canonical file revision, the result is
 
 Evidence kinds remain `source_reported`, `derived`, `proposed_link`, or `unknown`. Proposed observations cannot become source facts. Totals refuse a truncated page.
 
-## Later slices
+## Installed clients (P10-D)
 
-- **P10-D**: saved scopes and installed CLI/MCP evidence bundles.
+CLI `ppa analytics {query,context,subscriptions,trip-costs,changes-since}` and MCP `archive_analytics` return the same JSON contract (`client_contract_version=p10d.1`):
+
+- rows / hits, citations, totals (`matched_total`, `total_status`)
+- effective / saved scope payload
+- completeness: `complete`, `truncated`, `coverage=eligible_stored` (or `empty_scope`), `freshness`
+- `served_checkpoint` vs `materialized_checkpoint` — divergence is `stale`, not silently mixed
+- evidence kinds: `source_reported` / `derived` / `proposed_link` / `unknown`
+- `production_proven=false`
+
+`ppa query` / `archive_query` and `ppa evidence` / `archive_evidence` accept `--saved-scope` / `saved_scope_name`. Context expansion labels matched vs adjacent units. Legacy simple query still works.
+
+These clients do not convert currency, do not emit financial or health advice, and do not invent a current subscription.
+
+Capability deltas for P09/P04 matrices live in `archive_docs/reports/p10-runtime-capability-delta.md`. P09 owns README / ARCHITECTURE / MCP_SETUP / runtime-contract rewrites.
