@@ -21,7 +21,7 @@ from archive_tests.acceptance.environment import (
 from archive_tests.acceptance.evidence import write_junit
 from archive_tests.acceptance.oracle import cosine_similarity, exact_nearest_neighbors
 from archive_tests.acceptance.registry import load_builtin_scenarios, scenarios_for
-from archive_tests.acceptance.run import RunnerError, main, validate_output_path
+from archive_tests.acceptance.run import RunnerError, main, run_suite, validate_output_path
 from archive_tests.acceptance.scenarios.baseline import assert_expected_hit
 from archive_tests.conftest import OWNED_ROOT_MARKER, assert_owned_test_root
 
@@ -46,12 +46,10 @@ def test_suite_ids_include_baseline_and_children() -> None:
     assert "p10" in SUITE_IDS
 
 
-def test_empty_suite_fails(tmp_path: Path) -> None:
-    load_builtin_scenarios()
-    assert scenarios_for("release") == []
-    proc = _runner("--suite", "release", "--output", str(tmp_path / "out"))
-    assert proc.returncode != 0
-    assert "zero scenarios" in proc.stderr
+def test_empty_suite_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("archive_tests.acceptance.run.scenarios_for", lambda suite: [])
+    with pytest.raises(RunnerError, match="zero scenarios"):
+        run_suite(suite="release", output=tmp_path / "out", require_integration=False)
 
 
 def test_unknown_suite_rejected() -> None:
@@ -166,8 +164,9 @@ def test_require_integration_flag_is_registered(pytestconfig: pytest.Config) -> 
     assert pytestconfig.getoption("--require-integration") in {True, False}
 
 
-def test_main_empty_suite_exit_code(tmp_path: Path) -> None:
-    code = main(["--suite", "p09", "--output", str(tmp_path / "out"), "--require-integration"])
+def test_main_empty_suite_exit_code(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("archive_tests.acceptance.run.scenarios_for", lambda suite: [])
+    code = main(["--suite", "baseline", "--output", str(tmp_path / "out")])
     assert code == 1
 
 

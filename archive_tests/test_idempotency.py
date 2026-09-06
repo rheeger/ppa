@@ -152,6 +152,12 @@ def test_wipe_and_reimport_produces_same_card_hashes(tmp_vault, tmp_path):
         path.unlink()
     (tmp_vault / "_meta" / "identity-map.json").write_text("{}", encoding="utf-8")
     (tmp_vault / "_meta" / "sync-state.json").write_text("{}", encoding="utf-8")
+    journal = tmp_vault / "_meta" / "change-journal.sqlite3"
+    if journal.exists():
+        journal.unlink()
+    lock = tmp_vault / "_meta" / "change-journal.lock"
+    if lock.exists():
+        lock.unlink()
 
     _run_import(tmp_vault, fixtures)
     after = {

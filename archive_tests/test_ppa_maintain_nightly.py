@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import logging
 from datetime import datetime
 from pathlib import Path
 
@@ -113,7 +114,7 @@ def test_render_plist_substitutes_paths() -> None:
     assert "gemini_key.txt" in rendered
 
 
-def test_dry_run_exits_zero(tmp_path: Path, monkeypatch, capsys) -> None:
+def test_dry_run_exits_zero(tmp_path: Path, monkeypatch, caplog) -> None:
     mod = _load_mod()
     monkeypatch.chdir(REPO_ROOT)
     monkeypatch.setenv("PPA_INDEX_DSN", "postgresql://archive:archive@127.0.0.1:50731/archive")
@@ -122,14 +123,14 @@ def test_dry_run_exits_zero(tmp_path: Path, monkeypatch, capsys) -> None:
     monkeypatch.setenv("PPA_EMBEDDING_PROVIDER", "hash")
     monkeypatch.setenv("PPA_EMBEDDING_MODEL", "archive-hash-dev")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    rc = mod.main(["--dry-run"])
+    with caplog.at_level(logging.INFO, logger="ppa"):
+        rc = mod.main(["--dry-run"])
     assert rc == 0
-    # dry-run logs to stderr, not stdout
-    err = capsys.readouterr().err
-    assert "--run-source-updaters" in err
-    assert "--allow-broad-llm" in err
-    assert "--catch-up" not in err
-    assert "photos" not in err.lower() or "parked" in err.lower()
+    text = caplog.text
+    assert "--run-source-updaters" in text
+    assert "--allow-broad-llm" in text
+    assert "--catch-up" not in text
+    assert "photos" not in text.lower() or "parked" in text.lower()
 
 
 def test_default_log_path_uses_local_date() -> None:

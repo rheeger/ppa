@@ -63,6 +63,7 @@ class FakeIndex:
                 "rel_path": "People/jane-smith.md",
                 "summary": "Jane Smith",
                 "type": "person",
+                "sources": ["linkedin"],
                 "activity_at": "2026-03-06",
                 "matched_by": "lexical",
                 "preview": "FULL ATTACHMENT OCR MUST NEVER APPEAR IN EVIDENCE: " + ("x" * 400),
@@ -92,6 +93,7 @@ class FakeIndex:
                 "rel_path": "People/jane-smith.md",
                 "summary": "Jane Smith",
                 "type": "person",
+                "sources": ["linkedin"],
                 "activity_at": "2026-03-06",
             }
         ]

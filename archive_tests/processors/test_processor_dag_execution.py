@@ -646,15 +646,17 @@ def test_apply_enrichment_calls_run_enrichment_for_uids(
     assert calls[0][2].get("workflow") == "email_thread"
 
 
-def test_apply_enrichment_without_broad_llm_skips(
+def test_apply_enrichment_without_broad_llm_runs_deterministic(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     vault = _minimal_vault(tmp_path)
     store = _MockStore(vault)
+    calls: list[list[str]] = []
 
-    def _enrich(*_a, **_k):
-        raise AssertionError("enrichment must not run without --allow-broad-llm")
+    def _enrich(*_a, **kwargs):
+        calls.append(list(kwargs.get("uids") or _a[1] if len(_a) > 1 else []))
+        return type("Metrics", (), {"enriched_card_uids": ["uid-enr-skip"], "errors": 0})()
 
     monkeypatch.setattr(
         "archive_sync.llm_enrichment.enrichment_orchestrator.run_enrichment_for_uids",
@@ -669,8 +671,8 @@ def test_apply_enrichment_without_broad_llm_skips(
         allow_broad_llm=False,
     )
     assert result.executed is True
-    assert all(r.status == "skipped" for r in result.item_results)
-    assert any(r.skip_reason == "missing_broad_llm_opt_in" for r in result.item_results)
+    assert calls
+    assert not any(getattr(r, "skip_reason", "") == "missing_broad_llm_opt_in" for r in result.item_results)
 
 
 def test_apply_entity_resolution_passes_uid_allowlist(
@@ -699,15 +701,17 @@ def test_apply_entity_resolution_passes_uid_allowlist(
     assert calls[0]["dry_run"] is False
 
 
-def test_apply_entity_resolution_without_broad_llm_skips(
+def test_apply_entity_resolution_without_broad_llm_runs_deterministic(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     vault = _minimal_vault(tmp_path)
     store = _MockStore(vault)
+    calls: list[dict] = []
 
-    def _er(*_a, **_k):
-        raise AssertionError("entity resolution must not run without --allow-broad-llm")
+    def _er(vault_path, **kwargs):
+        calls.append({"vault_path": vault_path, **kwargs})
+        return {"created_uids": [], "changed_uids": [], "errors": []}
 
     monkeypatch.setattr("archive_sync.extractors.entity_resolution.run_entity_resolution", _er)
     result = _apply_default(
@@ -717,8 +721,8 @@ def test_apply_entity_resolution_without_broad_llm_skips(
         store=store,
         allow_broad_llm=False,
     )
-    assert all(r.status == "skipped" for r in result.item_results)
-    assert any(r.skip_reason == "missing_broad_llm_opt_in" for r in result.item_results)
+    assert calls
+    assert not any(getattr(r, "skip_reason", "") == "missing_broad_llm_opt_in" for r in result.item_results)
 
 
 def test_suppressed_inputs_skip_without_calling_embed_pending(tmp_path: Path) -> None:

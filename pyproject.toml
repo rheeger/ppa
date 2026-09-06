@@ -54,7 +54,7 @@ where = ["."]
 include = ["archive_cli*", "archive_vault*", "archive_sync*", "archive_doctor*", "archive_auth*", "archive_engine*"]
 
 [tool.pytest.ini_options]
-pythonpath = [".", "archive_tests"]
+pythonpath = ["."]
 testpaths = ["archive_tests"]
 markers = [
     "integration: requires a running Postgres instance",

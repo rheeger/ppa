@@ -41,6 +41,7 @@ def test_confidence_written_to_frontmatter(extractor_vault, tmp_path, sample_ema
     )
     write_email_to_vault(extractor_vault, "Email/conf.md", fm, body)
     staging = tmp_path / "st"
+    staging.mkdir()
     runner = ExtractionRunner(
         vault_path=extractor_vault,
         registry=build_default_registry(),

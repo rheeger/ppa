@@ -318,6 +318,7 @@ class ExtractionRunner:
             existed = (out_root / rel_out).is_file()
             try:
                 card_out = er.card.model_copy(update={"extraction_confidence": er.extraction_confidence})
+                out_root.mkdir(parents=True, exist_ok=True)
                 write_card(str(out_root), rel_out, card_out, er.body, er.provenance)
             except Exception as exc:
                 log.warning("write_card failed %s: %s", rel_out, exc)
