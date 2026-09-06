@@ -6,6 +6,7 @@ use serde_json::{Map, Value as JsonValue};
 
 use crate::chunk::accumulator::{ChunkAccumulator, ChunkRecord};
 use crate::chunk::builders;
+use crate::chunk::bursts;
 use crate::chunk::fm::fm_str_value;
 
 /// Same mapping as `archive_cli.card_registry` `chunk_builder_name` (None → default path).
@@ -64,6 +65,9 @@ fn build_chunks_map(fm: &Map<String, JsonValue>, body: &str) -> Vec<ChunkRecord>
     } else {
         builders::build_default_chunks(fm, body, &mut acc);
     }
+    if bursts::conversation_card_type(&card_type) {
+        bursts::append_burst_chunks(&mut acc, &JsonValue::Object(fm.clone()), body, &card_type);
+    }
 
     acc.chunks
 }
@@ -83,6 +87,23 @@ pub fn chunk_records_to_py_list(py: Python<'_>, records: &[ChunkRecord]) -> PyRe
         d.set_item("content", &r.content)?;
         d.set_item("content_hash", &r.content_hash)?;
         d.set_item("token_count", r.token_count)?;
+        if let Some(burst) = &r.burst {
+            d.set_item("burst_key", &burst.burst_key)?;
+            d.set_item("burst_sequence", burst.burst_sequence)?;
+            let mids = PyList::empty_bound(py);
+            for mid in &burst.message_ids {
+                mids.append(mid)?;
+            }
+            d.set_item("message_ids", mids)?;
+            d.set_item("parent_thread", &burst.parent_thread)?;
+            d.set_item("algorithm_version", &burst.algorithm_version)?;
+            d.set_item("embed_eligible", burst.embed_eligible)?;
+            let revs = PyList::empty_bound(py);
+            for rev in &burst.source_revisions {
+                revs.append(rev)?;
+            }
+            d.set_item("source_revisions", revs)?;
+        }
         list.append(d)?;
     }
     Ok(list.to_object(py))

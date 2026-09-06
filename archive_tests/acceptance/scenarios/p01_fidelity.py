@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from typing import Any
@@ -49,7 +50,7 @@ def _write_person(vault, *, uid: str, rel_path: str, summary: str, email: str, a
         rel_path,
         card,
         body=f"{summary} is a synthetic P01-A fidelity fixture.",
-        provenance=_prov("summary", "first_name", "last_name", "emails", "aliases", "company", "title"),
+        provenance=_prov("summary", "first_name", "last_name", "emails", "aliases", "company", "title", "tags"),
     )
     return {"uid": uid, "rel_path": rel_path, "path": str(path), "email": email, "alias": alias}
 
@@ -92,7 +93,7 @@ def run_p01_fidelity(runtime: IsolatedRuntime) -> dict[str, Any]:
         alias="p01-s",
     )
     reset_serving_handle()
-    from archive_cli.server import archive_graph, archive_rebuild_indexes, archive_search
+    from archive_cli.server import archive_graph, archive_rebuild_indexes, archive_search, archive_search_json
 
     rebuild_text = archive_rebuild_indexes()
     from archive_cli.index_store import get_archive_index
@@ -148,6 +149,7 @@ def run_p01_fidelity(runtime: IsolatedRuntime) -> dict[str, Any]:
     listed_uids = {row.get("card_uid") for row in listed}
     graph = handle.graph(active["rel_path"], hops=1)
     mcp_search = archive_search(ACTIVE_UID, limit=8)
+    mcp_search_json = json.loads(archive_search_json(ACTIVE_UID, limit=8))
     mcp_graph = archive_graph(active["rel_path"], hops=1)
 
     if not any(row.get("card_uid") == ACTIVE_UID and row.get("match_channel") == "exact" for row in exact):
@@ -167,8 +169,9 @@ def run_p01_fidelity(runtime: IsolatedRuntime) -> dict[str, Any]:
         raise AssertionError(f"inferred edge lost method: {graph}")
     if abs(float(inferred.get("confidence") or 0) - 0.58) > 1e-9:
         raise AssertionError(f"inferred confidence lost: {inferred}")
-    if ACTIVE_UID not in mcp_search:
-        raise AssertionError(f"MCP search missed active uid: {mcp_search[:500]}")
+    json_uids = [str(row.get("card_uid") or "") for row in mcp_search_json.get("rows") or []]
+    if ACTIVE_UID not in json_uids and active["rel_path"] not in mcp_search:
+        raise AssertionError(f"MCP search missed active card: text={mcp_search[:500]} json={json_uids}")
     if "possible_same_person" not in mcp_graph and "inferred" not in mcp_graph:
         raise AssertionError(f"MCP graph missed inferred edge: {mcp_graph[:800]}")
 
@@ -182,6 +185,8 @@ def run_p01_fidelity(runtime: IsolatedRuntime) -> dict[str, Any]:
         "listed_uids": sorted(str(uid) for uid in listed_uids if uid),
         "graph": graph,
         "mcp_search": mcp_search[:1500],
+        "mcp_search_json_uids": json_uids,
+        "mcp_search_confidence": mcp_search_json.get("confidence"),
         "mcp_graph": mcp_graph[:1500],
         "unknown": UNKNOWN,
         "fixtures": {

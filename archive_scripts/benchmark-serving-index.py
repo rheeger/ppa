@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
-"""Benchmark ServingIndexHandle / store-method clocks against the cutover SLOs."""
+"""Benchmark ServingIndexHandle / store-method clocks against the cutover SLOs.
+
+``--scale-profile million_vector`` is a resource probe. It does not open the
+seed and does not invent recall or latency. Missing envelope is blocked.
+"""
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import statistics
@@ -14,7 +19,7 @@ from archive_cli.index_config import (
     get_default_embedding_version,
 )
 from archive_cli.log import configure_logging
-from archive_cli.store import get_archive_store
+from archive_cli.serving_scale import SCALE_PROFILE_MILLION, probe_million_vector_scale
 
 SLO_MS = {
     "search": 250,
@@ -67,6 +72,23 @@ def _repeat(name: str, n: int, fn) -> dict:
 
 def main() -> None:
     configure_logging()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--scale-profile",
+        default="",
+        help="Resource probe only. Use million_vector; does not open the seed.",
+    )
+    args, _unknown = parser.parse_known_args()
+    if str(args.scale_profile or "").strip() == SCALE_PROFILE_MILLION:
+        payload = probe_million_vector_scale()
+        print(json.dumps(payload, indent=2))
+        out = Path(os.environ.get("PPA_SERVING_BENCH_OUT", "logs/serving-index-scale.json"))
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        return
+
+    from archive_cli.store import get_archive_store
+
     n = int(os.environ.get("PPA_SERVING_BENCH_N", "8"))
     store = get_archive_store()
     handle = store._serving()

@@ -83,9 +83,15 @@ HOW IT WORKS
 - Indexes (Postgres + embeddings) are derived. If reads work but search looks
   stale, the index is stale — do not invent.
 - Filters: type_filter, source_filter, people_filter, start_date, end_date.
-- Some deployments are read-only. A PPA_MCP_TOOL_PROFILE error means the tool
-  is disabled, not that the archive is empty.
+- Some deployments are read-only. A PPA_MCP_TOOL_PROFILE denial
+  (ok=false, status=denied) means the tool is disabled, not that the
+  archive is empty. Error/denial JSON is never empty success.
 - Empty / timeout / unreachable: fail closed. Do not fabricate archive facts.
+- high/medium/low is retrieval evidence quality, not the probability a
+  proposition is true. One exact identifier match may be high without
+  implying source completeness. Eleven weak hits are not high.
+- coverage, freshness, and truncated stay unknown when unknown. Read
+  confidence_reason; do not infer completeness from result count.
 - Email / attachment / document / duplicate / thread stacks can be large.
   Compose: list compactly when you want a dated stack; read bodies for the
   UIDs you will use; follow parent/attachment/duplicate pointers on demand.
@@ -110,7 +116,9 @@ DO
   already have the UIDs.
 - Retry: reformulate, change filters, switch modes, raise limit. Never stop
   after one miss.
-- Check confidence. Low = narrow, widen, or say the archive does not have it.
+- Check confidence and confidence_reason. Low = narrow, widen, or say
+  the archive does not have it. High is exact-identifier evidence
+  quality, not corpus completeness.
 - Prefer *_json tools when you will parse results.
 - Search a person by name (people_filter) and separately by email (query=).
 
@@ -154,9 +162,10 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         f"{FILTER_HINT}"
     ),
     "archive_search_json": (
-        "Same as archive_search, structured JSON (paths, summaries, confidence). "
-        "Prefer this when you will parse. Not canonical evidence — read cards "
-        "you will cite."
+        "Same as archive_search, structured JSON (paths, summaries, confidence, "
+        "confidence_reason, EvidenceEnvelope). Prefer this when you will parse. "
+        "Not canonical evidence — read cards you will cite. ok=false is an "
+        "error or denial, not a zero-hit search."
     ),
     "archive_query": (
         "Structured filter by frontmatter. Use when you know the card type, "
@@ -181,8 +190,9 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     ),
     "archive_hybrid_search_json": (
         "Same as archive_hybrid_search as JSON (rows, scores, confidence, "
-        "matched_by). Prefer this when parsing. Previews are not extracts — "
-        "read cards you will cite."
+        "confidence_reason, matched_by, EvidenceEnvelope). Prefer this when "
+        "parsing. Previews are not extracts — read cards you will cite. "
+        "ok=false is an error or denial, not a zero-hit search."
     ),
     "archive_vector_search": (
         "Semantic-only recall over embeddings. Use for vague conceptual questions "

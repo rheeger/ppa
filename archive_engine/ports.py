@@ -34,6 +34,20 @@ class AffectedContextResolver(Protocol):
     def resolve_affected(self, uid: str, revision: str) -> AffectedContext | None: ...
 
 
+class BurstAffectedResolver(Protocol):
+    """Thread + changed message identities → retired/replacement burst keys."""
+
+    def resolve_burst_affected(
+        self,
+        thread_uid: str,
+        *,
+        changed_message_ids: tuple[str, ...] = (),
+        previous_burst_keys: tuple[str, ...] = (),
+        current_messages: tuple[object, ...] = (),
+        channel: str,
+    ) -> object: ...
+
+
 class ExactReadPort(Protocol):
     """Application-service exact read. Access context is always explicit."""
 

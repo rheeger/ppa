@@ -549,7 +549,10 @@ def test_get_index_returns_postgres_backend(tmp_vault):
 
 def test_archive_bootstrap_postgres_requires_dsn(tmp_vault, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("PPA_INDEX_DSN", raising=False)
-    assert archive_bootstrap_postgres() == "PPA_INDEX_DSN is required"
+    payload = json.loads(archive_bootstrap_postgres())
+    assert payload["ok"] is False
+    assert payload["error"] == "IndexUnavailableError"
+    assert payload["message"] == "PPA_INDEX_DSN is required"
 
 
 def test_archive_bootstrap_postgres_uses_postgres_backend(tmp_vault, monkeypatch: pytest.MonkeyPatch):
@@ -774,9 +777,15 @@ def test_archive_embed_pending_and_vector_hybrid_search(tmp_vault, fake_index, m
 
 def test_archive_tool_profile_remote_read_blocks_sensitive_and_admin(fake_index, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("PPA_MCP_TOOL_PROFILE", "remote-read")
-    assert archive_search("Jane") != "Tool disabled by PPA_MCP_TOOL_PROFILE=remote-read"
-    assert archive_read("People/jane-smith.md") == "Tool disabled by PPA_MCP_TOOL_PROFILE=remote-read"
-    assert archive_rebuild_indexes() == "Tool disabled by PPA_MCP_TOOL_PROFILE=remote-read"
+    assert "tool_disabled" not in archive_search("Jane")
+    read_denied = json.loads(archive_read("People/jane-smith.md"))
+    rebuild_denied = json.loads(archive_rebuild_indexes())
+    assert read_denied["ok"] is False
+    assert read_denied["status"] == "denied"
+    assert read_denied["error"] == "tool_disabled"
+    assert "People/jane-smith.md" not in read_denied.get("message", "")
+    assert rebuild_denied["ok"] is False
+    assert rebuild_denied["error"] == "tool_disabled"
 
 
 def test_archive_seed_link_surface_describes_scope(monkeypatch: pytest.MonkeyPatch):

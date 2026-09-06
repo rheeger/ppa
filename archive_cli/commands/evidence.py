@@ -12,9 +12,10 @@ from archive_cli.index_config import (
     get_context_max_tokens_total,
     get_context_preceding,
 )
+from archive_cli.retrieval_pipeline import PIPELINE_VERSION
 
 from ..store import DefaultArchiveStore
-from .confidence import compute_confidence, detect_gaps, log_gaps
+from .confidence import attach_retrieval_envelope, detect_gaps, log_gaps
 
 
 def evidence(
@@ -91,7 +92,14 @@ def evidence(
         result["saved_scope"] = scope_payload
     hits = list(result.get("hits") or [])
     qtext = query.strip() or f"evidence:{type_filter}:{people_filter}:{start_date}..{end_date}"
-    result["confidence"] = compute_confidence(result_count=len(hits), query_text=qtext).value
+    attach_retrieval_envelope(
+        result,
+        query=qtext,
+        rows_key="hits",
+        limit=cap,
+        method="evidence",
+        pipeline_version=PIPELINE_VERSION,
+    )
     if expand_context:
         from archive_engine.context import expand_ranked_hits
 

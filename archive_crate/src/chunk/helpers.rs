@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use crate::chunk::constants::CHUNK_SCHEMA_VERSION;
 
 /// Same bytes as Python `json.dumps(s, ensure_ascii=True)` for string values (quoted).
-fn encode_json_string_python_ensure_ascii(s: &str) -> String {
+pub(crate) fn encode_json_string_python_ensure_ascii(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
     for ch in s.chars() {

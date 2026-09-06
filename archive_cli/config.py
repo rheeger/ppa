@@ -77,6 +77,15 @@ def _archive_config_from_instance(config) -> ArchiveConfig:
                 },
                 "preserve_exact_match_floor": True,
             },
+            "fusion": {
+                "strategy": "rrf",
+                "k": 60,
+                "diversity_cap": 2,
+                "diversity_window": 10,
+                "rare_token_weight": 0.0,
+                "ranking_profile": "default",
+                "current_ops_half_life_days": 30,
+            },
             "context": {
                 "include_in_embeddings": True,
                 "include_in_reranker_input": True,

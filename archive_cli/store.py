@@ -30,6 +30,7 @@ from .index_config import (
     get_default_embedding_version,
     get_query_embed_cache_path,
     get_query_embed_cache_ram_entries,
+    get_rerank_top_n,
     get_seed_links_enabled,
     get_vector_dimension,
 )
@@ -38,7 +39,13 @@ from .projections.registry import projection_for_card_type
 from .query_embed_cache import QueryEmbedCache, QueryEmbedSpec
 from .query_planner import build_query_plan, effective_filters_from_plan
 from .query_timing import QueryPhaseTimes, add_ms, log_phase_times
-from .reranker import blend_rerank_scores, reranker_for_config
+from .rank_fusion import FUSION_STRATEGY
+from .reranker import (
+    RerankError,
+    apply_http_rerank_order,
+    blend_rerank_scores,
+    reranker_for_config,
+)
 from .retrieval_pipeline import (
     PIPELINE_VERSION,
     HybridFetchInputs,
@@ -154,6 +161,35 @@ class DefaultArchiveStore(ArchiveStore):
             return filtered
         return filtered[:limit]
 
+    def _retrieval_generation(self) -> str:
+        serving = self._try_serving_query()
+        if serving is not None:
+            gid = str(getattr(serving, "generation_id", "") or "")
+            if gid:
+                return gid
+        return ""
+
+    def _with_envelope(
+        self,
+        payload: dict[str, Any],
+        *,
+        query: str,
+        rows_key: str = "rows",
+        limit: int | None = None,
+        method: str = "",
+    ) -> dict[str, Any]:
+        from archive_cli.commands.confidence import attach_retrieval_envelope
+
+        return attach_retrieval_envelope(
+            payload,
+            query=query,
+            rows_key=rows_key,
+            limit=limit,
+            method=method,
+            pipeline_version=PIPELINE_VERSION,
+            generation=self._retrieval_generation(),
+        )
+
     def bootstrap(self) -> dict[str, Any]:
         return self.runtime.warehouse.bootstrap()
 
@@ -234,20 +270,29 @@ class DefaultArchiveStore(ArchiveStore):
         limit: int = 20,
     ) -> dict[str, Any]:
         fetch_limit = limit * 8 if is_restricted(self.access) else limit
-        return self.runtime.query(
-            type_filter=type_filter,
-            source_filter=source_filter,
-            people_filter=people_filter,
-            org_filter=org_filter,
-            start_date=start_date,
-            end_date=end_date,
-            limit=fetch_limit,
-            authorize_limit=limit,
+        return self._with_envelope(
+            self.runtime.query(
+                type_filter=type_filter,
+                source_filter=source_filter,
+                people_filter=people_filter,
+                org_filter=org_filter,
+                start_date=start_date,
+                end_date=end_date,
+                limit=fetch_limit,
+                authorize_limit=limit,
+            ),
+            query=f"query:{type_filter}",
+            limit=limit,
+            method="query",
         )
 
     def search(self, query: str, *, limit: int = 20, **kwargs: Any) -> dict[str, Any]:
         fetch_limit = limit * 8 if is_restricted(self.access) else limit
-        return self.runtime.search(query, limit=limit, fetch_limit=fetch_limit, **kwargs)
+        return self._with_envelope(
+            self.runtime.search(query, limit=limit, fetch_limit=fetch_limit, **kwargs),
+            query=query,
+            limit=limit,
+        )
 
     def card_stack_pointers(self, uids: list[str]) -> dict[str, dict[str, Any]]:
         raw = self.runtime.retrieval.pointers(uids)
@@ -308,7 +353,13 @@ class DefaultArchiveStore(ArchiveStore):
         uids = [row_uid(row) for row in rows if row_uid(row)]
         pointers = self.card_stack_pointers(uids) if uids else {}
         hits = compact_hits(rows, pointers_by_uid=pointers, question=cleaned, chronological=True)
-        return {"hits": hits, "query": cleaned, "limit": cap}
+        return self._with_envelope(
+            {"hits": hits, "query": cleaned, "limit": cap},
+            query=cleaned,
+            rows_key="hits",
+            limit=cap,
+            method="evidence",
+        )
 
     def graph(self, note_path: str, *, hops: int = 2) -> dict[str, Any]:
         rel_path = note_path if note_path.endswith(".md") else f"{note_path}.md"
@@ -430,12 +481,17 @@ class DefaultArchiveStore(ArchiveStore):
             add_ms(phases, "total_ms", t_total)
             self._last_phase_times = phases
             log_phase_times("vector_search", phases)
-            return {
-                "rows": rows,
-                "embedding_model": model,
-                "embedding_version": version,
-                "phase_times": phases.to_dict(),
-            }
+            return self._with_envelope(
+                {
+                    "rows": rows,
+                    "embedding_model": model,
+                    "embedding_version": version,
+                    "phase_times": phases.to_dict(),
+                },
+                query=query,
+                limit=int(kwargs.get("limit", 20) or 20),
+                method="vector",
+            )
         fetch_limit = int(kwargs.get("limit", 20) or 20)
         if is_restricted(self.access):
             fetch_limit = fetch_limit * 8
@@ -450,11 +506,16 @@ class DefaultArchiveStore(ArchiveStore):
             end_date=str(kwargs.get("end_date", "")),
             limit=fetch_limit,
         )
-        return {
-            "rows": self._authorized_rows(rows, limit=int(kwargs.get("limit", 20) or 20)),
-            "embedding_model": model,
-            "embedding_version": version,
-        }
+        return self._with_envelope(
+            {
+                "rows": self._authorized_rows(rows, limit=int(kwargs.get("limit", 20) or 20)),
+                "embedding_model": model,
+                "embedding_version": version,
+            },
+            query=query,
+            limit=int(kwargs.get("limit", 20) or 20),
+            method="vector",
+        )
 
     def _run_hybrid_retrieval(
         self,
@@ -521,9 +582,10 @@ class DefaultArchiveStore(ArchiveStore):
         )
         pipeline_meta: dict[str, Any] = {}
         rr_cfg = rc.get("reranker", {})
+        provider = str(rr_cfg.get("provider", "none")).strip().lower()
         pool_limit = limit
-        if rr_cfg.get("enabled") and str(rr_cfg.get("provider", "none")).lower() not in ("none", "", "noop"):
-            pool_limit = max(limit, int(rr_cfg.get("top_k", 30) or 30))
+        if rr_cfg.get("enabled") and provider not in ("none", "", "noop"):
+            pool_limit = max(limit, int(rr_cfg.get("top_k") or get_rerank_top_n() or 30))
         rows = fuse_and_rank_hybrid(
             HybridFetchInputs(
                 lexical_rows=merged_lex,
@@ -535,10 +597,14 @@ class DefaultArchiveStore(ArchiveStore):
             final_limit=pool_limit,
             pipeline_meta=pipeline_meta,
         )
-        rerank_note = {"provider": str(rr_cfg.get("provider", "none")), "enabled": bool(rr_cfg.get("enabled"))}
-        if rr_cfg.get("enabled") and str(rr_cfg.get("provider", "none")).lower() not in ("none", "", "noop"):
-            reranker = reranker_for_config(rc)
-            top_k = min(int(rr_cfg.get("top_k", 30)), len(rows))
+        rerank_note: dict[str, Any] = {
+            "provider": provider or "none",
+            "enabled": bool(rr_cfg.get("enabled")),
+            "degraded": False,
+            "used": "rrf",
+        }
+        if rr_cfg.get("enabled") and provider not in ("none", "", "noop"):
+            top_k = min(int(rr_cfg.get("top_k") or get_rerank_top_n() or 30), len(rows))
             head = rows[:top_k]
             ctx_on = bool(rc.get("context", {}).get("include_in_reranker_input", True))
             for row in head:
@@ -550,18 +616,34 @@ class DefaultArchiveStore(ArchiveStore):
                     row["context_text"] = build_context_text(cj)
                 else:
                     row["context_text"] = ""
-            rr_list = reranker.rerank(query, head)
-            by_uid = {x.card_uid: x for x in rr_list}
-            blend_cfg = rr_cfg.get("blend") or {}
-            head = blend_rerank_scores(
-                head,
-                by_uid,
-                top_1_3_retrieval_weight=float(blend_cfg.get("top_1_3_retrieval_weight", 0.75)),
-                top_4_10_retrieval_weight=float(blend_cfg.get("top_4_10_retrieval_weight", 0.60)),
-                rest_retrieval_weight=float(blend_cfg.get("rest_retrieval_weight", 0.40)),
-                preserve_exact_match_floor=bool(rr_cfg.get("preserve_exact_match_floor", True)),
-            )
-            rows = head + rows[top_k:]
+            try:
+                reranker = reranker_for_config(rc)
+                rr_list = reranker.rerank(query, head)
+                by_uid = {item.card_uid: item for item in rr_list}
+                preserve = bool(rr_cfg.get("preserve_exact_match_floor", True))
+                if provider == "heuristic":
+                    blend_cfg = rr_cfg.get("blend") or {}
+                    head = blend_rerank_scores(
+                        head,
+                        by_uid,
+                        top_1_3_retrieval_weight=float(blend_cfg.get("top_1_3_retrieval_weight", 0.75)),
+                        top_4_10_retrieval_weight=float(blend_cfg.get("top_4_10_retrieval_weight", 0.60)),
+                        rest_retrieval_weight=float(blend_cfg.get("rest_retrieval_weight", 0.40)),
+                        preserve_exact_match_floor=preserve,
+                    )
+                    rerank_note["used"] = "heuristic"
+                else:
+                    head = apply_http_rerank_order(head, by_uid, preserve_exact_match_floor=preserve)
+                    rerank_note["used"] = "http"
+                    if rr_list:
+                        rerank_note["model_revision"] = rr_list[0].model_revision
+                rows = head + rows[top_k:]
+            except RerankError as exc:
+                rerank_note["degraded"] = True
+                rerank_note["reason"] = str(exc)
+                rerank_note["used"] = "rrf"
+                if bool(rr_cfg.get("fail_closed")):
+                    raise
         rows = rows[:limit]
         return rows, {
             "plan": plan,
@@ -582,12 +664,17 @@ class DefaultArchiveStore(ArchiveStore):
             add_ms(phases, "total_ms", t_total)
             self._last_phase_times = phases
             log_phase_times("hybrid_search", phases)
-            return {
-                "rows": rows,
-                "embedding_model": model,
-                "embedding_version": version,
-                "phase_times": phases.to_dict(),
-            }
+            return self._with_envelope(
+                {
+                    "rows": rows,
+                    "embedding_model": model,
+                    "embedding_version": version,
+                    "phase_times": phases.to_dict(),
+                },
+                query=query,
+                limit=int(kwargs.get("limit", 20) or 20),
+                method="hybrid",
+            )
         rows, _trace = self._run_hybrid_retrieval(
             query=query,
             query_vector=query_vector,
@@ -604,12 +691,17 @@ class DefaultArchiveStore(ArchiveStore):
         add_ms(phases, "total_ms", t_total)
         self._last_phase_times = phases
         log_phase_times("hybrid_search", phases)
-        return {
-            "rows": self._authorized_rows(rows, limit=int(kwargs.get("limit", 20) or 20)),
-            "embedding_model": model,
-            "embedding_version": version,
-            "phase_times": phases.to_dict(),
-        }
+        return self._with_envelope(
+            {
+                "rows": self._authorized_rows(rows, limit=int(kwargs.get("limit", 20) or 20)),
+                "embedding_model": model,
+                "embedding_version": version,
+                "phase_times": phases.to_dict(),
+            },
+            query=query,
+            limit=int(kwargs.get("limit", 20) or 20),
+            method="hybrid",
+        )
 
     def embedding_status(self, *, embedding_model: str = "", embedding_version: int = 0) -> dict[str, Any]:
         model = embedding_model or get_default_embedding_model()
@@ -791,7 +883,13 @@ class DefaultArchiveStore(ArchiveStore):
                         },
                     }
                 )
-            return retrieval_explain_payload(query, mode, slim)
+            slim_payload = retrieval_explain_payload(query, mode, slim)
+            return self._with_envelope(
+                slim_payload,
+                query=query,
+                limit=int(kwargs.get("limit", 20) or 20),
+                method=mode,
+            )
 
         model = kwargs.get("embedding_model", "") or get_default_embedding_model()
         version = kwargs.get("embedding_version", 0) or get_default_embedding_version()
@@ -849,7 +947,7 @@ class DefaultArchiveStore(ArchiveStore):
         pipeline_meta = trace.get("pipeline_meta", {})
         fusion_strategy = str(
             pipeline_meta.get(
-                "fusion_strategy", "vector" if mode == "vector" else "lexical_vector_union_with_graph_boost"
+                "fusion_strategy", "vector" if mode == "vector" else FUSION_STRATEGY
             )
         )
         include_ctx = bool(rc.get("context", {}).get("include_in_result_payloads", True))
@@ -926,7 +1024,7 @@ class DefaultArchiveStore(ArchiveStore):
             }
 
         reranker_payload = trace.get("reranker")
-        return retrieval_explain_payload_v2(
+        payload = retrieval_explain_payload_v2(
             pipeline_version=str(pipeline_meta.get("pipeline_version", PIPELINE_VERSION)),
             query=query,
             mode=mode,
@@ -935,6 +1033,13 @@ class DefaultArchiveStore(ArchiveStore):
             fusion_strategy=fusion_strategy,
             results=explain_rows,
             reranker=reranker_payload,
+        )
+        return self._with_envelope(
+            payload,
+            query=query,
+            rows_key="results",
+            limit=limit,
+            method=mode,
         )
 
     def read_many(self, paths_or_uids: list[str]) -> dict[str, Any]:
