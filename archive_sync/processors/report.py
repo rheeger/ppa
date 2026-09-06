@@ -22,6 +22,11 @@ def write_processor_report(repo_root: Path, report: ProcessorRunReport) -> dict[
     summary_path = base / "summary.md"
     payload = report.to_dict()
     payload["completion_state"] = SECTION_E_COMPLETION_STATE
+    from archive_cli.commands.maintain import counts_from_processor_reports
+
+    payload["receipt_counts"] = counts_from_processor_reports(
+        [{"report": payload, "item_results": payload.get("item_results") or []}]
+    )
     report_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     summary_path.write_text(_summary_md(report), encoding="utf-8")
     paths = {"report": str(report_path), "summary": str(summary_path)}

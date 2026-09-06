@@ -478,11 +478,30 @@ def test_maintain_publish_passes_rebuilt_and_updater_uids(tmp_path: Path, monkey
     store = _warehouse_store(tmp_path)
     monkeypatch.setattr("archive_cli.index_store.PostgresArchiveIndex", type(store.index))
 
-    called: dict[str, list[str] | None] = {}
+    called: dict[str, object] = {}
 
-    def fake_publish(_store, *, logger=None, dirty_uids=None, **_k):
-        called["dirty_uids"] = list(dirty_uids or [])
-        return {"ok": True, "generation": "gen-new"}
+    def fake_publish(checkpoint, context):
+        called["dirty_uids"] = list(context.get("dirty_uids") or [])
+        called["checkpoint"] = checkpoint
+        from archive_engine.publication import PublicationReceipt
+
+        return PublicationReceipt(
+            generation_id="gen-new",
+            mode="incremental",
+            parent_generation="",
+            base_generation="",
+            snapshot_id="",
+            source_watermark=0,
+            cards=0,
+            chunks=0,
+            embeddings=0,
+            tombstone_uids=(),
+            replaced_uids=(),
+            compacted=False,
+            ok=True,
+            acked_watermark=1,
+            eligible_checkpoint=1,
+        )
 
     monkeypatch.setattr(
         "archive_cli.serving_index.serving_index_status",
@@ -493,7 +512,7 @@ def test_maintain_publish_passes_rebuilt_and_updater_uids(tmp_path: Path, monkey
         },
     )
     monkeypatch.setattr("archive_cli.serving_index.read_dirty_uids", lambda _vault: [])
-    monkeypatch.setattr("archive_cli.serving_index.publish_serving_index", fake_publish)
+    monkeypatch.setattr("archive_engine.publication.publish", fake_publish)
 
     report = MaintenanceReport(
         cards_rebuilt=213,
@@ -505,6 +524,7 @@ def test_maintain_publish_passes_rebuilt_and_updater_uids(tmp_path: Path, monkey
     assert called["dirty_uids"] == ["uid-rebuilt-1", "uid-rebuilt-2", "uid-updater-1"]
     assert called["dirty_uids"] != []
     assert report.serving_index["generation"] == "gen-new"
+    assert report.publication.get("ok") is True
     assert not any(e.get("step") == "serving_index_publish" for e in report.errors)
     assert "serving_index_publish (clean)" not in report.skipped_steps
 
@@ -518,9 +538,27 @@ def test_maintain_publish_does_not_skip_when_cards_rebuilt(tmp_path: Path, monke
     monkeypatch.setattr("archive_cli.index_store.PostgresArchiveIndex", type(store.index))
     called: dict[str, object] = {}
 
-    def fake_publish(_store, *, logger=None, dirty_uids=None, **_k):
-        called["dirty_uids"] = list(dirty_uids or [])
-        return {"ok": True, "generation": "gen-new"}
+    def fake_publish(checkpoint, context):
+        called["dirty_uids"] = list(context.get("dirty_uids") or [])
+        from archive_engine.publication import PublicationReceipt
+
+        return PublicationReceipt(
+            generation_id="gen-new",
+            mode="incremental",
+            parent_generation="",
+            base_generation="",
+            snapshot_id="",
+            source_watermark=0,
+            cards=0,
+            chunks=0,
+            embeddings=0,
+            tombstone_uids=(),
+            replaced_uids=(),
+            compacted=False,
+            ok=True,
+            acked_watermark=1,
+            eligible_checkpoint=1,
+        )
 
     monkeypatch.setattr(
         "archive_cli.serving_index.serving_index_status",
@@ -531,7 +569,7 @@ def test_maintain_publish_does_not_skip_when_cards_rebuilt(tmp_path: Path, monke
         },
     )
     monkeypatch.setattr("archive_cli.serving_index.read_dirty_uids", lambda _vault: [])
-    monkeypatch.setattr("archive_cli.serving_index.publish_serving_index", fake_publish)
+    monkeypatch.setattr("archive_engine.publication.publish", fake_publish)
 
     report = MaintenanceReport(
         cards_rebuilt=213,
@@ -566,7 +604,7 @@ def test_maintain_publish_skips_when_clean(tmp_path: Path, monkeypatch) -> None:
         },
     )
     monkeypatch.setattr("archive_cli.serving_index.read_dirty_uids", lambda _vault: [])
-    monkeypatch.setattr("archive_cli.serving_index.publish_serving_index", fake_publish)
+    monkeypatch.setattr("archive_engine.publication.publish", fake_publish)
 
     report = MaintenanceReport(nothing_to_do=True, cards_rebuilt=0, new_cards_ingested=0)
     _publish_serving_index(store, report, logging.getLogger("t"), dry_run=False)

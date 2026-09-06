@@ -63,3 +63,4 @@ def load_builtin_scenarios() -> None:
     from archive_tests.acceptance.scenarios import p03_dependencies as _p03  # noqa: F401
     from archive_tests.acceptance.scenarios import p03_embedding as _p03b  # noqa: F401
     from archive_tests.acceptance.scenarios import p03_outputs as _p03c  # noqa: F401
+    from archive_tests.acceptance.scenarios import p03_maintain as _p03d  # noqa: F401

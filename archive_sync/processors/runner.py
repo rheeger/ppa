@@ -324,6 +324,20 @@ def _execute_materialization(ctx: ExecuteContext, items: list[ProcessorPlanItem]
     return out
 
 
+def _mark_processor_vault_written(vault_path: str | Path, uids: list[str]) -> None:
+    """Invalidate process + serving cache after a processor writes derived cards."""
+
+    written = [str(uid).strip() for uid in uids if str(uid).strip()]
+    if not written:
+        return
+    try:
+        from archive_cli.vault_cache_runtime import mark_vault_written
+
+        mark_vault_written(vault_path, uids=written)
+    except Exception:
+        log.debug("mark_vault_written after processor writes failed", exc_info=True)
+
+
 def _execute_typed_extraction(ctx: ExecuteContext, items: list[ProcessorPlanItem]) -> BatchExecuteResult:
     """Thin adapter into ExtractionRunner for dirty UIDs only."""
 
@@ -349,6 +363,12 @@ def _execute_typed_extraction(ctx: ExecuteContext, items: list[ProcessorPlanItem
         metrics = runner.run()
         extracted = int(getattr(metrics, "extracted_cards", 0) or 0)
         out.warnings.append(f"typed_extraction extracted_cards={extracted}")
+        written = [
+            str(record.output_uid)
+            for record in list(getattr(metrics, "created", []) or []) + list(getattr(metrics, "changed", []) or [])
+            if getattr(record, "output_uid", None)
+        ]
+        _mark_processor_vault_written(ctx.vault_path, written)
     except Exception as exc:
         out.errors.append(f"typed_extraction: {exc}")
         log.exception("typed_extraction_failed")
@@ -403,6 +423,10 @@ def _execute_entity_resolution(ctx: ExecuteContext, items: list[ProcessorPlanIte
 
             log.info("entity_resolution_dirty_uids count=%s", len(uids))
             er_result = er_mod.run_entity_resolution(ctx.vault_path, dry_run=False, uid_allowlist=uids)
+            _mark_processor_vault_written(
+                ctx.vault_path,
+                list(er_result.get("created_uids") or []) + list(er_result.get("changed_uids") or []),
+            )
         except Exception as exc:
             out.errors.append(f"entity_resolution: {exc}")
             log.exception("entity_resolution_failed")
@@ -686,6 +710,10 @@ def _execute_enrichment(ctx: ExecuteContext, items: list[ProcessorPlanItem]) -> 
         try:
             metrics = orch.run_deterministic_derived_enrichment(
                 ctx.vault_path, [item.input_uid for item in derived], dry_run=False
+            )
+            _mark_processor_vault_written(
+                ctx.vault_path,
+                list(getattr(metrics, "enriched_card_uids", []) or []),
             )
         except Exception as exc:
             out.errors.append(f"derived_enrichment: {exc}")

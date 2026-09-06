@@ -209,6 +209,11 @@ def provision_isolated_runtime(
     vault = root / "vault"
     serving = root / "rust-search-index"
     embed_cache = root / "query-embed-cache.sqlite3"
+    for leftover in (vault, serving, embed_cache):
+        if leftover.is_dir():
+            shutil.rmtree(leftover)
+        elif leftover.is_file():
+            leftover.unlink()
     schema = f"plan_p04_{run_id}"
     container_name = f"ppa-p04-{run_id}"
     port = _pick_port()

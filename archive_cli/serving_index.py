@@ -168,10 +168,15 @@ def _as_str_list(value: Any) -> list[str]:
 
 def _optional_rows(conn: Any, sql: str, params: tuple[Any, ...] | None = None) -> list[Any]:
     try:
-        if params is None:
-            return list(conn.execute(sql))
-        return list(conn.execute(sql, params))
+        conn.execute("SAVEPOINT ppa_optional_export")
+        rows = list(conn.execute(sql) if params is None else conn.execute(sql, params))
+        conn.execute("RELEASE SAVEPOINT ppa_optional_export")
+        return rows
     except Exception:
+        try:
+            conn.execute("ROLLBACK TO SAVEPOINT ppa_optional_export")
+        except Exception:
+            pass
         return []
 
 
@@ -223,10 +228,16 @@ def load_serving_export_maps(conn: Any, schema: str, uids: list[str] | None = No
     )
     corpus_state_table = False
     try:
+        conn.execute("SAVEPOINT ppa_corpus_state_probe")
         probe = list(conn.execute(f"SELECT 1 FROM {schema}.card_corpus_state LIMIT 1"))
+        conn.execute("RELEASE SAVEPOINT ppa_corpus_state_probe")
         corpus_state_table = True
         _ = probe
     except Exception:
+        try:
+            conn.execute("ROLLBACK TO SAVEPOINT ppa_corpus_state_probe")
+        except Exception:
+            pass
         corpus_state_table = False
     if corpus_state_table:
         for row in state_rows:

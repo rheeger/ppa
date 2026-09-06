@@ -251,6 +251,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         ladder_gate=args.ladder_gate or GATE_SYNTHETIC_FIXTURES,
         decision_run_id=getattr(args, "decision_run_id", "") or "",
         repo_root=_repo_root(),
+        default_processor_decision=getattr(args, "processor_decision", None) or (
+            "typed_extraction" if processor_key == PROCESSOR_EMAIL_TYPED_EXTRACTION else ""
+        ),
     )
     payload = {
         "completion_state": SECTION_E_COMPLETION_STATE,
@@ -264,6 +267,35 @@ def cmd_run(args: argparse.Namespace) -> int:
         "item_results": [r.to_dict() for r in result.item_results],
         "output_count": result.report.output_count,
     }
+    from archive_cli.commands.maintain import (
+        MaintenanceReport,
+        apply_processor_counts,
+        eligible_checkpoint_for_report,
+        read_freshness_watermarks,
+    )
+
+    maintain_report = MaintenanceReport(processor_reports=[result.to_dict()])
+    apply_processor_counts(maintain_report)
+    payload["receipt_counts"] = {
+        "cards_extracted": maintain_report.cards_extracted,
+        "entities_resolved": maintain_report.entities_resolved,
+        "cards_rebuilt": maintain_report.cards_rebuilt,
+        "processor_output_count": maintain_report.processor_output_count,
+    }
+    payload["served_freshness"] = read_freshness_watermarks(getattr(store, "vault", None))
+    if apply:
+        import logging
+
+        from archive_cli.commands.maintain import _publish_serving_index
+
+        _publish_serving_index(store, maintain_report, logging.getLogger("ppa.processors"), dry_run=False)
+        payload["publication"] = maintain_report.publication or maintain_report.serving_index
+        payload["eligible_checkpoint"] = maintain_report.eligible_checkpoint
+        payload["failed_revision_uids"] = maintain_report.failed_revision_uids
+    else:
+        plan = eligible_checkpoint_for_report(store, maintain_report)
+        payload["publication"] = {"ok": False, "dry_run": True, "eligible_checkpoint": plan["high_watermark"]}
+        payload["eligible_checkpoint"] = plan["high_watermark"]
     _emit(payload, args)
     if result.report.status == "failed":
         return EXIT_RUNTIME_FAILURE
@@ -348,6 +380,12 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         help="Refuse linkers apply without --allow-all-linkers (exit 3)",
     )
     p_run.add_argument("--require-provider", action="store_true", help="Fail with exit 4 if provider missing")
+    p_run.add_argument(
+        "--processor-decision",
+        default="",
+        help="Default processor_decision for dirty UIDs without a corpus decision "
+        "(typed_extraction when running email_typed_extraction)",
+    )
     p_run.set_defaults(func=cmd_run)
 
 
