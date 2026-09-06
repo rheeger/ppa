@@ -1,8 +1,8 @@
 """PPA engine package.
 
 P06-A owns shared contracts and the exact-read service.
-P07-A owns ``recovery_manifest`` as a sibling module in this package — this
-init does not claim recovery and does not register CLI commands.
+P07 owns ``recovery_manifest`` and ``recovery`` as sibling modules — this
+init does not register CLI commands (P09 owns parser wiring).
 
 Sibling modules remain importable as ``archive_engine.<name>`` even when they
 are not re-exported here.
@@ -78,7 +78,7 @@ __all__ = [
 ]
 
 _SIBLING_MODULES = frozenset(
-    {"access", "changes", "corrections", "egress", "execution_mode", "publication", "recovery_manifest", "redaction", "runtime"}
+    {"access", "changes", "corrections", "egress", "execution_mode", "publication", "recovery", "recovery_manifest", "redaction", "runtime"}
 )
 
 

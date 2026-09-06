@@ -7,9 +7,14 @@ import json
 from pathlib import Path
 
 from archive_tests.conftest import assert_owned_test_root
-from archive_vault.provenance import ProvenanceEntry
-from archive_vault.schema import PersonCard
+from archive_vault.card_contracts import CARD_TYPE_SPECS
+from archive_vault.provenance import PROVENANCE_EXEMPT_FIELDS, ProvenanceEntry
+from archive_vault.schema import BaseCard, PersonCard
 from archive_vault.vault import write_card
+
+CORPUS_SEED = 20260906
+CONTRACT_VERSION = "p04b.1"
+PROVENANCE_SOURCE = "acceptance.p04b"
 
 BASELINE_UID = "hfa-person-p04abase001"
 BASELINE_REL_PATH = "People/p04-acceptance-tracer.md"
@@ -21,25 +26,32 @@ BASELINE_BODY = (
 )
 
 
-def _provenance(*fields: str) -> dict[str, ProvenanceEntry]:
-    return {field: ProvenanceEntry("acceptance.p04a", "2026-09-06", "deterministic") for field in fields}
+def _provenance(*fields: str, source: str = "acceptance.p04a") -> dict[str, ProvenanceEntry]:
+    return {field: ProvenanceEntry(source, "2026-09-06", "deterministic") for field in fields}
+
+
+def provenance_for(card: BaseCard, *, source: str = PROVENANCE_SOURCE) -> dict[str, ProvenanceEntry]:
+    """Emit provenance for every populated, non-exempt field on ``card``."""
+
+    fields: list[str] = []
+    for key, value in card.model_dump(mode="python").items():
+        if key in PROVENANCE_EXEMPT_FIELDS:
+            continue
+        if value in ("", [], None, {}, False):
+            continue
+        fields.append(key)
+    return _provenance(*fields, source=source)
 
 
 def init_vault(vault: Path, *, owned_root: Path) -> Path:
-    """Create a minimal vault skeleton under an owned test root."""
+    """Create a vault skeleton under an owned test root (all card families)."""
 
     assert_owned_test_root(owned_root)
     vault = Path(vault)
     if owned_root.resolve() not in vault.resolve().parents and vault.resolve() != owned_root.resolve():
         raise AssertionError(f"vault {vault} is not under owned root {owned_root}")
-    for name in (
-        "People",
-        "Email",
-        "Calendar",
-        "_templates",
-        ".obsidian",
-        "_meta",
-    ):
+    families = {spec.rel_path_family for spec in CARD_TYPE_SPECS.values()}
+    for name in sorted(families | {"_templates", ".obsidian", "_meta"}):
         (vault / name).mkdir(parents=True, exist_ok=True)
     meta = vault / "_meta"
     (meta / "identity-map.json").write_text("{}", encoding="utf-8")

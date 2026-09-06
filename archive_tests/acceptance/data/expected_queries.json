@@ -1,0 +1,173 @@
+{
+  "contract_version": "p04b.1",
+  "queries": [
+    {
+      "expected_uids": [
+        "hfa-person-p04balex0001"
+      ],
+      "kind": "exact_id",
+      "label_hash": "dc884d041dc29243d38271813e1715fd7bbc9a19999cab8f25053860d6a41a0a",
+      "notes": "Exact UID membership. Rank is irrelevant.",
+      "owner_slice": "P04-B",
+      "query_id": "q-p04b-exact-alex-primary",
+      "request": "hfa-person-p04balex0001",
+      "split": "calibration"
+    },
+    {
+      "excluded_uids": [
+        "hfa-flight-p04blook001",
+        "hfa-finance-p04blook001"
+      ],
+      "expected_uids": [
+        "hfa-accommodation-p04bhotl001",
+        "hfa-finance-p04bchg0001"
+      ],
+      "kind": "lexical",
+      "label_hash": "c080721984d99ab3b35e90f242fb240ba4f4e47b83bf3ee85a59c193a82aa6d9",
+      "notes": "Lexical relevance may vary in rank; lookalikes stay excluded.",
+      "owner_slice": "P01-B1",
+      "query_id": "q-p04b-lex-loft-stay",
+      "request": "Harbor Loft NYC stay April",
+      "split": "calibration"
+    },
+    {
+      "expected_amount": 60.0,
+      "expected_currency": "EUR",
+      "expected_uids": [
+        "hfa-finance-p04beur0001",
+        "hfa-finance-p04bref0001"
+      ],
+      "kind": "aggregate",
+      "label_hash": "28e86da772ad8bc788d1a0dd42b3954b56fad144918a988b40fb8a5fe7ddda7d",
+      "notes": "100.00 + (-40.00) = 60.00 authored arithmetic.",
+      "owner_slice": "P10-C",
+      "query_id": "q-p04b-agg-eur-net",
+      "request": "Net EUR for Pebble Press",
+      "split": "calibration"
+    },
+    {
+      "expected_uids": [
+        "ann-p04b-0065"
+      ],
+      "kind": "ann",
+      "label_hash": "ffc0a8f32cb45cc1728c3adaf9c0dc93b46ccdf46faf4ff771de33fcf1027055",
+      "notes": "Independent exact cosine top-1. Do not copy native IVF neighbors.",
+      "owner_slice": "P01-A",
+      "query_id": "q-p04b-ann-modulo-adversary",
+      "request": "adversarial_modulo_ivf",
+      "split": "calibration"
+    },
+    {
+      "expected_uids": [
+        "hfa-person-p04balex0001",
+        "hfa-person-p04balex0002"
+      ],
+      "kind": "lexical",
+      "label_hash": "500d2b6120c4e8b42644173e4f79355e4f5990da4cded7deb5c8cd37a0d477b3",
+      "notes": "Both namesakes are relevant; merge is forbidden by the relation label.",
+      "owner_slice": "P10-A",
+      "query_id": "q-p04b-person-namesake",
+      "request": "Alex Rivera",
+      "split": "calibration"
+    },
+    {
+      "expected_uids": [
+        "hfa-calendar-event-p04bmidn001"
+      ],
+      "kind": "lexical",
+      "label_hash": "d18b823f3b3161b39f2310180fee81dfe165be993be9d37c60360a4bc39ed79f",
+      "notes": "Unique token membership for the crossing-midnight event.",
+      "owner_slice": "P04-B",
+      "query_id": "q-p04b-lex-midnight",
+      "request": "P04B-TOKEN-CAL-MIDNIGHT",
+      "split": "calibration"
+    },
+    {
+      "expected_uids": [
+        "hfa-flight-p04bout0001"
+      ],
+      "kind": "exact_id",
+      "label_hash": "198d66fbffe485a6afabc18a9975fc3394ac1f95fe2f20d1c632b4d3b2004871",
+      "notes": "Held-out exact identifier.",
+      "owner_slice": "P04-B",
+      "query_id": "q-p04b-exact-flight-out",
+      "request": "hfa-flight-p04bout0001",
+      "split": "held_out"
+    },
+    {
+      "excluded_uids": [
+        "hfa-email-message-p04bstale01"
+      ],
+      "expected_uids": [
+        "hfa-email-message-p04breply01",
+        "hfa-email-message-p04breq0001"
+      ],
+      "kind": "lexical",
+      "label_hash": "f804d212d2affdfc3373f897314ed39488f2bc928d2d770e83b6aa0e7a8843f2",
+      "notes": "Authorization context: reply plus request. No authorized=true.",
+      "owner_slice": "P01-B1",
+      "query_id": "q-p04b-lex-auth-reply",
+      "request": "P04B-TOKEN-AUTH-REPLY",
+      "split": "held_out"
+    },
+    {
+      "excluded_uids": [
+        "hfa-finance-p04blook001"
+      ],
+      "expected_amount": 482.0,
+      "expected_currency": "USD",
+      "expected_uids": [
+        "hfa-finance-p04bchg0001"
+      ],
+      "kind": "aggregate",
+      "label_hash": "45bfa5744af0aec9b2e00732cf45e7a91a70284ab15f8d7bf2ef50f5194d8312",
+      "notes": "Exact fixture amount 482.00, exclude 480.00 lookalike.",
+      "owner_slice": "P10-C",
+      "query_id": "q-p04b-agg-same-charge",
+      "request": "Supported loft charge total",
+      "split": "held_out"
+    },
+    {
+      "excluded_uids": [
+        "hfa-email-message-p04bsupp001",
+        "hfa-email-message-p04bqarn001"
+      ],
+      "kind": "lexical",
+      "label_hash": "37fad322d0e2938afe8b037c600e0d9beac78b1dae40c079b0319749c378f51c",
+      "notes": "Active-eligible filter must exclude suppressed and quarantine. Enforcement is P05.",
+      "owner_slice": "P05-B",
+      "query_id": "q-p04b-lex-suppressed-excluded",
+      "request": "active eligible trip mail",
+      "split": "held_out"
+    },
+    {
+      "expected_uids": [
+        "hfa-subscription-p04brenw001",
+        "hfa-subscription-p04bcncl001"
+      ],
+      "kind": "relation",
+      "label_hash": "e3cb3c05586e8d0d5ea0913303d028932797a896a45cf057e72aca33def31faf",
+      "notes": "Last-observed/unknown. Renewal is not proof of current billing.",
+      "owner_slice": "P10-C",
+      "query_id": "q-p04b-renewal-lifecycle",
+      "request": "Is Pebble Mail a current subscription?",
+      "split": "held_out"
+    },
+    {
+      "excluded_uids": [
+        "hfa-flight-p04blook001"
+      ],
+      "expected_uids": [
+        "hfa-accommodation-p04bhotl001"
+      ],
+      "kind": "lexical",
+      "label_hash": "9a0abf5c2d74e75a8a2202abdc09e1b6d69d786845260d54237dc15c01689c29",
+      "notes": "Hotel token must not pull the May lookalike flight.",
+      "owner_slice": "P10-C",
+      "query_id": "q-p04b-lex-lookalike-excluded",
+      "request": "P04B-TOKEN-HOTEL",
+      "split": "held_out"
+    }
+  ],
+  "seed": 20260906
+}

@@ -148,9 +148,20 @@ def run_suite(
             logger.info("scenario_start id=%s suite=%s", scenario.id, suite)
             case = _run_scenario(scenario, runtime)
             cases.append(case)
-            trace_path = output / "baseline-trace.json"
             if case.get("id") == "baseline.vault_pg_rust_mcp":
-                write_json(trace_path, {k: v for k, v in case.items() if k not in {"mcp_read"}})
+                write_json(output / "baseline-trace.json", {k: v for k, v in case.items() if k not in {"mcp_read"}})
+            if case.get("id") == "p04.frozen_corpus":
+                write_json(output / "corpus-trace.json", case)
+            if case.get("id") == "p04.crash_matrix":
+                write_json(output / "crash-matrix.json", case)
+            if case.get("id") == "p04.privacy_restore":
+                write_json(output / "privacy-restore.json", case)
+                receipt = case.get("receipt_path")
+                if receipt:
+                    src = Path(str(receipt))
+                    dest = output / "restore-receipt.json"
+                    if src.is_file():
+                        dest.write_bytes(src.read_bytes())
     except IntegrationRequiredError:
         raise
     except IsolationError:
@@ -171,9 +182,10 @@ def run_suite(
         artifact_entry(results_path, relative_to=output),
         artifact_entry(junit_path, relative_to=output),
     ]
-    trace = output / "baseline-trace.json"
-    if trace.is_file():
-        artifacts.append(artifact_entry(trace, relative_to=output))
+    for name in ("baseline-trace.json", "corpus-trace.json", "crash-matrix.json", "privacy-restore.json", "restore-receipt.json"):
+        trace = output / name
+        if trace.is_file():
+            artifacts.append(artifact_entry(trace, relative_to=output))
     evidence = build_evidence(
         repo=repo,
         output=output,

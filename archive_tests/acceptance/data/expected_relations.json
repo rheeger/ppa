@@ -1,0 +1,174 @@
+{
+  "contract_version": "p04b.1",
+  "relations": [
+    {
+      "case_id": "rel-p04b-same-trip",
+      "evidence_kinds": {
+        "hfa-accommodation-p04bhotl001": "source_reported",
+        "hfa-email-message-p04bbook001": "source_reported",
+        "hfa-finance-p04bchg0001": "source_reported",
+        "hfa-flight-p04bin00001": "source_reported",
+        "hfa-flight-p04bout0001": "source_reported",
+        "hfa-observation-p04btrip001": "proposed_link",
+        "hfa-ride-p04bairp001": "source_reported"
+      },
+      "expected_output_fields": [
+        "member_uids",
+        "unmatched_evidence",
+        "excluded_uids"
+      ],
+      "family": "same-trip",
+      "label_role": "oracle",
+      "negative_evidence_ids": [
+        "hfa-flight-p04blook001"
+      ],
+      "operation": "trip_workflow",
+      "owner_slice": "P10-C",
+      "positive_evidence_ids": [
+        "hfa-flight-p04bout0001",
+        "hfa-flight-p04bin00001",
+        "hfa-accommodation-p04bhotl001",
+        "hfa-ride-p04bairp001",
+        "hfa-finance-p04bchg0001",
+        "hfa-email-message-p04bbook001"
+      ],
+      "rationale": "April 11-14 Harbor Loft itinerary shares confirmation HA4B11/LOFT4B. The May SFO-JFK booking is a proximity lookalike.",
+      "request": "Assemble the April Harbor Loft trip and exclude lookalike bookings.",
+      "required_paths": [
+        "Transactions/Flights/p04-sfo-jfk.md",
+        "Transactions/Accommodations/p04-harbor-loft.md",
+        "Transactions/Rides/p04-jfk-loft.md"
+      ]
+    },
+    {
+      "case_id": "rel-p04b-same-charge",
+      "evidence_kinds": {
+        "hfa-accommodation-p04bhotl001": "source_reported",
+        "hfa-email-attachment-p04brcpt001": "source_reported",
+        "hfa-finance-p04bchg0001": "source_reported",
+        "hfa-purchase-p04bhotl001": "derived"
+      },
+      "expected_output_fields": [
+        "supported_charge_uid",
+        "receipt_uids",
+        "excluded_uids",
+        "amount",
+        "currency"
+      ],
+      "family": "same-charge",
+      "label_role": "oracle",
+      "negative_evidence_ids": [
+        "hfa-finance-p04blook001",
+        "hfa-purchase-p04blook001"
+      ],
+      "operation": "reconcile_trip_costs",
+      "owner_slice": "P10-C",
+      "positive_evidence_ids": [
+        "hfa-finance-p04bchg0001",
+        "hfa-purchase-p04bhotl001",
+        "hfa-email-attachment-p04brcpt001",
+        "hfa-accommodation-p04bhotl001"
+      ],
+      "rationale": "One supported 482.00 USD loft charge plus its receipt. 480.00 is a lookalike merchant amount.",
+      "request": "Count one supported actual charge for the loft stay.",
+      "required_paths": [
+        "Finance/p04-loft-charge.md",
+        "Transactions/Purchases/p04-loft-receipt.md",
+        "EmailAttachments/p04-loft-receipt.md"
+      ]
+    },
+    {
+      "case_id": "rel-p04b-not-the-same-person",
+      "evidence_kinds": {
+        "hfa-person-p04balex0001": "source_reported",
+        "hfa-person-p04balex0002": "source_reported"
+      },
+      "expected_output_fields": [
+        "member_uids",
+        "excluded_merge",
+        "display_name"
+      ],
+      "family": "not-the-same-person",
+      "label_role": "oracle",
+      "negative_evidence_ids": [],
+      "operation": "person_query",
+      "owner_slice": "P07-C",
+      "positive_evidence_ids": [
+        "hfa-person-p04balex0001",
+        "hfa-person-p04balex0002"
+      ],
+      "rationale": "Two people share the display name Alex Rivera and must stay distinct. Shared external id does not merge them.",
+      "request": "Return labeled memberships for each Alex Rivera and exclude a merge.",
+      "required_paths": [
+        "People/p04-alex-rivera-primary.md",
+        "People/p04-alex-rivera-namesake.md"
+      ]
+    },
+    {
+      "case_id": "rel-p04b-reply-is-authorization",
+      "evidence_kinds": {
+        "hfa-email-message-p04bbook001": "source_reported",
+        "hfa-email-message-p04breply01": "source_reported",
+        "hfa-email-message-p04breq0001": "source_reported",
+        "hfa-finance-p04bchg0001": "source_reported"
+      },
+      "expected_output_fields": [
+        "reply_uid",
+        "request_uid",
+        "thread_uid",
+        "supporting_charge_uid",
+        "forbidden_authorized_flag"
+      ],
+      "family": "reply-is-authorization",
+      "label_role": "oracle",
+      "negative_evidence_ids": [
+        "hfa-email-message-p04bstale01",
+        "hfa-email-thread-p04bneg00001"
+      ],
+      "operation": "retrieve_authorization_context",
+      "owner_slice": "P01-B1",
+      "positive_evidence_ids": [
+        "hfa-email-message-p04breq0001",
+        "hfa-email-message-p04breply01",
+        "hfa-finance-p04bchg0001",
+        "hfa-email-message-p04bbook001"
+      ],
+      "rationale": "The loft reply authorizes the later charge only as supporting evidence. No authorized=true field is emitted.",
+      "request": "Return the answer-bearing reply plus its preceding request and the later charge.",
+      "required_paths": [
+        "Email/p04-loft-request.md",
+        "Email/p04-loft-reply.md",
+        "Finance/p04-loft-charge.md"
+      ]
+    },
+    {
+      "case_id": "rel-p04b-renewal-is-not-current",
+      "evidence_kinds": {
+        "hfa-subscription-p04bcncl001": "source_reported",
+        "hfa-subscription-p04brenw001": "source_reported"
+      },
+      "expected_output_fields": [
+        "lifecycle_state",
+        "last_observed_event_uid",
+        "conflict_uids",
+        "freshness"
+      ],
+      "family": "renewal-is-not-current-subscription",
+      "label_role": "oracle",
+      "negative_evidence_ids": [],
+      "operation": "subscription_lifecycle",
+      "owner_slice": "P10-C",
+      "positive_evidence_ids": [
+        "hfa-subscription-p04brenw001",
+        "hfa-subscription-p04bcncl001"
+      ],
+      "rationale": "2025-11-01 renewal is last-observed. 2026-01-15 cancel conflicts. Freshness does not prove current billing.",
+      "request": "Report last-observed or unknown; do not claim a current subscription.",
+      "required_paths": [
+        "Transactions/Subscriptions/p04-pebble-renew.md",
+        "Transactions/Subscriptions/p04-pebble-cancel.md"
+      ]
+    }
+  ],
+  "seed": 20260906
+}

@@ -76,14 +76,14 @@ def ivf_nlist(n: int) -> int:
 
 
 def ivf_nprobe(nlist: int) -> int:
-    """Selective probe count: ``nlist.min(32).max(1)``."""
+    """Match the native probe count: ``nlist.min(32).max(1)``."""
 
     return max(1, min(int(nlist), 32))
 
 
 @dataclass(frozen=True)
 class ModuloIvfResult:
-    """Independent simulation of the broken modulo-IVF serving path."""
+    """Independent simulation of the current modulo-IVF serving path."""
 
     neighbors: tuple[Neighbor, ...]
     nlist: int
@@ -103,7 +103,7 @@ def modulo_ivf_knn(
 
     Assignment is ``i % nlist``. Lists are probed by cosine of their *first*
     member only, then at most 32 lists are scanned. This is an independent
-    reconstruction of the old algorithm, not a wrapper around native ANN.
+    reconstruction of the current algorithm, not a wrapper around native ANN.
     """
 
     if k < 1:
