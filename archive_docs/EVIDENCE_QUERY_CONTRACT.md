@@ -1,7 +1,7 @@
 # Evidence query contract (P10-A / P10-B)
 
-**Version:** `p10b.1`  
-**Owner:** P10 evidence-query. Workflows (P10-C) and CLI/MCP registration (P10-D) extend this document; they do not replace it.
+**Version:** `p10c.1`  
+**Owner:** P10 evidence-query. CLI/MCP registration (P10-D) extends this document; it does not replace it.
 
 This is the first product surface that can read a **full eligible set** (or say that it did not). Clients synthesize answers from the returned rows. The archive does not answer for you.
 
@@ -70,7 +70,16 @@ If generation offsets no longer match the canonical file revision, the result is
 
 `serving_index_graph_bounded` enforces depth (default 1, public max 2), max nodes/edges, elapsed budget, and optional relation-type filters **during** native BFS. High-degree hubs return a partial graph with `truncated`, `truncation_reason`, `frontier`, and surviving edge citations (`method`, `evidence_uids`). Denied neighbors are never entered.
 
+## Deterministic workflows (P10-C)
+
+`archive_engine.analytics` exposes three finite workflows over the full eligible set after AccessContext. They return facts, arithmetic, and ambiguity. They do not advise and they do not invent a current subscription.
+
+- **Subscriptions** (`rel-p04b-renewal-is-not-current`): group by service/account/plan. Latest event is last-observed (`last_observed_renewed` / `last_observed_canceled` / …). A later cancel conflicts with reading an old renewal as current. Simultaneous contradictions are `conflict`. Freshness stays `unknown` unless the source proves otherwise.
+- **Trip costs** (`rel-p04b-same-trip`, `rel-p04b-same-charge`): membership is confirmation / order / source-email identity. Lookalikes and proximity-only cards are excluded or unmatched. The supported actual charge is counted once; booking and segment estimates are listed separately. Currency groups never convert. Refunds stay negative. `q-p04b-agg-eur-net` is 100.00 + (−40.00) = 60.00 EUR.
+- **Changes since checkpoint**: committed journal records after a sequence, plus decision labels. Create/update/delete/correct/merge stay distinct. `embed` / `legacy_dirty` are derived refreshes, not life events. Deletes are bodyless tombstones. Cursors are sequence + snapshot bound.
+
+Evidence kinds remain `source_reported`, `derived`, `proposed_link`, or `unknown`. Proposed observations cannot become source facts. Totals refuse a truncated page.
+
 ## Later slices
 
-- **P10-C**: subscription lifecycle, trip costs, changes-since.
 - **P10-D**: saved scopes and installed CLI/MCP evidence bundles.
