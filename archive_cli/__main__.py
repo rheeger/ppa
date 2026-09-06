@@ -32,6 +32,7 @@ from .commands import read as read_cmd
 from .commands import search as search_cmd
 from .commands import seed_links as seed_cmd
 from .commands import status as status_cmd
+from .command_registry import dispatch_product_command, register_product_commands
 from .commands._resolve import resolve_index, resolve_store
 from .errors import PpaError, VaultNotFoundError
 from .index_config import get_seed_links_enabled
@@ -148,6 +149,7 @@ def main() -> None:
         help="Skip vault scan cache; always read files from disk (slower but guaranteed fresh)",
     )
     subparsers = parser.add_subparsers(dest="command")
+    register_product_commands(subparsers)
 
     serve_parser = subparsers.add_parser("serve", help="Start MCP server (stdio or HTTP)")
     serve_parser.add_argument(
@@ -1346,6 +1348,8 @@ def main() -> None:
         args.port = 0
     # Stderr-only logging for all subcommands; keep stdout for MCP JSON-RPC / CLI JSON. See archive_cli/log.py.
     configure_logging(verbose=args.verbose)
+    if dispatch_product_command(args):
+        return
     log_file = str(getattr(args, "log_file", "") or "").strip()
     if log_file:
         from .log import attach_file_log

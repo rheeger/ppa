@@ -76,3 +76,4 @@ def load_builtin_scenarios() -> None:
     from archive_tests.acceptance.scenarios import p08_lifecycle as _p08_lifecycle  # noqa: F401
     from archive_tests.acceptance.scenarios import p08_sample as _p08_sample  # noqa: F401
     from archive_tests.acceptance.scenarios import p09_config as _p09_config  # noqa: F401
+    from archive_tests.acceptance.scenarios import p09_install as _p09_install  # noqa: F401

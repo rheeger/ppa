@@ -1,0 +1,14 @@
+# Runtime dependencies for the Python 3.12 packaging profile.
+# Resolver procedure is documented in archive_docs/runbooks/install-independent-archive.md.
+# Do not silently lower requires-python; the library floor stays >=3.10.
+
+pydantic>=2.0
+ruamel.yaml>=0.17
+mcp>=1.0
+psycopg[binary]>=3.2
+python-dateutil>=2.8
+html2text>=2024.2.26
+markitdown>=0.0.1
+firecrawl-anydoc>=0.2.0
+pypdf>=5.0
+PyYAML>=6.0
