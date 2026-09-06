@@ -361,7 +361,7 @@ class EmbedderMixin:
         if include_context_prefix:
             rows = conn.execute(
                 f"""
-                SELECT c.chunk_key, c.rel_path, c.chunk_type, c.chunk_index, c.content, c.token_count,
+                SELECT c.chunk_key, c.card_uid, c.rel_path, c.chunk_type, c.chunk_index, c.content, c.token_count,
                        ctx.card_type AS ctype,
                        ctx.summary,
                        ctx.activity_at,
@@ -377,7 +377,7 @@ class EmbedderMixin:
         else:
             rows = conn.execute(
                 f"""
-                SELECT c.chunk_key, c.rel_path, c.chunk_type, c.chunk_index, c.content, c.token_count
+                SELECT c.chunk_key, c.card_uid, c.rel_path, c.chunk_type, c.chunk_index, c.content, c.token_count
                 FROM {self.schema}.chunks c
                 WHERE c.chunk_key IN ({placeholders})
                 """,
@@ -500,6 +500,7 @@ class EmbedderMixin:
             conn.commit()
             result.embedded = len(batch)
             result.embedded_keys = list(claimed_keys)
+            result.card_uids = [str(row.get("card_uid") or "").strip() for row in batch if str(row.get("card_uid") or "").strip()]
             return result
 
     def copy_embeddings_from_schema(
@@ -852,6 +853,7 @@ class EmbedderMixin:
                     "failed_chunk_keys": [],
                     "pending_chunk_keys": list(pending_keys) if scoped else [],
                     "chunk_keys_by_uid": {uid: list(keys) for uid, keys in chunk_keys_by_uid.items()},
+                    "card_uids": [],
                 }
                 if embedding_spec is not None:
                     payload["embedding_spec"] = embedding_spec.to_payload()
@@ -871,6 +873,7 @@ class EmbedderMixin:
             submitted_keys: list[str] = []
             completed_new_keys: list[str] = []
             failed_keys: list[str] = []
+            embedded_uids: set[str] = set()
             reserve_lock = Lock()
             progress_lock = Lock()
             should_rebuild_vector_index = embed_defer_vector_index()
@@ -977,6 +980,7 @@ class EmbedderMixin:
                     worker_result.claimed_keys.extend(batch_result.claimed_keys)
                     worker_result.embedded_keys.extend(batch_result.embedded_keys)
                     worker_result.failed_keys.extend(batch_result.failed_keys)
+                    worker_result.card_uids.extend(batch_result.card_uids)
                     if batch_result.last_error:
                         worker_result.last_error = batch_result.last_error
                     with progress_lock:
@@ -985,6 +989,7 @@ class EmbedderMixin:
                         submitted_keys.extend(batch_result.claimed_keys)
                         completed_new_keys.extend(batch_result.embedded_keys)
                         failed_keys.extend(batch_result.failed_keys)
+                        embedded_uids.update(batch_result.card_uids)
                         if batch_result.last_error:
                             last_error = batch_result.last_error
                         fail_suffix = f" failed={failed}" if failed else ""
@@ -1062,6 +1067,7 @@ class EmbedderMixin:
                 "failed_chunk_keys": failed_unique,
                 "pending_chunk_keys": still_pending,
                 "chunk_keys_by_uid": {uid: list(keys) for uid, keys in chunk_keys_by_uid.items()},
+                "card_uids": sorted(embedded_uids),
             }
             if embedding_spec is not None:
                 result["embedding_spec"] = embedding_spec.to_payload()

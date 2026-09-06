@@ -121,10 +121,13 @@ class DefaultArchiveStore(ArchiveStore):
             counts = self.index.rebuild()
         if self._is_warehouse_index():
             try:
+                from archive_engine.changes import acknowledge_materialized
+
                 from .serving_index import mark_serving_index_dirty
 
                 allowlist = filtered.get("uid_allowlist") or []
                 dirty = [str(uid).strip() for uid in allowlist if str(uid).strip()]
+                acknowledge_materialized(self.vault, uids=dirty or None)
                 mark_serving_index_dirty(self.vault, "rebuild", dirty)
             except Exception:
                 pass
@@ -625,9 +628,16 @@ class DefaultArchiveStore(ArchiveStore):
             embed_result["copy_from_schema"] = copy_result
         if self._is_warehouse_index():
             try:
+                from archive_engine.changes import emit_embed_completion, request_reconciliation
+
                 from .serving_index import mark_serving_index_dirty
 
-                mark_serving_index_dirty(self.vault, "embed_pending")
+                card_uids = [str(uid).strip() for uid in (embed_result.get("card_uids") or []) if str(uid).strip()]
+                if card_uids:
+                    emit_embed_completion(self.vault, card_uids, source="embed_pending")
+                else:
+                    request_reconciliation(self.vault, reason="embed_pending")
+                mark_serving_index_dirty(self.vault, "embed_pending", card_uids)
             except Exception:
                 pass
         return embed_result

@@ -1026,6 +1026,14 @@ def ingest_completed_batches(
                 except Exception as exc:
                     logger_.error("ingest_batch_error batch=%s error=%s", batch_id, exc)
 
+    vault = getattr(index, "vault", None)
+    if vault is not None:
+        try:
+            from archive_engine.changes import request_reconciliation
+
+            request_reconciliation(vault, reason="batch_embed_ingest")
+        except Exception:
+            logger_.debug("batch embed journal reconcile skipped", exc_info=True)
     return {
         "ingested_batches": ingested,
         "total_written": total_written,

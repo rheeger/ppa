@@ -276,8 +276,12 @@ def provision_isolated_runtime(
 
 def reset_serving_handle() -> None:
     from archive_cli import serving_index as si
+    from archive_engine.publication import clear_publication_pins
 
+    if si._HANDLE is not None:
+        si._HANDLE.close()
     si._HANDLE = None
+    clear_publication_pins()
 
 
 def inspect_warehouse_card(dsn: str, schema: str, uid: str) -> dict[str, Any] | None:

@@ -35,3 +35,7 @@ class CapabilityUnavailableError(EngineError):
 
 class IncompatibleContractError(IncompatibleStateError):
     """Serialized shared record is missing fields or has an unknown version."""
+
+
+class PublisherBusyError(RetryableEngineError):
+    """Another process holds the publication lease."""

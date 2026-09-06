@@ -179,6 +179,7 @@ def atomic_write_contained(root: str | Path, user_path: str, data: bytes) -> Pat
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(tmp_name, target.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            os.fsync(parent_fd)
         except Exception:
             try:
                 os.unlink(tmp_name, dir_fd=parent_fd)
@@ -188,3 +189,18 @@ def atomic_write_contained(root: str | Path, user_path: str, data: bytes) -> Pat
         return target
     finally:
         os.close(parent_fd)
+
+
+def unlink_contained(root: str | Path, user_path: str) -> Path:
+    """Unlink a contained regular file using a no-follow parent directory fd."""
+
+    target = resolve_contained_path(root, user_path, purpose="write", create_parents=False)
+    if not target.exists():
+        return target
+    parent_fd = _posix_parent_dir_fd(target.parent)
+    try:
+        os.unlink(target.name, dir_fd=parent_fd)
+        os.fsync(parent_fd)
+    finally:
+        os.close(parent_fd)
+    return target

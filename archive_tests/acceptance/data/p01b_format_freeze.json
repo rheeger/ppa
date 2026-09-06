@@ -1,0 +1,55 @@
+{
+  "slice": "P01-B",
+  "serving_index_format_version": 2,
+  "vector_impl": "ivf_centroids_v2",
+  "chunk_evidence_ref_version": 1,
+  "chunk_schema_version": "6",
+  "algorithm_version": "p01b-freeze-1",
+  "pipeline_version": "2026.09.06.p01a",
+  "artifacts": [
+    "manifest.json",
+    "ivf_centroids.bin",
+    "ivf_assign.bin",
+    "ivf_meta.json",
+    "embedding_spec.json",
+    "embeddings.bin",
+    "embedding_keys.txt",
+    "cards.jsonl",
+    "chunks.jsonl",
+    "edges.jsonl"
+  ],
+  "old_reader": "format 1 / ivf_mmap_v1 generations fail closed with serving_index_format_unsupported",
+  "chunk_evidence_ref_example": {
+    "version": 1,
+    "archive_id": "p01b-freeze",
+    "card_uid": "ann-p04b-0065",
+    "chunk_id": "ann-p04b-0065",
+    "chunk_schema_version": "6",
+    "algorithm_version": "p01b-freeze-1",
+    "evidence_kind": "derived",
+    "lineage_complete": true,
+    "parent_thread": "thread-p01b",
+    "source_revisions": ["sha256:p01b-burst", "sha256:p01b-parent"],
+    "span_unavailable": false,
+    "source_spans": [
+      {
+        "source_uid": "ann-p04b-0065",
+        "source_message_id": "msg-p01b-1",
+        "source_revision": "sha256:p01b-burst",
+        "representation": "canonical_body_utf8",
+        "start_byte": 0,
+        "end_byte": 20
+      }
+    ],
+    "message_refs_available": true,
+    "message_refs": []
+  },
+  "adversary": {
+    "n": 1089,
+    "nlist": 33,
+    "nprobe": 32,
+    "true_neighbor_id": "ann-p04b-0065",
+    "vector_sha256": "a21a7a57bf165947f9ad4dda477cd418aa6668e51bf204dce7f4a0ae1b0b2715",
+    "note": "Oracle is exact cosine. Native IVF is the implementation under test, not the oracle."
+  }
+}
