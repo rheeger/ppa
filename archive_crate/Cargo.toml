@@ -8,7 +8,7 @@ name = "archive_crate"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.22", features = ["extension-module"] }
+pyo3 = { version = "0.22" }
 walkdir = "2"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
@@ -30,6 +30,12 @@ tantivy = "0.22"
 memmap2 = "0.9"
 # tantivy 0.22 pulls `time`; 0.3.55+ needs rustc 1.88. Pin for CI rustc 1.85.
 time = "=0.3.41"
+
+# `extension-module` skips linking libpython (correct for maturin). Cargo test
+# builds a bin, so CI runs `cargo test --no-default-features` to link Python.
+[features]
+extension-module = ["pyo3/extension-module"]
+default = ["extension-module"]
 
 [build-dependencies]
 pyo3-build-config = "0.22"

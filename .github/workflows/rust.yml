@@ -41,7 +41,9 @@ jobs:
           PY
       - name: Run Rust tests
         working-directory: archive_crate
-        run: cargo test
+        env:
+          PYO3_PYTHON: python
+        run: cargo test --no-default-features
       - name: Run archive_crate Python tests
         run: |
           python -m pytest archive_tests/test_archive_crate_smoke.py archive_tests/test_archive_crate_walk.py \
