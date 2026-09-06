@@ -23,6 +23,15 @@ def test_recovery_cache_runbook_exists() -> None:
     assert runbook.exists(), "Embedding recovery cache runbook missing"
 
 
+def test_local_archive_recovery_runbook_exists() -> None:
+    runbook = PPA_ROOT / "archive_docs" / "runbooks" / "local-archive-recovery.md"
+    assert runbook.exists(), "Local archive recovery runbook missing"
+    text = runbook.read_text(encoding="utf-8")
+    assert "openssl" in text.lower()
+    assert "plaintext fallback" in text.lower()
+    assert "new root" in text.lower() or "new destination" in text.lower()
+
+
 def test_v2_operations_runbook_exists() -> None:
     runbook = PPA_ROOT / "archive_docs" / "runbooks" / "ppa-v2-operations.md"
     assert runbook.exists(), "v2 operations runbook missing"
