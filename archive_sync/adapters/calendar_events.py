@@ -52,6 +52,7 @@ def _clean(value: str) -> str:
 
 class CalendarEventsAdapter(BaseAdapter):
     source_id = "calendar-events"
+    uses_connector_sdk = True
     preload_existing_uid_index = False
     enable_person_resolution = False
 

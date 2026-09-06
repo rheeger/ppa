@@ -411,6 +411,7 @@ def _extract_attachments(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 class GmailMessagesAdapter(BaseAdapter):
     source_id = "gmail-messages"
+    uses_connector_sdk = True
     preload_existing_uid_index = False
 
     def _token_lock(self) -> threading.RLock:

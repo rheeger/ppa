@@ -102,6 +102,7 @@ class PreparedIngestItem:
 
 class BaseAdapter(ABC):
     source_id: str = "unknown"
+    uses_connector_sdk: bool = False
     preload_existing_uid_index: bool = True
     enable_person_resolution: bool = True
     parallel_person_matching: bool = False
@@ -549,6 +550,11 @@ class BaseAdapter(ABC):
             progress_every,
         )
         config = _run_logged("load config", lambda: load_config(vault))
+        if getattr(self, "uses_connector_sdk", False):
+            from archive_sync.connectors.contracts import validate_manifest
+            from archive_sync.connectors.legacy import manifest_for_source
+
+            validate_manifest(manifest_for_source(self.source_id))
         cursor_key = _run_logged("resolve cursor key", lambda: self.get_cursor_key(**kwargs))
         cursor = _run_logged("load sync state", lambda: load_sync_state(vault).get(cursor_key, {}))
         if not isinstance(cursor, dict):

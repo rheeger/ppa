@@ -40,13 +40,11 @@ def _load_repo_dotenv() -> None:
 from .adapters.apple_health import AppleHealthAdapter
 from .adapters.base import IngestResult
 from .adapters.beeper import BeeperAdapter
-from .adapters.calendar_events import CalendarEventsAdapter
 from .adapters.contacts import ContactsAdapter
 from .adapters.copilot_finance import CopilotFinanceAdapter
 from .adapters.file_libraries import FileLibrariesAdapter
 from .adapters.github_history import GitHubHistoryAdapter
 from .adapters.gmail_correspondents import GmailCorrespondentsAdapter
-from .adapters.gmail_messages import GmailMessagesAdapter
 from .adapters.imessage import IMessageAdapter
 from .adapters.linkedin import LinkedInAdapter
 from .adapters.medical_records import MedicalRecordsAdapter
@@ -190,9 +188,11 @@ def cmd_gmail_correspondents(args):
 
 
 def cmd_gmail_messages(args):
+    from .connectors.legacy import adapter_for_source
+
     _run(
         "gmail-messages",
-        GmailMessagesAdapter(),
+        adapter_for_source("gmail-messages"),
         vault=args.vault,
         dry_run=args.dry_run,
         account_email=args.account_email,
@@ -208,9 +208,11 @@ def cmd_gmail_messages(args):
 
 
 def cmd_calendar_events(args):
+    from .connectors.legacy import adapter_for_source
+
     _run(
         "calendar-events",
-        CalendarEventsAdapter(),
+        adapter_for_source("calendar-events"),
         vault=args.vault,
         dry_run=args.dry_run,
         account_email=args.account_email,
