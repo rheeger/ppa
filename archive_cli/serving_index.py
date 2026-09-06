@@ -62,6 +62,8 @@ WAREHOUSE_EDGE_CONFIDENCE = 1.0
 INFERRED_EDGE_METHOD = "inferred"
 SERVING_EMBEDDING_METRIC = "cosine"
 SERVING_EMBEDDING_NORMALIZATION = "l2"
+REQUIRED_SERVING_INDEX_FORMAT = 2
+REQUIRED_VECTOR_IMPL = "ivf_centroids_v2"
 
 
 class ServingFidelityError(ValueError):
@@ -545,6 +547,25 @@ class ServingIndexHandle:
         return _crate().serving_index_read_path(self._native, uid)
 
 
+def serving_index_format_version(status: dict[str, Any] | None) -> int:
+    """Read ACTIVE format from status/manifest. 0 means unknown or missing."""
+
+    payload = status or {}
+    raw = payload.get("serving_index_format")
+    if raw is None:
+        manifest = payload.get("manifest") or {}
+        if isinstance(manifest, dict):
+            raw = manifest.get("serving_index_format_version")
+    try:
+        return int(raw or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def serving_index_format_supported(status: dict[str, Any] | None) -> bool:
+    return serving_index_format_version(status) == REQUIRED_SERVING_INDEX_FORMAT
+
+
 def serving_index_status(vault: Path | None = None) -> dict[str, Any]:
     root = get_serving_index_path(vault)
     try:
@@ -709,6 +730,11 @@ def get_serving_handle(vault: Path) -> ServingIndexHandle:
     gid = str(status.get("serving_index_generation") or "")
     if not gid or not status.get("serving_index_ready"):
         raise ServingIndexUnavailableError("serving_index_unavailable")
+    found = serving_index_format_version(status)
+    if found != REQUIRED_SERVING_INDEX_FORMAT:
+        raise ServingIndexUnavailableError(
+            f"serving_index_format_unsupported: found {found}, need {REQUIRED_SERVING_INDEX_FORMAT} ({REQUIRED_VECTOR_IMPL})"
+        )
     key = _vault_handle_key(vault)
     with _LOCK:
         if _HANDLE is None:

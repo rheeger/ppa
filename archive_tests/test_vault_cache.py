@@ -36,6 +36,13 @@ def test_cache_build_tier2(tmp_path: Path) -> None:
     ch = cache.content_hash_for_rel_path(some)
     assert len(ch) == 64
     assert cache.raw_content_sha256_for_rel_path(some)
+    rels = cache.all_rel_paths()[:8]
+    by_rel = cache.wikilinks_for_rel_paths(rels)
+    assert set(by_rel) == set(rels)
+    stems = [Path(rel).stem for rel in rels]
+    found = cache.rel_paths_for_slugs(stems)
+    assert found
+    assert cache.uids_for_rel_paths(rels)
 
 
 def test_cache_hit(tmp_path: Path) -> None:

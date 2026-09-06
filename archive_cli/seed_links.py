@@ -900,32 +900,47 @@ def _uid_refs_from_frontmatter(frontmatter: dict[str, Any]) -> set[str]:
     return refs
 
 
-def _wikilink_neighbor_uids(
-    rel_path: str,
-    frontmatter: dict[str, Any],
-    cache: VaultScanCache,
-    *,
-    uid_by_rel: dict[str, str],
-) -> set[str]:
-    neighbors: set[str] = set()
-    try:
-        slugs = list(cache.wikilinks_for_rel_path(rel_path))
-    except ValueError:
-        slugs = []
+def _frontmatter_wikilink_slugs(frontmatter: dict[str, Any]) -> list[str]:
+    slugs: list[str] = []
     for value in frontmatter.values():
         for item in _iter_string_values(value):
             text = str(item).strip()
             if text.startswith("[[") and text.endswith("]]"):
                 slugs.append(_slug_from_ref(text))
-    for slug in slugs:
-        slug = _clean_text(slug)
-        if not slug:
-            continue
-        rel = cache.rel_path_for_slug(slug)
-        if rel:
-            uid = uid_by_rel.get(rel) or cache.uid_for_rel_path(rel)
-            if uid:
-                neighbors.add(uid)
+    return slugs
+
+
+def _wikilink_neighbor_uids_bulk(
+    rows: list[dict[str, Any]],
+    cache: VaultScanCache,
+    uid_by_rel: dict[str, str],
+) -> set[str]:
+    """Resolve wikilink neighbors with one slug query. No per-slug SQLite or vault walk."""
+
+    rels = [str(row.get("rel_path") or "").strip() for row in rows]
+    rels = [rel for rel in rels if rel]
+    wikilinks_by_rel = cache.wikilinks_for_rel_paths(rels) if rels else {}
+    slugs: set[str] = set()
+    for row in rows:
+        rel = str(row.get("rel_path") or "").strip()
+        slugs.update(_clean_text(slug) for slug in (wikilinks_by_rel.get(rel) or []) if _clean_text(slug))
+        slugs.update(
+            _clean_text(slug)
+            for slug in _frontmatter_wikilink_slugs(dict(row.get("frontmatter") or {}))
+            if _clean_text(slug)
+        )
+    slugs.discard("")
+    if not slugs:
+        return set()
+    rel_by_slug = cache.rel_paths_for_slugs(slugs)
+    missing_rels = {rel for rel in rel_by_slug.values() if rel and rel not in uid_by_rel}
+    if missing_rels:
+        uid_by_rel.update(cache.uids_for_rel_paths(missing_rels))
+    neighbors: set[str] = set()
+    for rel in rel_by_slug.values():
+        uid = uid_by_rel.get(rel)
+        if uid:
+            neighbors.add(uid)
     return neighbors
 
 
@@ -939,12 +954,27 @@ def _neighbor_uids_from_serving_index(
 
     if vault_path is None:
         return None
+    catalog_log = logging.getLogger("ppa.seed_links")
     try:
         from archive_cli.errors import ServingIndexUnavailableError
-        from archive_cli.serving_index import get_serving_handle
+        from archive_cli.serving_index import (
+            REQUIRED_SERVING_INDEX_FORMAT,
+            get_serving_handle,
+            serving_index_format_supported,
+            serving_index_format_version,
+            serving_index_status,
+        )
     except ImportError:
         return None
     try:
+        status = serving_index_status(Path(vault_path))
+        if not serving_index_format_supported(status):
+            catalog_log.info(
+                "seed-link catalog skipping serving-index neighbor lookup format=%s need=%s",
+                serving_index_format_version(status),
+                REQUIRED_SERVING_INDEX_FORMAT,
+            )
+            return None
         handle = get_serving_handle(Path(vault_path))
         out = {
             str(uid).strip()
@@ -953,12 +983,13 @@ def _neighbor_uids_from_serving_index(
         }
         out.update(seed_uids)
         return out
-    except ServingIndexUnavailableError:
+    except ServingIndexUnavailableError as exc:
+        catalog_log.info("seed-link catalog skipping serving-index neighbor lookup reason=%s", exc)
         return None
-    except Exception:
-        logging.getLogger("ppa.seed_links").warning(
-            "seed-link catalog serving-index neighbor lookup failed; using scoped cache rows",
-            exc_info=True,
+    except Exception as exc:
+        catalog_log.warning(
+            "seed-link catalog serving-index neighbor lookup failed; using scoped cache rows reason=%s",
+            exc,
         )
         return None
 
@@ -975,6 +1006,8 @@ def expand_catalog_neighbor_closure(
     wanted = {str(uid).strip() for uid in seed_uids if str(uid).strip()}
     if not wanted:
         return set()
+    from archive_sync.cli_logging import log_ratio_progress
+
     catalog_log = logging.getLogger("ppa.seed_links")
     catalog_log.info("seed-link catalog neighbor closure start seed=%s", len(wanted))
     from_index = _neighbor_uids_from_serving_index(vault_path, wanted, max_hops=max_hops)
@@ -986,12 +1019,30 @@ def expand_catalog_neighbor_closure(
         )
         return from_index
 
+    hops = max(1, int(max_hops))
     frontier = set(wanted)
     expanded = set(wanted)
     uid_by_rel: dict[str, str] = {}
-    for _hop in range(max(1, int(max_hops))):
+    started = time.monotonic()
+    for hop in range(hops):
         if not frontier:
             break
+        log_ratio_progress(
+            catalog_log,
+            "seed-link catalog neighbor closure",
+            hop + 1,
+            hops,
+            started,
+            every=1,
+            force=True,
+        )
+        catalog_log.info(
+            "seed-link catalog neighbor closure source=cache hop=%s/%s frontier=%s expanded=%s",
+            hop + 1,
+            hops,
+            len(frontier),
+            len(expanded),
+        )
         rows = cache.frontmatter_rows_for_uids(frontier)
         next_frontier: set[str] = set()
         for row in rows:
@@ -999,20 +1050,20 @@ def expand_catalog_neighbor_closure(
             rel = str(row.get("rel_path") or "").strip()
             if rel and uid:
                 uid_by_rel[rel] = uid
-            fm = dict(row.get("frontmatter") or {})
-            for ref_uid in _uid_refs_from_frontmatter(fm):
+            for ref_uid in _uid_refs_from_frontmatter(dict(row.get("frontmatter") or {})):
                 if ref_uid and ref_uid not in expanded:
                     next_frontier.add(ref_uid)
-            if rel:
-                for neighbor_uid in _wikilink_neighbor_uids(rel, fm, cache, uid_by_rel=uid_by_rel):
-                    if neighbor_uid not in expanded:
-                        next_frontier.add(neighbor_uid)
+        for neighbor_uid in _wikilink_neighbor_uids_bulk(rows, cache, uid_by_rel):
+            if neighbor_uid not in expanded:
+                next_frontier.add(neighbor_uid)
         expanded.update(next_frontier)
         frontier = next_frontier
     catalog_log.info(
-        "seed-link catalog neighbor closure source=cache seed=%s expanded=%s",
+        "seed-link catalog neighbor closure source=cache seed=%s expanded=%s hops=%s elapsed=%.1fs",
         len(wanted),
         len(expanded),
+        hops,
+        time.monotonic() - started,
     )
     return expanded
 
@@ -3055,12 +3106,24 @@ def run_seed_link_workers(
     index.ensure_ready()
     if catalog is None:
         catalog = build_seed_link_catalog(index.vault, cache=cache)
+    from archive_sync.cli_logging import log_ratio_progress
+
+    worker_log = logging.getLogger("ppa.seed_links")
     summary = SeedLinkRunSummary()
     reserve_lock = Lock()
+    progress_lock = Lock()
     max_to_process = max(int(limit or 0), 0)
     workers = max(1, int(max_workers or DEFAULT_SEED_LINK_WORKERS))
     processed_jobs = 0
+    progress_done = 0
+    progress_started = time.monotonic()
     claim_batch_size = DEFAULT_SEED_LINK_CLAIM_BATCH_SIZE
+    worker_log.info(
+        "seed-link workers start jobs<=%s workers=%s include_llm=%s",
+        max_to_process or "unbounded",
+        workers,
+        include_llm,
+    )
 
     def reserve_job_slots(requested: int) -> int:
         nonlocal processed_jobs
@@ -3121,6 +3184,18 @@ def run_seed_link_workers(
                         _complete_job(conn, index, int(job["job_id"]), commit=False)
                         conn.commit()
                         worker_summary.jobs_completed += 1
+                        if max_to_process:
+                            with progress_lock:
+                                progress_done += 1
+                                current = progress_done
+                            log_ratio_progress(
+                                worker_log,
+                                "seed-link workers",
+                                current,
+                                max_to_process,
+                                progress_started,
+                                every=50,
+                            )
                         _merge_module_metric(
                             worker_summary.module_metrics,
                             str(job["module_name"]),
@@ -3132,6 +3207,18 @@ def run_seed_link_workers(
                         conn.rollback()
                         _fail_job(conn, index, int(job["job_id"]), str(exc), commit=True)
                         worker_summary.jobs_failed += 1
+                        if max_to_process:
+                            with progress_lock:
+                                progress_done += 1
+                                current = progress_done
+                            log_ratio_progress(
+                                worker_log,
+                                "seed-link workers",
+                                current,
+                                max_to_process,
+                                progress_started,
+                                every=50,
+                            )
         return worker_summary
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -3169,6 +3256,13 @@ def run_seed_link_workers(
         )
         conn.commit()
     summary.deterministic_only = not include_llm
+    worker_log.info(
+        "seed-link workers done completed=%s failed=%s candidates=%s elapsed=%.1fs",
+        summary.jobs_completed,
+        summary.jobs_failed,
+        summary.candidates,
+        time.monotonic() - progress_started,
+    )
     return {
         "workers": workers,
         "jobs_completed": summary.jobs_completed,

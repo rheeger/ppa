@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
+from archive_cli.errors import ServingIndexUnavailableError
 from archive_cli.seed_links import (
     SeedLinkCatalog,
     build_seed_link_catalog,
@@ -72,14 +76,17 @@ def test_expand_catalog_neighbor_closure_adds_wikilink_neighbor() -> None:
         ],
         [],
     ]
-    cache.wikilinks_for_rel_path.return_value = ["person-b"]
-    cache.rel_path_for_slug.return_value = "People/b.md"
-    cache.uid_for_rel_path.return_value = "uid-b"
+    cache.wikilinks_for_rel_paths.return_value = {"Email/2026/a.md": ["person-b"]}
+    cache.rel_paths_for_slugs.return_value = {"person-b": "People/b.md"}
+    cache.uids_for_rel_paths.return_value = {"People/b.md": "uid-b"}
 
     expanded = expand_catalog_neighbor_closure(cache, {"uid-a"})
     assert expanded == {"uid-a", "uid-b"}
     cache.rel_path_to_uid.assert_not_called()
     cache.rel_paths_by_type.assert_not_called()
+    cache.rel_path_for_slug.assert_not_called()
+    cache.wikilinks_for_rel_path.assert_not_called()
+    cache.uid_for_rel_path.assert_not_called()
 
 
 def test_maintain_rebuilds_vault_cache_tier_2_after_updaters() -> None:
@@ -91,6 +98,101 @@ def test_maintain_rebuilds_vault_cache_tier_2_after_updaters() -> None:
     assert "rebuild_vault_cache_after_writes(store.vault, tier=2" in src
 
 
+def test_format1_active_linker_maintain_does_not_walk_slugs(monkeypatch, tmp_path: Path, caplog) -> None:
+    monkeypatch.delenv("PPA_TEST_PG_DSN", raising=False)
+    open_calls: list[str] = []
+    walk_calls: list[tuple] = []
+    slug_calls: list[tuple] = []
+
+    class _Crate:
+        @staticmethod
+        def serving_index_status(_root):
+            return {
+                "serving_index_generation": "1788643235290",
+                "serving_index_format": 1,
+                "serving_index_ready": True,
+                "serving_index_dirty_records": 0,
+                "manifest": {"serving_index_format_version": 1, "vector_impl": "ivf_mmap_v1"},
+            }
+
+        @staticmethod
+        def serving_index_open(root):
+            open_calls.append(str(root))
+            raise ValueError("serving_index_format_unsupported: found 1, need 2 (ivf_centroids_v2)")
+
+    monkeypatch.setattr("archive_cli.serving_index._crate", lambda: _Crate())
+    monkeypatch.setattr("os.walk", lambda *a, **k: walk_calls.append(a) or iter(()))
+    monkeypatch.setattr(
+        "archive_vault.vault.find_note_by_slug",
+        lambda *a, **k: slug_calls.append(a) or None,
+    )
+    monkeypatch.setattr(
+        "archive_vault.vault.iter_note_paths",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("vault walk")),
+    )
+
+    cache = MagicMock()
+    cache.frontmatter_rows_for_uids.return_value = [
+        {
+            "uid": "uid-a",
+            "rel_path": "Email/2026/a.md",
+            "frontmatter": {"uid": "uid-a", "type": "email_message", "people": ["[[person-b]]"]},
+        }
+    ]
+    cache.wikilinks_for_rel_paths.return_value = {"Email/2026/a.md": ["person-b"]}
+    cache.rel_paths_for_slugs.return_value = {"person-b": "People/b.md"}
+    cache.uids_for_rel_paths.return_value = {"People/b.md": "uid-b"}
+    cache.rel_path_for_slug.side_effect = AssertionError("per-slug SQLite forbidden")
+    cache.wikilinks_for_rel_path.side_effect = AssertionError("per-card wikilink SQLite forbidden")
+    cache.uid_for_rel_path.side_effect = AssertionError("per-rel uid SQLite forbidden")
+    cache.all_frontmatters.side_effect = AssertionError("full vault dump forbidden")
+
+    from archive_cli.serving_index import get_serving_handle
+
+    with pytest.raises(ServingIndexUnavailableError, match="serving_index_format_unsupported"):
+        get_serving_handle(tmp_path)
+    assert open_calls == []
+
+    caplog.set_level(logging.INFO, logger="ppa.seed_links")
+    expanded = expand_catalog_neighbor_closure(cache, {"uid-a"}, vault_path=tmp_path)
+    assert expanded == {"uid-a", "uid-b"}
+    assert walk_calls == []
+    assert slug_calls == []
+    cache.rel_path_for_slug.assert_not_called()
+    cache.wikilinks_for_rel_path.assert_not_called()
+    cache.uid_for_rel_path.assert_not_called()
+    cache.all_frontmatters.assert_not_called()
+    assert any("skipping serving-index neighbor lookup" in rec.message for rec in caplog.records)
+    assert any("1/1" in rec.message and "neighbor closure" in rec.message for rec in caplog.records)
+
+    monkeypatch.setattr(
+        "archive_cli.seed_links._sketch_from_frontmatter",
+        lambda **kwargs: MagicMock(
+            uid="uid-a",
+            rel_path=kwargs["rel_path"],
+            slug="a",
+            card_type="email_message",
+            summary="A",
+            frontmatter=kwargs["frontmatter"],
+            body="",
+            content_hash="hash",
+            activity_at="",
+            wikilinks=[],
+            emails=set(),
+            phones=set(),
+            handles=set(),
+            aliases=set(),
+            external_ids={},
+        ),
+    )
+    catalog = build_seed_link_catalog(str(tmp_path), cache=cache, catalog_uids={"uid-a"})
+    assert "uid-a" in catalog.cards_by_uid
+    cache.rel_path_for_slug.assert_not_called()
+    assert open_calls == []
+    assert walk_calls == []
+    assert slug_calls == []
+
+
 def test_expand_catalog_neighbor_closure_uses_serving_index(monkeypatch) -> None:
     cache = MagicMock()
 
@@ -100,6 +202,14 @@ def test_expand_catalog_neighbor_closure_uses_serving_index(monkeypatch) -> None
             assert hops == 1
             return ["uid-a", "uid-b", "uid-c"]
 
+    monkeypatch.setattr(
+        "archive_cli.serving_index.serving_index_status",
+        lambda _vault: {
+            "serving_index_generation": "g2",
+            "serving_index_format": 2,
+            "serving_index_ready": True,
+        },
+    )
     monkeypatch.setattr("archive_cli.serving_index.get_serving_handle", lambda _vault: _Handle())
     expanded = expand_catalog_neighbor_closure(cache, {"uid-a"}, vault_path="/tmp/vault")
     assert expanded == {"uid-a", "uid-b", "uid-c"}

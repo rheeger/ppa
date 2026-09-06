@@ -810,6 +810,82 @@ class VaultScanCache:
                     return str(row[0])
         return None
 
+    def rel_paths_for_slugs(self, slugs: set[str] | frozenset[str] | list[str]) -> dict[str, str]:
+        """One IN-query dump of slug → rel_path. Never walk the vault or loop per slug."""
+
+        wanted = {str(slug).strip() for slug in slugs if str(slug).strip()}
+        if not wanted:
+            return {}
+        aliases: dict[str, str] = {}
+        for slug in wanted:
+            for variant in (slug, slug.replace(" ", "-"), slug.replace(" ", "_")):
+                if variant:
+                    aliases.setdefault(variant, slug)
+        keys = sorted(aliases)
+        found: dict[str, str] = {}
+        chunk_size = 500
+        with self._lock:
+            for i in range(0, len(keys), chunk_size):
+                chunk = keys[i : i + chunk_size]
+                placeholders = ",".join("?" * len(chunk))
+                rows = self._conn.execute(
+                    f"SELECT slug, rel_path FROM notes WHERE slug IN ({placeholders})",
+                    chunk,
+                ).fetchall()
+                for slug_raw, rel_raw in rows:
+                    original = aliases.get(str(slug_raw))
+                    if original and original not in found:
+                        found[original] = str(rel_raw)
+        return found
+
+    def uids_for_rel_paths(self, rel_paths: set[str] | frozenset[str] | list[str]) -> dict[str, str]:
+        """One IN-query dump of rel_path → uid."""
+
+        wanted = sorted({str(rel).strip() for rel in rel_paths if str(rel).strip()})
+        if not wanted:
+            return {}
+        out: dict[str, str] = {}
+        chunk_size = 500
+        with self._lock:
+            for i in range(0, len(wanted), chunk_size):
+                chunk = wanted[i : i + chunk_size]
+                placeholders = ",".join("?" * len(chunk))
+                rows = self._conn.execute(
+                    f"SELECT rel_path, uid FROM notes WHERE rel_path IN ({placeholders}) AND uid != ''",
+                    chunk,
+                ).fetchall()
+                for rel_raw, uid_raw in rows:
+                    out[str(rel_raw)] = str(uid_raw)
+        return out
+
+    def wikilinks_for_rel_paths(self, rel_paths: set[str] | frozenset[str] | list[str]) -> dict[str, list[str]]:
+        """One IN-query dump of rel_path → wikilink slugs. Missing/tier-1 rows are empty."""
+
+        wanted = sorted({str(rel).strip() for rel in rel_paths if str(rel).strip()})
+        if not wanted:
+            return {}
+        out: dict[str, list[str]] = {rel: [] for rel in wanted}
+        chunk_size = 500
+        with self._lock:
+            for i in range(0, len(wanted), chunk_size):
+                chunk = wanted[i : i + chunk_size]
+                placeholders = ",".join("?" * len(chunk))
+                rows = self._conn.execute(
+                    f"SELECT rel_path, wikilinks_json FROM notes WHERE rel_path IN ({placeholders})",
+                    chunk,
+                ).fetchall()
+                for rel_raw, wj_raw in rows:
+                    slugs: list[str] = []
+                    if wj_raw:
+                        try:
+                            parsed = json.loads(wj_raw)
+                        except json.JSONDecodeError:
+                            parsed = []
+                        if isinstance(parsed, list):
+                            slugs = [str(item).strip() for item in parsed if str(item).strip()]
+                    out[str(rel_raw)] = slugs
+        return out
+
     def rel_paths_by_type(self) -> dict[str, list[str]]:
         with self._lock:
             rows = self._conn.execute(
