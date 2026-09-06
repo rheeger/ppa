@@ -1047,7 +1047,6 @@ class IMessageAdapter(BaseAdapter):
                     changed = True
 
             message_count = max(
-                len(merged_data.get("messages", [])),
                 int(merged_data.get("message_count", 0) or 0),
                 int(incoming.get("message_count", 0) or 0),
             )
@@ -1087,4 +1086,50 @@ class IMessageAdapter(BaseAdapter):
             write_card(vault_path, str(rel_path), merged_card, body=body or existing_body, provenance=merged_provenance)
             return
 
+        if card.type == "imessage_message":
+            dest = Path(vault_path) / str(rel_path)
+            is_new = not dest.is_file()
+            self._replace_generic_card(vault_path, rel_path, card, body, provenance)
+            _touch_parent_thread(vault_path, card, increment=is_new)
+            return
+
         self._replace_generic_card(vault_path, rel_path, card, body, provenance)
+
+
+def _touch_parent_thread(vault_path: str | Path, card: Any, *, increment: bool) -> None:
+    """Bump parent thread rollup when a child message is written. Does not walk the vault."""
+
+    from archive_cli.vault_cache import VaultScanCache
+    from archive_vault.canon.wikilink import parse as parse_wikilink
+
+    thread_ref = parse_wikilink(str(getattr(card, "thread", "") or ""))
+    if not thread_ref:
+        return
+    vault = Path(vault_path)
+    cache_path = VaultScanCache.cache_path_for_vault(vault)
+    if not cache_path.is_file():
+        return
+    try:
+        cache = VaultScanCache.build_or_load(vault, tier=1, progress_every=0)
+        rel = cache.rel_path_for_uid(thread_ref)
+    except Exception:
+        return
+    if not rel:
+        return
+    frontmatter, _body, _provenance = read_note(vault, rel)
+    updates: dict[str, Any] = {}
+    sent = str(getattr(card, "sent_at", "") or getattr(card, "created", "") or "")
+    if sent:
+        last = str(frontmatter.get("last_message_at") or "")
+        if not last or sent > last:
+            updates["last_message_at"] = sent
+        first = str(frontmatter.get("first_message_at") or "")
+        if not first or sent < first:
+            updates["first_message_at"] = sent
+    if increment:
+        updates["message_count"] = int(frontmatter.get("message_count") or 0) + 1
+    if not updates:
+        return
+    from archive_vault.vault import update_frontmatter_fields
+
+    update_frontmatter_fields(vault, rel, updates)
