@@ -28,11 +28,15 @@ class RunnerError(RuntimeError):
 
 
 def _configure_logging() -> None:
-    if logging.getLogger("ppa").handlers:
+    from archive_engine.redaction import redacting_formatter
+
+    root = logging.getLogger("ppa")
+    if root.handlers:
+        for handler in root.handlers:
+            handler.setFormatter(redacting_formatter())
         return
     handler = logging.StreamHandler(sys.stderr)
-    handler.setFormatter(logging.Formatter("%(asctime)s [%(name)s] %(levelname)s %(message)s"))
-    root = logging.getLogger("ppa")
+    handler.setFormatter(redacting_formatter())
     root.addHandler(handler)
     root.setLevel(logging.INFO)
 

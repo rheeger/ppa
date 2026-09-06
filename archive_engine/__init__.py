@@ -37,6 +37,7 @@ from archive_engine.contracts import (
 from archive_engine.errors import (
     AccessDeniedError,
     CapabilityUnavailableError,
+    EgressDeniedError,
     EngineError,
     IncompatibleContractError,
     IncompatibleStateError,
@@ -54,6 +55,7 @@ __all__ = [
     "ArchiveRuntime",
     "ArtifactHash",
     "CapabilityUnavailableError",
+    "EgressDeniedError",
     "ChangeBatch",
     "ChangeRecord",
     "ChunkEvidenceRef",
@@ -76,7 +78,7 @@ __all__ = [
 ]
 
 _SIBLING_MODULES = frozenset(
-    {"access", "changes", "corrections", "execution_mode", "publication", "recovery_manifest", "runtime"}
+    {"access", "changes", "corrections", "egress", "execution_mode", "publication", "recovery_manifest", "redaction", "runtime"}
 )
 
 
