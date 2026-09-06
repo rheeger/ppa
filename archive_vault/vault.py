@@ -390,6 +390,24 @@ def write_card(
     provenance = provenance or {}
     validated = validate_card_strict(card.model_dump(mode="python"))
     frontmatter = card_to_frontmatter(validated)
+    rel = str(normalize_vault_rel(rel_path))
+    target = vault / rel
+    uid = str(frontmatter.get("uid") or card.uid)
+    if target.is_file():
+        from archive_vault.decisions import active_overrides_for, overlay_overrides
+
+        overrides = active_overrides_for(vault, uid)
+        if overrides:
+            overlaid, restored = overlay_overrides(frontmatter, overrides)
+            if restored:
+                frontmatter = overlaid
+                validated = validate_card_strict({**validated.model_dump(mode="python"), **frontmatter})
+                frontmatter = card_to_frontmatter(validated)
+                _existing_fm, _existing_body, existing_prov = read_note(vault, rel)
+                provenance = {
+                    **provenance,
+                    **{field_name: existing_prov[field_name] for field_name in restored if field_name in existing_prov},
+                }
     if frontmatter.get("aliases") and "aliases" not in provenance and "summary" in provenance:
         provenance = {**provenance, "aliases": _copy_provenance_entry(provenance["summary"])}
     if frontmatter.get("linkedin") and "linkedin" not in provenance and "linkedin_url" in provenance:
@@ -402,8 +420,6 @@ def write_card(
 
     rendered_body = write_provenance(body, provenance)
     content = render_card(frontmatter, rendered_body)
-    rel = str(normalize_vault_rel(rel_path))
-    target = vault / rel
     operation = OPERATION_UPDATE if target.is_file() else OPERATION_CREATE
     raw_source = frontmatter.get("source")
     if isinstance(raw_source, list) and raw_source:

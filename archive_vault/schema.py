@@ -21,6 +21,7 @@ TELEGRAM_URL_RE = re.compile(r"(?:https?://)?(?:www\.)?(?:t\.me|telegram\.me)/([
 class ProvenanceMethod(str, Enum):
     deterministic = "deterministic"
     llm = "llm"
+    human = "human"
 
 
 DETERMINISTIC_ONLY = frozenset(

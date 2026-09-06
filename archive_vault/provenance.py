@@ -10,6 +10,9 @@ from typing import Any
 
 from archive_vault.schema import DETERMINISTIC_ONLY
 
+PROVENANCE_METHOD_HUMAN = "human"
+_DETERMINISTIC_ALLOWED_METHODS = frozenset({"deterministic", PROVENANCE_METHOD_HUMAN})
+
 _PROVENANCE_RE = re.compile(r"\n?<!-- provenance\n(.*?)\n-->\s*", re.DOTALL)
 PROVENANCE_EXEMPT_FIELDS = frozenset(
     {
@@ -121,6 +124,8 @@ def _entry_to_history_dict(entry: ProvenanceEntry) -> dict[str, Any]:
 def merge_provenance(
     existing: dict[str, ProvenanceEntry],
     incoming: dict[str, ProvenanceEntry],
+    *,
+    protected_fields: frozenset[str] | None = None,
 ) -> dict[str, ProvenanceEntry]:
     """Merge provenance maps, letting incoming entries win field-by-field.
 
@@ -130,9 +135,15 @@ def merge_provenance(
     forensic trail of prior writes — useful for backfills, re-enrichments,
     and "who wrote this field last?" investigations. Only the latest entry
     is consulted by ``validate_provenance``; ``prior`` is for humans + audits.
+
+    ``protected_fields`` keeps existing human/override provenance so a source
+    replay cannot relabel a correction as source-reported.
     """
+    protected = protected_fields or frozenset()
     merged: dict[str, ProvenanceEntry] = dict(existing)
     for field_name, new_entry in incoming.items():
+        if field_name in protected:
+            continue
         old_entry = merged.get(field_name)
         if old_entry is None:
             merged[field_name] = new_entry
@@ -179,7 +190,7 @@ def validate_provenance(card_data: dict[str, Any], prov: dict[str, ProvenanceEnt
         if entry is None:
             errors.append(f"Field '{field_name}' is missing provenance")
             continue
-        if field_name in DETERMINISTIC_ONLY and entry.method != "deterministic":
+        if field_name in DETERMINISTIC_ONLY and entry.method not in _DETERMINISTIC_ALLOWED_METHODS:
             errors.append(f"Field '{field_name}' is deterministic-only but provenance method is '{entry.method}'")
     return errors
 

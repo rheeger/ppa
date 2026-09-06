@@ -27,6 +27,12 @@ from archive_vault.identity_resolver import (
     resolve_person,
     resolve_person_snapshot,
 )
+from archive_vault.decisions import (
+    active_overrides_for,
+    note_source_conflicts,
+    overlay_overrides,
+    protected_field_names,
+)
 from archive_vault.provenance import PROVENANCE_EXEMPT_FIELDS, ProvenanceEntry, merge_provenance
 from archive_vault.schema import (
     BaseCard,
@@ -337,6 +343,9 @@ class BaseAdapter(ABC):
             return f"GitMessages/{year_month}/{card.uid}.md"
         return f"{card.type.title()}/{card.uid}.md"
 
+    def _protected_overrides(self, vault_path: str | Path, uid: str) -> dict:
+        return active_overrides_for(vault_path, uid)
+
     def _merge_generic_card(
         self,
         vault_path: str | Path,
@@ -349,9 +358,21 @@ class BaseAdapter(ABC):
         existing_card = validate_card_permissive(frontmatter)
         merged_data = existing_card.model_dump(mode="python")
         incoming_data = card.model_dump(mode="python")
+        uid = str(merged_data.get("uid") or getattr(card, "uid", "") or "")
+        overrides = self._protected_overrides(vault_path, uid)
+        protected = protected_field_names(overrides)
+        if overrides:
+            note_source_conflicts(
+                vault_path,
+                uid,
+                incoming_data,
+                incoming_source=str(self.source_id or ""),
+            )
         changed = False
 
         for field_name, incoming_value in incoming_data.items():
+            if field_name in protected:
+                continue
             if field_name not in merged_data or field_name == "updated":
                 continue
             existing_value = merged_data[field_name]
@@ -376,8 +397,14 @@ class BaseAdapter(ABC):
         if changed:
             merged_data["updated"] = date.today().isoformat()
 
+        if overrides:
+            merged_data, _ = overlay_overrides(merged_data, overrides)
         merged_card = validate_card_strict(merged_data)
-        merged_provenance = merge_provenance(existing_provenance, provenance)
+        merged_provenance = merge_provenance(
+            existing_provenance,
+            provenance,
+            protected_fields=protected,
+        )
         self._write_canonical_card(vault_path, rel_path, merged_card, merged_body, merged_provenance)
 
     def _write_canonical_card(
@@ -408,9 +435,21 @@ class BaseAdapter(ABC):
         existing_card = validate_card_permissive(frontmatter)
         merged_data = existing_card.model_dump(mode="python")
         incoming_data = card.model_dump(mode="python")
+        uid = str(merged_data.get("uid") or getattr(card, "uid", "") or "")
+        overrides = self._protected_overrides(vault_path, uid)
+        protected = protected_field_names(overrides)
+        if overrides:
+            note_source_conflicts(
+                vault_path,
+                uid,
+                incoming_data,
+                incoming_source=str(self.source_id or ""),
+            )
         changed = False
 
         for field_name, incoming_value in incoming_data.items():
+            if field_name in protected:
+                continue
             if field_name in {"uid", "type", "source_id", "created"}:
                 continue
             if field_name == "source":
@@ -443,8 +482,14 @@ class BaseAdapter(ABC):
         if changed:
             merged_data["updated"] = date.today().isoformat()
 
+        if overrides:
+            merged_data, _ = overlay_overrides(merged_data, overrides)
         merged_card = validate_card_strict(merged_data)
-        merged_provenance = merge_provenance(existing_provenance, provenance)
+        merged_provenance = merge_provenance(
+            existing_provenance,
+            provenance,
+            protected_fields=protected,
+        )
         self._write_canonical_card(vault_path, rel_path, merged_card, merged_body, merged_provenance)
 
     def merge_card(
