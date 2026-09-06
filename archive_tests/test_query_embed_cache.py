@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import pytest
+
 from archive_cli.query_embed_cache import QueryEmbedCache, QueryEmbedSpec, query_embed_cache_key
+from archive_engine.contracts import EmbeddingSpec
+from archive_engine.errors import IncompatibleContractError
 
 
 def _spec(dimension: int = 4) -> QueryEmbedSpec:
@@ -40,3 +44,38 @@ def test_evict_by_max_rows(tmp_path) -> None:
     assert result["deleted_cap"] >= 2
     assert cache.stats()["rows"] == 1
     cache.close()
+
+
+def test_embedding_spec_identity_does_not_reuse_incompatible_space(tmp_path) -> None:
+    cache = QueryEmbedCache(tmp_path / "q.sqlite", ram_entries=8)
+    spec_a = QueryEmbedSpec.from_embedding_spec(
+        EmbeddingSpec(
+            provider_namespace="hash",
+            model="archive-hash-dev",
+            model_revision="1",
+            dimension=4,
+            metric="cosine",
+            normalization="l2",
+            chunk_schema="6",
+        )
+    )
+    spec_b = QueryEmbedSpec.from_embedding_spec(
+        EmbeddingSpec(
+            provider_namespace="hash",
+            model="archive-hash-dev",
+            model_revision="1",
+            dimension=4,
+            metric="cosine",
+            normalization="none",
+            chunk_schema="6",
+        )
+    )
+    cache.put("alpha", spec_a, [1.0, 0.0, 0.0, 0.0])
+    assert cache.get("alpha", spec_a) == [1.0, 0.0, 0.0, 0.0]
+    assert cache.get("alpha", spec_b) is None
+    cache.close()
+
+
+def test_from_embedding_spec_rejects_incomplete() -> None:
+    with pytest.raises(IncompatibleContractError):
+        EmbeddingSpec.from_payload({"model": "x"})

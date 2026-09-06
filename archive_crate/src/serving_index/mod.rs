@@ -119,6 +119,16 @@ fn req_i64(req: &Bound<'_, PyDict>, key: &str, default: i64) -> i64 {
 }
 
 fn card_to_row(card: &CardMeta, extra: serde_json::Value) -> serde_json::Value {
+    let corpus_state = if card.corpus_state.is_empty() {
+        schema::UNKNOWN
+    } else {
+        card.corpus_state.as_str()
+    };
+    let provenance = if card.provenance_summary.is_empty() {
+        schema::UNKNOWN
+    } else {
+        card.provenance_summary.as_str()
+    };
     let mut row = serde_json::json!({
         "card_uid": card.card_uid,
         "uid": card.card_uid,
@@ -127,8 +137,14 @@ fn card_to_row(card: &CardMeta, extra: serde_json::Value) -> serde_json::Value {
         "type": card.r#type,
         "activity_at": card.activity_at,
         "activity_end_at": card.activity_end_at,
-        "corpus_state": card.corpus_state,
+        "corpus_state": corpus_state,
+        "retrieval_weight": card.retrieval_weight,
         "slug": card.slug,
+        "aliases": card.aliases,
+        "emails": card.emails,
+        "external_ids": card.external_ids,
+        "source_revision": card.source_revision,
+        "provenance_summary": provenance,
     });
     if let Some(obj) = row.as_object_mut() {
         if let Some(extra_obj) = extra.as_object() {
@@ -167,13 +183,51 @@ pub fn serving_index_search(
     let people_filter = req_str(&req, "people_filter");
     let start_date = req_str(&req, "start_date");
     let end_date = req_str(&req, "end_date");
+    let mut rows = Vec::new();
+    let mut seen = HashSet::new();
+    if let Some(card) = idx.meta.exact_identifier(&query) {
+        if idx.meta.matches_filters(
+            card,
+            &type_filter,
+            &source_filter,
+            &people_filter,
+            "",
+            &start_date,
+            &end_date,
+        ) {
+            let (exact, slug_e, sum_e, ext_e, per_e) = rank::exact_flags(card, &query);
+            rows.push(card_to_row(
+                card,
+                serde_json::json!({
+                    "matched_by": "exact",
+                    "match_channel": "exact",
+                    "exact_match": true,
+                    "slug_exact": slug_e,
+                    "summary_exact": sum_e,
+                    "external_id_exact": ext_e,
+                    "person_exact": per_e,
+                    "serving_generation": idx.generation_id,
+                    "citation": {
+                        "card_uid": card.card_uid,
+                        "source_revision": card.source_revision,
+                        "generation": idx.generation_id,
+                        "match_channel": "exact",
+                    },
+                    "uid_exact": i32::from(exact),
+                }),
+            ));
+            seen.insert(card.card_uid.clone());
+        }
+    }
     let hits = if let Some(lex) = &idx.lexical {
         lex.search(&query, limit * 4, &type_filter)?
     } else {
         Vec::new()
     };
-    let mut rows = Vec::new();
     for (uid, score) in hits {
+        if !seen.insert(uid.clone()) {
+            continue;
+        }
         if let Some(card) = idx.meta.by_uid.get(&uid) {
             if !idx.meta.matches_filters(
                 card,
@@ -187,16 +241,25 @@ pub fn serving_index_search(
                 continue;
             }
             let (exact, slug_e, sum_e, ext_e, per_e) = rank::exact_flags(card, &query);
+            let channel = if exact { "exact" } else { "lexical" };
             rows.push(card_to_row(
                 card,
                 serde_json::json!({
-                    "matched_by": "lexical",
+                    "matched_by": channel,
+                    "match_channel": channel,
                     "lexical_score": score,
                     "exact_match": exact,
                     "slug_exact": slug_e,
                     "summary_exact": sum_e,
                     "external_id_exact": ext_e,
                     "person_exact": per_e,
+                    "serving_generation": idx.generation_id,
+                    "citation": {
+                        "card_uid": card.card_uid,
+                        "source_revision": card.source_revision,
+                        "generation": idx.generation_id,
+                        "match_channel": channel,
+                    },
                 }),
             ));
         }
@@ -289,10 +352,16 @@ pub fn serving_index_vector(
             ) {
                 continue;
             }
+            let provenance = if card.provenance_summary.is_empty() {
+                schema::UNKNOWN
+            } else {
+                card.provenance_summary.as_str()
+            };
             rows.push(card_to_row(
                 card,
                 serde_json::json!({
                     "matched_by": "vector",
+                    "match_channel": "vector",
                     "score": sim,
                     "similarity": sim,
                     "vector_similarity": sim,
@@ -300,8 +369,15 @@ pub fn serving_index_vector(
                     "chunk_index": cidx,
                     "matched_chunk_count": matched,
                     "preview": card.summary.chars().take(160).collect::<String>(),
-                    "provenance_bias": "mixed",
-                    "provenance_score": 0.04,
+                    "provenance_bias": provenance,
+                    "provenance_score": 0.0,
+                    "serving_generation": idx.generation_id,
+                    "citation": {
+                        "card_uid": card.card_uid,
+                        "source_revision": card.source_revision,
+                        "generation": idx.generation_id,
+                        "match_channel": "vector",
+                    },
                 }),
             ));
         }
@@ -422,14 +498,29 @@ pub fn serving_index_graph(
     for (node, targets) in graph {
         let items: Vec<serde_json::Value> = targets
             .into_iter()
-            .map(|(path_or_uid, edge_type)| {
+            .filter(|edge| {
+                idx.meta
+                    .by_uid
+                    .get(&edge.neighbor_uid)
+                    .map(|c| !MetadataStore::is_suppressed(c))
+                    .unwrap_or(true)
+            })
+            .map(|edge| {
                 let path = idx
                     .meta
                     .by_uid
-                    .get(&path_or_uid)
+                    .get(&edge.neighbor_uid)
                     .map(|c| c.rel_path.clone())
-                    .unwrap_or(path_or_uid);
-                serde_json::json!({"path": path, "edge_type": edge_type})
+                    .unwrap_or_else(|| edge.neighbor_uid.clone());
+                let mut item = edge.to_json(path);
+                if edge.method == "inferred" {
+                    if let Some(obj) = item.as_object_mut() {
+                        obj.insert("match_channel".into(), serde_json::json!("seed-link"));
+                    }
+                } else if let Some(obj) = item.as_object_mut() {
+                    obj.insert("match_channel".into(), serde_json::json!("graph"));
+                }
+                item
             })
             .collect();
         let key = idx
@@ -455,10 +546,12 @@ pub fn serving_index_person(py: Python<'_>, handle: &Bound<'_, ServingIndex>, na
         .cloned();
     if let Some(uid) = uid {
         if let Some(card) = idx.meta.by_uid.get(&uid) {
-            return json_to_py(
-                py,
-                serde_json::json!({"found": true, "rel_path": card.rel_path, "card_uid": uid}),
-            );
+            if !MetadataStore::is_suppressed(card) {
+                return json_to_py(
+                    py,
+                    serde_json::json!({"found": true, "rel_path": card.rel_path, "card_uid": uid}),
+                );
+            }
         }
     }
     json_to_py(py, serde_json::json!({"found": false, "rel_path": "", "card_uid": ""}))
@@ -492,8 +585,17 @@ pub fn serving_index_neighbor_uids(
         out.insert(uid.to_string());
         for (node, targets) in idx.graph.hops(uid, hops) {
             out.insert(node);
-            for (target, _) in targets {
-                out.insert(target);
+            for edge in targets {
+                if idx
+                    .meta
+                    .by_uid
+                    .get(&edge.neighbor_uid)
+                    .map(MetadataStore::is_suppressed)
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+                out.insert(edge.neighbor_uid);
             }
         }
     }
@@ -587,6 +689,7 @@ struct Manifest {
     analyzer_id: String,
     vector_impl: String,
     pipeline_version: String,
+    ranking_version: String,
     card_count: usize,
     chunk_count: usize,
     embedding_count: usize,
@@ -670,6 +773,7 @@ pub fn serving_index_build(
             analyzer_id: schema::ANALYZER_ID.to_string(),
             vector_impl: schema::VECTOR_IMPL.to_string(),
             pipeline_version: rank::pipeline_version().to_string(),
+            ranking_version: rank::ranking_version().to_string(),
             card_count: cards.len(),
             chunk_count,
             embedding_count: key_count,

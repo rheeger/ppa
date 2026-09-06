@@ -18,6 +18,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from archive_engine.contracts import EmbeddingSpec
+from archive_engine.errors import IncompatibleContractError
+
 logger = logging.getLogger("ppa.query_embed_cache")
 
 SCHEMA_VERSION = "1"
@@ -52,8 +55,11 @@ def query_embed_cache_key(
     version: int,
     provider: str,
     dimension: int,
+    spec_identity: str = "",
 ) -> str:
     raw = f"{normalize_query_text(text)}\0{model}\0{version}\0{provider}\0{dimension}\0{SCHEMA_VERSION}"
+    if spec_identity:
+        raw = f"{raw}\0{spec_identity}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
@@ -67,12 +73,57 @@ def _unpack_vector(blob: bytes, dimension: int) -> list[float]:
     return list(struct.unpack(f"<{dimension}f", blob))
 
 
+def validate_embedding_spec(spec: EmbeddingSpec) -> EmbeddingSpec:
+    """Reject incomplete or mixed-space specs. Does not invent defaults."""
+
+    return EmbeddingSpec.from_payload(spec.to_payload())
+
+
+def embedding_spec_identity(spec: EmbeddingSpec) -> str:
+    validated = validate_embedding_spec(spec)
+    payload = validated.to_payload()
+    return "\0".join(
+        str(payload[key])
+        for key in (
+            "provider_namespace",
+            "model",
+            "model_revision",
+            "dimension",
+            "metric",
+            "normalization",
+            "chunk_schema",
+        )
+    )
+
+
 @dataclass(frozen=True)
 class QueryEmbedSpec:
     model: str
     version: int
     provider: str
     dimension: int
+    embedding_spec: EmbeddingSpec | None = None
+
+    @classmethod
+    def from_embedding_spec(cls, spec: EmbeddingSpec) -> QueryEmbedSpec:
+        validated = validate_embedding_spec(spec)
+        revision = validated.model_revision
+        try:
+            version = int(revision)
+        except ValueError as exc:
+            raise IncompatibleContractError(f"model_revision must be an integer cache version: {revision!r}") from exc
+        return cls(
+            model=validated.model,
+            version=version,
+            provider=validated.provider_namespace,
+            dimension=validated.dimension,
+            embedding_spec=validated,
+        )
+
+    def cache_identity(self) -> str:
+        if self.embedding_spec is None:
+            return ""
+        return embedding_spec_identity(self.embedding_spec)
 
 
 class QueryEmbedCache:
@@ -126,6 +177,7 @@ class QueryEmbedCache:
             version=spec.version,
             provider=spec.provider,
             dimension=spec.dimension,
+            spec_identity=spec.cache_identity(),
         )
         with self._lock:
             ram = self._lru_get(key)
@@ -152,12 +204,17 @@ class QueryEmbedCache:
     def put(self, text: str, spec: QueryEmbedSpec, vector: list[float]) -> str:
         if len(vector) != spec.dimension:
             raise ValueError(f"vector length {len(vector)} != dimension {spec.dimension}")
+        if any(x != x or x in (float("inf"), float("-inf")) for x in vector):
+            raise ValueError("query embedding contains non-finite values")
+        if spec.embedding_spec is not None and spec.embedding_spec.dimension != spec.dimension:
+            raise IncompatibleContractError("EmbeddingSpec dimension does not match query vector")
         key = query_embed_cache_key(
             text,
             model=spec.model,
             version=spec.version,
             provider=spec.provider,
             dimension=spec.dimension,
+            spec_identity=spec.cache_identity(),
         )
         blob = _pack_vector(vector)
         with self._lock:

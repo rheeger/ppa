@@ -49,7 +49,15 @@ pub struct CardMeta {
     #[serde(default)]
     pub emails: Vec<String>,
     #[serde(default)]
+    pub external_ids: Vec<String>,
+    #[serde(default)]
     pub search_text: String,
+    #[serde(default)]
+    pub source_revision: String,
+    #[serde(default)]
+    pub retrieval_weight: Option<f64>,
+    #[serde(default)]
+    pub provenance_summary: String,
 }
 
 #[derive(Debug, Default)]
@@ -57,6 +65,8 @@ pub struct MetadataStore {
     pub by_uid: HashMap<String, CardMeta>,
     pub by_slug: HashMap<String, String>,
     pub by_path: HashMap<String, String>,
+    pub by_email: HashMap<String, String>,
+    pub by_external_id: HashMap<String, String>,
     /// Cards with a parseable `activity_at`, sorted by `(at_ms, uid)`.
     pub by_activity: Vec<ActivityEntry>,
     /// Indexes into `by_activity` for cards that have an interval end.
@@ -103,10 +113,55 @@ impl MetadataStore {
             for alias in &card.aliases {
                 store.by_slug.insert(alias.to_lowercase(), card.card_uid.clone());
             }
+            for email in &card.emails {
+                let key = email.to_lowercase();
+                if !key.is_empty() {
+                    store.by_email.insert(key, card.card_uid.clone());
+                }
+            }
+            for ext in &card.external_ids {
+                let key = ext.trim().to_string();
+                if !key.is_empty() {
+                    store.by_external_id.insert(key.clone(), card.card_uid.clone());
+                    store.by_external_id.insert(key.to_lowercase(), card.card_uid.clone());
+                }
+            }
             store.by_uid.insert(card.card_uid.clone(), card);
         }
         store.rebuild_activity_index();
         Ok(store)
+    }
+
+    pub fn is_suppressed(card: &CardMeta) -> bool {
+        card.corpus_state == "suppressed"
+    }
+
+    pub fn exact_identifier(&self, query: &str) -> Option<&CardMeta> {
+        let q = query.trim();
+        if q.is_empty() {
+            return None;
+        }
+        if let Some(card) = self.by_uid.get(q) {
+            return Some(card);
+        }
+        let lower = q.to_lowercase();
+        if let Some(uid) = self.by_slug.get(&lower) {
+            return self.by_uid.get(uid);
+        }
+        if let Some(uid) = self.by_email.get(&lower) {
+            return self.by_uid.get(uid);
+        }
+        if let Some(uid) = self
+            .by_external_id
+            .get(q)
+            .or_else(|| self.by_external_id.get(&lower))
+        {
+            return self.by_uid.get(uid);
+        }
+        if let Some(uid) = self.by_path.get(q) {
+            return self.by_uid.get(uid);
+        }
+        None
     }
 
     fn rebuild_activity_index(&mut self) {
@@ -141,6 +196,9 @@ impl MetadataStore {
         start_date: &str,
         end_date: &str,
     ) -> bool {
+        if Self::is_suppressed(card) {
+            return false;
+        }
         if !type_filter.is_empty() && card.r#type != type_filter {
             return false;
         }
