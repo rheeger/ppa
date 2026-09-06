@@ -180,6 +180,18 @@ def main() -> None:
         "mcp-config",
         help="Print paste-ready MCP JSON for this environment (no secrets)",
     )
+    identity_repair_parser = subparsers.add_parser(
+        "identity-repair",
+        help="Census and rewrite join-key families (phones, people, thread rollups, hybrid merge)",
+    )
+    identity_repair_parser.add_argument(
+        "identity_action",
+        choices=["census", "preflight", "canonicalize", "resolve-people", "rollup-threads", "merge", "same-conversation"],
+    )
+    identity_repair_parser.add_argument("--apply", action="store_true", help="Write vault changes (default dry-run)")
+    identity_repair_parser.add_argument("--output", default="", help="Write JSON report to this path")
+    identity_repair_parser.add_argument("--tar", default="", help="preflight: write a tarball of dirty paths")
+
     rebuild_parser = subparsers.add_parser("rebuild-indexes")
     rebuild_parser.add_argument("--workers", type=int)
     rebuild_parser.add_argument("--batch-size", type=int)
@@ -1366,6 +1378,11 @@ def main() -> None:
         from .log import attach_file_log
 
         attach_file_log(Path(log_file))
+    if args.command == "identity-repair":
+        from .commands.identity_repair import dispatch as identity_repair_dispatch
+
+        _print_json(identity_repair_dispatch(args))
+        return
     if args.command == "mcp-config":
         _emit_mcp_config()
         return
