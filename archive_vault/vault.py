@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import os
 import re
-import tempfile
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
 
 from archive_cli.ppa_engine import ppa_engine
+from archive_vault.paths import PathEscapeError, atomic_write_contained, normalize_vault_rel, resolve_contained_path
 from archive_vault.provenance import (
     ProvenanceEntry,
     read_provenance,
@@ -311,8 +311,11 @@ def read_note(vault: str | Path, rel_path: str) -> tuple[dict, str, dict[str, Pr
     """Read and parse a note by relative path."""
 
     vault = Path(vault)
-    path = vault / rel_path
-    if not path.exists():
+    try:
+        path = resolve_contained_path(vault, rel_path, purpose="read")
+    except PathEscapeError:
+        raise FileNotFoundError(rel_path) from None
+    if not path.is_file():
         raise FileNotFoundError(rel_path)
     parsed = read_note_file(path, vault_root=vault)
     return parsed.frontmatter, parsed.body, parsed.provenance
@@ -391,23 +394,10 @@ def write_card(
     if errors:
         raise ValueError("; ".join(errors))
 
-    target = vault / rel_path
-    target.parent.mkdir(parents=True, exist_ok=True)
     rendered_body = write_provenance(body, provenance)
     content = render_card(frontmatter, rendered_body)
-
-    fd, tmp_path = tempfile.mkstemp(prefix=f".tmp_{target.stem}_", dir=str(target.parent))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(content)
-        os.replace(tmp_path, target)
-    except Exception:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
-    return target
+    atomic_write_contained(vault, rel_path, content.encode("utf-8"))
+    return Path(vault) / normalize_vault_rel(rel_path)
 
 
 def update_frontmatter_fields(vault_root: Path | str, rel_path: str, updates: dict[str, Any]) -> None:
@@ -416,9 +406,12 @@ def update_frontmatter_fields(vault_root: Path | str, rel_path: str, updates: di
 
     from ruamel.yaml import YAML
 
-    full_path = Path(vault_root) / rel_path
+    try:
+        full_path = resolve_contained_path(vault_root, rel_path, purpose="write", create_parents=False)
+    except PathEscapeError as exc:
+        raise FileNotFoundError(f"Card not found: {rel_path}") from exc
     if not full_path.is_file():
-        raise FileNotFoundError(f"Card not found: {full_path}")
+        raise FileNotFoundError(f"Card not found: {rel_path}")
     text = full_path.read_text(encoding="utf-8")
     parts = text.split("---", 2)
     if len(parts) < 3:
@@ -432,7 +425,7 @@ def update_frontmatter_fields(vault_root: Path | str, rel_path: str, updates: di
         frontmatter[key] = value
     sio = StringIO()
     yaml.dump(frontmatter, sio)
-    full_path.write_text(f"---\n{sio.getvalue()}---{parts[2]}", encoding="utf-8")
+    atomic_write_contained(vault_root, rel_path, f"---\n{sio.getvalue()}---{parts[2]}".encode("utf-8"))
 
 
 def extract_wikilinks(content: str) -> list[str]:

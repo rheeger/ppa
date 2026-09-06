@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from archive_vault.paths import PathEscapeError, resolve_contained_path, resolve_existing_contained
 from archive_vault.vault import find_note_by_slug
 
 from .config import load_archive_config
@@ -156,13 +157,26 @@ class DefaultArchiveStore(ArchiveStore):
         payload["query_embed_cache_misses"] = self._query_embed_cache.stats().get("misses", 0)
         return payload
 
+    def _contained_text(self, user_path: str) -> tuple[str | None, str]:
+        """Read a vault-relative path. Escapes and missing files return ``(None, "")``."""
+
+        try:
+            path = resolve_contained_path(self.vault, user_path, purpose="read")
+            rel = str(path.relative_to(Path(self.vault).resolve()))
+        except (PathEscapeError, ValueError):
+            return None, ""
+        if not path.is_file():
+            return None, rel
+        return path.read_text(encoding="utf-8"), rel
+
     def read(self, path_or_uid: str) -> dict[str, Any]:
         if path_or_uid.endswith(".md"):
-            path = (self.vault / path_or_uid).resolve()
+            content, rel = self._contained_text(path_or_uid)
             return {
                 "path_or_uid": path_or_uid,
-                "content": path.read_text(encoding="utf-8") if path.exists() else "",
-                "found": path.exists(),
+                "content": content or "",
+                "found": content is not None,
+                "rel_path": rel,
             }
         rel_path = None
         if self._is_warehouse_index():
@@ -174,11 +188,14 @@ class DefaultArchiveStore(ArchiveStore):
             rel_path = self.index.read_path_for_uid(path_or_uid)
         if rel_path is None:
             return {"path_or_uid": path_or_uid, "content": "", "found": False}
+        content, rel = self._contained_text(str(rel_path))
+        if content is None:
+            return {"path_or_uid": path_or_uid, "content": "", "found": False}
         return {
             "path_or_uid": path_or_uid,
-            "content": (self.vault / rel_path).read_text(encoding="utf-8"),
+            "content": content,
             "found": True,
-            "rel_path": rel_path,
+            "rel_path": rel or str(rel_path),
         }
 
     def query(
@@ -892,17 +909,26 @@ class DefaultArchiveStore(ArchiveStore):
             if hit:
                 rel_path = str(hit.get("rel_path") or "")
                 if rel_path:
-                    path = self.vault / rel_path
-                    if path.exists():
-                        return {"found": True, "content": path.read_text(encoding="utf-8"), "rel_path": rel_path}
+                    content, rel = self._contained_text(rel_path)
+                    if content is not None:
+                        return {"found": True, "content": content, "rel_path": rel or rel_path}
+                    return {"found": False, "content": ""}
                 return {"found": bool(hit.get("found")), "content": str(hit.get("content") or ""), **hit}
         rel_path = self.index.person_path(name)
         if rel_path:
-            path = self.vault / rel_path
-            if path.exists():
-                return {"found": True, "content": path.read_text(encoding="utf-8"), "rel_path": rel_path}
+            content, rel = self._contained_text(str(rel_path))
+            if content is not None:
+                return {"found": True, "content": content, "rel_path": rel or str(rel_path)}
         match = find_note_by_slug(self.vault, name.replace(" ", "-").lower())
-        return {"found": bool(match), "content": match.read_text(encoding="utf-8") if match else ""}
+        if match is None:
+            return {"found": False, "content": ""}
+        try:
+            contained = resolve_existing_contained(self.vault, match)
+        except PathEscapeError:
+            return {"found": False, "content": ""}
+        if not contained.is_file():
+            return {"found": False, "content": ""}
+        return {"found": True, "content": contained.read_text(encoding="utf-8")}
 
 
 def get_archive_store(

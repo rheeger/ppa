@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 
 try:
@@ -143,10 +144,34 @@ _TOOL_PROFILES: dict[str, set[str] | None] = {
 }
 
 
-def _tool_profile_error(tool_name: str) -> str | None:
-    from .index_config import _ppa_env
+_VALID_TOOL_PROFILES = frozenset(_TOOL_PROFILES)
+_PROFILE_LABELS = ", ".join(sorted(_VALID_TOOL_PROFILES))
 
-    profile = _ppa_env("PPA_MCP_TOOL_PROFILE", default="full").lower() or "full"
+
+def _normalize_tool_profile() -> tuple[str, str | None]:
+    """Return ``(normalized_profile, invalid_error)``.
+
+    Unset env uses the documented ``full`` default. Empty or unknown values
+    fail closed — they do not widen to unrestricted access.
+    """
+
+    if "PPA_MCP_TOOL_PROFILE" not in os.environ:
+        return "full", None
+    raw = os.environ.get("PPA_MCP_TOOL_PROFILE", "")
+    profile = raw.strip().lower()
+    if not profile or profile not in _TOOL_PROFILES:
+        shown = raw.strip()
+        if len(shown) > 64:
+            shown = shown[:64] + "..."
+        label = shown if shown else "(empty)"
+        return "", f"Invalid PPA_MCP_TOOL_PROFILE={label!r}. Valid profiles: {_PROFILE_LABELS}"
+    return profile, None
+
+
+def _tool_profile_error(tool_name: str) -> str | None:
+    profile, invalid = _normalize_tool_profile()
+    if invalid:
+        return invalid
     allowed = _TOOL_PROFILES.get(profile)
     if allowed is None:
         return None
