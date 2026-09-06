@@ -11,6 +11,7 @@ first_name: Alex
 last_name: Rivera
 emails:
   - alex.rivera.idrep@example.com
+emails_seen_count: 8
 phones: []
 people: []
 orgs: []
