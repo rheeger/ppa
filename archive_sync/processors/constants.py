@@ -134,6 +134,10 @@ SKIP_ACTIVE_ONLY = "active_only_processor"
 SKIP_UPSTREAM = "upstream_not_complete"
 SKIP_PROVIDER = "llm_provider_unavailable"
 SKIP_NOT_APPLICABLE = "input_filter_mismatch"
+SKIP_NONCONVERGENT = "nonconvergent_feedback"
+CONTEXT_RECONCILIATION_CAPABILITY = "affected_context_resolver/v0"
+MAX_OUTPUT_FEEDBACK_GENERATIONS = 4
+MAX_SELF_INVALIDATING_REVISIONS = 2
 
 SKIP_REASONS = frozenset(
     {
@@ -147,6 +151,7 @@ SKIP_REASONS = frozenset(
         SKIP_BLOCKED_PROVIDER,
         SKIP_SUPERSEDED,
         SKIP_VALID_NO_OUTPUT,
+        SKIP_NONCONVERGENT,
     }
 )
 

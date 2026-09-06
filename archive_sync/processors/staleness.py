@@ -23,6 +23,8 @@ from .constants import (
 )
 from .declarations import ProcessorDeclaration
 
+_DERIVED_ENRICHMENT_TYPES = frozenset({"purchase", "meal_order"})
+
 
 @dataclass
 class ProcessorInputSnapshot:
@@ -40,6 +42,7 @@ class ProcessorInputSnapshot:
     output_failed: bool = False
     upstream_output_hash: str = ""
     recorded_upstream_output_hash: str = ""
+    feedback_generation: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -57,6 +60,7 @@ class ProcessorInputSnapshot:
             "output_failed": self.output_failed,
             "upstream_output_hash": self.upstream_output_hash,
             "recorded_upstream_output_hash": self.recorded_upstream_output_hash,
+            "feedback_generation": self.feedback_generation,
         }
 
 
@@ -90,6 +94,8 @@ def input_matches_filters(snapshot: ProcessorInputSnapshot, decl: ProcessorDecla
         if key == "corpus_decision":
             actual = snapshot.corpus_state
         elif key == "processor_decision":
+            if snapshot.card_type in _DERIVED_ENRICHMENT_TYPES:
+                continue
             actual = snapshot.processor_decision
         else:
             actual = str(snapshot.field_values.get(key, ""))

@@ -150,14 +150,17 @@ def receipt_from_item_result(
     input_revision: str,
     scheduler_status: str,
 ) -> OutputReceipt:
-    outputs = tuple(
-        OutputRevision(uid=uid, revision=input_revision)
-        for uid in result.output_uids
-        if uid
-    )
+    prior = result.receipt
+    if prior is not None and prior.outputs:
+        outputs = prior.outputs
+    else:
+        outputs = tuple(
+            OutputRevision(uid=uid, revision=input_revision)
+            for uid in result.output_uids
+            if uid
+        )
     if scheduler_status == RECEIPT_STATUS_VALID_NO_OUTPUT:
         outputs = ()
-    prior = result.receipt
     return OutputReceipt(
         processor=result.processor_key,
         processor_version=processor_version,

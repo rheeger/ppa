@@ -39,9 +39,12 @@ from archive_sync.llm_enrichment.workflows import imessage_thread as wf_imessage
 from archive_vault.llm_provider import GeminiProvider, LLMResponse, OllamaProvider
 from archive_vault.provenance import ProvenanceEntry, merge_provenance
 from archive_vault.schema import validate_card_strict
-from archive_vault.vault import read_note, write_card
+from archive_vault.vault import read_note, read_note_by_uid, write_card
 
 log = logging.getLogger("ppa.card_enrichment")
+
+DERIVED_ENRICHMENT_TAG = "ppa-enriched"
+DERIVED_ENRICHMENT_TYPES = frozenset({"purchase", "meal_order"})
 
 
 def _utc_today() -> str:
@@ -84,6 +87,9 @@ class CardEnrichmentMetrics:
     match_candidates_staged: int = 0
     enriched: int = 0
     enriched_card_uids: list[str] = field(default_factory=list)
+    unchanged_card_uids: list[str] = field(default_factory=list)
+    failed_card_uids: list[str] = field(default_factory=list)
+    output_revisions: dict[str, str] = field(default_factory=dict)
     prefilter_breakdown: dict[str, int] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -93,6 +99,77 @@ class CardEnrichmentMetrics:
         else:
             base["llm_yield_rate"] = None
         return base
+
+
+def apply_deterministic_derived_enrichment(
+    vault_path: str | Path,
+    uids: list[str] | set[str] | frozenset[str],
+    *,
+    dry_run: bool = False,
+) -> CardEnrichmentMetrics:
+    """Fill empty derived-card enrichment without a provider. Idempotent on rerun."""
+
+    from archive_sync.adapters.base import deterministic_provenance
+    from archive_sync.processors.input_hash import compute_output_revision
+
+    metrics = CardEnrichmentMetrics(workflow="derived_deterministic")
+    scoped = [str(uid).strip() for uid in uids if str(uid).strip()]
+    metrics.total_cards = len(scoped)
+    today = _utc_today()
+    vault = str(vault_path)
+    for uid in scoped:
+        note = read_note_by_uid(vault, uid)
+        if note is None:
+            continue
+        rel, fm, body, _prov = note
+        card_type = str(fm.get("type") or "")
+        if card_type not in DERIVED_ENRICHMENT_TYPES:
+            continue
+        metrics.gated += 1
+        try:
+            card = validate_card_strict(dict(fm))
+        except Exception:
+            metrics.errors += 1
+            metrics.failed_card_uids.append(uid)
+            continue
+        tags = [str(tag) for tag in (card.tags or []) if str(tag).strip()]
+        revision = compute_output_revision(
+            uid=uid, payload={"type": card_type, "tags": tags, "rel_path": str(rel)}
+        )
+        if DERIVED_ENRICHMENT_TAG in tags:
+            metrics.skipped_populated += 1
+            metrics.unchanged_card_uids.append(uid)
+            metrics.output_revisions[uid] = revision
+            continue
+        new_tags = [*tags, DERIVED_ENRICHMENT_TAG]
+        updated = card.model_copy(update={"tags": new_tags, "updated": today})
+        revision = compute_output_revision(
+            uid=uid, payload={"type": card_type, "tags": new_tags, "rel_path": str(rel)}
+        )
+        if dry_run:
+            metrics.dry_run_writes += 1
+            metrics.enriched += 1
+            metrics.enriched_card_uids.append(uid)
+            metrics.output_revisions[uid] = revision
+            continue
+        try:
+            write_card(
+                vault,
+                str(rel),
+                updated,
+                body,
+                deterministic_provenance(updated, "deterministic_derived_enrichment"),
+            )
+        except Exception:
+            log.exception("derived enrichment write failed uid=%s", uid)
+            metrics.errors += 1
+            metrics.failed_card_uids.append(uid)
+            continue
+        metrics.vault_writes += 1
+        metrics.enriched += 1
+        metrics.enriched_card_uids.append(uid)
+        metrics.output_revisions[uid] = revision
+    return metrics
 
 
 @dataclass
@@ -1126,9 +1203,17 @@ class CardEnrichmentRunner:
             return self._run_calendar_event()
         if self.workflow == "document":
             return self._run_document()
+        if self.workflow == "derived_deterministic":
+            uid_filter: set[str] = set()
+            if self.uid_filter_file is not None:
+                uid_filter = _load_uid_filter_file(Path(self.uid_filter_file))
+            self.metrics = apply_deterministic_derived_enrichment(
+                self.vault_path, uid_filter, dry_run=self.dry_run
+            )
+            return self.metrics
         raise ValueError(
             f"unsupported workflow: {self.workflow!r} (expected email_thread, imessage_thread, "
-            "beeper_thread, finance, calendar_event, document)"
+            "beeper_thread, finance, calendar_event, document, derived_deterministic)"
         )
 
     def _run_email_thread(self) -> CardEnrichmentMetrics:

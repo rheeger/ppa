@@ -92,6 +92,8 @@ class ProcessorRunReport:
     decision_run_id: str = ""
     blocked_count: int = 0
     scheduler_events: list[dict[str, Any]] = field(default_factory=list)
+    feedback_generations: int = 0
+    capability_markers: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -118,4 +120,6 @@ class ProcessorRunReport:
             "ladder_gate": self.ladder_gate,
             "decision_run_id": self.decision_run_id,
             "scheduler_events": list(self.scheduler_events),
+            "feedback_generations": self.feedback_generations,
+            "capability_markers": list(self.capability_markers),
         }

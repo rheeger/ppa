@@ -127,7 +127,7 @@ def _email_typed_extraction() -> ProcessorDeclaration:
     return ProcessorDeclaration(
         processor_key=PROCESSOR_EMAIL_TYPED_EXTRACTION,
         processor_version=EMAIL_TYPED_EXTRACTION_VERSION,
-        input_card_types=("email_thread",),
+        input_card_types=("email_thread", "email_message"),
         input_filters={"processor_decision": "typed_extraction", "corpus_decision": "active"},
         output_kinds=(OUTPUT_KIND_DERIVED_CARDS,),
         output_identity="{processor_key}:{input_uid}:{extractor_version}",
@@ -144,7 +144,7 @@ def _email_thread_enrichment() -> ProcessorDeclaration:
     return ProcessorDeclaration(
         processor_key=PROCESSOR_EMAIL_THREAD_ENRICHMENT,
         processor_version=EMAIL_THREAD_ENRICHMENT_VERSION,
-        input_card_types=("email_thread",),
+        input_card_types=("email_thread", "purchase", "meal_order"),
         input_filters={"processor_decision": "thread_enrichment", "corpus_decision": "active"},
         output_kinds=(OUTPUT_KIND_SUMMARIES, OUTPUT_KIND_ENTITIES, OUTPUT_KIND_MATCHES),
         output_identity="{processor_key}:{input_uid}:{prompt_version}",
