@@ -1,4 +1,5 @@
 import json
+import logging
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -10,11 +11,13 @@ from archive_cli.index_config import (
     get_query_embed_cache_max_rows,
     get_query_embed_cache_path,
     get_query_embed_cache_ram_entries,
+    get_serving_export_batch_size,
     get_serving_index_max_rss_mb,
     get_serving_index_path,
 )
 from archive_cli.query_explain import explain_sql
 from archive_cli.serving_index import (
+    _export_embeddings,
     mark_serving_index_dirty,
     merge_jsonl_by_key,
     prune_retired_serving_generations,
@@ -39,12 +42,67 @@ def _stub_manifest(dest: str | Path) -> dict[str, object]:
 def test_serving_index_defaults(tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("PPA_SERVING_INDEX_PATH", raising=False)
     monkeypatch.delenv("PPA_QUERY_EMBED_CACHE_PATH", raising=False)
+    monkeypatch.delenv("PPA_SERVING_EXPORT_BATCH", raising=False)
     assert get_serving_index_path(tmp_path) == tmp_path / "_meta" / "rust-search-index"
     assert get_query_embed_cache_path(tmp_path) == tmp_path / "_meta" / "query-embed-cache.sqlite"
     assert get_serving_index_max_rss_mb() >= 256
+    assert get_serving_export_batch_size() >= 100
     assert get_query_embed_cache_ram_entries() >= 0
     assert get_query_embed_cache_max_rows() >= 1
     assert get_query_embed_cache_max_age_days() >= 1
+
+
+def test_export_embeddings_streams_batches_and_logs_progress(tmp_path: Path, caplog, monkeypatch) -> None:
+    dim = 4
+    rows = [{"chunk_key": f"ck-{i}", "embedding": [float(i)] * dim} for i in range(5)]
+    executed: list[str] = []
+
+    class _Cur:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+        def execute(self, sql, _params=None):
+            executed.append(str(sql))
+
+        def __iter__(self):
+            return iter(rows)
+
+    class _Conn:
+        def cursor(self, name=None):
+            assert name == "ppa_serving_emb_export"
+            return _Cur()
+
+        def execute(self, sql, _params=None):
+            executed.append(str(sql))
+            if "COUNT(*)" in str(sql):
+                return [{"n": len(rows)}]
+            raise AssertionError(f"client execute should not fetch embeddings: {sql}")
+
+    monkeypatch.setenv("PPA_SERVING_EXPORT_BATCH", "2")
+    dest = tmp_path / "emb-export"
+    log = logging.getLogger("ppa.serving_index")
+    with caplog.at_level(logging.INFO, logger="ppa.serving_index"):
+        exported = _export_embeddings(
+            _Conn(),
+            "ppa",
+            dim=dim,
+            uids=None,
+            dest_dir=dest,
+            log=log,
+            progress_every=2,
+        )
+    assert exported.items == []
+    assert exported.count == 5
+    assert Path(exported.keys_path).read_text(encoding="utf-8").splitlines() == [f"ck-{i}" for i in range(5)]
+    assert Path(exported.bin_path).stat().st_size == 5 * dim * 4
+    assert any("serving_index_export embeddings start" in rec.message for rec in caplog.records)
+    assert any("serving_index_export embeddings 2/5" in rec.message for rec in caplog.records)
+    assert any("rss_mb=" in rec.message for rec in caplog.records)
+    assert any("COUNT(*)" in sql for sql in executed)
+    assert any("SELECT chunk_key, embedding" in sql for sql in executed)
 
 
 def test_explain_sql_captures_failure() -> None:

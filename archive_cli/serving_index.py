@@ -6,12 +6,17 @@ mmap handle keyed by (vault, index_root, ACTIVE generation).
 
 from __future__ import annotations
 
+import array
 import json
 import logging
+import math
 import os
+import resource
 import shutil
+import sys
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -42,7 +47,9 @@ from .index_config import (
     get_query_embed_cache_max_rows,
     get_query_embed_cache_path,
     get_query_embed_cache_ram_entries,
+    get_rebuild_progress_every,
     get_serving_candidate_budget,
+    get_serving_export_batch_size,
     get_serving_index_max_rss_mb,
     get_serving_index_path,
     get_serving_nlist,
@@ -776,6 +783,8 @@ def _snapshot_binding(vault: Path, gid: str) -> tuple[str, int]:
 def _decode_embedding(raw: Any, dim: int) -> list[float] | None:
     if raw is None:
         return None
+    if isinstance(raw, (bytes, bytearray, memoryview)) and len(raw) == dim * 4:
+        return array.array("f", raw).tolist()
     if isinstance(raw, str):
         nums = [float(x) for x in raw.strip("[]").split(",") if x.strip()]
     else:
@@ -785,17 +794,166 @@ def _decode_embedding(raw: Any, dim: int) -> list[float] | None:
     return nums
 
 
+def _pack_embedding(raw: Any, dim: int) -> bytes | None:
+    if raw is None:
+        return None
+    if isinstance(raw, (bytes, bytearray, memoryview)) and len(raw) == dim * 4:
+        return bytes(raw)
+    nums = _decode_embedding(raw, dim)
+    if nums is None:
+        return None
+    return array.array("f", nums).tobytes()
+
+
+def _format_mins_secs(seconds: float) -> str:
+    if not math.isfinite(seconds) or seconds < 0:
+        return "?"
+    total = int(round(seconds))
+    m, s = divmod(total, 60)
+    return f"{m}:{s:02d}"
+
+
+def _rss_mb() -> float:
+    try:
+        usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    except Exception:
+        return 0.0
+    if sys.platform == "darwin":
+        return usage / (1024 * 1024)
+    return usage / 1024.0
+
+
+def _first_row(result: Any) -> Any:
+    fetchone = getattr(result, "fetchone", None)
+    if fetchone is not None:
+        return fetchone()
+    try:
+        return result[0]
+    except (TypeError, IndexError, KeyError):
+        return None
+
+
+def _row_int(row: Any) -> int:
+    if row is None:
+        return 0
+    if isinstance(row, dict):
+        return int(next(iter(row.values())))
+    if isinstance(row, (list, tuple)):
+        return int(row[0])
+    return int(row)
+
+
+def _query_count(conn: Any, sql: str, params: tuple[Any, ...] | None = None) -> int:
+    result = conn.execute(sql) if params is None else conn.execute(sql, params)
+    return _row_int(_first_row(result))
+
+
+def _iter_server_rows(
+    conn: Any,
+    sql: str,
+    params: tuple[Any, ...] | None,
+    *,
+    name: str,
+    batch: int,
+) -> Any:
+    """Prefer a named server-side cursor so the client never fetchall's millions of rows."""
+
+    cursor_factory = getattr(conn, "cursor", None)
+    if cursor_factory is None:
+        yield from (conn.execute(sql) if params is None else conn.execute(sql, params))
+        return
+    try:
+        cur = cursor_factory(name=name)
+    except TypeError:
+        yield from (conn.execute(sql) if params is None else conn.execute(sql, params))
+        return
+    if hasattr(cur, "__enter__"):
+        with cur:
+            if hasattr(cur, "itersize"):
+                cur.itersize = batch
+            if params is None:
+                cur.execute(sql)
+            else:
+                cur.execute(sql, params)
+            yield from cur
+        return
+    try:
+        if hasattr(cur, "itersize"):
+            cur.itersize = batch
+        if params is None:
+            cur.execute(sql)
+        else:
+            cur.execute(sql, params)
+        yield from cur
+    finally:
+        closer = getattr(cur, "close", None)
+        if closer is not None:
+            closer()
+
+
+def _log_export_progress(
+    log: logging.Logger,
+    label: str,
+    done: int,
+    total: int,
+    started: float,
+    *,
+    every: int,
+    force: bool = False,
+) -> None:
+    if not force and every <= 0:
+        return
+    if not force and done != total and (every <= 0 or done % every != 0):
+        return
+    elapsed = time.monotonic() - started
+    rate = done / elapsed if elapsed > 0 else 0.0
+    remain = (total - done) / rate if rate > 0 and total > done else (0.0 if done >= total > 0 else float("nan"))
+    pct = (100.0 * done / total) if total else 0.0
+    log.info(
+        "serving_index_export %s %s/%s (%.1f%%) elapsed=%s eta_remaining=%s rate_rows_per_s=%.1f rss_mb=%.0f",
+        label,
+        done,
+        total if total else "?",
+        pct,
+        _format_mins_secs(elapsed),
+        _format_mins_secs(remain),
+        rate,
+        _rss_mb(),
+    )
+
+
+@dataclass
+class _EmbeddingExport:
+    items: list[tuple[str, tuple[float, ...]]]
+    count: int
+    keys_path: str = ""
+    bin_path: str = ""
+
+
 def _export_embeddings(
     conn: Any,
     schema: str,
     *,
     dim: int,
     uids: list[str] | None,
-) -> list[tuple[str, tuple[float, ...]]]:
+    dest_dir: Path | None = None,
+    log: logging.Logger | None = None,
+    progress_every: int | None = None,
+) -> _EmbeddingExport:
+    """Stream warehouse vectors in bounded batches. Never hold 4M×dim Python floats."""
+
+    log = log or logger
     model = get_default_embedding_model()
     version = get_default_embedding_version()
+    batch = get_serving_export_batch_size()
+    every = get_rebuild_progress_every() if progress_every is None else progress_every
     out: list[tuple[str, tuple[float, ...]]] = []
     if uids is None:
+        count_sql = f"""
+            SELECT COUNT(*) AS n
+            FROM {schema}.embeddings
+            WHERE embedding_model = %s AND embedding_version = %s
+            """
         sql = f"""
             SELECT chunk_key, embedding
             FROM {schema}.embeddings
@@ -803,6 +961,13 @@ def _export_embeddings(
             """
         params: tuple[Any, ...] = (model, version)
     else:
+        count_sql = f"""
+            SELECT COUNT(*) AS n
+            FROM {schema}.embeddings e
+            JOIN {schema}.chunks c ON c.chunk_key = e.chunk_key
+            WHERE e.embedding_model = %s AND e.embedding_version = %s
+              AND c.card_uid = ANY(%s)
+            """
         sql = f"""
             SELECT e.chunk_key, e.embedding
             FROM {schema}.embeddings e
@@ -811,18 +976,67 @@ def _export_embeddings(
               AND c.card_uid = ANY(%s)
             """
         params = (model, version, uids)
+    started = time.monotonic()
+    log.info("serving_index_export embeddings start batch=%s dest=%s", batch, dest_dir or "memory")
     try:
-        rows = conn.execute(sql, params)
+        total = _query_count(conn, count_sql, params)
+    except Exception:
+        logger.exception("serving_index embed count failed")
+        total = 0
+    log.info("serving_index_export embeddings counted total=%s rss_mb=%.0f", total, _rss_mb())
+    keys_path = ""
+    bin_path = ""
+    count = 0
+    vf = None
+    kf = None
+    try:
+        if dest_dir is not None:
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            keys_dest = dest_dir / "embedding_keys.txt"
+            bin_dest = dest_dir / "embeddings.bin"
+            vf = bin_dest.open("wb")
+            kf = keys_dest.open("w", encoding="utf-8")
+            keys_path = str(keys_dest)
+            bin_path = str(bin_dest)
+        rows = _iter_server_rows(conn, sql, params, name="ppa_serving_emb_export", batch=batch)
+        for row in rows:
+            packed = _pack_embedding(row["embedding"] if not isinstance(row, tuple) else row[1], dim)
+            if packed is None:
+                continue
+            key = str(row["chunk_key"] if not isinstance(row, tuple) else row[0]).strip()
+            if not key:
+                continue
+            if vf is not None and kf is not None:
+                vf.write(packed)
+                kf.write(key + "\n")
+            else:
+                nums = array.array("f")
+                nums.frombytes(packed)
+                out.append((key, tuple(nums)))
+            count += 1
+            _log_export_progress(log, "embeddings", count, total, started, every=every)
     except Exception:
         logger.exception("serving_index embed export failed")
-        return out
-    for row in rows:
-        nums = _decode_embedding(row["embedding"] if not isinstance(row, tuple) else row[1], dim)
-        if nums is None:
-            continue
-        key = str(row["chunk_key"] if not isinstance(row, tuple) else row[0])
-        out.append((key, tuple(nums)))
-    return out
+        if vf is not None:
+            vf.close()
+            vf = None
+        if kf is not None:
+            kf.close()
+            kf = None
+        return _EmbeddingExport(items=out, count=count, keys_path=keys_path, bin_path=bin_path)
+    finally:
+        if vf is not None:
+            vf.close()
+        if kf is not None:
+            kf.close()
+    _log_export_progress(log, "embeddings", count, total or count, started, every=every, force=True)
+    log.info(
+        "serving_index_export embeddings done count=%s elapsed=%s rss_mb=%.0f",
+        count,
+        _format_mins_secs(time.monotonic() - started),
+        _rss_mb(),
+    )
+    return _EmbeddingExport(items=out, count=count, keys_path=keys_path, bin_path=bin_path)
 
 
 def _export_warehouse_snapshot(
@@ -842,37 +1056,99 @@ def _export_warehouse_snapshot(
     chunks: list[dict[str, Any]] = []
     embeddings: list[tuple[str, tuple[float, ...]]] = []
     edges: list[dict[str, Any]] = []
+    emb_export = _EmbeddingExport(items=[], count=0)
+    every = get_rebuild_progress_every()
+    batch = get_serving_export_batch_size()
+    mode_name = "incremental" if incremental else "full"
+    export_dir = get_serving_index_path(Path(store.vault)) / ".export-tmp" / gid
+    log.info(
+        "serving_index_export start mode=%s generation=%s dim=%s batch=%s progress_every=%s",
+        mode_name,
+        gid,
+        dim,
+        batch,
+        every,
+    )
     with index._connect() as conn:
         conn.execute("SET statement_timeout = 0")
+        t_maps = time.monotonic()
+        log.info("serving_index_export maps start rss_mb=%.0f", _rss_mb())
         maps = load_serving_export_maps(conn, schema, dirty_uids if incremental else None)
+        log.info(
+            "serving_index_export maps done people=%s sources=%s elapsed=%s rss_mb=%.0f",
+            len(maps.get("people") or {}),
+            len(maps.get("sources") or {}),
+            _format_mins_secs(time.monotonic() - t_maps),
+            _rss_mb(),
+        )
         card_sql = _card_export_sql(schema, incremental=incremental)
-        card_rows = conn.execute(card_sql, (dirty_uids,) if incremental else None) if incremental else conn.execute(card_sql)
-        for row in card_rows:
-            cards.append(build_serving_card(row, maps))
         if incremental:
-            chunk_rows = conn.execute(
-                f"SELECT chunk_key, card_uid, chunk_type, chunk_index FROM {schema}.chunks WHERE card_uid = ANY(%s)",
+            card_total = _query_count(
+                conn,
+                f"SELECT COUNT(*) AS n FROM {schema}.cards c WHERE c.uid = ANY(%s)",
+                (dirty_uids,),
+            )
+            card_params: tuple[Any, ...] | None = (dirty_uids,)
+        else:
+            card_total = _query_count(conn, f"SELECT COUNT(*) AS n FROM {schema}.cards")
+            card_params = None
+        t_cards = time.monotonic()
+        log.info("serving_index_export cards start total=%s rss_mb=%.0f", card_total, _rss_mb())
+        for row in _iter_server_rows(conn, card_sql, card_params, name="ppa_serving_card_export", batch=batch):
+            cards.append(build_serving_card(row, maps))
+            _log_export_progress(log, "cards", len(cards), card_total, t_cards, every=every)
+        _log_export_progress(log, "cards", len(cards), card_total or len(cards), t_cards, every=every, force=True)
+        if incremental:
+            chunk_sql = f"SELECT chunk_key, card_uid, chunk_type, chunk_index FROM {schema}.chunks WHERE card_uid = ANY(%s)"
+            chunk_params: tuple[Any, ...] | None = (dirty_uids,)
+            chunk_total = _query_count(
+                conn,
+                f"SELECT COUNT(*) AS n FROM {schema}.chunks WHERE card_uid = ANY(%s)",
                 (dirty_uids,),
             )
         else:
-            chunk_rows = conn.execute(f"SELECT chunk_key, card_uid, chunk_type, chunk_index FROM {schema}.chunks")
-        for row in chunk_rows:
+            chunk_sql = f"SELECT chunk_key, card_uid, chunk_type, chunk_index FROM {schema}.chunks"
+            chunk_params = None
+            chunk_total = _query_count(conn, f"SELECT COUNT(*) AS n FROM {schema}.chunks")
+        t_chunks = time.monotonic()
+        log.info("serving_index_export chunks start total=%s rss_mb=%.0f", chunk_total, _rss_mb())
+        for row in _iter_server_rows(conn, chunk_sql, chunk_params, name="ppa_serving_chunk_export", batch=batch):
             chunks.append(build_serving_chunk(row))
+            _log_export_progress(log, "chunks", len(chunks), chunk_total, t_chunks, every=every)
+        _log_export_progress(log, "chunks", len(chunks), chunk_total or len(chunks), t_chunks, every=every, force=True)
         if not skip_embeddings:
-            embeddings = _export_embeddings(conn, schema, dim=dim, uids=dirty_uids if incremental else None)
+            emb_export = _export_embeddings(
+                conn,
+                schema,
+                dim=dim,
+                uids=dirty_uids if incremental else None,
+                dest_dir=export_dir,
+                log=log,
+                progress_every=every,
+            )
+            embeddings = emb_export.items
+        t_edges = time.monotonic()
+        log.info("serving_index_export edges start rss_mb=%.0f", _rss_mb())
         edges = load_serving_edges(conn, schema, dirty_uids if incremental else None)
+        log.info(
+            "serving_index_export edges done count=%s elapsed=%s rss_mb=%.0f",
+            len(edges),
+            _format_mins_secs(time.monotonic() - t_edges),
+            _rss_mb(),
+        )
     present = {str(row["card_uid"]) for row in cards}
     deleted = tuple(uid for uid in dirty_uids if uid not in present) if incremental else ()
     snapshot_id, watermark = _snapshot_binding(Path(store.vault), gid)
     log.info(
-        "serving_index_export done mode=%s cards=%s chunks=%s embeddings=%s edges=%s deleted=%s snapshot=%s",
-        "incremental" if incremental else "full",
+        "serving_index_export done mode=%s cards=%s chunks=%s embeddings=%s edges=%s deleted=%s snapshot=%s rss_mb=%.0f",
+        mode_name,
         len(cards),
         len(chunks),
-        len(embeddings),
+        emb_export.count or len(embeddings),
         len(edges),
         len(deleted),
         snapshot_id,
+        _rss_mb(),
     )
     return ServingSnapshot(
         snapshot_id=snapshot_id,
@@ -884,6 +1160,9 @@ def _export_warehouse_snapshot(
         embedding_spec=spec,
         deleted_uids=deleted,
         dirty_uids=tuple(dirty_uids) if incremental else (),
+        embedding_keys_path=emb_export.keys_path,
+        embeddings_bin_path=emb_export.bin_path,
+        embedding_count=emb_export.count,
     )
 
 
@@ -916,6 +1195,14 @@ def publish_serving_index(
         incremental = bool(concrete and status.get("serving_index_ready") and active_gid)
     gid = dest_generation or str(int(time.time() * 1000))
     mode = "delta" if incremental else "full"
+    log.info(
+        "serving_index_publish start mode=%s generation=%s keep_active=%s incremental=%s dirty_uids=%s",
+        mode,
+        gid,
+        active_gid,
+        incremental,
+        len(concrete),
+    )
     force_compact = False
     if incremental and active_gid:
         try:
@@ -940,7 +1227,8 @@ def publish_serving_index(
         gid=gid,
     )
     rss_cap = get_serving_index_max_rss_mb()
-    est_mb = (len(snapshot.embeddings) * dim * 4) / (1024 * 1024)
+    embed_n = snapshot.embedding_count or len(snapshot.embeddings)
+    est_mb = (embed_n * dim * 4) / (1024 * 1024)
     if est_mb > rss_cap:
         if incremental:
             log.warning(

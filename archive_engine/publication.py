@@ -134,6 +134,9 @@ class ServingSnapshot:
     embedding_spec: EmbeddingSpec
     deleted_uids: tuple[str, ...] = ()
     dirty_uids: tuple[str, ...] = ()
+    embedding_keys_path: str = ""
+    embeddings_bin_path: str = ""
+    embedding_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -309,6 +312,32 @@ def write_jsonl(path: Path, rows: Iterable[Mapping[str, Any]]) -> int:
     return count
 
 
+def _install_snapshot_embeddings(dest: Path, snapshot: ServingSnapshot) -> int:
+    """Move a streamed warehouse export into the generation, or write in-memory vectors."""
+
+    keys_dest = dest / "embedding_keys.txt"
+    bin_dest = dest / "embeddings.bin"
+    keys_src = str(snapshot.embedding_keys_path or "").strip()
+    bin_src = str(snapshot.embeddings_bin_path or "").strip()
+    if keys_src and bin_src:
+        src_keys = Path(keys_src)
+        src_bin = Path(bin_src)
+        if src_keys.is_file() and src_bin.is_file():
+            if src_keys.resolve() != keys_dest.resolve():
+                shutil.move(str(src_keys), str(keys_dest))
+            if src_bin.resolve() != bin_dest.resolve():
+                shutil.move(str(src_bin), str(bin_dest))
+            parent = src_keys.parent
+            if parent.name and parent.parent.name == ".export-tmp":
+                shutil.rmtree(parent, ignore_errors=True)
+            count = int(snapshot.embedding_count or 0)
+            if count <= 0 and keys_dest.is_file():
+                with keys_dest.open(encoding="utf-8") as fh:
+                    count = sum(1 for line in fh if line.strip())
+            return count
+    return write_embeddings(keys_dest, bin_dest, snapshot.embeddings)
+
+
 def write_embeddings(keys_path: Path, bin_path: Path, items: Sequence[tuple[str, Sequence[float]]]) -> int:
     import array
 
@@ -434,7 +463,18 @@ def read_active_generation(index_root: Path) -> str:
 
 
 def estimate_snapshot_bytes(snapshot: ServingSnapshot) -> int:
-    vectors = sum((len(vec) * 4) + 64 for _key, vec in snapshot.embeddings)
+    if snapshot.embeddings:
+        vectors = sum((len(vec) * 4) + 64 for _key, vec in snapshot.embeddings)
+    else:
+        dim = int(snapshot.embedding_spec.dimension or 0)
+        count = int(snapshot.embedding_count or 0)
+        if snapshot.embeddings_bin_path:
+            try:
+                vectors = Path(snapshot.embeddings_bin_path).stat().st_size + (count * 64)
+            except OSError:
+                vectors = count * ((dim * 4) + 64)
+        else:
+            vectors = count * ((dim * 4) + 64)
     json_bytes = sum(len(json.dumps(dict(row))) + 1 for row in (*snapshot.cards, *snapshot.chunks, *snapshot.edges))
     return vectors + json_bytes + 1_048_576
 
@@ -890,7 +930,7 @@ def publish_snapshot(
         write_jsonl(dest / "cards.jsonl", snapshot.cards)
         write_jsonl(dest / "chunks.jsonl", snapshot.chunks)
         write_jsonl(dest / "edges.jsonl", snapshot.edges)
-        embed_count = write_embeddings(dest / "embedding_keys.txt", dest / "embeddings.bin", snapshot.embeddings)
+        embed_count = _install_snapshot_embeddings(dest, snapshot)
         _maybe_fault(fault, "write")
         base = parent
         if parent:

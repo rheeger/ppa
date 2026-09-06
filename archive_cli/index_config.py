@@ -78,6 +78,7 @@ DEFAULT_REBUILD_WORKERS = max(os.cpu_count() or 4, 1)
 DEFAULT_REBUILD_BATCH_SIZE = 1000
 DEFAULT_REBUILD_COMMIT_INTERVAL = 5000
 DEFAULT_REBUILD_PROGRESS_EVERY = 10000
+DEFAULT_SERVING_EXPORT_BATCH = 2000
 DEFAULT_REBUILD_EXECUTOR = "thread"
 DEFAULT_REBUILD_FLUSH_ROW_MULT = 120
 DEFAULT_REBUILD_FLUSH_MAX_EDGES = 100_000
@@ -520,6 +521,11 @@ def get_serving_candidate_budget() -> int:
 
 def get_serving_train_memory_mb() -> int:
     return max(_ppa_env_int("PPA_SERVING_TRAIN_MEMORY_MB", default=get_serving_index_max_rss_mb()), 64)
+
+
+def get_serving_export_batch_size() -> int:
+    """Client fetch size for warehouse embedding export. Keep bounded so 4M+ vectors are not fetchall'd."""
+    return max(_ppa_env_int("PPA_SERVING_EXPORT_BATCH", default=DEFAULT_SERVING_EXPORT_BATCH), 100)
 
 
 def _ppa_env_float(canonical: str, default: float) -> float:
