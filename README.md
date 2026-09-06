@@ -2,7 +2,7 @@
 
 PPA is a private knowledge system for the data your life or organization already creates: email, messages, calendar events, files, photos, health records, financial exports, code history, receipts, travel, meetings, and more.
 
-Most knowledge bases start with notes you write. PPA starts with evidence from the systems where things actually happened. It converts that evidence into typed Markdown cards, preserves provenance for every meaningful field, builds a Postgres + pgvector retrieval index, and exposes the whole archive to humans and agents through a CLI and MCP.
+Most knowledge bases start with notes you write. PPA starts with evidence from the systems where things actually happened. It converts that evidence into typed Markdown cards, preserves provenance for every meaningful field, publishes a Rust serving index for query, keeps Postgres as a derived warehouse, and exposes the archive to humans and agents through a CLI and MCP.
 
 The result is not another chatbot and not another notes app. PPA is the canonical archive and retrieval engine underneath them.
 
@@ -17,7 +17,7 @@ PPA gives you that view without making a third-party app the source of truth:
 - Ask "which flight, hotel, and rental car were part of this trip?" from structural links, not vague similarity.
 - Ask "which purchase matches this credit-card charge?" through deterministic finance reconciliation.
 - Ask "tell me about my relationship with Sarah" by combining the PersonCard, message threads, calendar events, photos, and graph neighbors.
-- Ask "what subscriptions am I paying for?" from subscription lifecycle cards, not a keyword search over old emails.
+- Compose "what subscriptions am I paying for?" from `subscription` cards plus `query` / `evidence` / `read`. Narrative analytics workflows (subscriptions, trip costs, changes-since) are **pending** (P10).
 
 A folder indexer can search files. A note app can search notes. PPA is built for the harder problem: turning messy personal or organizational exhaust into a durable, queryable, evidence-backed knowledge system.
 
@@ -31,7 +31,7 @@ A folder indexer can search files. A note app can search notes. PPA is built for
 
 **Retrieval is multi-modal.** The same corpus supports exact reads, structured queries, lexical search, vector search, hybrid search, graph traversal, temporal neighbors, people lookup, timeline lookup, retrieval explanations, and index health checks.
 
-**The graph is evidence-aware.** Edges carry type and confidence. Deterministic links, wikilinks, derived-from relationships, and promoted inferred links do not get treated as equal. Hybrid retrieval uses confidence-weighted graph boosts instead of blind neighbor expansion.
+**The graph is typed, not a confidence warehouse.** Serving graph hops carry an edge type and a `trust` default of 1.0. Warehouse `edges` rows have no `method` / `confidence` / `evidence_uids` columns. Seed-link confidence is a separate gated path (`PPA_SEED_LINKS_ENABLED`). Do not treat every neighbor as equally evidenced.
 
 **Agents get tools, not vibes.** PPA exposes MCP tools with clear routing guidance and confidence signaling. The consuming agent does the reasoning; PPA retrieves, ranks, cites, and shows when the archive may not have enough data.
 
@@ -56,7 +56,7 @@ Adapters are idempotent. Re-running an import should produce the same canonical 
 
 ### Typed Cards
 
-PPA currently models 37 card types:
+PPA currently models 36 card types (`CARD_TYPES` in `archive_vault/schema.py`):
 
 - Core entities: `person`, `place`, `organization`
 - Communication: `email_thread`, `email_message`, `email_attachment`, `imessage_thread`, `imessage_message`, `imessage_attachment`, `beeper_thread`, `beeper_message`, `beeper_attachment`
@@ -106,6 +106,7 @@ PPA supports several retrieval paths over the same archive:
 - `archive_person`, `archive_graph`, and `archive_timeline` for relationship and chronology work
 - `archive_retrieval_explain` for understanding why results ranked the way they did
 - `archive_status_json`, `archive_embedding_status`, and related tools for operational health
+- `archive_knowledge` exists but is an **empty fallback** (lexical search). There is no populated knowledge cache or 46-facet living profile.
 
 Retrieval responses include confidence signaling. Sparse or surprising results are logged as retrieval gaps so maintenance can surface where the archive needs more data, better extraction, or better linking.
 
@@ -157,13 +158,31 @@ This separation is the core safety property. The archive can evolve, the index c
 
 ### Install
 
+Supported retrieval needs the native `archive_crate` extension. Editable checkout is a developer path, not the clean-install story.
+
+Clean install (hashed wheels, Python 3.12 profile):
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install --require-hashes -r requirements/runtime-py312.lock
+python archive_scripts/build_release.py
+pip install --no-deps dist/ppa-*.whl
+ppa setup --non-interactive --from spec.json --apply
+```
+
+Developer checkout (must build the crate; `pip install -e .` alone is not enough):
+
 ```bash
 git clone https://github.com/rheeger/ppa.git
 cd ppa
-python3 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -e .
+# build archive_crate with maturin against this interpreter (see install runbook)
 ```
+
+See [install-independent-archive](archive_docs/runbooks/install-independent-archive.md). `production_proven` stays false until a long soak — a fixture smoke is not that.
 
 ### Start Local Postgres And Build The Index
 
@@ -218,9 +237,14 @@ ppa person "Sarah"
 ppa graph "People/sarah.md"
 ppa read "hfa-email-message-..."
 ppa status
+ppa instance-status
+ppa readiness
 ppa health
 ppa maintain
+ppa setup --help
 ```
+
+`ppa status` / `ppa readiness` evaluate the **current instance only**. The historical `local_seed_living_corpus` leftover is bound to the original local seed and does not transfer. Analytics CLI/MCP workflows are **pending** (P10). A manifest file is never a freshness signal.
 
 Admin commands such as `rebuild-indexes`, `bootstrap-postgres`, migrations, embedding backfills, and linker operations are documented in the [runtime contract](archive_docs/PPA_RUNTIME_CONTRACT.md). Restrict admin tools in production with `PPA_MCP_TOOL_PROFILE`.
 

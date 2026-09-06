@@ -17,13 +17,14 @@ from typing import Any
 from archive_engine.config import CONFIG_SCHEMA_VERSION, resolve_instance_config
 from archive_engine.errors import ConfigError
 from archive_vault.provenance import ProvenanceEntry
-from archive_vault.schema import PersonCard
+from archive_vault.schema import OrganizationCard, PersonCard
 from archive_vault.vault import write_card
 
 logger = logging.getLogger("ppa.setup")
 
 FIXTURE_PERSON_UID = "hfa-person-p09c-ada"
 FIXTURE_PERSON_NAME = "Ada Example"
+FIXTURE_ORG_UID = "hfa-organization-p09d-acme"
 ALLOWED_FIXTURES = frozenset({"sample.fixture"})
 SEED_MARKERS = (
     "hf-archives-seed",
@@ -177,17 +178,35 @@ def _write_instance_config(spec: Mapping[str, Any]) -> Path:
             "model_revision": "1",
         },
         "access": {"principal": "local-operator", "profile": "trusted-local"},
-        "scopes": [
-            {
-                "name": "fixture",
-                "sources": ["sample", "test"],
-                "retrieval_profile": "historical",
-            }
-        ],
+        "scopes": _default_scopes(spec),
     }
     path = root / "ppa.json"
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return path
+
+
+def _default_scopes(spec: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Person and organization instances get distinct saved scopes."""
+
+    entity_type = str(spec.get("entity_type") or "person")
+    name = str(spec.get("entity_name") or FIXTURE_PERSON_NAME)
+    if entity_type == "organization":
+        return [
+            {
+                "name": "org-ops",
+                "sources": ["sample", "test"],
+                "orgs": [name],
+                "retrieval_profile": "current_ops",
+            }
+        ]
+    return [
+        {
+            "name": "personal-fixture",
+            "sources": ["sample", "test"],
+            "people": [name],
+            "retrieval_profile": "historical",
+        }
+    ]
 
 
 def _write_fixture_person(root: Path, spec: Mapping[str, Any]) -> str:
@@ -199,9 +218,9 @@ def _write_fixture_person(root: Path, spec: Mapping[str, Any]) -> str:
         source_id="ada@example.test",
         created="2026-09-06",
         updated="2026-09-06",
-        summary=spec["entity_name"],
-        first_name=str(spec["entity_name"]).split(" ", 1)[0],
-        last_name=str(spec["entity_name"]).split(" ", 1)[-1] if " " in str(spec["entity_name"]) else "",
+        summary=FIXTURE_PERSON_NAME,
+        first_name=FIXTURE_PERSON_NAME.split(" ", 1)[0],
+        last_name=FIXTURE_PERSON_NAME.split(" ", 1)[-1],
         emails=["ada@example.test"],
     )
     entry = ProvenanceEntry("test", "2026-09-06", "deterministic")
@@ -209,7 +228,7 @@ def _write_fixture_person(root: Path, spec: Mapping[str, Any]) -> str:
         root,
         f"People/{FIXTURE_PERSON_UID}.md",
         card,
-        body=f"{spec['entity_name']} is the fixture person for an independent archive.",
+        body=f"{FIXTURE_PERSON_NAME} is the fixture person for an independent archive.",
         provenance={
             "summary": entry,
             "first_name": entry,
@@ -218,6 +237,37 @@ def _write_fixture_person(root: Path, spec: Mapping[str, Any]) -> str:
         },
     )
     return FIXTURE_PERSON_UID
+
+
+def _write_fixture_organization(root: Path, spec: Mapping[str, Any]) -> str:
+    dest = root / "Entities" / "Organizations"
+    dest.mkdir(parents=True, exist_ok=True)
+    card = OrganizationCard(
+        uid=FIXTURE_ORG_UID,
+        type="organization",
+        source=["test"],
+        source_id="acme.example.test",
+        created="2026-09-06",
+        updated="2026-09-06",
+        summary=spec["entity_name"],
+        name=str(spec["entity_name"]),
+        org_type="company",
+        domain="example.test",
+    )
+    entry = ProvenanceEntry("test", "2026-09-06", "deterministic")
+    write_card(
+        root,
+        f"Entities/Organizations/{FIXTURE_ORG_UID}.md",
+        card,
+        body=f"{spec['entity_name']} is the fixture organization for an independent archive.",
+        provenance={
+            "summary": entry,
+            "name": entry,
+            "org_type": entry,
+            "domain": entry,
+        },
+    )
+    return FIXTURE_ORG_UID
 
 
 def _import_sample_fixture(root: Path, spec: Mapping[str, Any]) -> dict[str, Any]:
@@ -246,6 +296,9 @@ def apply_setup(spec: Mapping[str, Any]) -> dict[str, Any]:
     try:
         config_path = _write_instance_config(normalized)
         person_uid = _write_fixture_person(root, normalized)
+        org_uid = ""
+        if normalized["entity_type"] == "organization":
+            org_uid = _write_fixture_organization(root, normalized)
         imported = _import_sample_fixture(root, normalized)
         resolved = resolve_instance_config(instance_dir=root, allow_cwd_discovery=False)
         capabilities = detect_capabilities(vault=root)
@@ -255,7 +308,9 @@ def apply_setup(spec: Mapping[str, Any]) -> dict[str, Any]:
             "root": str(root),
             "archive_id": resolved.identity.archive_id,
             "config_path": str(config_path),
+            "entity_type": normalized["entity_type"],
             "fixture_person_uid": person_uid,
+            "fixture_org_uid": org_uid,
             "imported": imported,
             "capabilities": capabilities,
             "fresh": False,

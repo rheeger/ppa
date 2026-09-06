@@ -3,7 +3,7 @@
 **Slice:** P09-A. **Inventory date:** 2026-09-06. **Baseline SHA:** `d36663b`.  
 **Inputs:** this repository’s code, tests, runtime/MCP docs, and v2 / v2.5 / v3 / v4 vision files. No external attachments.
 
-This document maps **historical phase claims** to **current code**. It does not authorize setup CLI, config consolidation, or a README/ARCHITECTURE rewrite (P09-D).
+This document maps **historical phase claims** to **current code**. P09-D rewrote the public-doc paragraphs listed below; treat those files as current unless a later slice supersedes them.
 
 ## How to use this rebase
 

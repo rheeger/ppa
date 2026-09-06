@@ -23,6 +23,7 @@ from archive_sync.source_updaters.constants import (
 from archive_sync.source_updaters.snapshot import is_required_freshness_source
 
 from .corpus_summary import query_corpus_summary, rollback_decision_run_ids
+from .instance_policy import current_instance_policy
 from .suppression_visibility import SuppressionVisibilityResult, evaluate_suppression_visibility
 
 
@@ -37,6 +38,7 @@ class V3ReadinessResult:
     suppression_visibility: SuppressionVisibilityResult | None = None
     engine_mode: str = ""
     rollback_decision_run_ids: list[str] = field(default_factory=list)
+    instance_policy: dict[str, Any] = field(default_factory=dict)
     details: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -50,6 +52,7 @@ class V3ReadinessResult:
             "suppression_visibility": (self.suppression_visibility.to_dict() if self.suppression_visibility else None),
             "engine_mode": self.engine_mode,
             "rollback_decision_run_ids": list(self.rollback_decision_run_ids),
+            "instance_policy": dict(self.instance_policy),
             "details": dict(self.details),
         }
 
@@ -117,10 +120,21 @@ def evaluate_v3_readiness(
     sources_payload: dict[str, Any],
     processors_payload: dict[str, Any],
     require_production_soak: bool = True,
+    vault_path: str = "",
+    archive_id: str = "",
 ) -> V3ReadinessResult:
-    """Evaluate v3 readiness fail-closed from durable gate/source/processor/corpus evidence."""
+    """Evaluate v3 readiness fail-closed from durable gate/source/processor/corpus evidence.
+
+    Historical ``local_seed_living_corpus`` is recorded only when this vault is
+    the original local seed. It never flips ``ready`` and never transfers.
+    """
 
     current_engine = ppa_engine()
+    policy = current_instance_policy(
+        vault_path=vault_path,
+        archive_instance=archive_instance,
+        archive_id=archive_id,
+    )
     gate_readiness = evaluate_readiness(
         registry,
         archive_instance=archive_instance,
@@ -213,6 +227,10 @@ def evaluate_v3_readiness(
             blocking.append("production_soak_evidence_missing")
 
     ready = not failed
+    if policy.get("inherits_local_seed_exception"):
+        failed.append("inherited_historical_exception")
+        blocking.append("local_seed_living_corpus_does_not_transfer")
+        ready = False
     return V3ReadinessResult(
         ready=ready,
         archive_instance=archive_instance,
@@ -223,10 +241,12 @@ def evaluate_v3_readiness(
         suppression_visibility=suppression,
         engine_mode=current_engine,
         rollback_decision_run_ids=rollback_ids,
+        instance_policy=policy,
         details={
             "corpus_summary": corpus,
             "section_b_apply_gate": SECTION_B_APPLY_ARTIFACT_GATE,
             "latest_apply_gate_run": apply_record.to_dict() if apply_record else None,
             "latest_soak_gate_run": soak.to_dict() if soak else None,
+            "instance_policy": policy,
         },
     )

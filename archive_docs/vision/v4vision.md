@@ -4,7 +4,7 @@
 
 ## The Core Thesis
 
-After v3, PPA is a **proven multi-user personal knowledge system**. Anyone comfortable with Docker and a terminal can set up their own private archive, connect their data sources, and make their AI tools smarter about their life. The engine works, the extractors work, the knowledge cache works, the CLI is polished.
+After v3, PPA is a **self-hosted archive** that can install a fixture instance and keep two roots isolated through restart. Anyone comfortable with Docker and a terminal can run their own private archive. Extractors and MCP retrieval work. The knowledge cache does **not** work (empty fallback). The CLI is the product surface; analytics workflows are still pending.
 
 v4 makes PPA **accessible to everyone**. Three pillars:
 
@@ -12,7 +12,7 @@ v4 makes PPA **accessible to everyone**. Three pillars:
 
 2. **PPA Service** — A hosted service layer that removes the operational burdens self-hosters solve manually: OAuth proxy (no Google Cloud project needed), signed connector updates (extractors stay current automatically), and compiled app distribution (notarized `.dmg` with auto-updates).
 
-3. **Rust engine rewrite** — The Python engine is proven but not built for scale. A Rust rewrite of the core engine — vault scanning, materialization, FTS, embedding pipeline, MCP server — delivers the performance needed for archives with millions of cards and positions PPA as infrastructure that can power multiple archives on a single machine.
+3. **Incremental Rust** — `archive_crate` already ships walk, cache, materialize, chunk, person-batch, validator, and serving query. Remaining Rust is ANN fidelity, publication, and typed ports — not a greenfield rewrite of scanner / FTS / MCP. MCP stays Python.
 
 The v4 user is anyone who uses AI tools and has a decade of email, messages, and digital life. They don't know what Docker or MCP is. They install an app, connect their accounts, and their AI assistant suddenly knows their restaurant preferences, travel history, and who their VIP contacts are.
 
@@ -24,7 +24,7 @@ The v4 user is anyone who uses AI tools and has a decade of email, messages, and
 
 v2 principles 1–9 and v3 principles 10–14 remain in force. v4 adds:
 
-15. **Rust at the core, Python at the edges.** The engine — vault scanning, materialization, indexing, FTS, embedding pipeline, MCP server — is rewritten in Rust for performance and reliability. Extractors, knowledge domain definitions, and adapter logic remain Python — they change frequently, benefit from rapid iteration, and aren't performance-critical. The Rust engine exposes a Python FFI layer (via PyO3) so existing extractors and adapters work without modification.
+15. **Rust on the hot path, Python at the edges.** Vault scanning, cache, materialization, chunking, and serving query already run in `archive_crate` (PyO3). Extractors, adapters, enrichment, MCP, and CLI stay Python. Do not restate a broad engine rewrite as remaining v4 work.
 
 16. **The app is invisible when working.** PPA is infrastructure, not a destination. The UI exists for setup, status, and troubleshooting. The product experience happens inside whatever AI tool the user already uses — Cursor, Claude Desktop, ChatGPT, or voice assistants.
 
@@ -626,7 +626,7 @@ ppa.dev/
 ```
 v3 Complete (Phase 15)
 │
-├── Phase 16: Rust engine rewrite
+├── Phase 16: incremental Rust (serving already ships; not a greenfield rewrite)
 │   ├── 16a: Scaffold + scanner (2-3 weeks)
 │   ├── 16b: Materializer + loader (4-6 weeks) ← after 16a
 │   ├── 16c: Query + MCP server (3-4 weeks) ← after 16b

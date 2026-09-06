@@ -1,7 +1,9 @@
 # PPA Backup and Restore Runbook
 
-> **Scope**: The HFA instance on Arnold (192.168.50.27).
-> **Updated**: 2026-03-23
+> **Historical host ops.** This runbook describes the HFA instance on Arnold (192.168.50.27).
+> It is not the independent-instance restore path. Product restore is P07
+> (`archive_cli/commands/recovery.py`, openssl + `ppa-backup-encrypt.sh`).
+> **Updated**: 2026-03-23 (banner 2026-09-06)
 
 ## What Gets Backed Up
 
