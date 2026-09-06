@@ -73,3 +73,29 @@ def test_hfa_backup_creates_encrypted_artifacts_only(tmp_vault, tmp_path):
     assert (latest_dir / "ppa-backup.manifest.json.enc").exists()
     assert (latest_dir / "ppa-backup.tar.enc.sha256").exists()
     assert not (latest_dir / "People" / "jane-smith.md").exists()
+    assert not list(backup_root.rglob("*.tar"))
+    restore_dir = tmp_path / "restored-from-script"
+    restore_script = repo_root / "archive_scripts" / "ppa-backup-restore.sh"
+    env["PPA_RESTORE_DIR"] = str(restore_dir)
+    # Active root is the source vault; restore must use a different dest.
+    restored = subprocess.run(
+        ["bash", str(restore_script)],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert restored.returncode == 0, restored.stderr
+    assert (restore_dir / "People" / "jane-smith.md").is_file()
+    assert (tmp_vault / "People" / "jane-smith.md").is_file()
+    blocked = subprocess.run(
+        ["bash", str(restore_script)],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**env, "PPA_RESTORE_DIR": str(tmp_vault)},
+    )
+    assert blocked.returncode != 0
+    assert "active root" in blocked.stderr.lower() or "overlaps" in blocked.stderr.lower() or "not empty" in blocked.stderr.lower()

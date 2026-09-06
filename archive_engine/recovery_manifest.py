@@ -626,6 +626,8 @@ def classify_rel_path(rel_path: str) -> PathClass | None:
             )
         if rest.endswith(("-wal", "-shm")):
             return PathClass(RecoveryClass.DISPOSABLE, ArtifactPresence.OPTIONAL, "vault.sqlite-wal")
+        if rest.endswith("-dirty-uids.txt"):
+            return PathClass(RecoveryClass.DISPOSABLE, ArtifactPresence.OPTIONAL, "vault.meta.maintain-dirty")
         if rest.startswith("_bench_") or rest.endswith(".tmp"):
             return PathClass(RecoveryClass.DISPOSABLE, ArtifactPresence.OPTIONAL, "vault.meta.disposable")
         return None
