@@ -397,6 +397,20 @@ def _crate():
     return archive_crate
 
 
+def _access_req(kwargs: dict[str, Any]) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+    for key in (
+        "access_deny",
+        "access_restricted",
+        "access_policy_identity",
+        "access_sources",
+        "access_domains",
+    ):
+        if key in kwargs:
+            fields[key] = kwargs[key]
+    return fields
+
+
 class ServingIndexHandle:
     def __init__(self, vault: Path, index_root: Path, generation_id: str, native: Any):
         self.vault = Path(vault)
@@ -422,10 +436,13 @@ class ServingIndexHandle:
             "start_date": str(kwargs.get("start_date", "") or ""),
             "end_date": str(kwargs.get("end_date", "") or ""),
         }
+        req.update(_access_req(kwargs))
         return list(_crate().serving_index_search(self._native, req) or [])
 
     def query(self, **kwargs: Any) -> list[dict[str, Any]]:
-        return list(_crate().serving_index_query(self._native, dict(kwargs)) or [])
+        req = dict(kwargs)
+        req.update(_access_req(kwargs))
+        return list(_crate().serving_index_query(self._native, req) or [])
 
     def vector(self, query_vector: list[float], **kwargs: Any) -> list[dict[str, Any]]:
         req = {
@@ -442,6 +459,7 @@ class ServingIndexHandle:
             req.pop("nprobe")
         if req["candidate_budget"] <= 0:
             req.pop("candidate_budget")
+        req.update(_access_req(kwargs))
         rows = list(_crate().serving_index_vector(self._native, query_vector, req) or [])
         for row in rows:
             if row.get("score") is None:
@@ -457,25 +475,32 @@ class ServingIndexHandle:
             "start_date": str(kwargs.get("start_date", "") or ""),
             "end_date": str(kwargs.get("end_date", "") or ""),
         }
+        req.update(_access_req(kwargs))
         return list(_crate().serving_index_hybrid(self._native, query, query_vector, req) or [])
 
-    def graph(self, note_path: str, hops: int = 2) -> dict[str, Any]:
-        return dict(_crate().serving_index_graph(self._native, note_path, int(hops) or 1) or {})
+    def graph(self, note_path: str, hops: int = 2, **kwargs: Any) -> dict[str, Any]:
+        return dict(_crate().serving_index_graph(self._native, note_path, int(hops) or 1, _access_req(kwargs)) or {})
 
-    def person(self, name: str) -> dict[str, Any]:
-        return dict(_crate().serving_index_person(self._native, name) or {})
+    def person(self, name: str, **kwargs: Any) -> dict[str, Any]:
+        return dict(_crate().serving_index_person(self._native, name, _access_req(kwargs)) or {})
 
-    def pointers(self, uids: list[str]) -> dict[str, dict[str, Any]]:
-        return dict(_crate().serving_index_pointers(self._native, list(uids)) or {})
+    def pointers(self, uids: list[str], **kwargs: Any) -> dict[str, dict[str, Any]]:
+        return dict(_crate().serving_index_pointers(self._native, list(uids), _access_req(kwargs)) or {})
 
-    def neighbor_uids(self, uids: list[str], hops: int = 1) -> list[str]:
-        return list(_crate().serving_index_neighbor_uids(self._native, list(uids), int(hops) or 1) or [])
+    def neighbor_uids(self, uids: list[str], hops: int = 1, **kwargs: Any) -> list[str]:
+        return list(
+            _crate().serving_index_neighbor_uids(self._native, list(uids), int(hops) or 1, _access_req(kwargs)) or []
+        )
 
     def timeline(self, **kwargs: Any) -> list[dict[str, Any]]:
-        return list(_crate().serving_index_timeline(self._native, dict(kwargs)) or [])
+        req = dict(kwargs)
+        req.update(_access_req(kwargs))
+        return list(_crate().serving_index_timeline(self._native, req) or [])
 
     def temporal_neighbors(self, timestamp: str, **kwargs: Any) -> dict[str, Any]:
-        return dict(_crate().serving_index_temporal_neighbors(self._native, timestamp, dict(kwargs)) or {})
+        req = dict(kwargs)
+        req.update(_access_req(kwargs))
+        return dict(_crate().serving_index_temporal_neighbors(self._native, timestamp, req) or {})
 
     def read_path(self, uid: str) -> str | None:
         return _crate().serving_index_read_path(self._native, uid)

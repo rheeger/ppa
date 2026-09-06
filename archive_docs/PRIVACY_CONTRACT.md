@@ -1,9 +1,9 @@
-# Privacy contract (P05-A)
+# Privacy contract (P05-A + P05-B)
 
-This is the current containment and tool-profile contract. It does not claim
-encrypted-at-rest deployment, OS sandboxing, or protection against a process
-running as the same OS user. P05-B (retrieval policy) and P05-C (egress,
-redaction, data inventory) are not implemented here.
+This is the current containment, tool-profile, and retrieval-access contract.
+It does not claim encrypted-at-rest deployment, OS sandboxing, or protection
+against a process running as the same OS user. P05-C (egress, redaction, data
+inventory) is not implemented here.
 
 ## Path containment
 
@@ -79,9 +79,30 @@ Explicit `full` remains explicit. Existing `read-only` / `remote-read` /
   instead of writing through `vault / rel_path`.
 - `.md` reads may include a contained `rel_path` field when the path is valid.
 
+## Retrieval access (P05-B)
+
+One immutable `AccessContext` is resolved at the CLI/MCP/HTTP entry point
+(`archive_engine.access.resolve_access_context`) and passed through search,
+hybrid/vector, graph, person, timeline, evidence, and raw reads. Native
+serving applies the same predicate **before** top-k, counts, and graph
+expansion. Denied records are absent from IDs, snippets, neighbor lists,
+and pointer caches.
+
+- Empty `allowed_sources` / `allowed_domains` with `deny=false` is the
+  configured trusted-local context (unrestricted). P01 ranking is unchanged.
+- Restricted contexts deny unknown provenance and incomplete lineage.
+- Mixed-source derived records deny if any required source is denied.
+  Future claims inherit this rule; this slice does not implement claims.
+- Domain labels use `p05b-domain-v1` (type/source, conservative unknown).
+- Query-embed cache keys include `policy_identity`. Changing the allow-list
+  or egress revision cannot reuse another principal's cache entry.
+- Invalid `PPA_MCP_TOOL_PROFILE` still fails closed.
+
+Env (optional, fail-closed): `PPA_ACCESS_PRINCIPAL`, `PPA_ACCESS_PROFILE`,
+`PPA_ACCESS_ALLOWED_SOURCES`, `PPA_ACCESS_ALLOWED_DOMAINS`,
+`PPA_ACCESS_ALLOWED_TOOLS`, `PPA_ACCESS_EGRESS_POLICY_REVISION`,
+`PPA_ACCESS_DENY`.
+
 ## Later slices (not this contract's proof)
 
-- P05-B: one `AccessContext` across search, graph, summaries, and reads.
-  Mixed-source derived records (and future claims) deny if any required source
-  is denied.
 - P05-C: provider egress, diagnostic redaction, at-rest inventory.

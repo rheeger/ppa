@@ -6,8 +6,19 @@ import time
 from pathlib import Path
 from typing import Any
 
+from archive_engine.access import (
+    access_request_fields,
+    card_permitted,
+    filter_records,
+    is_restricted,
+    not_found_payload,
+    policy_identity,
+    record_from_frontmatter,
+    resolve_access_context,
+)
+from archive_engine.contracts import AccessContext
 from archive_vault.paths import PathEscapeError, resolve_contained_path, resolve_existing_contained
-from archive_vault.vault import find_note_by_slug
+from archive_vault.vault import find_note_by_slug, parse_note_content
 
 from .config import load_archive_config
 from .contracts import ArchiveStore
@@ -74,7 +85,13 @@ def _import_seed_links():
 
 
 class DefaultArchiveStore(ArchiveStore):
-    def __init__(self, vault: Path | None = None, index: Any | None = None, provider_factory=None):
+    def __init__(
+        self,
+        vault: Path | None = None,
+        index: Any | None = None,
+        provider_factory=None,
+        access: AccessContext | None = None,
+    ):
         self.config = load_archive_config()
         self.vault = Path(vault or self.config.vault_path)
         self.index = index or PostgresArchiveIndex(self.vault, dsn=self.config.index_dsn)
@@ -84,6 +101,25 @@ class DefaultArchiveStore(ArchiveStore):
             ram_entries=get_query_embed_cache_ram_entries(),
         )
         self._last_phase_times: QueryPhaseTimes | None = None
+        from .engine_factory import resolve_archive_identity, schema_binding_for
+
+        identity = resolve_archive_identity(self.vault, schema_binding=schema_binding_for(self.config.index_schema))
+        if access is None:
+            self.access = resolve_access_context(identity.archive_id, identity=identity)
+        elif access.archive_id == identity.archive_id:
+            self.access = access
+        else:
+            self.access = AccessContext(
+                archive_id=identity.archive_id,
+                principal=access.principal,
+                profile=access.profile,
+                allowed_tools=access.allowed_tools,
+                allowed_sources=access.allowed_sources,
+                allowed_domains=access.allowed_domains,
+                egress_policy_revision=access.egress_policy_revision,
+                deny=access.deny,
+                deny_reason=access.deny_reason,
+            )
 
     def _is_warehouse_index(self) -> bool:
         return isinstance(self.index, PostgresArchiveIndex)
@@ -97,6 +133,17 @@ class DefaultArchiveStore(ArchiveStore):
         if not self._is_warehouse_index():
             return None
         return self._serving()
+
+    def _policy_kwargs(self) -> dict[str, Any]:
+        return access_request_fields(self.access)
+
+    def _authorized_rows(self, rows: list[dict[str, Any]], *, limit: int | None = None) -> list[dict[str, Any]]:
+        if not is_restricted(self.access):
+            return list(rows) if limit is None else list(rows)[:limit]
+        filtered = filter_records(self.access, rows)
+        if limit is None:
+            return filtered
+        return filtered[:limit]
 
     def bootstrap(self) -> dict[str, Any]:
         return self.index.bootstrap()
@@ -181,12 +228,28 @@ class DefaultArchiveStore(ArchiveStore):
                 index=self.index,
                 serving_factory=self._serving if self._is_warehouse_index() else None,
                 schema_binding=schema_binding_for(self.config.index_schema),
+                access=self.access,
             )
             self._engine = engine
         return engine
 
+    def _record_for_read(self, path_or_uid: str, payload: dict[str, Any]) -> dict[str, Any]:
+        content = str(payload.get("content") or "")
+        if content:
+            try:
+                frontmatter, _body, _prov = parse_note_content(content)
+            except Exception:
+                frontmatter = {}
+            return record_from_frontmatter(frontmatter)
+        return {"type": "", "sources": [], "required_sources": [], "lineage_complete": None}
+
     def read(self, path_or_uid: str) -> dict[str, Any]:
-        return self._exact_read_service().read(path_or_uid)
+        payload = self._exact_read_service().read(path_or_uid, access=self.access)
+        if not payload.get("found"):
+            return payload
+        if not card_permitted(self.access, self._record_for_read(path_or_uid, payload)):
+            return not_found_payload(path_or_uid, include_rel=str(path_or_uid).endswith(".md"))
+        return payload
 
     def query(
         self,
@@ -207,31 +270,38 @@ class DefaultArchiveStore(ArchiveStore):
             "limit": limit,
         }
         serving = self._try_serving_query()
+        fetch_limit = limit * 8 if is_restricted(self.access) else limit
+        kwargs["limit"] = fetch_limit
         if serving is not None:
-            rows = serving.query(**kwargs, start_date=start_date, end_date=end_date)
-            return {"rows": rows}
+            rows = serving.query(**kwargs, start_date=start_date, end_date=end_date, **self._policy_kwargs())
+            return {"rows": self._authorized_rows(rows, limit=limit)}
         query_fn = self.index.query_cards
         # Date filters are additive; FakeIndex and older indexes may omit them.
         try:
             rows = query_fn(**kwargs, start_date=start_date, end_date=end_date)
         except TypeError:
             rows = query_fn(**kwargs)
-        return {"rows": rows}
+        return {"rows": self._authorized_rows(list(rows or []), limit=limit)}
 
     def search(self, query: str, *, limit: int = 20, **kwargs: Any) -> dict[str, Any]:
         serving = self._try_serving_query()
+        fetch_limit = limit * 8 if is_restricted(self.access) else limit
         if serving is not None:
-            return {"rows": serving.search(query, limit=limit, **kwargs)}
-        return {"rows": self.index.search(query, limit=limit, **kwargs)}
+            return {
+                "rows": serving.search(query, limit=limit, **kwargs, **self._policy_kwargs()),
+            }
+        return {"rows": self._authorized_rows(self.index.search(query, limit=fetch_limit, **kwargs), limit=limit)}
 
     def card_stack_pointers(self, uids: list[str]) -> dict[str, dict[str, Any]]:
         serving = self._try_serving_query()
         if serving is not None:
-            return serving.pointers(uids)
+            return serving.pointers(uids, **self._policy_kwargs())
         fn = getattr(self.index, "card_stack_pointers", None)
         if callable(fn):
-            return fn(uids)
-        return {}
+            raw = fn(uids)
+            if not is_restricted(self.access):
+                return raw
+            return {uid: pointers for uid, pointers in (raw or {}).items() if uid}
 
     def evidence(
         self,
@@ -260,6 +330,7 @@ class DefaultArchiveStore(ArchiveStore):
                     people_filter=people_filter,
                     start_date=start_date,
                     end_date=end_date,
+                    **self._policy_kwargs(),
                 )
             else:
                 rows = self.index.search(
@@ -281,6 +352,7 @@ class DefaultArchiveStore(ArchiveStore):
                 limit=cap,
             )
             rows = list(result.get("rows") or [])
+        rows = self._authorized_rows(list(rows or []), limit=cap)
         uids = [row_uid(row) for row in rows if row_uid(row)]
         pointers = self.card_stack_pointers(uids) if uids else {}
         hits = compact_hits(rows, pointers_by_uid=pointers, question=cleaned, chronological=True)
@@ -290,14 +362,37 @@ class DefaultArchiveStore(ArchiveStore):
         rel_path = note_path if note_path.endswith(".md") else f"{note_path}.md"
         serving = self._try_serving_query()
         if serving is not None:
-            return {"graph": serving.graph(rel_path, hops=hops), "rel_path": rel_path}
-        return {"graph": self.index.graph(rel_path, hops=hops), "rel_path": rel_path}
+            return {"graph": serving.graph(rel_path, hops=hops, **self._policy_kwargs()), "rel_path": rel_path}
+        graph = self.index.graph(rel_path, hops=hops)
+        if is_restricted(self.access) and isinstance(graph, dict):
+            graph = {
+                node: [
+                    edge
+                    for edge in (targets or [])
+                    if card_permitted(self.access, edge if isinstance(edge, dict) else {"sources": []})
+                ]
+                for node, targets in graph.items()
+            }
+        return {"graph": graph, "rel_path": rel_path}
 
     def timeline(self, *, start_date: str = "", end_date: str = "", limit: int = 20) -> dict[str, Any]:
         serving = self._try_serving_query()
+        fetch_limit = limit * 8 if is_restricted(self.access) else limit
         if serving is not None:
-            return {"rows": serving.timeline(start_date=start_date, end_date=end_date, limit=limit)}
-        return {"rows": self.index.timeline(start_date=start_date, end_date=end_date, limit=limit)}
+            return {
+                "rows": serving.timeline(
+                    start_date=start_date,
+                    end_date=end_date,
+                    limit=limit,
+                    **self._policy_kwargs(),
+                )
+            }
+        return {
+            "rows": self._authorized_rows(
+                self.index.timeline(start_date=start_date, end_date=end_date, limit=fetch_limit),
+                limit=limit,
+            )
+        }
 
     def temporal_neighbors(
         self,
@@ -318,15 +413,21 @@ class DefaultArchiveStore(ArchiveStore):
                 type_filter=type_filter,
                 source_filter=source_filter,
                 people_filter=people_filter,
+                **self._policy_kwargs(),
             )
-        return self.index.temporal_neighbors(
+        result = self.index.temporal_neighbors(
             timestamp,
             direction=direction,
-            limit=limit,
+            limit=limit * 8 if is_restricted(self.access) else limit,
             type_filter=type_filter,
             source_filter=source_filter,
             people_filter=people_filter,
         )
+        if isinstance(result, dict) and "results" in result:
+            result = dict(result)
+            result["results"] = self._authorized_rows(list(result.get("results") or []), limit=limit)
+            result["count"] = len(result["results"])
+        return result
 
     def knowledge_for_domain(
         self,
@@ -344,6 +445,7 @@ class DefaultArchiveStore(ArchiveStore):
             version=version,
             provider=str(getattr(provider, "name", "unknown")),
             dimension=int(getattr(provider, "dimension", 0) or get_vector_dimension()),
+            policy_identity=policy_identity(self.access),
         )
         t0 = time.monotonic()
         cached = self._query_embed_cache.get(query, spec)
@@ -352,7 +454,13 @@ class DefaultArchiveStore(ArchiveStore):
             add_ms(phases, "embed_ms", t0)
             return cached
         vector = provider.embed_texts([query.strip() or ""])[0]
-        spec = QueryEmbedSpec(model=spec.model, version=spec.version, provider=spec.provider, dimension=len(vector))
+        spec = QueryEmbedSpec(
+            model=spec.model,
+            version=spec.version,
+            provider=spec.provider,
+            dimension=len(vector),
+            policy_identity=policy_identity(self.access),
+        )
         self._query_embed_cache.put(query, spec, vector)
         phases.embed_cache_hit = False
         add_ms(phases, "embed_ms", t0)
@@ -366,7 +474,7 @@ class DefaultArchiveStore(ArchiveStore):
         query_vector = self._embed_query(query, model=model, version=version, phases=phases)
         serving = self._try_serving_query()
         if serving is not None:
-            rows = serving.vector(query_vector, **kwargs)
+            rows = serving.vector(query_vector, **kwargs, **self._policy_kwargs())
             add_ms(phases, "total_ms", t_total)
             self._last_phase_times = phases
             log_phase_times("vector_search", phases)
@@ -376,6 +484,9 @@ class DefaultArchiveStore(ArchiveStore):
                 "embedding_version": version,
                 "phase_times": phases.to_dict(),
             }
+        fetch_limit = int(kwargs.get("limit", 20) or 20)
+        if is_restricted(self.access):
+            fetch_limit = fetch_limit * 8
         rows = self.index.vector_search(
             query_vector=query_vector,
             embedding_model=model,
@@ -385,9 +496,13 @@ class DefaultArchiveStore(ArchiveStore):
             people_filter=str(kwargs.get("people_filter", "")),
             start_date=str(kwargs.get("start_date", "")),
             end_date=str(kwargs.get("end_date", "")),
-            limit=int(kwargs.get("limit", 20) or 20),
+            limit=fetch_limit,
         )
-        return {"rows": rows, "embedding_model": model, "embedding_version": version}
+        return {
+            "rows": self._authorized_rows(rows, limit=int(kwargs.get("limit", 20) or 20)),
+            "embedding_model": model,
+            "embedding_version": version,
+        }
 
     def _run_hybrid_retrieval(
         self,
@@ -511,7 +626,7 @@ class DefaultArchiveStore(ArchiveStore):
         query_vector = self._embed_query(query, model=model, version=version, phases=phases)
         serving = self._try_serving_query()
         if serving is not None:
-            rows = serving.hybrid(query, query_vector, **kwargs)
+            rows = serving.hybrid(query, query_vector, **kwargs, **self._policy_kwargs())
             add_ms(phases, "total_ms", t_total)
             self._last_phase_times = phases
             log_phase_times("hybrid_search", phases)
@@ -537,7 +652,12 @@ class DefaultArchiveStore(ArchiveStore):
         add_ms(phases, "total_ms", t_total)
         self._last_phase_times = phases
         log_phase_times("hybrid_search", phases)
-        return {"rows": rows, "embedding_model": model, "embedding_version": version, "phase_times": phases.to_dict()}
+        return {
+            "rows": self._authorized_rows(rows, limit=int(kwargs.get("limit", 20) or 20)),
+            "embedding_model": model,
+            "embedding_version": version,
+            "phase_times": phases.to_dict(),
+        }
 
     def embedding_status(self, *, embedding_model: str = "", embedding_version: int = 0) -> dict[str, Any]:
         model = embedding_model or get_default_embedding_model()
@@ -902,20 +1022,26 @@ class DefaultArchiveStore(ArchiveStore):
     def person(self, name: str) -> dict[str, Any]:
         serving = self._try_serving_query()
         if serving is not None:
-            hit = serving.person(name)
+            hit = serving.person(name, **self._policy_kwargs())
             if hit:
                 rel_path = str(hit.get("rel_path") or "")
                 if rel_path:
                     content, rel = self._contained_text(rel_path)
                     if content is not None:
-                        return {"found": True, "content": content, "rel_path": rel or rel_path}
+                        payload = {"found": True, "content": content, "rel_path": rel or rel_path}
+                        if not card_permitted(self.access, self._record_for_read(rel or rel_path, payload)):
+                            return {"found": False, "content": ""}
+                        return payload
                     return {"found": False, "content": ""}
                 return {"found": bool(hit.get("found")), "content": str(hit.get("content") or ""), **hit}
         rel_path = self.index.person_path(name)
         if rel_path:
             content, rel = self._contained_text(str(rel_path))
             if content is not None:
-                return {"found": True, "content": content, "rel_path": rel or str(rel_path)}
+                payload = {"found": True, "content": content, "rel_path": rel or str(rel_path)}
+                if not card_permitted(self.access, self._record_for_read(rel or str(rel_path), payload)):
+                    return {"found": False, "content": ""}
+                return payload
         match = find_note_by_slug(self.vault, name.replace(" ", "-").lower())
         if match is None:
             return {"found": False, "content": ""}
@@ -925,10 +1051,17 @@ class DefaultArchiveStore(ArchiveStore):
             return {"found": False, "content": ""}
         if not contained.is_file():
             return {"found": False, "content": ""}
-        return {"found": True, "content": contained.read_text(encoding="utf-8")}
+        content = contained.read_text(encoding="utf-8")
+        payload = {"found": True, "content": content}
+        if not card_permitted(self.access, self._record_for_read(str(match), payload)):
+            return {"found": False, "content": ""}
+        return payload
 
 
 def get_archive_store(
-    vault: Path | None = None, index: Any | None = None, provider_factory=None
+    vault: Path | None = None,
+    index: Any | None = None,
+    provider_factory=None,
+    access: AccessContext | None = None,
 ) -> DefaultArchiveStore:
-    return DefaultArchiveStore(vault=vault, index=index, provider_factory=provider_factory)
+    return DefaultArchiveStore(vault=vault, index=index, provider_factory=provider_factory, access=access)

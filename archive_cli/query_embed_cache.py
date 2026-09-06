@@ -56,10 +56,13 @@ def query_embed_cache_key(
     provider: str,
     dimension: int,
     spec_identity: str = "",
+    policy_identity: str = "",
 ) -> str:
     raw = f"{normalize_query_text(text)}\0{model}\0{version}\0{provider}\0{dimension}\0{SCHEMA_VERSION}"
     if spec_identity:
         raw = f"{raw}\0{spec_identity}"
+    if policy_identity:
+        raw = f"{raw}\0policy:{policy_identity}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
@@ -103,6 +106,7 @@ class QueryEmbedSpec:
     provider: str
     dimension: int
     embedding_spec: EmbeddingSpec | None = None
+    policy_identity: str = ""
 
     @classmethod
     def from_embedding_spec(cls, spec: EmbeddingSpec) -> QueryEmbedSpec:
@@ -118,6 +122,7 @@ class QueryEmbedSpec:
             provider=validated.provider_namespace,
             dimension=validated.dimension,
             embedding_spec=validated,
+            policy_identity="",
         )
 
     def cache_identity(self) -> str:
@@ -178,6 +183,7 @@ class QueryEmbedCache:
             provider=spec.provider,
             dimension=spec.dimension,
             spec_identity=spec.cache_identity(),
+            policy_identity=spec.policy_identity,
         )
         with self._lock:
             ram = self._lru_get(key)
@@ -215,6 +221,7 @@ class QueryEmbedCache:
             provider=spec.provider,
             dimension=spec.dimension,
             spec_identity=spec.cache_identity(),
+            policy_identity=spec.policy_identity,
         )
         blob = _pack_vector(vector)
         with self._lock:

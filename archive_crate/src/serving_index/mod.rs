@@ -22,7 +22,7 @@ use serde::Serialize;
 
 use crate::serving_index::graph::GraphStore;
 use crate::serving_index::lexical::LexicalIndex;
-use crate::serving_index::metadata::{CardMeta, MetadataStore};
+use crate::serving_index::metadata::{AccessPolicy, CardMeta, MetadataStore};
 use crate::serving_index::vector::IvfMmapAnn;
 use crate::serving_index::vector_train::TrainConfig;
 
@@ -138,6 +138,55 @@ fn req_i64(req: &Bound<'_, PyDict>, key: &str, default: i64) -> i64 {
         .unwrap_or(default)
 }
 
+fn req_bool(req: &Bound<'_, PyDict>, key: &str) -> bool {
+    req.get_item(key)
+        .ok()
+        .flatten()
+        .and_then(|v| v.extract::<bool>().ok())
+        .unwrap_or(false)
+}
+
+fn req_str_list(req: &Bound<'_, PyDict>, key: &str) -> Vec<String> {
+    if let Some(value) = req.get_item(key).ok().flatten() {
+        if let Ok(items) = value.extract::<Vec<String>>() {
+            return items
+                .into_iter()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+        if let Ok(raw) = value.extract::<String>() {
+            return raw
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+    }
+    Vec::new()
+}
+
+fn access_policy(req: &Bound<'_, PyDict>) -> AccessPolicy {
+    let deny = req_bool(req, "access_deny");
+    let sources = req_str_list(req, "access_sources");
+    let domains = req_str_list(req, "access_domains");
+    let restricted = req_bool(req, "access_restricted") || deny || !sources.is_empty() || !domains.is_empty();
+    AccessPolicy {
+        deny,
+        restricted,
+        allowed_sources: sources,
+        allowed_domains: domains,
+    }
+}
+
+fn card_allowed(idx: &ServingIndex, uid: &str, policy: &AccessPolicy) -> bool {
+    idx.meta
+        .by_uid
+        .get(uid)
+        .map(|card| policy.permits(card) && !MetadataStore::is_suppressed(card))
+        .unwrap_or(false)
+}
+
 fn card_to_row(card: &CardMeta, extra: serde_json::Value) -> serde_json::Value {
     let corpus_state = if card.corpus_state.is_empty() {
         schema::UNKNOWN
@@ -203,11 +252,13 @@ pub fn serving_index_search(
     let people_filter = req_str(&req, "people_filter");
     let start_date = req_str(&req, "start_date");
     let end_date = req_str(&req, "end_date");
+    let policy = access_policy(&req);
     let mut rows = Vec::new();
     let mut seen = HashSet::new();
     if let Some(card) = idx.meta.exact_identifier(&query) {
-        if idx.meta.matches_filters(
+        if idx.meta.eligible(
             card,
+            &policy,
             &type_filter,
             &source_filter,
             &people_filter,
@@ -258,8 +309,9 @@ pub fn serving_index_search(
             continue;
         }
         if let Some(card) = idx.meta.by_uid.get(&uid) {
-            if !idx.meta.matches_filters(
+            if !idx.meta.eligible(
                 card,
+                &policy,
                 &type_filter,
                 &source_filter,
                 &people_filter,
@@ -313,13 +365,15 @@ pub fn serving_index_query(
     let start_date = req_str(&req, "start_date");
     let end_date = req_str(&req, "end_date");
     let limit = req_i64(&req, "limit", 20).max(1) as usize;
+    let policy = access_policy(&req);
     let mut cards: Vec<&CardMeta> = idx
         .meta
         .by_uid
         .values()
         .filter(|c| {
-            idx.meta.matches_filters(
+            idx.meta.eligible(
                 c,
+                &policy,
                 &type_filter,
                 &source_filter,
                 &people_filter,
@@ -349,6 +403,7 @@ pub fn serving_index_vector(
     let people_filter = req_str(&req, "people_filter");
     let start_date = req_str(&req, "start_date");
     let end_date = req_str(&req, "end_date");
+    let policy = access_policy(&req);
     if idx.vectors.is_empty() {
         return json_to_py(py, serde_json::Value::Array(vec![]));
     };
@@ -387,7 +442,9 @@ pub fn serving_index_vector(
         .unwrap_or(4096);
     let nprobe = req_i64(&req, "nprobe", default_nprobe).max(1) as usize;
     let budget = req_i64(&req, "candidate_budget", default_budget).max(1) as usize;
-    let has_filter = !type_filter.is_empty()
+    let has_filter = policy.restricted
+        || policy.deny
+        || !type_filter.is_empty()
         || !source_filter.is_empty()
         || !people_filter.is_empty()
         || !start_date.is_empty()
@@ -414,8 +471,9 @@ pub fn serving_index_vector(
                 }
                 if let Some((uid, _, _)) = idx.chunk_to_card.get(key) {
                     if let Some(card) = idx.meta.by_uid.get(uid) {
-                        if idx.meta.matches_filters(
+                        if idx.meta.eligible(
                             card,
+                            &policy,
                             &type_filter,
                             &source_filter,
                             &people_filter,
@@ -480,8 +538,9 @@ pub fn serving_index_vector(
     items.sort_by(|a, b| b.1.0.partial_cmp(&a.1.0).unwrap_or(std::cmp::Ordering::Equal));
     for (uid, (sim, ctype, cidx, matched, chunk_key)) in items {
         if let Some(card) = idx.meta.by_uid.get(&uid) {
-            if !idx.meta.matches_filters(
+            if !idx.meta.eligible(
                 card,
+                &policy,
                 &type_filter,
                 &source_filter,
                 &people_filter,
@@ -552,6 +611,7 @@ pub fn serving_index_hybrid(
     let people_filter = req_str(&req, "people_filter");
     let start_date = req_str(&req, "start_date");
     let end_date = req_str(&req, "end_date");
+    let policy = access_policy(&req);
     let cap = (limit * 8).max(limit).max(limit * idx.chain_depth);
     let mut lexical = HashMap::new();
     for lex in &idx.lexical {
@@ -567,6 +627,50 @@ pub fn serving_index_hybrid(
     }
     let mut vector = HashMap::new();
     for ann in &idx.vectors {
+        if policy.restricted || policy.deny {
+            let mut eligible = HashSet::new();
+            for (i, key) in ann.keys().iter().enumerate() {
+                if !idx.live_chunk_keys.contains(key) {
+                    continue;
+                }
+                if let Some((uid, _, _)) = idx.chunk_to_card.get(key) {
+                    if let Some(card) = idx.meta.by_uid.get(uid) {
+                        if idx.meta.eligible(
+                            card,
+                            &policy,
+                            &type_filter,
+                            &source_filter,
+                            &people_filter,
+                            "",
+                            &start_date,
+                            &end_date,
+                        ) {
+                            eligible.insert(i);
+                        }
+                    }
+                }
+            }
+            let part = ann.knn_live(
+                &query_vector,
+                cap,
+                &idx.live_chunk_keys,
+                ann.nprobe(),
+                cap,
+                Some(&eligible),
+            );
+            for hit in part.hits {
+                if let Some((card_uid, ctype, cidx)) = idx.chunk_to_card.get(&hit.key) {
+                    let e = vector
+                        .entry(card_uid.clone())
+                        .or_insert((hit.score, ctype.clone(), *cidx, 0usize));
+                    e.3 += 1;
+                    if hit.score > e.0 {
+                        *e = (hit.score, ctype.clone(), *cidx, e.3);
+                    }
+                }
+            }
+            continue;
+        }
         for (chunk_key, sim) in ann.knn(&query_vector, cap) {
             if !idx.live_chunk_keys.contains(&chunk_key) {
                 continue;
@@ -598,8 +702,9 @@ pub fn serving_index_hybrid(
             .by_uid
             .get(uid)
             .map(|c| {
-                idx.meta.matches_filters(
+                idx.meta.eligible(
                     c,
+                    &policy,
                     &type_filter,
                     &source_filter,
                     &people_filter,
@@ -615,8 +720,9 @@ pub fn serving_index_hybrid(
             .by_uid
             .get(uid)
             .map(|c| {
-                idx.meta.matches_filters(
+                idx.meta.eligible(
                     c,
+                    &policy,
                     &type_filter,
                     &source_filter,
                     &people_filter,
@@ -627,19 +733,22 @@ pub fn serving_index_hybrid(
             })
             .unwrap_or(false)
     });
-    let trust = idx.graph.neighbor_trust(&anchors);
-    let rows = rank::fuse(&lexical, &vector, &trust, &idx.meta.by_uid, query, limit);
+    let trust = idx.graph.neighbor_trust(&anchors, |uid| card_allowed(&idx, uid, &policy));
+    let rows = rank::fuse(&lexical, &vector, &trust, &idx.meta.by_uid, query, limit, &policy);
     json_to_py(py, serde_json::Value::Array(rows))
 }
 
 #[pyfunction]
+#[pyo3(signature = (handle, start, hops, req=None))]
 pub fn serving_index_graph(
     py: Python<'_>,
     handle: &Bound<'_, ServingIndex>,
     start: &str,
     hops: usize,
+    req: Option<Bound<'_, PyDict>>,
 ) -> PyResult<PyObject> {
     let idx = handle.borrow();
+    let policy = req.as_ref().map(access_policy).unwrap_or_else(AccessPolicy::unrestricted);
     let uid = if idx.meta.by_uid.contains_key(start) {
         start.to_string()
     } else {
@@ -651,18 +760,12 @@ pub fn serving_index_graph(
             .unwrap_or_else(|| start.to_string())
     };
     let hops = hops.clamp(1, 2);
-    let graph = idx.graph.hops(&uid, hops);
+    let graph = idx.graph.hops_where(&uid, hops, |node| card_allowed(&idx, node, &policy));
     let mut out = serde_json::Map::new();
     for (node, targets) in graph {
         let items: Vec<serde_json::Value> = targets
             .into_iter()
-            .filter(|edge| {
-                idx.meta
-                    .by_uid
-                    .get(&edge.neighbor_uid)
-                    .map(|c| !MetadataStore::is_suppressed(c))
-                    .unwrap_or(true)
-            })
+            .filter(|edge| card_allowed(&idx, &edge.neighbor_uid, &policy))
             .map(|edge| {
                 let path = idx
                     .meta
@@ -693,8 +796,15 @@ pub fn serving_index_graph(
 }
 
 #[pyfunction]
-pub fn serving_index_person(py: Python<'_>, handle: &Bound<'_, ServingIndex>, name: &str) -> PyResult<PyObject> {
+#[pyo3(signature = (handle, name, req=None))]
+pub fn serving_index_person(
+    py: Python<'_>,
+    handle: &Bound<'_, ServingIndex>,
+    name: &str,
+    req: Option<Bound<'_, PyDict>>,
+) -> PyResult<PyObject> {
     let idx = handle.borrow();
+    let policy = req.as_ref().map(access_policy).unwrap_or_else(AccessPolicy::unrestricted);
     let needle = name.trim().to_lowercase().replace(' ', "-");
     let uid = idx
         .meta
@@ -704,7 +814,7 @@ pub fn serving_index_person(py: Python<'_>, handle: &Bound<'_, ServingIndex>, na
         .cloned();
     if let Some(uid) = uid {
         if let Some(card) = idx.meta.by_uid.get(&uid) {
-            if !MetadataStore::is_suppressed(card) {
+            if policy.permits(card) && !MetadataStore::is_suppressed(card) {
                 return json_to_py(
                     py,
                     serde_json::json!({"found": true, "rel_path": card.rel_path, "card_uid": uid}),
@@ -716,44 +826,52 @@ pub fn serving_index_person(py: Python<'_>, handle: &Bound<'_, ServingIndex>, na
 }
 
 #[pyfunction]
+#[pyo3(signature = (handle, uids, req=None))]
 pub fn serving_index_pointers(
     py: Python<'_>,
     handle: &Bound<'_, ServingIndex>,
     uids: Vec<String>,
+    req: Option<Bound<'_, PyDict>>,
 ) -> PyResult<PyObject> {
     let idx = handle.borrow();
-    let map = idx.graph.pointers(&uids);
+    let policy = req.as_ref().map(access_policy).unwrap_or_else(AccessPolicy::unrestricted);
+    let visible: Vec<String> = uids
+        .into_iter()
+        .filter(|uid| card_allowed(&idx, uid, &policy))
+        .collect();
+    let mut map = idx.graph.pointers(&visible);
+    for slot in map.values_mut() {
+        for list in slot.values_mut() {
+            list.retain(|uid| card_allowed(&idx, uid, &policy));
+        }
+    }
     json_to_py(py, serde_json::to_value(map).unwrap_or(serde_json::json!({})))
 }
 
 #[pyfunction]
+#[pyo3(signature = (handle, uids, hops, req=None))]
 pub fn serving_index_neighbor_uids(
     handle: &Bound<'_, ServingIndex>,
     uids: Vec<String>,
     hops: usize,
+    req: Option<Bound<'_, PyDict>>,
 ) -> PyResult<Vec<String>> {
     let idx = handle.borrow();
+    let policy = req.as_ref().map(access_policy).unwrap_or_else(AccessPolicy::unrestricted);
     let hops = hops.clamp(1, 2);
     let mut out = HashSet::new();
     for uid in uids {
         let uid = uid.trim();
-        if uid.is_empty() {
+        if uid.is_empty() || !card_allowed(&idx, uid, &policy) {
             continue;
         }
         out.insert(uid.to_string());
-        for (node, targets) in idx.graph.hops(uid, hops) {
+        for (node, targets) in idx.graph.hops_where(uid, hops, |node| card_allowed(&idx, node, &policy)) {
             out.insert(node);
             for edge in targets {
-                if idx
-                    .meta
-                    .by_uid
-                    .get(&edge.neighbor_uid)
-                    .map(MetadataStore::is_suppressed)
-                    .unwrap_or(false)
-                {
-                    continue;
+                if card_allowed(&idx, &edge.neighbor_uid, &policy) {
+                    out.insert(edge.neighbor_uid);
                 }
-                out.insert(edge.neighbor_uid);
             }
         }
     }
@@ -773,6 +891,7 @@ pub fn serving_index_timeline(
     let source_filter = req_str(&req, "source_filter");
     let people_filter = req_str(&req, "people_filter");
     let limit = req_i64(&req, "limit", 20).max(1) as usize;
+    let policy = access_policy(&req);
     let cards = idx.meta.timeline_range(
         &start_date,
         &end_date,
@@ -780,6 +899,7 @@ pub fn serving_index_timeline(
         &type_filter,
         &source_filter,
         &people_filter,
+        &policy,
     );
     let rows: Vec<serde_json::Value> = cards
         .into_iter()
@@ -808,6 +928,7 @@ pub fn serving_index_temporal_neighbors(
     let type_filter = req_str(&req, "type_filter");
     let source_filter = req_str(&req, "source_filter");
     let people_filter = req_str(&req, "people_filter");
+    let policy = access_policy(&req);
     let Some(hits) = idx.meta.temporal_neighbors(
         timestamp,
         direction,
@@ -815,6 +936,7 @@ pub fn serving_index_temporal_neighbors(
         &type_filter,
         &source_filter,
         &people_filter,
+        &policy,
     ) else {
         return json_to_py(
             py,

@@ -25,6 +25,15 @@ except ImportError:  # pragma: no cover
             raise RuntimeError("mcp package is required to run ppa")
 
 
+from archive_engine.access import (
+    PROFILE_LABELS,
+    TOOL_PROFILES,
+    VALID_TOOL_PROFILES,
+    normalize_tool_profile,
+    resolve_access_context,
+    tool_permitted,
+)
+
 from .commands import admin, attachments, explain
 from .commands import evidence as evidence_cmd
 from .commands import formatters as fmt
@@ -85,67 +94,10 @@ def _tool(name: str):
 
 
 _TOOL_PROFILES: dict[str, set[str] | None] = {
-    "full": None,
-    "read-only": {
-        "archive_search",
-        "archive_read",
-        "archive_query",
-        "archive_graph",
-        "archive_person",
-        "archive_timeline",
-        "archive_evidence",
-        "archive_temporal_neighbors",
-        "archive_knowledge",
-        "archive_stats",
-        "archive_vector_search",
-        "archive_hybrid_search",
-        "archive_search_json",
-        "archive_hybrid_search_json",
-        "archive_read_many",
-        "archive_status_json",
-        "archive_retrieval_explain_json",
-    },
-    "remote-read": {
-        "archive_search",
-        "archive_query",
-        "archive_timeline",
-        "archive_evidence",
-        "archive_stats",
-        "archive_search_json",
-    },
-    "admin-only": {
-        "archive_validate",
-        "archive_duplicates",
-        "archive_duplicate_uids",
-        "archive_rebuild_indexes",
-        "archive_bootstrap_postgres",
-        "archive_index_status",
-        "archive_projection_inventory",
-        "archive_projection_status",
-        "archive_projection_explain",
-        "archive_retrieval_explain",
-        "archive_embedding_status",
-        "archive_embedding_backlog",
-        "archive_embed_estimate",
-        "archive_embed_pending",
-        "archive_seed_link_surface",
-        "archive_seed_link_enqueue",
-        "archive_seed_link_backfill",
-        "archive_seed_link_refresh",
-        "archive_seed_link_worker",
-        "archive_seed_link_promote",
-        "archive_seed_link_report",
-        "archive_link_candidates",
-        "archive_link_candidate",
-        "archive_review_link_candidate",
-        "archive_link_quality_gate",
-        "archive_status_json",
-    },
+    name: None if tools is None else set(tools) for name, tools in TOOL_PROFILES.items()
 }
-
-
-_VALID_TOOL_PROFILES = frozenset(_TOOL_PROFILES)
-_PROFILE_LABELS = ", ".join(sorted(_VALID_TOOL_PROFILES))
+_VALID_TOOL_PROFILES = VALID_TOOL_PROFILES
+_PROFILE_LABELS = PROFILE_LABELS
 
 
 def _normalize_tool_profile() -> tuple[str, str | None]:
@@ -155,23 +107,27 @@ def _normalize_tool_profile() -> tuple[str, str | None]:
     fail closed — they do not widen to unrestricted access.
     """
 
-    if "PPA_MCP_TOOL_PROFILE" not in os.environ:
-        return "full", None
-    raw = os.environ.get("PPA_MCP_TOOL_PROFILE", "")
-    profile = raw.strip().lower()
-    if not profile or profile not in _TOOL_PROFILES:
-        shown = raw.strip()
-        if len(shown) > 64:
-            shown = shown[:64] + "..."
-        label = shown if shown else "(empty)"
-        return "", f"Invalid PPA_MCP_TOOL_PROFILE={label!r}. Valid profiles: {_PROFILE_LABELS}"
-    return profile, None
+    return normalize_tool_profile(
+        os.environ.get("PPA_MCP_TOOL_PROFILE") if "PPA_MCP_TOOL_PROFILE" in os.environ else None,
+        present="PPA_MCP_TOOL_PROFILE" in os.environ,
+    )
+
+
+def _entry_access() -> object:
+    """Resolve the process AccessContext once per tool call. Never widen later."""
+
+    return resolve_access_context(os.environ.get("PPA_ARCHIVE_ID", "mcp") or "mcp")
 
 
 def _tool_profile_error(tool_name: str) -> str | None:
     profile, invalid = _normalize_tool_profile()
     if invalid:
         return invalid
+    access = _entry_access()
+    if access.deny and access.deny_reason:
+        return access.deny_reason
+    if not tool_permitted(access, tool_name):
+        return f"Tool disabled by PPA_MCP_TOOL_PROFILE={profile or access.profile}"
     allowed = _TOOL_PROFILES.get(profile)
     if allowed is None:
         return None

@@ -13,6 +13,7 @@ import pytest
 from archive_cli.http_serve import (
     DEFAULT_TOKEN_FILE,
     bearer_authorized,
+    bind_http_access_context,
     resolve_http_auth_token,
     write_http_auth_token,
 )
@@ -52,6 +53,12 @@ def test_write_http_auth_token_sets_mode(tmp_path: Path) -> None:
     wrote = write_http_auth_token("secret-token", dest)
     assert wrote.read_text(encoding="utf-8").strip() == "secret-token"
     assert (wrote.stat().st_mode & 0o777) == 0o600
+
+
+def test_http_bind_access_fails_closed_on_invalid_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PPA_MCP_TOOL_PROFILE", "not-a-profile")
+    with pytest.raises(RuntimeError, match="Invalid PPA_MCP_TOOL_PROFILE"):
+        bind_http_access_context(archive_id="http-test")
 
 
 def test_http_serve_exits_without_token() -> None:

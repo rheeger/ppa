@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use super::metadata::CardMeta;
+use super::metadata::{AccessPolicy, CardMeta};
 use super::schema::{QUARANTINE_RETRIEVAL_WEIGHT, RANKING_VERSION, UNKNOWN};
 
 const PIPELINE_VERSION: &str = "2026.09.06.p01a";
@@ -87,6 +87,7 @@ pub fn fuse(
     meta: &HashMap<String, CardMeta>,
     query: &str,
     limit: usize,
+    policy: &AccessPolicy,
 ) -> Vec<serde_json::Value> {
     let mut uids: Vec<String> = lexical.keys().cloned().collect();
     for uid in vector.keys() {
@@ -112,7 +113,7 @@ pub fn fuse(
         let Some(card) = meta.get(&uid) else {
             continue;
         };
-        if card.corpus_state == "suppressed" {
+        if !policy.permits(card) || card.corpus_state == "suppressed" {
             continue;
         }
         let (exact, slug_e, sum_e, ext_e, per_e) = exact_flags(card, query);
