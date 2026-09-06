@@ -15,7 +15,7 @@ from archive_vault.config import PPAConfig, load_config
 from archive_vault.identity import IdentityCache, _normalize_identifier, resolve_any, upsert_identity_map
 from archive_vault.provenance import ProvenanceEntry
 from archive_vault.schema import validate_card_permissive, validate_card_strict
-from archive_vault.vault import find_note_by_slug, iter_notes, read_note, write_card
+from archive_vault.vault import find_note_by_slug, iter_notes, read_note, read_note_by_uid, write_card
 
 try:
     from rapidfuzz import fuzz
@@ -521,13 +521,20 @@ def resolve_person(
             if rel_path.parts and rel_path.parts[0] == "People"
         ]
     )
-    return _resolve_person_from_candidates(
+    result = _resolve_person_from_candidates(
         identifiers,
         resolver=resolver,
         candidate_people=candidate_people,
         nicknames=nicknames,
         config=config,
     )
+    if result.wikilink:
+        from archive_vault.identity import canonicalize_wikilink, load_identity_map
+
+        canonical = canonicalize_wikilink(load_identity_map(vault_path) if cache is None else cache.entries, result.wikilink)
+        if canonical and canonical != result.wikilink:
+            return ResolveResult(result.action, canonical, result.confidence, [*result.reasons, "identity_redirect"])
+    return result
 
 
 def resolve_person_batch(
@@ -679,17 +686,30 @@ def merge_into_existing(
 ) -> str | None:
     """Merge incoming data into an existing person card."""
 
+    from archive_vault.identity import canonicalize_wikilink, load_identity_map, redirect_target_uid
+
+    vault_root = Path(vault_path)
+    canonical_link = canonicalize_wikilink(load_identity_map(vault_root), wikilink) or wikilink
     if target_rel_path is not None:
-        target = Path(vault_path) / Path(target_rel_path)
+        target = vault_root / Path(target_rel_path)
         if not target.exists():
             return None
+        frontmatter_probe, _, _ = read_note(vault_root, str(target.relative_to(vault_root)))
+        redirect_uid = str(frontmatter_probe.get("redirect_to") or "") or redirect_target_uid(
+            vault_root, str(frontmatter_probe.get("uid") or "")
+        )
+        if redirect_uid:
+            redirected = read_note_by_uid(vault_root, redirect_uid)
+            if redirected is not None:
+                target = vault_root / redirected[0]
+                wikilink = canonical_link
     else:
-        slug = wikilink.removeprefix("[[").removesuffix("]]")
-        target = find_note_by_slug(Path(vault_path), slug)
+        slug = canonical_link.removeprefix("[[").removesuffix("]]")
+        target = find_note_by_slug(vault_root, slug)
     if target is None:
         return None
 
-    frontmatter, body, existing_provenance = read_note(Path(vault_path), str(target.relative_to(vault_path)))
+    frontmatter, body, existing_provenance = read_note(vault_root, str(target.relative_to(vault_root)))
     existing_card = validate_card_permissive(frontmatter)
     merged_data = existing_card.model_dump(mode="python")
     if merged_data.get("company") and not merged_data.get("companies"):
@@ -755,7 +775,7 @@ def merge_into_existing(
         elif "summary" in new_provenance:
             merged_prov["aliases"] = _clone_provenance(new_provenance["summary"])
     write_card(
-        Path(vault_path), str(target.relative_to(vault_path)), merged_card, body=merged_body, provenance=merged_prov
+        vault_root, str(target.relative_to(vault_root)), merged_card, body=merged_body, provenance=merged_prov
     )
     aliases = {
         "name": merged_card.summary,

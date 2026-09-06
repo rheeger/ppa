@@ -33,11 +33,18 @@ RECOVERY_CLASS = "decision_critical"
 KIND_FIELD_OVERRIDE = "field_override"
 KIND_CLEAR_OVERRIDE = "clear_override"
 KIND_SOURCE_CONFLICT = "source_conflict"
+KIND_IDENTITY_MERGE = "identity_merge"
+KIND_IDENTITY_UNDO = "identity_undo"
+KIND_IDENTITY_SPLIT = "identity_split"
 
 STATUS_ACTIVE = "active"
 STATUS_CLEARED = "cleared"
 STATUS_SUPERSEDED = "superseded"
 STATUS_OPEN = "open"
+STATUS_BLOCKED = "blocked"
+STATUS_PARTIAL = "partial"
+
+IDENTITY_KINDS = frozenset({KIND_IDENTITY_MERGE, KIND_IDENTITY_UNDO, KIND_IDENTITY_SPLIT})
 
 DecisionKind = Literal["field_override", "clear_override", "source_conflict"]
 DecisionStatus = Literal["active", "cleared", "superseded", "open"]
@@ -422,6 +429,108 @@ def note_source_conflicts(
             )
         )
     return recorded
+
+
+def append_decision_payload(
+    vault: str | Path,
+    item: Mapping[str, Any],
+    *,
+    source: str = "decision",
+) -> tuple[dict[str, Any], ChangeRecord]:
+    """Append a raw decision object (field or identity) through the journal."""
+
+    payload = load_decision_log(vault)
+    decisions = list(payload["decisions"])
+    stored = dict(item)
+    if not stored.get("decision_id"):
+        stored["decision_id"] = new_decision_id()
+    decisions.append(stored)
+    record = persist_decision_log(
+        vault,
+        {
+            "format_name": DECISIONS_FORMAT_NAME,
+            "format_version": DECISIONS_FORMAT_VERSION,
+            "decisions": decisions,
+        },
+        source=source,
+    )
+    stored["decision_mutation_id"] = record.mutation_id
+    decisions[-1] = stored
+    persist_decision_log(
+        vault,
+        {
+            "format_name": DECISIONS_FORMAT_NAME,
+            "format_version": DECISIONS_FORMAT_VERSION,
+            "decisions": decisions,
+        },
+        source=source,
+    )
+    return stored, record
+
+
+def update_decision_payload(
+    vault: str | Path,
+    decision_id: str,
+    updates: Mapping[str, Any],
+    *,
+    source: str = "decision",
+) -> tuple[dict[str, Any], ChangeRecord]:
+    """Patch a decision in place without dropping unknown keys."""
+
+    payload = load_decision_log(vault)
+    updated: dict[str, Any] | None = None
+    decisions: list[dict[str, Any]] = []
+    for item in payload["decisions"]:
+        if not isinstance(item, Mapping):
+            continue
+        current = dict(item)
+        if str(current.get("decision_id") or "") != decision_id:
+            decisions.append(current)
+            continue
+        current.update(dict(updates))
+        updated = current
+        decisions.append(current)
+    if updated is None:
+        raise IncompatibleStateError(f"decision not found: {decision_id}")
+    record = persist_decision_log(
+        vault,
+        {
+            "format_name": DECISIONS_FORMAT_NAME,
+            "format_version": DECISIONS_FORMAT_VERSION,
+            "decisions": decisions,
+        },
+        source=source,
+    )
+    return updated, record
+
+
+def list_identity_decisions(vault: str | Path) -> list[dict[str, Any]]:
+    payload = load_decision_log(vault)
+    return [
+        dict(item)
+        for item in payload["decisions"]
+        if isinstance(item, Mapping) and str(item.get("kind") or "") in IDENTITY_KINDS
+    ]
+
+
+def latest_identity_merge(vault: str | Path, *, winner_uid: str = "", loser_uid: str = "") -> dict[str, Any] | None:
+    found: dict[str, Any] | None = None
+    for item in list_identity_decisions(vault):
+        if str(item.get("kind") or "") != KIND_IDENTITY_MERGE:
+            continue
+        if winner_uid and str(item.get("winner_uid") or "") != winner_uid:
+            continue
+        if loser_uid and str(item.get("loser_uid") or "") != loser_uid:
+            continue
+        found = item
+    return found
+
+
+def active_identity_merge(vault: str | Path, *, winner_uid: str = "", loser_uid: str = "") -> dict[str, Any] | None:
+    found = latest_identity_merge(vault, winner_uid=winner_uid, loser_uid=loser_uid)
+    if found is None or str(found.get("status") or "") != STATUS_ACTIVE:
+        return None
+    return found
 
 
 def open_conflicts_for(vault: str | Path, uid: str, field: str | None = None) -> list[FieldDecision]:

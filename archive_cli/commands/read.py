@@ -36,15 +36,20 @@ def read(
         exact_match=found,
         query_text=path_or_uid,
     ).value
-    if found and (include_attachment_uids or include_duplicate_uids):
+    if found:
         frontmatter, _body = parse_frontmatter(str(result.get("content") or ""))
-        ptrs = stack_pointers_from_frontmatter(frontmatter)
-        if include_attachment_uids:
-            result["attachment_uids"] = ptrs["attachment_uids"]
-        if include_duplicate_uids:
-            result["duplicate_uids"] = ptrs["duplicate_uids"]
-            if ptrs.get("parent_uid"):
-                result["parent_uid"] = ptrs["parent_uid"]
+        redirect_to = str(frontmatter.get("redirect_to") or "").strip()
+        if redirect_to:
+            result["redirect_to"] = redirect_to
+            result["redirect_provenance"] = "identity_decision"
+        if include_attachment_uids or include_duplicate_uids:
+            ptrs = stack_pointers_from_frontmatter(frontmatter)
+            if include_attachment_uids:
+                result["attachment_uids"] = ptrs["attachment_uids"]
+            if include_duplicate_uids:
+                result["duplicate_uids"] = ptrs["duplicate_uids"]
+                if ptrs.get("parent_uid"):
+                    result["parent_uid"] = ptrs["parent_uid"]
     return result
 
 
