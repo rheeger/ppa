@@ -15,7 +15,13 @@ import time
 from pathlib import Path
 from typing import Any
 
-from archive_engine.contracts import UNKNOWN, EmbeddingSpec, ServingEdge
+from archive_engine.contracts import (
+    CHUNK_EVIDENCE_REF_VERSION,
+    UNKNOWN,
+    ChunkEvidenceRef,
+    EmbeddingSpec,
+    ServingEdge,
+)
 from archive_engine.errors import IncompatibleContractError
 
 from .corpus_hygiene.state_store import QUARANTINE_RETRIEVAL_WEIGHT
@@ -28,8 +34,15 @@ from .index_config import (
     get_query_embed_cache_max_rows,
     get_query_embed_cache_path,
     get_query_embed_cache_ram_entries,
+    get_serving_candidate_budget,
     get_serving_index_max_rss_mb,
     get_serving_index_path,
+    get_serving_nlist,
+    get_serving_nprobe,
+    get_serving_train_iters,
+    get_serving_train_memory_mb,
+    get_serving_train_sample,
+    get_serving_train_seed,
     get_vector_dimension,
 )
 from .query_embed_cache import QueryEmbedCache, validate_embedding_spec
@@ -61,6 +74,50 @@ def serving_embedding_spec() -> EmbeddingSpec:
         chunk_schema=str(CHUNK_SCHEMA_VERSION),
     )
     return validate_embedding_spec(spec)
+
+
+def serving_train_config(spec: EmbeddingSpec | None = None) -> dict[str, Any]:
+    """Frozen ANN training knobs for serving_index_build."""
+
+    return {
+        "nlist": get_serving_nlist(),
+        "nprobe": get_serving_nprobe(),
+        "train_sample": get_serving_train_sample(),
+        "train_iters": get_serving_train_iters(),
+        "seed": get_serving_train_seed(),
+        "candidate_budget": get_serving_candidate_budget(),
+        "memory_mb": get_serving_train_memory_mb(),
+        "embedding_spec": (spec or serving_embedding_spec()).to_payload(),
+    }
+
+
+def serving_chunk_evidence_ref(card_uid: str, chunk_key: str) -> ChunkEvidenceRef:
+    """Legacy-unavailable evidence for warehouse chunks. Does not invent spans."""
+
+    return ChunkEvidenceRef(
+        version=CHUNK_EVIDENCE_REF_VERSION,
+        archive_id="local",
+        card_uid=card_uid,
+        chunk_id=chunk_key,
+        chunk_schema_version=str(CHUNK_SCHEMA_VERSION),
+        algorithm_version="p01b-freeze-1",
+        evidence_kind=UNKNOWN,
+        lineage_complete=False,
+        span_unavailable=True,
+        message_refs_available=False,
+    )
+
+
+def build_serving_chunk(row: Any) -> dict[str, Any]:
+    uid = str(row["card_uid"])
+    key = str(row["chunk_key"])
+    return {
+        "chunk_key": key,
+        "card_uid": uid,
+        "chunk_type": str(row.get("chunk_type") or ""),
+        "chunk_index": int(row.get("chunk_index") or 0),
+        "evidence": serving_chunk_evidence_ref(uid, key).to_payload(),
+    }
 
 
 def serving_corpus_state(raw: Any) -> str:
@@ -361,7 +418,13 @@ class ServingIndexHandle:
             "people_filter": str(kwargs.get("people_filter", "") or ""),
             "start_date": str(kwargs.get("start_date", "") or ""),
             "end_date": str(kwargs.get("end_date", "") or ""),
+            "nprobe": int(kwargs.get("nprobe", 0) or 0),
+            "candidate_budget": int(kwargs.get("candidate_budget", 0) or 0),
         }
+        if req["nprobe"] <= 0:
+            req.pop("nprobe")
+        if req["candidate_budget"] <= 0:
+            req.pop("candidate_budget")
         rows = list(_crate().serving_index_vector(self._native, query_vector, req) or [])
         for row in rows:
             if row.get("score") is None:
@@ -623,14 +686,7 @@ def publish_serving_index(
                 f"SELECT chunk_key, card_uid, chunk_type, chunk_index FROM {schema}.chunks WHERE card_uid = ANY(%s)",
                 (concrete,),
             ):
-                patched_chunks.append(
-                    {
-                        "chunk_key": str(row["chunk_key"]),
-                        "card_uid": str(row["card_uid"]),
-                        "chunk_type": str(row["chunk_type"] or ""),
-                        "chunk_index": int(row["chunk_index"] or 0),
-                    }
-                )
+                patched_chunks.append(build_serving_chunk(row))
             patched_edges.extend(load_serving_edges(conn, schema, concrete))
         card_count = merge_jsonl_by_key(prev / "cards.jsonl", cards_path, key="card_uid", replacements=patched_cards)
         chunk_count = merge_jsonl_by_key(
@@ -695,17 +751,7 @@ def publish_serving_index(
             t_chunks = time.monotonic()
             with chunks_path.open("w", encoding="utf-8") as fh:
                 for row in conn.execute(f"SELECT chunk_key, card_uid, chunk_type, chunk_index FROM {schema}.chunks"):
-                    fh.write(
-                        json.dumps(
-                            {
-                                "chunk_key": str(row["chunk_key"]),
-                                "card_uid": str(row["card_uid"]),
-                                "chunk_type": str(row["chunk_type"] or ""),
-                                "chunk_index": int(row["chunk_index"] or 0),
-                            }
-                        )
-                        + "\n"
-                    )
+                    fh.write(json.dumps(build_serving_chunk(row), ensure_ascii=False) + "\n")
                     chunk_count += 1
                     if chunk_count % 50000 == 0 or chunk_count == chunk_total:
                         log.info("serving_index_export stage=chunks %s", _eta(t_chunks, chunk_count, chunk_total))
@@ -790,6 +836,7 @@ def publish_serving_index(
         str(vec_path),
         dim,
         str(edges_path),
+        json.dumps(serving_train_config()),
     )
     rss_cap = get_serving_index_max_rss_mb()
     est_mb = (embed_count * dim * 4) / (1024 * 1024)

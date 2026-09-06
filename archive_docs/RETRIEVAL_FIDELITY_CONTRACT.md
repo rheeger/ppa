@@ -127,6 +127,8 @@ emit `method` / `confidence` / `evidence_uids` / `direction` additively.
 
 ## Ranking version
 
-P01-A does **not** bump `SERVING_INDEX_FORMAT_VERSION` (P01-B freezes ANN
-format). Ranking/pipeline identity is `2026.09.06.p01a`. Quarantine weight is
-`0.35`, not the previous native `0.15`.
+P01-A did **not** bump `SERVING_INDEX_FORMAT_VERSION`. P01-B freezes ANN
+format at version `2` (`ivf_centroids_v2`): centroids, assignments, checksum,
+and `EmbeddingSpec` are required. Old modulo-IVF generations fail closed.
+Ranking/pipeline identity remains `2026.09.06.p01a`. Quarantine weight is
+`0.35`, not the previous native `0.15`. Card/edge field mapping is unchanged.

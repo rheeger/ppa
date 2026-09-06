@@ -1,4 +1,5 @@
 mod dirty;
+mod evidence;
 mod generation;
 mod graph;
 mod lexical;
@@ -6,6 +7,7 @@ mod metadata;
 mod rank;
 mod schema;
 mod vector;
+mod vector_train;
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -20,7 +22,9 @@ use serde::Serialize;
 use crate::serving_index::graph::GraphStore;
 use crate::serving_index::lexical::LexicalIndex;
 use crate::serving_index::metadata::{CardMeta, MetadataStore};
-use crate::serving_index::vector::{IvfMmapAnn, VectorAnn};
+use crate::serving_index::evidence::ChunkEvidenceRef;
+use crate::serving_index::vector::IvfMmapAnn;
+use crate::serving_index::vector_train::TrainConfig;
 
 #[pyclass]
 pub struct ServingIndex {
@@ -33,6 +37,7 @@ pub struct ServingIndex {
     lexical: Option<LexicalIndex>,
     vectors: Option<IvfMmapAnn>,
     chunk_to_card: HashMap<String, (String, String, i32)>,
+    chunk_evidence: HashMap<String, serde_json::Value>,
 }
 
 static OPEN_LOCK: Mutex<()> = Mutex::new(());
@@ -41,11 +46,17 @@ fn chunk_map_path(dir: &Path) -> PathBuf {
     dir.join("chunks.jsonl")
 }
 
-fn load_chunk_map(dir: &Path) -> PyResult<HashMap<String, (String, String, i32)>> {
+fn load_chunk_map(
+    dir: &Path,
+) -> PyResult<(
+    HashMap<String, (String, String, i32)>,
+    HashMap<String, serde_json::Value>,
+)> {
     let path = chunk_map_path(dir);
     let mut out = HashMap::new();
+    let mut evidence = HashMap::new();
     if !path.exists() {
-        return Ok(out);
+        return Ok((out, evidence));
     }
     let f = fs::File::open(&path).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
     for line in BufReader::new(f).lines() {
@@ -60,10 +71,26 @@ fn load_chunk_map(dir: &Path) -> PyResult<HashMap<String, (String, String, i32)>
         let ctype = v.get("chunk_type").and_then(|x| x.as_str()).unwrap_or("").to_string();
         let idx = v.get("chunk_index").and_then(|x| x.as_i64()).unwrap_or(0) as i32;
         if !key.is_empty() {
+            if let Some(raw) = v.get("evidence") {
+                let parsed: Result<ChunkEvidenceRef, _> = serde_json::from_value(raw.clone());
+                match parsed {
+                    Ok(refer) => {
+                        if let Err(msg) = refer.validate() {
+                            return Err(pyo3::exceptions::PyValueError::new_err(msg));
+                        }
+                        evidence.insert(key.clone(), refer.to_json());
+                    }
+                    Err(err) => {
+                        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                            "unsupported ChunkEvidenceRef: {err}"
+                        )));
+                    }
+                }
+            }
             out.insert(key, (card, ctype, idx));
         }
     }
-    Ok(out)
+    Ok((out, evidence))
 }
 
 #[pymethods]
@@ -86,11 +113,23 @@ fn open_generation(index_root: &Path) -> PyResult<ServingIndex> {
             "serving_index_unavailable",
         ));
     }
+    let format = read_format_version(&dir)?;
+    if format != schema::SERVING_INDEX_FORMAT_VERSION {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "serving_index_format_unsupported: found {format}, need {} ({})",
+            schema::SERVING_INDEX_FORMAT_VERSION,
+            schema::VECTOR_IMPL
+        )));
+    }
     let meta = MetadataStore::load(&dir)?;
     let graph = GraphStore::load(&dir)?;
     let lexical = LexicalIndex::open(&dir.join("tantivy")).ok();
-    let vectors = IvfMmapAnn::open(&dir).ok();
-    let chunk_to_card = load_chunk_map(&dir)?;
+    let vectors = if dir.join("embedding_keys.txt").exists() {
+        Some(IvfMmapAnn::open(&dir)?)
+    } else {
+        None
+    };
+    let (chunk_to_card, chunk_evidence) = load_chunk_map(&dir)?;
     Ok(ServingIndex {
         generation_id: gid,
         dir,
@@ -99,7 +138,19 @@ fn open_generation(index_root: &Path) -> PyResult<ServingIndex> {
         lexical,
         vectors,
         chunk_to_card,
+        chunk_evidence,
     })
+}
+
+fn read_format_version(dir: &Path) -> PyResult<u32> {
+    let raw = fs::read_to_string(dir.join("manifest.json"))
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+    let value: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    Ok(value
+        .get("serving_index_format_version")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as u32)
 }
 
 fn req_str(req: &Bound<'_, PyDict>, key: &str) -> String {
@@ -323,23 +374,81 @@ pub fn serving_index_vector(
     let Some(ann) = &idx.vectors else {
         return json_to_py(py, serde_json::Value::Array(vec![]));
     };
-    let knn = ann.knn(&query_vector, limit * 8);
-    let mut best: HashMap<String, (f32, String, i32, usize)> = HashMap::new();
-    for (chunk_key, sim) in knn {
-        if let Some((card_uid, ctype, cidx)) = idx.chunk_to_card.get(&chunk_key) {
-            let e = best.entry(card_uid.clone()).or_insert((sim, ctype.clone(), *cidx, 0));
+    if !query_vector.iter().all(|v| v.is_finite()) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "query embedding contains non-finite values",
+        ));
+    }
+    if !query_vector.is_empty() && query_vector.len() != ann.dim() && ann.dim() != 0 {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "query dimension {} != serving dimension {}",
+            query_vector.len(),
+            ann.dim()
+        )));
+    }
+    if let Some(expected) = ann.embedding_spec() {
+        if let Some(raw) = req.get_item("embedding_spec").ok().flatten() {
+            if let Ok(got) = raw.extract::<String>() {
+                let got_v: serde_json::Value = serde_json::from_str(&got)
+                    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+                if &got_v != expected {
+                    return Err(pyo3::exceptions::PyValueError::new_err(
+                        "incompatible EmbeddingSpec for this serving generation",
+                    ));
+                }
+            }
+        }
+    }
+    let nprobe = req_i64(&req, "nprobe", ann.nprobe() as i64).max(1) as usize;
+    let budget = req_i64(&req, "candidate_budget", ann.candidate_budget() as i64).max(1) as usize;
+    let has_filter = !type_filter.is_empty()
+        || !source_filter.is_empty()
+        || !people_filter.is_empty()
+        || !start_date.is_empty()
+        || !end_date.is_empty();
+    let eligible = if has_filter {
+        let mut set = HashSet::new();
+        for (i, key) in ann.keys().iter().enumerate() {
+            if let Some((uid, _, _)) = idx.chunk_to_card.get(key) {
+                if let Some(card) = idx.meta.by_uid.get(uid) {
+                    if idx.meta.matches_filters(
+                        card,
+                        &type_filter,
+                        &source_filter,
+                        &people_filter,
+                        "",
+                        &start_date,
+                        &end_date,
+                    ) {
+                        set.insert(i);
+                    }
+                }
+            }
+        }
+        Some(set)
+    } else {
+        None
+    };
+    let report = ann.knn_report(&query_vector, limit * 8, eligible.as_ref(), nprobe, budget);
+    let mut best: HashMap<String, (f32, String, i32, usize, String)> = HashMap::new();
+    for hit in &report.hits {
+        if let Some((card_uid, ctype, cidx)) = idx.chunk_to_card.get(&hit.key) {
+            let e = best
+                .entry(card_uid.clone())
+                .or_insert((hit.score, ctype.clone(), *cidx, 0, hit.key.clone()));
             e.3 += 1;
-            if sim > e.0 {
-                e.0 = sim;
+            if hit.score > e.0 {
+                e.0 = hit.score;
                 e.1 = ctype.clone();
                 e.2 = *cidx;
+                e.4 = hit.key.clone();
             }
         }
     }
     let mut rows = Vec::new();
     let mut items: Vec<_> = best.into_iter().collect();
     items.sort_by(|a, b| b.1.0.partial_cmp(&a.1.0).unwrap_or(std::cmp::Ordering::Equal));
-    for (uid, (sim, ctype, cidx, matched)) in items {
+    for (uid, (sim, ctype, cidx, matched, chunk_key)) in items {
         if let Some(card) = idx.meta.by_uid.get(&uid) {
             if !idx.meta.matches_filters(
                 card,
@@ -357,6 +466,7 @@ pub fn serving_index_vector(
             } else {
                 card.provenance_summary.as_str()
             };
+            let evidence = idx.chunk_evidence.get(&chunk_key).cloned().unwrap_or(serde_json::Value::Null);
             rows.push(card_to_row(
                 card,
                 serde_json::json!({
@@ -368,15 +478,24 @@ pub fn serving_index_vector(
                     "chunk_type": ctype,
                     "chunk_index": cidx,
                     "matched_chunk_count": matched,
+                    "chunk_key": chunk_key,
+                    "evidence_ref": evidence,
                     "preview": card.summary.chars().take(160).collect::<String>(),
                     "provenance_bias": provenance,
                     "provenance_score": 0.0,
                     "serving_generation": idx.generation_id,
+                    "ann_nlist": report.nlist,
+                    "ann_nprobe": report.nprobe,
+                    "ann_lists_probed": report.lists_probed,
+                    "ann_candidates": report.candidates_scored,
+                    "ann_scanned_all": report.scanned_all,
+                    "truncated": report.truncated,
                     "citation": {
                         "card_uid": card.card_uid,
                         "source_revision": card.source_revision,
                         "generation": idx.generation_id,
                         "match_channel": "vector",
+                        "chunk_key": chunk_key,
                     },
                 }),
             ));
@@ -693,9 +812,14 @@ struct Manifest {
     card_count: usize,
     chunk_count: usize,
     embedding_count: usize,
+    nlist: usize,
+    nprobe: usize,
+    ivf_checksum: String,
+    embedding_spec: Option<serde_json::Value>,
 }
 
 #[pyfunction]
+#[pyo3(signature = (dest_generation, cards_jsonl, chunks_jsonl, embedding_keys_path, embeddings_bin_path, dim, edges_jsonl, train_config=None))]
 pub fn serving_index_build(
     py: Python<'_>,
     dest_generation: &str,
@@ -705,6 +829,7 @@ pub fn serving_index_build(
     embeddings_bin_path: &str,
     dim: usize,
     edges_jsonl: &str,
+    train_config: Option<&str>,
 ) -> PyResult<PyObject> {
     let dest = PathBuf::from(dest_generation);
     py.allow_threads(|| {
@@ -755,8 +880,12 @@ pub fn serving_index_build(
         } else {
             0
         };
-        let _ = dim;
-        vector::write_ivf_assignments(&dest, key_count)?;
+        let cfg: TrainConfig = match train_config {
+            Some(raw) if !raw.trim().is_empty() => serde_json::from_str(raw)
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("train_config: {e}")))?,
+            _ => TrainConfig::default(),
+        };
+        let ivf_meta = vector::write_trained_ivf(&dest, dim, &cfg)?;
         let chunk_count = if dest.join("chunks.jsonl").exists() {
             BufReader::new(fs::File::open(dest.join("chunks.jsonl")).map_err(|e| {
                 pyo3::exceptions::PyIOError::new_err(e.to_string())
@@ -777,6 +906,10 @@ pub fn serving_index_build(
             card_count: cards.len(),
             chunk_count,
             embedding_count: key_count,
+            nlist: ivf_meta.nlist,
+            nprobe: ivf_meta.nprobe,
+            ivf_checksum: ivf_meta.checksum.clone(),
+            embedding_spec: ivf_meta.embedding_spec.clone(),
         };
         fs::write(
             dest.join("manifest.json"),
@@ -835,6 +968,73 @@ pub fn serving_index_read_path(handle: &Bound<'_, ServingIndex>, uid: &str) -> P
     Ok(idx.meta.by_uid.get(uid).map(|c| c.rel_path.clone()))
 }
 
+#[pyfunction]
+#[pyo3(signature = (generation_dir, query_vector, k, nprobe=None, candidate_budget=None))]
+pub fn serving_index_ann_knn(
+    py: Python<'_>,
+    generation_dir: &str,
+    query_vector: Vec<f32>,
+    k: usize,
+    nprobe: Option<usize>,
+    candidate_budget: Option<usize>,
+) -> PyResult<PyObject> {
+    if query_vector.iter().any(|v| !v.is_finite()) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "query embedding contains non-finite values",
+        ));
+    }
+    let ann = IvfMmapAnn::open(Path::new(generation_dir))?;
+    if ann.dim() != 0 && query_vector.len() != ann.dim() {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "query dimension {} != serving dimension {}",
+            query_vector.len(),
+            ann.dim()
+        )));
+    }
+    let report = ann.knn_report(
+        &query_vector,
+        k.max(1),
+        None,
+        nprobe.unwrap_or(ann.nprobe()),
+        candidate_budget.unwrap_or(4096),
+    );
+    let hits: Vec<serde_json::Value> = report
+        .hits
+        .iter()
+        .map(|h| serde_json::json!({"key": h.key, "score": h.score}))
+        .collect();
+    json_to_py(
+        py,
+        serde_json::json!({
+            "hits": hits,
+            "nlist": report.nlist,
+            "nprobe": report.nprobe,
+            "lists_probed": report.lists_probed,
+            "candidates_scored": report.candidates_scored,
+            "scanned_all": report.scanned_all,
+            "truncated": report.truncated,
+            "skipped_invalid": report.skipped_invalid,
+            "skipped_zero": report.skipped_zero,
+        }),
+    )
+}
+
+#[pyfunction]
+pub fn serving_index_chunk_evidence(
+    py: Python<'_>,
+    handle: &Bound<'_, ServingIndex>,
+    chunk_key: &str,
+) -> PyResult<PyObject> {
+    let idx = handle.borrow();
+    json_to_py(
+        py,
+        idx.chunk_evidence
+            .get(chunk_key)
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    )
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ServingIndex>()?;
     m.add_function(wrap_pyfunction!(serving_index_open, m)?)?;
@@ -854,5 +1054,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(serving_index_mark_dirty, m)?)?;
     m.add_function(wrap_pyfunction!(serving_index_truncate_dirty, m)?)?;
     m.add_function(wrap_pyfunction!(serving_index_read_path, m)?)?;
+    m.add_function(wrap_pyfunction!(serving_index_ann_knn, m)?)?;
+    m.add_function(wrap_pyfunction!(serving_index_chunk_evidence, m)?)?;
     Ok(())
 }

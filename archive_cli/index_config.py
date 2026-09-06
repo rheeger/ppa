@@ -305,6 +305,43 @@ def get_serving_index_max_rss_mb() -> int:
     return max(_ppa_env_int("PPA_SERVING_INDEX_MAX_RSS_MB", default=8192), 256)
 
 
+def get_serving_nlist() -> int | None:
+    """Optional serving IVF list count. None means ``sqrt(N)`` clamped to 4096."""
+    raw = _ppa_env("PPA_SERVING_NLIST")
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def get_serving_nprobe() -> int:
+    """Selective probe count. Default 32; never silently becomes ``nlist`` at scale."""
+    return max(_ppa_env_int("PPA_SERVING_NPROBE", default=32), 1)
+
+
+def get_serving_train_sample() -> int:
+    return max(_ppa_env_int("PPA_SERVING_TRAIN_SAMPLE", default=100_000), 1)
+
+
+def get_serving_train_iters() -> int:
+    return max(_ppa_env_int("PPA_SERVING_TRAIN_ITERS", default=25), 1)
+
+
+def get_serving_train_seed() -> int:
+    return _ppa_env_int("PPA_SERVING_TRAIN_SEED", default=20260906)
+
+
+def get_serving_candidate_budget() -> int:
+    return max(_ppa_env_int("PPA_SERVING_CANDIDATE_BUDGET", default=4096), 1)
+
+
+def get_serving_train_memory_mb() -> int:
+    return max(_ppa_env_int("PPA_SERVING_TRAIN_MEMORY_MB", default=get_serving_index_max_rss_mb()), 64)
+
+
 def get_query_embed_cache_path(vault: Path | None = None) -> Path:
     raw = _ppa_env("PPA_QUERY_EMBED_CACHE_PATH")
     if raw:
