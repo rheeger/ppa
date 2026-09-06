@@ -1,0 +1,74 @@
+# Isolated product release suite. Does not use PPA_TEST_PG_DSN or the seed.
+# Linux x86_64 remains unproven in the P09 matrix; this job is a gate, not a
+# platform-support claim. Million-vector @1536 is blocked, not waived.
+name: product-release
+on:
+  workflow_dispatch:
+  pull_request:
+  schedule:
+    - cron: "0 4 * * 1"
+
+jobs:
+  release-suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      PPA_EMBEDDING_PROVIDER: hash
+      PPA_EMBEDDING_MODEL: archive-hash-dev
+      PPA_EMBEDDING_VERSION: "1"
+      PPA_ENGINE: rust
+      PPA_PLAN_ID: p04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: "1.85.1"
+          cache-workspaces: archive_crate -> target
+          rustflags: ""
+      - name: Create Python virtualenv
+        run: |
+          python -m venv .venv
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
+      - name: Install Python test dependencies
+        run: python -m pip install -e ".[dev]" maturin
+      - name: Build candidate archive_crate wheel
+        run: |
+          maturin build --release --locked --manifest-path archive_crate/Cargo.toml --interpreter "$VIRTUAL_ENV/bin/python" --out dist
+          python -m pip install --force-reinstall --no-deps dist/archive_crate-*.whl
+      - name: Record imported extension identity
+        run: |
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          import archive_crate
+          native = __import__(archive_crate.walk_vault.__module__, fromlist=["*"])
+          path = Path(native.__file__).resolve()
+          print(f"archive_crate_path={path}")
+          print(f"archive_crate_sha256={hashlib.sha256(path.read_bytes()).hexdigest()}")
+          PY
+      - name: Refuse inherited test DSN
+        run: unset PPA_TEST_PG_DSN && test -z "${PPA_TEST_PG_DSN:-}"
+      - name: Run isolated release suite
+        run: |
+          unset PPA_TEST_PG_DSN
+          python -m archive_tests.acceptance.run --suite release --output logs/plans/program --require-integration
+      - name: Release manifest tests
+        run: |
+          unset PPA_TEST_PG_DSN
+          python -m pytest -p no:cacheprovider archive_tests/test_release_manifest.py --require-integration -q
+      - name: Upload redacted release artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-release-evidence
+          path: |
+            logs/plans/program/release-evidence.json
+            logs/plans/program/evidence.json
+            logs/plans/program/results.json
+            logs/plans/program/junit.xml
+            logs/plans/program/summary.md
+          if-no-files-found: warn

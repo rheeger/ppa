@@ -79,6 +79,11 @@ jobs:
           PPA_EMBEDDING_PROVIDER: hash
           PPA_EMBEDDING_MODEL: archive-hash-dev
           PPA_EMBEDDING_VERSION: "1"
+      - name: Release manifest (non-integration)
+        run: python -m pytest -p no:cacheprovider archive_tests/test_release_manifest.py -q -m "not integration"
+        env:
+          PPA_EMBEDDING_PROVIDER: hash
+          PPA_ENGINE: rust
 
   integration:
     runs-on: ubuntu-latest

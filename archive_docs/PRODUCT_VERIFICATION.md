@@ -55,6 +55,18 @@ python -m archive_tests.acceptance.run --suite p04 --output logs/plans/p04/P04-C
 
 Scenarios `p04.crash_matrix` and `p04.privacy_restore` kill real child processes at publication/journal boundaries, deny leaked sources/egress, and restore an encrypted vault into a new root. `production_proven` stays false.
 
+## Integrated release gate (P04-D)
+
+```bash
+unset PPA_TEST_PG_DSN
+python -m archive_tests.acceptance.run --suite release --output logs/plans/program --require-integration
+python -m pytest -p no:cacheprovider archive_tests/test_release_manifest.py --require-integration
+```
+
+`--suite release` executes `release.integrated_gate` on **this** checkout. It fails if any of p01–p10 has zero scenarios, if a destination proof fails, or if held-out relation/quality evidence is missing. Child-final SHAs are recorded as inherited artifacts; only the current run is current-run proof.
+
+`production_proven` stays false. Million-vector @1536 is **blocked**, not waived. Linux x86_64 remains unproven. Model rerank stays disabled without model-quality proof. R0/R1 are not implied.
+
 ## Adding a child suite
 
 Register a `Scenario` from `archive_tests/acceptance/scenarios/pNN_*.py`. P04 does not implement sibling product features to force a green suite.

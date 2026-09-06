@@ -162,6 +162,8 @@ def run_suite(
                     dest = output / "restore-receipt.json"
                     if src.is_file():
                         dest.write_bytes(src.read_bytes())
+            if case.get("id") == "release.integrated_gate":
+                write_json(output / "release-evidence.json", case)
     except IntegrationRequiredError:
         raise
     except IsolationError:
@@ -182,7 +184,14 @@ def run_suite(
         artifact_entry(results_path, relative_to=output),
         artifact_entry(junit_path, relative_to=output),
     ]
-    for name in ("baseline-trace.json", "corpus-trace.json", "crash-matrix.json", "privacy-restore.json", "restore-receipt.json"):
+    for name in (
+        "baseline-trace.json",
+        "corpus-trace.json",
+        "crash-matrix.json",
+        "privacy-restore.json",
+        "restore-receipt.json",
+        "release-evidence.json",
+    ):
         trace = output / name
         if trace.is_file():
             artifacts.append(artifact_entry(trace, relative_to=output))

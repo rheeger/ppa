@@ -27,6 +27,18 @@ jobs:
       - name: Build archive_crate
         working-directory: archive_crate
         run: maturin develop
+      - name: Record imported extension identity
+        run: |
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          import archive_crate
+          native = __import__(archive_crate.walk_vault.__module__, fromlist=["*"])
+          path = Path(native.__file__).resolve()
+          digest = hashlib.sha256(path.read_bytes()).hexdigest()
+          print(f"archive_crate_path={path}")
+          print(f"archive_crate_sha256={digest}")
+          PY
       - name: Run Rust tests
         working-directory: archive_crate
         run: cargo test

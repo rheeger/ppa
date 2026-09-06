@@ -28,6 +28,7 @@ class Scenario:
 
 
 _REGISTRY: dict[str, list[Scenario]] = {suite: [] for suite in SUITE_IDS}
+_LOADED = False
 
 
 def register(scenario: Scenario) -> Scenario:
@@ -53,6 +54,9 @@ def scenarios_for(suite: str) -> list[Scenario]:
 def load_builtin_scenarios() -> None:
     """Import built-in scenario modules so they self-register."""
 
+    global _LOADED
+    if _LOADED:
+        return
     from archive_tests.acceptance.scenarios import baseline as _baseline  # noqa: F401
     from archive_tests.acceptance.scenarios import p01_ann as _p01_ann  # noqa: F401
     from archive_tests.acceptance.scenarios import p01_bursts as _p01_bursts  # noqa: F401
@@ -68,14 +72,14 @@ def load_builtin_scenarios() -> None:
     from archive_tests.acceptance.scenarios import p03_embedding as _p03b  # noqa: F401
     from archive_tests.acceptance.scenarios import p03_maintain as _p03d  # noqa: F401
     from archive_tests.acceptance.scenarios import p03_outputs as _p03c  # noqa: F401
+    from archive_tests.acceptance.scenarios import p04_corpus as _p04_corpus  # noqa: F401
+    from archive_tests.acceptance.scenarios import p04_crash_matrix as _p04_crash  # noqa: F401
+    from archive_tests.acceptance.scenarios import p04_privacy_restore as _p04_privacy  # noqa: F401
     from archive_tests.acceptance.scenarios import p05_access as _p05_access  # noqa: F401
     from archive_tests.acceptance.scenarios import p05_egress as _p05_egress  # noqa: F401
     from archive_tests.acceptance.scenarios import p06_contracts as _p06_contracts  # noqa: F401
     from archive_tests.acceptance.scenarios import p06_convergence as _p06_convergence  # noqa: F401
     from archive_tests.acceptance.scenarios import p06_runtime as _p06_runtime  # noqa: F401
-    from archive_tests.acceptance.scenarios import p04_corpus as _p04_corpus  # noqa: F401
-    from archive_tests.acceptance.scenarios import p04_crash_matrix as _p04_crash  # noqa: F401
-    from archive_tests.acceptance.scenarios import p04_privacy_restore as _p04_privacy  # noqa: F401
     from archive_tests.acceptance.scenarios import p07_corrections as _p07_corrections  # noqa: F401
     from archive_tests.acceptance.scenarios import p07_identity as _p07_identity  # noqa: F401
     from archive_tests.acceptance.scenarios import p07_restore as _p07_restore  # noqa: F401
@@ -90,3 +94,6 @@ def load_builtin_scenarios() -> None:
     from archive_tests.acceptance.scenarios import p10_context as _p10_context  # noqa: F401
     from archive_tests.acceptance.scenarios import p10_queries as _p10_queries  # noqa: F401
     from archive_tests.acceptance.scenarios import p10_workflows as _p10_workflows  # noqa: F401
+    from archive_tests.acceptance.scenarios import release as _release  # noqa: F401
+
+    _LOADED = True

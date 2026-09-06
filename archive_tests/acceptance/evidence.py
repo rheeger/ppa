@@ -98,7 +98,7 @@ def build_evidence(
     ac_map = (extra or {}).get("acceptance_criteria") or _default_ac(cases, suite)
     payload = {
         "plan_id": "p04",
-        "slice_id": "P04-C" if suite == "p04" else "P04-A",
+        "slice_id": "P04-D" if suite == "release" else ("P04-C" if suite == "p04" else "P04-A"),
         "suite": suite,
         "seed": int(seed),
         "require_integration": bool(require_integration),
@@ -136,9 +136,32 @@ def build_evidence(
 
 
 def _default_ac(cases: Sequence[Mapping[str, Any]], suite: str) -> dict[str, Any]:
+    if suite == "release":
+        return _default_p04d_ac(cases)
     if suite == "p04":
         return _default_p04c_ac(cases)
     return _default_p04a_ac(cases, suite)
+
+
+def _default_p04d_ac(cases: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    by_id = {str(case.get("id")): case for case in cases}
+    gate = by_id.get("release.integrated_gate") or {}
+    quality = gate.get("quality") or {}
+    return {
+        "P04-D.suite_release_gates_ten_destinations": {
+            "status": gate.get("status") or "failed",
+            "scenario": "release.integrated_gate",
+            "artifact": "release-evidence.json",
+        },
+        "P04-D.missing_child_suite_blocks": {"status": "covered_by_manifest_tests"},
+        "P04-D.relation_labels": {"status": gate.get("status") or "failed"},
+        "P04-D.quality_verdict": {
+            "status": quality.get("verdict") or "needs_revision",
+            "release_recommendation": quality.get("release_recommendation"),
+        },
+        "P04-D.production_proven_false": {"status": "passed" if gate.get("production_proven") is False else "failed"},
+        "P04-D.scale_blocked_not_waived": {"status": (gate.get("scale") or {}).get("status") or "blocked"},
+    }
 
 
 def _default_p04c_ac(cases: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
