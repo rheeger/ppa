@@ -5,8 +5,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from archive_cli.retrieval_pipeline import PIPELINE_VERSION
+
 from ..store import DefaultArchiveStore
-from .confidence import compute_confidence, detect_gaps, log_gaps
+from .confidence import attach_retrieval_envelope, detect_gaps, log_gaps
 
 
 def _graph_edge_count(graph: dict | None) -> int:
@@ -32,7 +34,13 @@ def graph(
     logger.info("graph_done has_graph=%s", result.get("graph") is not None)
     g = result.get("graph")
     ec = _graph_edge_count(g if isinstance(g, dict) else None)
-    result["confidence"] = compute_confidence(result_count=ec, query_text=note_path).value
+    attach_retrieval_envelope(
+        result,
+        query=note_path,
+        result_count=ec,
+        method="graph",
+        pipeline_version=PIPELINE_VERSION,
+    )
     gaps = detect_gaps(query_text=f"graph:{note_path}", result_count=ec)
     if gaps:
         try:
@@ -48,11 +56,15 @@ def person(name: str, *, store: DefaultArchiveStore, logger: logging.Logger) -> 
     result = store.person(name)
     logger.info("person_done found=%s", result.get("found"))
     found = bool(result.get("found"))
-    result["confidence"] = compute_confidence(
+    attach_retrieval_envelope(
+        result,
+        query=name,
         result_count=1 if found else 0,
         exact_match=found,
-        query_text=name,
-    ).value
+        method="exact" if found else "unknown",
+        evidence_kind="source_reported" if found else "unknown",
+        pipeline_version=PIPELINE_VERSION,
+    )
     return result
 
 
@@ -70,7 +82,13 @@ def timeline(
     rows = result.get("rows") or []
     logger.info("timeline_done result_count=%s", len(rows))
     qtext = f"timeline:{start_date}..{end_date}"
-    result["confidence"] = compute_confidence(result_count=len(rows), query_text=qtext).value
+    attach_retrieval_envelope(
+        result,
+        query=qtext,
+        limit=limit,
+        method="timeline",
+        pipeline_version=PIPELINE_VERSION,
+    )
     gaps = detect_gaps(query_text=qtext, result_count=len(rows))
     if gaps:
         try:
@@ -103,7 +121,15 @@ def temporal_neighbors(
     n = len(result.get("results") or [])
     logger.info("temporal_neighbors_done count=%s", n)
     qtext = f"temporal_neighbors:{timestamp}"
-    result["confidence"] = compute_confidence(result_count=n, query_text=qtext).value
+    attach_retrieval_envelope(
+        result,
+        query=qtext,
+        rows_key="results",
+        result_count=n,
+        limit=limit,
+        method="temporal",
+        pipeline_version=PIPELINE_VERSION,
+    )
     gaps = detect_gaps(query_text=qtext, result_count=n)
     if gaps:
         try:
@@ -128,7 +154,13 @@ def knowledge_domain(
     if not isinstance(rows, list):
         rows = []
     qtext = f"knowledge:{domain}"
-    result["confidence"] = compute_confidence(result_count=len(rows), query_text=qtext).value
+    attach_retrieval_envelope(
+        result,
+        query=qtext,
+        limit=limit,
+        method="knowledge",
+        pipeline_version=PIPELINE_VERSION,
+    )
     gaps = detect_gaps(query_text=qtext, result_count=len(rows))
     if gaps:
         try:

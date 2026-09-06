@@ -6,8 +6,10 @@ import logging
 import time
 from typing import Any
 
+from archive_cli.retrieval_pipeline import PIPELINE_VERSION
+
 from ..store import DefaultArchiveStore
-from .confidence import compute_confidence, detect_gaps, log_gaps
+from .confidence import attach_retrieval_envelope, detect_gaps, log_gaps
 
 
 def search(
@@ -24,8 +26,12 @@ def search(
     elapsed_ms = int((time.monotonic() - t0) * 1000)
     rows = result.get("rows") or []
     logger.info("search_done elapsed_ms=%s result_count=%s", elapsed_ms, len(rows))
-    any_exact = any(bool(r.get("exact_match")) for r in rows)
-    result["confidence"] = compute_confidence(result_count=len(rows), exact_match=any_exact, query_text=query).value
+    attach_retrieval_envelope(
+        result,
+        query=query,
+        limit=limit,
+        pipeline_version=PIPELINE_VERSION,
+    )
     gaps = detect_gaps(query_text=query, result_count=len(rows))
     if gaps:
         try:
@@ -49,8 +55,13 @@ def vector_search(
     elapsed_ms = int((time.monotonic() - t0) * 1000)
     rows = result.get("rows") or []
     logger.info("vector_search_done elapsed_ms=%s result_count=%s", elapsed_ms, len(rows))
-    any_exact = any(bool(r.get("exact_match")) for r in rows)
-    result["confidence"] = compute_confidence(result_count=len(rows), exact_match=any_exact, query_text=query).value
+    attach_retrieval_envelope(
+        result,
+        query=query,
+        limit=int(kwargs.get("limit", 0) or 0) or None,
+        method="vector",
+        pipeline_version=PIPELINE_VERSION,
+    )
     gaps = detect_gaps(query_text=query, result_count=len(rows))
     if gaps:
         try:
@@ -74,8 +85,13 @@ def hybrid_search(
     elapsed_ms = int((time.monotonic() - t0) * 1000)
     rows = result.get("rows") or []
     logger.info("hybrid_search_done elapsed_ms=%s result_count=%s", elapsed_ms, len(rows))
-    any_exact = any(bool(r.get("exact_match")) for r in rows)
-    result["confidence"] = compute_confidence(result_count=len(rows), exact_match=any_exact, query_text=query).value
+    attach_retrieval_envelope(
+        result,
+        query=query,
+        limit=int(kwargs.get("limit", 0) or 0) or None,
+        method="hybrid",
+        pipeline_version=PIPELINE_VERSION,
+    )
     gaps = detect_gaps(query_text=query, result_count=len(rows))
     if gaps:
         try:

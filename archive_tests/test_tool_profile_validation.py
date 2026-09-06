@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -65,12 +66,16 @@ def test_empty_and_unknown_profiles_fail_closed(raw: str, monkeypatch: pytest.Mo
 
 def test_unknown_profile_does_not_run_tools(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PPA_MCP_TOOL_PROFILE", "not-a-profile")
-    search = archive_search("anything")
-    read = archive_read("People/jane-smith.md")
-    rebuild = archive_rebuild_indexes()
-    assert search.startswith("Invalid PPA_MCP_TOOL_PROFILE=")
-    assert read.startswith("Invalid PPA_MCP_TOOL_PROFILE=")
-    assert rebuild.startswith("Invalid PPA_MCP_TOOL_PROFILE=")
+    search = json.loads(archive_search("anything"))
+    read = json.loads(archive_read("People/jane-smith.md"))
+    rebuild = json.loads(archive_rebuild_indexes())
+    for payload in (search, read, rebuild):
+        assert payload["ok"] is False
+        assert payload["status"] == "denied"
+        assert payload["error"] == "invalid_profile"
+        assert payload["message"].startswith("Invalid PPA_MCP_TOOL_PROFILE=")
+        assert payload.get("rows") is None
+        assert payload.get("confidence") is None
 
 
 def test_subprocess_invalid_profile_fails_closed(tmp_path: Path) -> None:

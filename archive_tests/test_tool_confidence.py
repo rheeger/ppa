@@ -53,6 +53,10 @@ def test_search_includes_confidence(command_store: DefaultArchiveStore) -> None:
     result = search_cmd.search("x", limit=5, store=command_store, logger=log)
     assert "confidence" in result
     assert result["confidence"] in {"high", "medium", "low"}
+    assert result["confidence_meaning"] == "retrieval_evidence_quality"
+    assert result["evidence"]["coverage"] == "unknown"
+    assert result["evidence"]["freshness"] == "unknown"
+    assert result["evidence"]["complete"] is False
 
 
 def test_query_includes_confidence(command_store: DefaultArchiveStore) -> None:
@@ -112,5 +116,6 @@ def test_sparse_results_log_gap(command_store: DefaultArchiveStore, fake_index: 
 def test_server_instructions_updated() -> None:
     assert "archive_temporal_neighbors" in _server_instructions
     assert "confidence" in _server_instructions.lower()
+    assert "evidence quality" in _server_instructions.lower()
     assert "archive_hybrid_search" in _server_instructions
     assert "email_message" in _server_instructions

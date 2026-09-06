@@ -6,8 +6,10 @@ import logging
 import time
 from typing import Any
 
+from archive_cli.retrieval_pipeline import PIPELINE_VERSION
+
 from ..store import DefaultArchiveStore
-from .confidence import compute_confidence, detect_gaps, log_gaps
+from .confidence import attach_retrieval_envelope, detect_gaps, log_gaps
 
 
 def query(
@@ -41,7 +43,13 @@ def query(
     rows = result.get("rows") or []
     logger.info("query_done elapsed_ms=%s result_count=%s", elapsed_ms, len(rows))
     qtext = f"type={type_filter!r} source={source_filter!r} people={people_filter!r} org={org_filter!r}"
-    result["confidence"] = compute_confidence(result_count=len(rows), query_text=qtext).value
+    attach_retrieval_envelope(
+        result,
+        query=qtext,
+        limit=limit,
+        method="query",
+        pipeline_version=PIPELINE_VERSION,
+    )
     gaps = detect_gaps(query_text=qtext, result_count=len(rows))
     if gaps:
         try:

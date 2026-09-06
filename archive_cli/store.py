@@ -105,6 +105,35 @@ class DefaultArchiveStore(ArchiveStore):
             return None
         return self._serving()
 
+    def _retrieval_generation(self) -> str:
+        serving = self._try_serving_query()
+        if serving is not None:
+            gid = str(getattr(serving, "generation_id", "") or "")
+            if gid:
+                return gid
+        return ""
+
+    def _with_envelope(
+        self,
+        payload: dict[str, Any],
+        *,
+        query: str,
+        rows_key: str = "rows",
+        limit: int | None = None,
+        method: str = "",
+    ) -> dict[str, Any]:
+        from archive_cli.commands.confidence import attach_retrieval_envelope
+
+        return attach_retrieval_envelope(
+            payload,
+            query=query,
+            rows_key=rows_key,
+            limit=limit,
+            method=method,
+            pipeline_version=PIPELINE_VERSION,
+            generation=self._retrieval_generation(),
+        )
+
     def bootstrap(self) -> dict[str, Any]:
         return self.index.bootstrap()
 
@@ -213,20 +242,22 @@ class DefaultArchiveStore(ArchiveStore):
         serving = self._try_serving_query()
         if serving is not None:
             rows = serving.query(**kwargs, start_date=start_date, end_date=end_date)
-            return {"rows": rows}
+            return self._with_envelope({"rows": rows}, query=f"query:{type_filter}", limit=limit, method="query")
         query_fn = self.index.query_cards
         # Date filters are additive; FakeIndex and older indexes may omit them.
         try:
             rows = query_fn(**kwargs, start_date=start_date, end_date=end_date)
         except TypeError:
             rows = query_fn(**kwargs)
-        return {"rows": rows}
+        return self._with_envelope({"rows": rows}, query=f"query:{type_filter}", limit=limit, method="query")
 
     def search(self, query: str, *, limit: int = 20, **kwargs: Any) -> dict[str, Any]:
         serving = self._try_serving_query()
         if serving is not None:
-            return {"rows": serving.search(query, limit=limit, **kwargs)}
-        return {"rows": self.index.search(query, limit=limit, **kwargs)}
+            payload = {"rows": serving.search(query, limit=limit, **kwargs)}
+        else:
+            payload = {"rows": self.index.search(query, limit=limit, **kwargs)}
+        return self._with_envelope(payload, query=query, limit=limit)
 
     def card_stack_pointers(self, uids: list[str]) -> dict[str, dict[str, Any]]:
         serving = self._try_serving_query()
@@ -288,7 +319,13 @@ class DefaultArchiveStore(ArchiveStore):
         uids = [row_uid(row) for row in rows if row_uid(row)]
         pointers = self.card_stack_pointers(uids) if uids else {}
         hits = compact_hits(rows, pointers_by_uid=pointers, question=cleaned, chronological=True)
-        return {"hits": hits, "query": cleaned, "limit": cap}
+        return self._with_envelope(
+            {"hits": hits, "query": cleaned, "limit": cap},
+            query=cleaned,
+            rows_key="hits",
+            limit=cap,
+            method="evidence",
+        )
 
     def graph(self, note_path: str, *, hops: int = 2) -> dict[str, Any]:
         rel_path = note_path if note_path.endswith(".md") else f"{note_path}.md"
@@ -374,12 +411,17 @@ class DefaultArchiveStore(ArchiveStore):
             add_ms(phases, "total_ms", t_total)
             self._last_phase_times = phases
             log_phase_times("vector_search", phases)
-            return {
-                "rows": rows,
-                "embedding_model": model,
-                "embedding_version": version,
-                "phase_times": phases.to_dict(),
-            }
+            return self._with_envelope(
+                {
+                    "rows": rows,
+                    "embedding_model": model,
+                    "embedding_version": version,
+                    "phase_times": phases.to_dict(),
+                },
+                query=query,
+                limit=int(kwargs.get("limit", 20) or 20),
+                method="vector",
+            )
         rows = self.index.vector_search(
             query_vector=query_vector,
             embedding_model=model,
@@ -391,7 +433,12 @@ class DefaultArchiveStore(ArchiveStore):
             end_date=str(kwargs.get("end_date", "")),
             limit=int(kwargs.get("limit", 20) or 20),
         )
-        return {"rows": rows, "embedding_model": model, "embedding_version": version}
+        return self._with_envelope(
+            {"rows": rows, "embedding_model": model, "embedding_version": version},
+            query=query,
+            limit=int(kwargs.get("limit", 20) or 20),
+            method="vector",
+        )
 
     def _run_hybrid_retrieval(
         self,
@@ -540,12 +587,17 @@ class DefaultArchiveStore(ArchiveStore):
             add_ms(phases, "total_ms", t_total)
             self._last_phase_times = phases
             log_phase_times("hybrid_search", phases)
-            return {
-                "rows": rows,
-                "embedding_model": model,
-                "embedding_version": version,
-                "phase_times": phases.to_dict(),
-            }
+            return self._with_envelope(
+                {
+                    "rows": rows,
+                    "embedding_model": model,
+                    "embedding_version": version,
+                    "phase_times": phases.to_dict(),
+                },
+                query=query,
+                limit=int(kwargs.get("limit", 20) or 20),
+                method="hybrid",
+            )
         rows, _trace = self._run_hybrid_retrieval(
             query=query,
             query_vector=query_vector,
@@ -562,7 +614,12 @@ class DefaultArchiveStore(ArchiveStore):
         add_ms(phases, "total_ms", t_total)
         self._last_phase_times = phases
         log_phase_times("hybrid_search", phases)
-        return {"rows": rows, "embedding_model": model, "embedding_version": version, "phase_times": phases.to_dict()}
+        return self._with_envelope(
+            {"rows": rows, "embedding_model": model, "embedding_version": version, "phase_times": phases.to_dict()},
+            query=query,
+            limit=int(kwargs.get("limit", 20) or 20),
+            method="hybrid",
+        )
 
     def embedding_status(self, *, embedding_model: str = "", embedding_version: int = 0) -> dict[str, Any]:
         model = embedding_model or get_default_embedding_model()
@@ -699,7 +756,13 @@ class DefaultArchiveStore(ArchiveStore):
                         },
                     }
                 )
-            return retrieval_explain_payload(query, mode, slim)
+            slim_payload = retrieval_explain_payload(query, mode, slim)
+            return self._with_envelope(
+                slim_payload,
+                query=query,
+                limit=int(kwargs.get("limit", 20) or 20),
+                method=mode,
+            )
 
         model = kwargs.get("embedding_model", "") or get_default_embedding_model()
         version = kwargs.get("embedding_version", 0) or get_default_embedding_version()
@@ -834,7 +897,7 @@ class DefaultArchiveStore(ArchiveStore):
             }
 
         reranker_payload = trace.get("reranker")
-        return retrieval_explain_payload_v2(
+        payload = retrieval_explain_payload_v2(
             pipeline_version=str(pipeline_meta.get("pipeline_version", PIPELINE_VERSION)),
             query=query,
             mode=mode,
@@ -843,6 +906,13 @@ class DefaultArchiveStore(ArchiveStore):
             fusion_strategy=fusion_strategy,
             results=explain_rows,
             reranker=reranker_payload,
+        )
+        return self._with_envelope(
+            payload,
+            query=query,
+            rows_key="results",
+            limit=limit,
+            method=mode,
         )
 
     def read_many(self, paths_or_uids: list[str]) -> dict[str, Any]:

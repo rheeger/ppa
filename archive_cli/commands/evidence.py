@@ -6,9 +6,10 @@ import logging
 from typing import Any
 
 from archive_cli.card_traversal import clamp_evidence_limit, narrative_outline
+from archive_cli.retrieval_pipeline import PIPELINE_VERSION
 
 from ..store import DefaultArchiveStore
-from .confidence import compute_confidence, detect_gaps, log_gaps
+from .confidence import attach_retrieval_envelope, detect_gaps, log_gaps
 
 
 def evidence(
@@ -47,7 +48,14 @@ def evidence(
     )
     hits = list(result.get("hits") or [])
     qtext = query.strip() or f"evidence:{type_filter}:{people_filter}:{start_date}..{end_date}"
-    result["confidence"] = compute_confidence(result_count=len(hits), query_text=qtext).value
+    attach_retrieval_envelope(
+        result,
+        query=qtext,
+        rows_key="hits",
+        limit=cap,
+        method="evidence",
+        pipeline_version=PIPELINE_VERSION,
+    )
     if narrative:
         result["narrative"] = narrative_outline(hits)
     logger.info("evidence_done result_count=%s narrative=%s", len(hits), narrative)
