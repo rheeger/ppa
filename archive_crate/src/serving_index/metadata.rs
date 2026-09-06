@@ -648,6 +648,296 @@ impl MetadataStore {
             }
         }
     }
+
+    pub fn typed_field_value(card: &CardMeta, field: &str) -> Option<TypedFieldValue> {
+        match field {
+            "uid" | "card_uid" => Some(TypedFieldValue::Text(card.card_uid.clone())),
+            "type" | "card_type" => Some(TypedFieldValue::Text(card.r#type.clone())),
+            "source" | "sources" => Some(TypedFieldValue::List(card.sources.clone())),
+            "people" => Some(TypedFieldValue::List(card.people.clone())),
+            "org" | "orgs" | "organization" => Some(TypedFieldValue::List(card.orgs.clone())),
+            "activity_at" => Some(TypedFieldValue::Text(card.activity_at.clone())),
+            "corpus_state" => Some(TypedFieldValue::Text(card.corpus_state.clone())),
+            "summary" => Some(TypedFieldValue::Text(card.summary.clone())),
+            "slug" => Some(TypedFieldValue::Text(card.slug.clone())),
+            "emails" => Some(TypedFieldValue::List(card.emails.clone())),
+            "domains" => Some(TypedFieldValue::List(card.domains.clone())),
+            _ => None,
+        }
+    }
+
+    pub fn matches_typed_predicate(card: &CardMeta, pred: &TypedPredicate) -> Result<bool, String> {
+        match pred.op.as_str() {
+            "and" => {
+                for child in &pred.predicates {
+                    if !Self::matches_typed_predicate(card, child)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+            "or" => {
+                if pred.predicates.is_empty() {
+                    return Ok(false);
+                }
+                for child in &pred.predicates {
+                    if Self::matches_typed_predicate(card, child)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
+            "exists" => {
+                let value = Self::typed_field_value(card, &pred.field)
+                    .ok_or_else(|| format!("unknown field: {}", pred.field))?;
+                Ok(!value.is_empty())
+            }
+            "in" => {
+                let value = Self::typed_field_value(card, &pred.field)
+                    .ok_or_else(|| format!("unknown field: {}", pred.field))?;
+                let items = pred.value.as_array().cloned().unwrap_or_default();
+                Ok(items.iter().any(|item| value.matches_eq(item)))
+            }
+            "eq" | "lt" | "lte" | "gt" | "gte" => {
+                let value = Self::typed_field_value(card, &pred.field)
+                    .ok_or_else(|| format!("unknown field: {}", pred.field))?;
+                Ok(value.compare(pred.op.as_str(), &pred.value))
+            }
+            other => Err(format!("unsupported predicate operator: {other}")),
+        }
+    }
+
+    pub fn typed_query_page<'a>(
+        &'a self,
+        policy: &AccessPolicy,
+        pred: Option<&TypedPredicate>,
+        order_field: &str,
+        order_direction: &str,
+        after_uid: &str,
+        after_value: &str,
+        after_null: bool,
+        page_size: usize,
+    ) -> Result<TypedQueryPage<'a>, String> {
+        if !matches!(
+            order_field,
+            "uid" | "type" | "activity_at" | "summary" | "slug" | "corpus_state"
+        ) {
+            return Err(format!("order field {order_field} is not sortable"));
+        }
+        if let Some(node) = pred {
+            validate_typed_predicate(node)?;
+        }
+        let desc = order_direction == "desc";
+        let mut eligible: Vec<&CardMeta> = self
+            .by_uid
+            .values()
+            .filter(|card| {
+                if !policy.permits(card) || Self::is_suppressed(card) {
+                    return false;
+                }
+                match pred {
+                    None => true,
+                    Some(node) => Self::matches_typed_predicate(card, node).unwrap_or(false),
+                }
+            })
+            .collect();
+        eligible.sort_by(|a, b| typed_order_cmp(a, b, order_field, desc));
+        let start = if after_uid.is_empty() {
+            0
+        } else {
+            eligible
+                .iter()
+                .position(|card| typed_after(*card, order_field, desc, after_value, after_uid, after_null))
+                .unwrap_or(eligible.len())
+        };
+        let remaining = eligible.len().saturating_sub(start);
+        let take = page_size.min(remaining);
+        let rows = eligible[start..start + take].to_vec();
+        let next = if remaining > page_size {
+            rows.last().map(|card| {
+                let value = order_value(card, order_field);
+                TypedAfter {
+                    uid: card.card_uid.clone(),
+                    order_value: value.clone(),
+                    order_null: value.is_empty(),
+                }
+            })
+        } else {
+            None
+        };
+        Ok(TypedQueryPage {
+            rows,
+            matched_total: eligible.len(),
+            next,
+            truncated: false,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct TypedPredicate {
+    pub op: String,
+    #[serde(default)]
+    pub field: String,
+    #[serde(default)]
+    pub value: serde_json::Value,
+    #[serde(default)]
+    pub predicates: Vec<TypedPredicate>,
+}
+
+#[derive(Debug, Clone)]
+pub enum TypedFieldValue {
+    Text(String),
+    List(Vec<String>),
+}
+
+impl TypedFieldValue {
+    fn is_empty(&self) -> bool {
+        match self {
+            TypedFieldValue::Text(value) => value.trim().is_empty(),
+            TypedFieldValue::List(values) => values.iter().all(|item| item.trim().is_empty()),
+        }
+    }
+
+    fn matches_eq(&self, other: &serde_json::Value) -> bool {
+        self.compare("eq", other)
+    }
+
+    fn compare(&self, op: &str, other: &serde_json::Value) -> bool {
+        let right = match other {
+            serde_json::Value::String(value) => value.clone(),
+            serde_json::Value::Number(num) => num.to_string(),
+            serde_json::Value::Bool(flag) => flag.to_string(),
+            serde_json::Value::Null => String::new(),
+            _ => return false,
+        };
+        match self {
+            TypedFieldValue::List(values) => {
+                if op != "eq" {
+                    return false;
+                }
+                let needle = right.to_ascii_lowercase();
+                values.iter().any(|item| {
+                    let hay = item.to_ascii_lowercase();
+                    hay == needle || hay.contains(&needle)
+                })
+            }
+            TypedFieldValue::Text(left) => {
+                if op == "eq" {
+                    return left.eq_ignore_ascii_case(&right);
+                }
+                let left_key = if right.len() == 10 { left.get(..10).unwrap_or(left) } else { left.as_str() };
+                match op {
+                    "lt" => left_key < right.as_str(),
+                    "lte" => left_key <= right.as_str(),
+                    "gt" => left_key > right.as_str(),
+                    "gte" => left_key >= right.as_str(),
+                    _ => false,
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TypedAfter {
+    pub uid: String,
+    pub order_value: String,
+    pub order_null: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct TypedQueryPage<'a> {
+    pub rows: Vec<&'a CardMeta>,
+    pub matched_total: usize,
+    pub next: Option<TypedAfter>,
+    pub truncated: bool,
+}
+
+fn validate_typed_predicate(pred: &TypedPredicate) -> Result<(), String> {
+    match pred.op.as_str() {
+        "and" | "or" => {
+            if pred.predicates.is_empty() {
+                return Err(format!("{} requires child predicates", pred.op));
+            }
+            for child in &pred.predicates {
+                validate_typed_predicate(child)?;
+            }
+            Ok(())
+        }
+        "eq" | "in" | "lt" | "lte" | "gt" | "gte" | "exists" => {
+            if pred.field.is_empty() {
+                return Err("predicate field is required".into());
+            }
+            if MetadataStore::typed_field_value(&CardMeta::default(), &pred.field).is_none() {
+                return Err(format!("unknown field: {}", pred.field));
+            }
+            if matches!(pred.op.as_str(), "lt" | "lte" | "gt" | "gte")
+                && matches!(pred.field.as_str(), "source" | "sources" | "people" | "org" | "orgs" | "emails" | "domains")
+            {
+                return Err(format!("operator {} is not valid for list field {}", pred.op, pred.field));
+            }
+            Ok(())
+        }
+        other => Err(format!("unsupported predicate operator: {other}")),
+    }
+}
+
+fn order_value(card: &CardMeta, field: &str) -> String {
+    match MetadataStore::typed_field_value(card, field) {
+        Some(TypedFieldValue::Text(value)) => value,
+        Some(TypedFieldValue::List(values)) => values.first().cloned().unwrap_or_default(),
+        None => String::new(),
+    }
+}
+
+fn typed_order_cmp(a: &CardMeta, b: &CardMeta, field: &str, desc: bool) -> std::cmp::Ordering {
+    let av = order_value(a, field);
+    let bv = order_value(b, field);
+    let a_null = av.is_empty();
+    let b_null = bv.is_empty();
+    let null_ord = a_null.cmp(&b_null);
+    if null_ord != std::cmp::Ordering::Equal {
+        return null_ord;
+    }
+    let value_ord = if desc { bv.cmp(&av) } else { av.cmp(&bv) };
+    if value_ord != std::cmp::Ordering::Equal {
+        return value_ord;
+    }
+    a.card_uid.cmp(&b.card_uid)
+}
+
+fn typed_after(card: &CardMeta, field: &str, desc: bool, last_value: &str, last_uid: &str, last_null: bool) -> bool {
+    let value = order_value(card, field);
+    let null = value.is_empty();
+    if desc {
+        if last_null && !null {
+            return false;
+        }
+        if null && !last_null {
+            return true;
+        }
+        if null && last_null {
+            return card.card_uid.as_str() > last_uid;
+        }
+        if value == last_value {
+            return card.card_uid.as_str() > last_uid;
+        }
+        return value.as_str() < last_value;
+    }
+    if last_null && !null {
+        return true;
+    }
+    if null && !last_null {
+        return false;
+    }
+    if null && last_null {
+        return card.card_uid.as_str() > last_uid;
+    }
+    if value == last_value {
+        return card.card_uid.as_str() > last_uid;
+    }
+    value.as_str() > last_value
 }
 
 #[cfg(test)]
@@ -692,5 +982,125 @@ mod access_tests {
         let mut derived = card("u4", &["gmail"], "purchase");
         derived.lineage_complete = Some(false);
         assert!(!policy.permits(&derived));
+    }
+
+    fn person(uid: &str, summary: &str) -> CardMeta {
+        CardMeta {
+            card_uid: uid.into(),
+            r#type: "person".into(),
+            summary: summary.into(),
+            sources: vec!["test".into()],
+            corpus_state: "active".into(),
+            ..CardMeta::default()
+        }
+    }
+
+    #[test]
+    fn typed_query_pages_all_eligible_exactly_once() {
+        let store = MetadataStore::from_cards([
+            person("hfa-person-a", "Alex Rivera"),
+            person("hfa-person-b", "Alex Rivera"),
+            person("hfa-person-c", "Jordan Hale"),
+            CardMeta {
+                card_uid: "hfa-person-sup".into(),
+                r#type: "person".into(),
+                summary: "Alex Rivera".into(),
+                sources: vec!["test".into()],
+                corpus_state: "suppressed".into(),
+                ..CardMeta::default()
+            },
+        ]);
+        let pred = TypedPredicate {
+            op: "and".into(),
+            predicates: vec![
+                TypedPredicate {
+                    op: "eq".into(),
+                    field: "type".into(),
+                    value: serde_json::json!("person"),
+                    ..TypedPredicate::default()
+                },
+                TypedPredicate {
+                    op: "eq".into(),
+                    field: "summary".into(),
+                    value: serde_json::json!("Alex Rivera"),
+                    ..TypedPredicate::default()
+                },
+            ],
+            ..TypedPredicate::default()
+        };
+        let first = store
+            .typed_query_page(&AccessPolicy::unrestricted(), Some(&pred), "uid", "asc", "", "", false, 1)
+            .unwrap();
+        assert_eq!(first.matched_total, 2);
+        assert_eq!(first.rows.len(), 1);
+        assert_eq!(first.rows[0].card_uid, "hfa-person-a");
+        let after = first.next.expect("next page");
+        let second = store
+            .typed_query_page(
+                &AccessPolicy::unrestricted(),
+                Some(&pred),
+                "uid",
+                "asc",
+                &after.uid,
+                &after.order_value,
+                after.order_null,
+                1,
+            )
+            .unwrap();
+        assert_eq!(second.rows[0].card_uid, "hfa-person-b");
+        assert!(second.next.is_none());
+        let seen: Vec<_> = first
+            .rows
+            .iter()
+            .chain(second.rows.iter())
+            .map(|card| card.card_uid.as_str())
+            .collect();
+        assert_eq!(seen, vec!["hfa-person-a", "hfa-person-b"]);
+    }
+
+    #[test]
+    fn typed_query_rejects_unknown_field() {
+        let store = MetadataStore::from_cards([person("hfa-person-a", "Alex")]);
+        let pred = TypedPredicate {
+            op: "eq".into(),
+            field: "not_a_field".into(),
+            value: serde_json::json!("x"),
+            ..TypedPredicate::default()
+        };
+        let err = store
+            .typed_query_page(&AccessPolicy::unrestricted(), Some(&pred), "uid", "asc", "", "", false, 10)
+            .unwrap_err();
+        assert!(err.contains("unknown field"), "{err}");
+    }
+
+    #[test]
+    fn restricted_policy_applied_before_typed_count() {
+        let store = MetadataStore::from_cards([
+            person("hfa-person-a", "Alex Rivera"),
+            CardMeta {
+                card_uid: "hfa-person-denied".into(),
+                r#type: "person".into(),
+                summary: "Alex Rivera".into(),
+                sources: vec!["other".into()],
+                corpus_state: "active".into(),
+                ..CardMeta::default()
+            },
+        ]);
+        let policy = AccessPolicy {
+            restricted: true,
+            allowed_sources: vec!["test".into()],
+            ..AccessPolicy::default()
+        };
+        let pred = TypedPredicate {
+            op: "eq".into(),
+            field: "summary".into(),
+            value: serde_json::json!("Alex Rivera"),
+            ..TypedPredicate::default()
+        };
+        let page = store
+            .typed_query_page(&policy, Some(&pred), "uid", "asc", "", "", false, 10)
+            .unwrap();
+        assert_eq!(page.matched_total, 1);
+        assert_eq!(page.rows[0].card_uid, "hfa-person-a");
     }
 }

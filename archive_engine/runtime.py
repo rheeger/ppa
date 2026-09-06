@@ -49,6 +49,9 @@ class ArchiveRuntime:
     def query(self, **kwargs: Any) -> dict[str, Any]:
         return {"rows": self.retrieval.query_cards(**kwargs)}
 
+    def typed_query(self, **kwargs: Any) -> dict[str, Any]:
+        return self.retrieval.typed_query(**kwargs)
+
     def graph(self, rel_path: str, *, hops: int = 2, **kwargs: Any) -> Any:
         return self.retrieval.graph(rel_path, hops=hops, **kwargs)
 

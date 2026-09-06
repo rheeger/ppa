@@ -68,3 +68,4 @@ def load_builtin_scenarios() -> None:
     from archive_tests.acceptance.scenarios import p06_runtime as _p06_runtime  # noqa: F401
     from archive_tests.acceptance.scenarios import p07_corrections as _p07_corrections  # noqa: F401
     from archive_tests.acceptance.scenarios import p07_identity as _p07_identity  # noqa: F401
+    from archive_tests.acceptance.scenarios import p10_queries as _p10_queries  # noqa: F401

@@ -55,6 +55,23 @@ class RetrievalAdapter:
         fetch_limit = kwargs.pop("fetch_limit", limit)
         return self._rows(self._index.search(query, limit=fetch_limit, **kwargs), limit=limit)
 
+    def typed_query(self, **kwargs: Any) -> dict[str, Any]:
+        serving = self.serving_or_none()
+        if serving is not None and hasattr(serving, "typed_query"):
+            payload = serving.typed_query(**kwargs, **self._policy())
+            return dict(payload or {})
+        rows = self.query_cards(
+            type_filter=str(kwargs.get("filters", {}).get("type_filter", "") if isinstance(kwargs.get("filters"), dict) else kwargs.get("type_filter", "")),
+            source_filter=str(kwargs.get("filters", {}).get("source_filter", "") if isinstance(kwargs.get("filters"), dict) else kwargs.get("source_filter", "")),
+            people_filter=str(kwargs.get("filters", {}).get("people_filter", "") if isinstance(kwargs.get("filters"), dict) else kwargs.get("people_filter", "")),
+            org_filter=str(kwargs.get("filters", {}).get("org_filter", "") if isinstance(kwargs.get("filters"), dict) else kwargs.get("org_filter", "")),
+            start_date=str(kwargs.get("filters", {}).get("start_date", "") if isinstance(kwargs.get("filters"), dict) else kwargs.get("start_date", "")),
+            end_date=str(kwargs.get("filters", {}).get("end_date", "") if isinstance(kwargs.get("filters"), dict) else kwargs.get("end_date", "")),
+            limit=int(kwargs.get("page_size") or kwargs.get("limit") or 20),
+            authorize_limit=int(kwargs.get("page_size") or kwargs.get("limit") or 20),
+        )
+        return {"rows": rows, "total_status": "unknown", "truncated": True}
+
     def query_cards(self, **kwargs: Any) -> list[dict[str, Any]]:
         authorize_limit = int(kwargs.pop("authorize_limit", kwargs.get("limit", 20)) or 20)
         serving = self.serving_or_none()

@@ -22,7 +22,7 @@ use serde::Serialize;
 
 use crate::serving_index::graph::GraphStore;
 use crate::serving_index::lexical::LexicalIndex;
-use crate::serving_index::metadata::{AccessPolicy, CardMeta, MetadataStore};
+use crate::serving_index::metadata::{AccessPolicy, CardMeta, MetadataStore, TypedPredicate};
 use crate::serving_index::vector::IvfMmapAnn;
 use crate::serving_index::vector_train::TrainConfig;
 
@@ -387,6 +387,98 @@ pub fn serving_index_query(
     cards.truncate(limit);
     let rows: Vec<serde_json::Value> = cards.into_iter().map(|c| card_to_row(c, serde_json::json!({}))).collect();
     json_to_py(py, serde_json::Value::Array(rows))
+}
+
+#[pyfunction]
+pub fn serving_index_typed_query(
+    py: Python<'_>,
+    handle: &Bound<'_, ServingIndex>,
+    req: Bound<'_, PyDict>,
+) -> PyResult<PyObject> {
+    let idx = handle.borrow();
+    let policy = access_policy(&req);
+    let order_field = req_str(&req, "order_field");
+    let order_field = if order_field.is_empty() { "uid".to_string() } else { order_field };
+    let order_direction = req_str(&req, "order_direction");
+    let order_direction = if order_direction.is_empty() {
+        "asc".to_string()
+    } else {
+        order_direction
+    };
+    let page_size = req_i64(&req, "page_size", 20).clamp(1, 200) as usize;
+    let after_uid = req_str(&req, "after_uid");
+    let after_value = req_str(&req, "after_value");
+    let after_null = req_bool(&req, "after_null");
+    let pred = if let Some(raw) = req.get_item("predicate").ok().flatten() {
+        if raw.is_none() {
+            None
+        } else {
+            let json = py
+                .import_bound("json")?
+                .call_method1("dumps", (raw,))?
+                .extract::<String>()?;
+            Some(
+                serde_json::from_str::<TypedPredicate>(&json)
+                    .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("invalid predicate: {e}")))?,
+            )
+        }
+    } else {
+        None
+    };
+    let page = idx
+        .meta
+        .typed_query_page(
+            &policy,
+            pred.as_ref(),
+            &order_field,
+            &order_direction,
+            &after_uid,
+            &after_value,
+            after_null,
+            page_size,
+        )
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let rows: Vec<serde_json::Value> = page
+        .rows
+        .into_iter()
+        .map(|card| {
+            card_to_row(
+                card,
+                serde_json::json!({
+                    "serving_generation": idx.generation_id,
+                    "source": card.sources,
+                    "sources": card.sources,
+                    "people": card.people,
+                    "orgs": card.orgs,
+                    "required_sources": if card.required_sources.is_empty() { card.sources.clone() } else { card.required_sources.clone() },
+                    "domains": card.domains,
+                    "lineage_complete": card.lineage_complete,
+                }),
+            )
+        })
+        .collect();
+    let mut payload = serde_json::json!({
+        "rows": rows,
+        "matched_total": page.matched_total,
+        "total_status": "exact",
+        "snapshot": idx.generation_id,
+        "truncated": page.truncated,
+    });
+    if let Some(obj) = payload.as_object_mut() {
+        if let Some(next) = page.next {
+            obj.insert(
+                "next_after".into(),
+                serde_json::json!({
+                    "uid": next.uid,
+                    "order_value": next.order_value,
+                    "order_null": next.order_null,
+                }),
+            );
+        } else {
+            obj.insert("next_after".into(), serde_json::Value::Null);
+        }
+    }
+    json_to_py(py, payload)
 }
 
 #[pyfunction]
@@ -1213,6 +1305,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(serving_index_open, m)?)?;
     m.add_function(wrap_pyfunction!(serving_index_search, m)?)?;
     m.add_function(wrap_pyfunction!(serving_index_query, m)?)?;
+    m.add_function(wrap_pyfunction!(serving_index_typed_query, m)?)?;
     m.add_function(wrap_pyfunction!(serving_index_vector, m)?)?;
     m.add_function(wrap_pyfunction!(serving_index_hybrid, m)?)?;
     m.add_function(wrap_pyfunction!(serving_index_graph, m)?)?;

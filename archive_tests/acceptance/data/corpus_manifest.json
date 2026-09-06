@@ -1,0 +1,973 @@
+{
+  "ann": {
+    "construction": "n=1089 => nlist=33, nprobe=32. True neighbor is index 65 (second member of list 32). List 32 first member is anti-aligned so the old first-member probe skips that list.",
+    "dimension": 8,
+    "n": 1089,
+    "nlist": 33,
+    "nprobe": 32,
+    "query": [
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "seed": 20260906,
+    "true_neighbor_id": "ann-p04b-0065",
+    "true_neighbor_index": 65,
+    "unprobed_list": 32,
+    "vector_sha256": "a21a7a57bf165947f9ad4dda477cd418aa6668e51bf204dce7f4a0ae1b0b2715"
+  },
+  "card_count": 64,
+  "cards": [
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "same_trip",
+        "same_charge"
+      ],
+      "rel_path": "Transactions/Accommodations/p04-harbor-loft.md",
+      "token": "P04B-TOKEN-HOTEL",
+      "type": "accommodation",
+      "uid": "hfa-accommodation-p04bhotl001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "coverage",
+        "high_degree"
+      ],
+      "rel_path": "BeeperAttachments/p04-coverage-bp-att.md",
+      "token": "P04B-TOKEN-COV-BEEPER-ATTACHMENT",
+      "type": "beeper_attachment",
+      "uid": "hfa-beeper-attachment-p04bcov0001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "coverage",
+        "high_degree"
+      ],
+      "rel_path": "Beeper/p04-coverage-bp-msg.md",
+      "token": "P04B-TOKEN-COV-BEEPER-MESSAGE",
+      "type": "beeper_message",
+      "uid": "hfa-beeper-message-p04bcov0001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "coverage",
+        "high_degree"
+      ],
+      "rel_path": "BeeperThreads/p04-coverage-bp-thread.md",
+      "token": "P04B-TOKEN-COV-BEEPER-THREAD",
+      "type": "beeper_thread",
+      "uid": "hfa-beeper-thread-p04bcov0001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "timezone_interval"
+      ],
+      "rel_path": "Calendar/p04-interval-block.md",
+      "token": "P04B-TOKEN-CAL-INTERVAL",
+      "type": "calendar_event",
+      "uid": "hfa-calendar-event-p04bintv001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "timezone_interval"
+      ],
+      "rel_path": "Calendar/p04-crossing-midnight.md",
+      "token": "P04B-TOKEN-CAL-MIDNIGHT",
+      "type": "calendar_event",
+      "uid": "hfa-calendar-event-p04bmidn001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "timezone_interval"
+      ],
+      "rel_path": "Calendar/p04-missing-timezone.md",
+      "token": "P04B-TOKEN-CAL-NOTZ",
+      "type": "calendar_event",
+      "uid": "hfa-calendar-event-p04bnotz001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "coverage",
+        "high_degree"
+      ],
+      "rel_path": "Transactions/CarRentals/p04-coverage-car.md",
+      "token": "P04B-TOKEN-COV-CAR-RENTAL",
+      "type": "car_rental",
+      "uid": "hfa-car-rental-p04bcov0001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "changed_deleted_chunks"
+      ],
+      "rel_path": "Documents/p04-current-chunk.md",
+      "token": "P04B-TOKEN-DOC-CURRENT",
+      "type": "document",
+      "uid": "hfa-document-p04bcur0001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "changed_deleted_chunks"
+      ],
+      "rel_path": "Documents/p04-deleted-chunk.md",
+      "token": "P04B-TOKEN-DOC-DELETED",
+      "type": "document",
+      "uid": "hfa-document-p04bdel0001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "malformed_attachment"
+      ],
+      "rel_path": "EmailAttachments/p04-malformed.bin.md",
+      "token": "P04B-TOKEN-ATTACH-BAD",
+      "type": "email_attachment",
+      "uid": "hfa-email-attachment-p04bbad0001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "same_charge"
+      ],
+      "rel_path": "EmailAttachments/p04-loft-receipt.md",
+      "token": "P04B-TOKEN-ATTACH-RCPT",
+      "type": "email_attachment",
+      "uid": "hfa-email-attachment-p04brcpt001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "corpus_state"
+      ],
+      "rel_path": "Email/p04-active-note.md",
+      "token": "P04B-TOKEN-EMAIL-ACTIVE",
+      "type": "email_message",
+      "uid": "hfa-email-message-p04bactv001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "same_trip",
+        "derived_duplicate"
+      ],
+      "rel_path": "Email/p04-loft-booking.md",
+      "token": "P04B-TOKEN-BOOKING",
+      "type": "email_message",
+      "uid": "hfa-email-message-p04bbook001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "source_duplicate"
+      ],
+      "rel_path": "Email/p04-source-dup-a.md",
+      "token": "P04B-TOKEN-DUP-SRC-A",
+      "type": "email_message",
+      "uid": "hfa-email-message-p04bdupsrc1"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "source_duplicate"
+      ],
+      "rel_path": "Email/p04-source-dup-b.md",
+      "token": "P04B-TOKEN-DUP-SRC-B",
+      "type": "email_message",
+      "uid": "hfa-email-message-p04bdupsrc2"
+    },
+    {
+      "corpus_state": "quarantine",
+      "edge_kind": "deterministic",
+      "families": [
+        "corpus_state"
+      ],
+      "rel_path": "Email/p04-quarantine-note.md",
+      "token": "P04B-TOKEN-EMAIL-QUARANTINE",
+      "type": "email_message",
+      "uid": "hfa-email-message-p04bqarn001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "reply_authorization"
+      ],
+      "rel_path": "Email/p04-loft-reply.md",
+      "token": "P04B-TOKEN-AUTH-REPLY",
+      "type": "email_message",
+      "uid": "hfa-email-message-p04breply01"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "reply_authorization"
+      ],
+      "rel_path": "Email/p04-loft-request.md",
+      "token": "P04B-TOKEN-AUTH-REQUEST",
+      "type": "email_message",
+      "uid": "hfa-email-message-p04breq0001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "shared_external_id"
+      ],
+      "rel_path": "Email/p04-shared-ext-a-msg.md",
+      "token": "P04B-TOKEN-SHARE-A-MSG",
+      "type": "email_message",
+      "uid": "hfa-email-message-p04bshaream"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "shared_external_id"
+      ],
+      "rel_path": "Email/p04-shared-ext-b-msg.md",
+      "token": "P04B-TOKEN-SHARE-B-MSG",
+      "type": "email_message",
+      "uid": "hfa-email-message-p04bsharebm"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "reply_authorization"
+      ],
+      "rel_path": "Email/p04-stale-edited-reply.md",
+      "token": "P04B-TOKEN-AUTH-STALE",
+      "type": "email_message",
+      "uid": "hfa-email-message-p04bstale01"
+    },
+    {
+      "corpus_state": "suppressed",
+      "edge_kind": "deterministic",
+      "families": [
+        "corpus_state"
+      ],
+      "rel_path": "Email/p04-suppressed-note.md",
+      "token": "P04B-TOKEN-EMAIL-SUPPRESSED",
+      "type": "email_message",
+      "uid": "hfa-email-message-p04bsupp001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "reply_authorization"
+      ],
+      "rel_path": "EmailThreads/p04-auth-loft.md",
+      "token": "P04B-TOKEN-THREAD-AUTH",
+      "type": "email_thread",
+      "uid": "hfa-email-thread-p04bauth0001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "reply_authorization"
+      ],
+      "rel_path": "EmailThreads/p04-other-account.md",
+      "token": "P04B-TOKEN-THREAD-NEG",
+      "type": "email_thread",
+      "uid": "hfa-email-thread-p04bneg00001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "shared_external_id"
+      ],
+      "rel_path": "EmailThreads/p04-shared-ext-a.md",
+      "token": "P04B-TOKEN-SHARE-A",
+      "type": "email_thread",
+      "uid": "hfa-email-thread-p04bsharea01"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "shared_external_id"
+      ],
+      "rel_path": "EmailThreads/p04-shared-ext-b.md",
+      "token": "P04B-TOKEN-SHARE-B",
+      "type": "email_thread",
+      "uid": "hfa-email-thread-p04bshareb01"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "coverage",
+        "high_degree"
+      ],
+      "rel_path": "Transactions/EventTickets/p04-coverage-ticket.md",
+      "token": "P04B-TOKEN-COV-EVENT-TICKET",
+      "type": "event_ticket",
+      "uid": "hfa-event-ticket-p04bcov0001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "same_charge",
+        "same_trip"
+      ],
+      "rel_path": "Finance/p04-loft-charge.md",
+      "token": "P04B-TOKEN-CHARGE",
+      "type": "finance",
+      "uid": "hfa-finance-p04bchg0001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "manual_correction"
+      ],
+      "rel_path": "Finance/p04-corrected-amount.md",
+      "token": "P04B-TOKEN-CORRECTED",
+      "type": "finance",
+      "uid": "hfa-finance-p04bcorr001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "multi_currency_refund"
+      ],
+      "rel_path": "Finance/p04-eur-purchase.md",
+      "token": "P04B-TOKEN-EUR",
+      "type": "finance",
+      "uid": "hfa-finance-p04beur0001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "same_charge"
+      ],
+      "rel_path": "Finance/p04-lookalike-charge.md",
+      "token": "P04B-TOKEN-CHARGE-LOOK",
+      "type": "finance",
+      "uid": "hfa-finance-p04blook001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "multi_currency_refund"
+      ],
+      "rel_path": "Finance/p04-eur-refund.md",
+      "token": "P04B-TOKEN-REFUND",
+      "type": "finance",
+      "uid": "hfa-finance-p04bref0001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "same_trip",
+        "multi_leg"
+      ],
+      "rel_path": "Transactions/Flights/p04-jfk-sfo.md",
+      "token": "P04B-TOKEN-FLIGHT-IN",
+      "type": "flight",
+      "uid": "hfa-flight-p04bin00001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "same_trip"
+      ],
+      "rel_path": "Transactions/Flights/p04-lookalike-sfo-jfk.md",
+      "token": "P04B-TOKEN-FLIGHT-LOOK",
+      "type": "flight",
+      "uid": "hfa-flight-p04blook001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "same_trip",
+        "multi_leg"
+      ],
+      "rel_path": "Transactions/Flights/p04-sfo-jfk.md",
+      "token": "P04B-TOKEN-FLIGHT-OUT",
+      "type": "flight",
+      "uid": "hfa-flight-p04bout0001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "coverage",
+        "high_degree"
+      ],
+      "rel_path": "GitCommits/p04-coverage-commit.md",
+      "token": "P04B-TOKEN-COV-GIT-COMMIT",
+      "type": "git_commit",
+      "uid": "hfa-git-commit-p04bcov0001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "coverage",
+        "high_degree"
+      ],
+      "rel_path": "GitMessages/p04-coverage-gmsg.md",
+      "token": "P04B-TOKEN-COV-GIT-MESSAGE",
+      "type": "git_message",
+      "uid": "hfa-git-message-p04bcov0001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "coverage",
+        "high_degree"
+      ],
+      "rel_path": "GitRepos/p04-coverage-repo.md",
+      "token": "P04B-TOKEN-COV-GIT-REPOSITORY",
+      "type": "git_repository",
+      "uid": "hfa-git-repository-p04bcov0001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "coverage",
+        "high_degree"
+      ],
+      "rel_path": "GitThreads/p04-coverage-thread.md",
+      "token": "P04B-TOKEN-COV-GIT-THREAD",
+      "type": "git_thread",
+      "uid": "hfa-git-thread-p04bcov0001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "coverage",
+        "high_degree"
+      ],
+      "rel_path": "Transactions/Groceries/p04-coverage-grocery.md",
+      "token": "P04B-TOKEN-COV-GROCERY-ORDER",
+      "type": "grocery_order",
+      "uid": "hfa-grocery-order-p04bcov0001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "coverage",
+        "high_degree"
+      ],
+      "rel_path": "IMessageAttachments/p04-coverage-im-att.md",
+      "token": "P04B-TOKEN-COV-IMESSAGE-ATTACHMENT",
+      "type": "imessage_attachment",
+      "uid": "hfa-imessage-attachment-p04bcov0001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "coverage",
+        "high_degree"
+      ],
+      "rel_path": "IMessage/p04-coverage-im-msg.md",
+      "token": "P04B-TOKEN-COV-IMESSAGE-MESSAGE",
+      "type": "imessage_message",
+      "uid": "hfa-imessage-message-p04bcov0001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "coverage",
+        "high_degree"
+      ],
+      "rel_path": "IMessageThreads/p04-coverage-im-thread.md",
+      "token": "P04B-TOKEN-COV-IMESSAGE-THREAD",
+      "type": "imessage_thread",
+      "uid": "hfa-imessage-thread-p04bcov0001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "coverage",
+        "high_degree"
+      ],
+      "rel_path": "Knowledge/p04-coverage-knowledge.md",
+      "token": "P04B-TOKEN-COV-KNOWLEDGE",
+      "type": "knowledge",
+      "uid": "hfa-knowledge-p04bcov0001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "coverage",
+        "high_degree"
+      ],
+      "rel_path": "Transactions/MealOrders/p04-coverage-meal.md",
+      "token": "P04B-TOKEN-COV-MEAL-ORDER",
+      "type": "meal_order",
+      "uid": "hfa-meal-order-p04bcov0001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "coverage",
+        "high_degree"
+      ],
+      "rel_path": "Photos/p04-coverage-photo.md",
+      "token": "P04B-TOKEN-COV-MEDIA-ASSET",
+      "type": "media_asset",
+      "uid": "hfa-media-asset-p04bcov0001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "coverage",
+        "high_degree"
+      ],
+      "rel_path": "Medical/p04-coverage-record.md",
+      "token": "P04B-TOKEN-COV-MEDICAL-RECORD",
+      "type": "medical_record",
+      "uid": "hfa-medical-record-p04bcov0001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "coverage",
+        "high_degree"
+      ],
+      "rel_path": "MeetingTranscripts/p04-coverage-meeting.md",
+      "token": "P04B-TOKEN-COV-MEETING-TRANSCRIPT",
+      "type": "meeting_transcript",
+      "uid": "hfa-meeting-transcript-p04bcov0001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "inferred",
+      "families": [
+        "inferred_edge",
+        "same_trip"
+      ],
+      "rel_path": "Agent/p04-proposed-same-trip.md",
+      "token": "P04B-TOKEN-OBS-TRIP",
+      "type": "observation",
+      "uid": "hfa-observation-p04btrip001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "same_trip",
+        "same_charge"
+      ],
+      "rel_path": "Entities/Organizations/p04-harbor-loft.md",
+      "token": "P04B-TOKEN-ORG-LOFT",
+      "type": "organization",
+      "uid": "hfa-organization-p04bloft0001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "namesake"
+      ],
+      "rel_path": "Entities/Organizations/p04-northwind-ledger.md",
+      "token": "P04B-TOKEN-ORG-PAY",
+      "type": "organization",
+      "uid": "hfa-organization-p04bpayr0001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "coverage",
+        "high_degree"
+      ],
+      "rel_path": "Transactions/Payroll/p04-coverage-pay.md",
+      "token": "P04B-TOKEN-COV-PAYROLL",
+      "type": "payroll",
+      "uid": "hfa-payroll-p04bcov0001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "high_degree",
+        "aliases",
+        "namesake"
+      ],
+      "rel_path": "People/p04-alex-rivera-primary.md",
+      "token": "P04B-TOKEN-ALEX-PRIMARY",
+      "type": "person",
+      "uid": "hfa-person-p04balex0001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "namesake",
+        "not_the_same_person"
+      ],
+      "rel_path": "People/p04-alex-rivera-namesake.md",
+      "token": "P04B-TOKEN-ALEX-NAMESAKE",
+      "type": "person",
+      "uid": "hfa-person-p04balex0002"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "same_trip"
+      ],
+      "rel_path": "People/p04-jordan-hale.md",
+      "token": "P04B-TOKEN-JORDAN",
+      "type": "person",
+      "uid": "hfa-person-p04bjord0001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "same_trip"
+      ],
+      "rel_path": "Entities/Places/p04-harbor-loft-nyc.md",
+      "token": "P04B-TOKEN-PLACE-LOFT",
+      "type": "place",
+      "uid": "hfa-place-p04bloft0001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "same_charge",
+        "derived_duplicate"
+      ],
+      "rel_path": "Transactions/Purchases/p04-loft-receipt.md",
+      "token": "P04B-TOKEN-PURCHASE",
+      "type": "purchase",
+      "uid": "hfa-purchase-p04bhotl001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "same_charge"
+      ],
+      "rel_path": "Transactions/Purchases/p04-lookalike-receipt.md",
+      "token": "P04B-TOKEN-PURCHASE-LOOK",
+      "type": "purchase",
+      "uid": "hfa-purchase-p04blook001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "same_trip"
+      ],
+      "rel_path": "Transactions/Rides/p04-jfk-loft.md",
+      "token": "P04B-TOKEN-RIDE",
+      "type": "ride",
+      "uid": "hfa-ride-p04bairp001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "coverage",
+        "high_degree"
+      ],
+      "rel_path": "Transactions/Shipments/p04-coverage-ship.md",
+      "token": "P04B-TOKEN-COV-SHIPMENT",
+      "type": "shipment",
+      "uid": "hfa-shipment-p04bcov0001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "subscription_ambiguity"
+      ],
+      "rel_path": "Transactions/Subscriptions/p04-pebble-cancel.md",
+      "token": "P04B-TOKEN-CANCEL",
+      "type": "subscription",
+      "uid": "hfa-subscription-p04bcncl001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "subscription_ambiguity"
+      ],
+      "rel_path": "Transactions/Subscriptions/p04-pebble-renew.md",
+      "token": "P04B-TOKEN-RENEW",
+      "type": "subscription",
+      "uid": "hfa-subscription-p04brenw001"
+    },
+    {
+      "corpus_state": "active",
+      "edge_kind": "deterministic",
+      "families": [
+        "coverage",
+        "high_degree"
+      ],
+      "rel_path": "Vaccinations/p04-coverage-vax.md",
+      "token": "P04B-TOKEN-COV-VACCINATION",
+      "type": "vaccination",
+      "uid": "hfa-vaccination-p04bcov0001"
+    }
+  ],
+  "contract_version": "p04b.1",
+  "families": {
+    "aliases": [
+      "hfa-person-p04balex0001"
+    ],
+    "changed_deleted_chunks": [
+      "hfa-document-p04bcur0001",
+      "hfa-document-p04bdel0001"
+    ],
+    "corpus_state": [
+      "hfa-email-message-p04bactv001",
+      "hfa-email-message-p04bqarn001",
+      "hfa-email-message-p04bsupp001"
+    ],
+    "coverage": [
+      "hfa-beeper-attachment-p04bcov0001",
+      "hfa-beeper-message-p04bcov0001",
+      "hfa-beeper-thread-p04bcov0001",
+      "hfa-car-rental-p04bcov0001",
+      "hfa-event-ticket-p04bcov0001",
+      "hfa-git-commit-p04bcov0001",
+      "hfa-git-message-p04bcov0001",
+      "hfa-git-repository-p04bcov0001",
+      "hfa-git-thread-p04bcov0001",
+      "hfa-grocery-order-p04bcov0001",
+      "hfa-imessage-attachment-p04bcov0001",
+      "hfa-imessage-message-p04bcov0001",
+      "hfa-imessage-thread-p04bcov0001",
+      "hfa-knowledge-p04bcov0001",
+      "hfa-meal-order-p04bcov0001",
+      "hfa-media-asset-p04bcov0001",
+      "hfa-medical-record-p04bcov0001",
+      "hfa-meeting-transcript-p04bcov0001",
+      "hfa-payroll-p04bcov0001",
+      "hfa-shipment-p04bcov0001",
+      "hfa-vaccination-p04bcov0001"
+    ],
+    "derived_duplicate": [
+      "hfa-email-message-p04bbook001",
+      "hfa-purchase-p04bhotl001"
+    ],
+    "high_degree": [
+      "hfa-beeper-attachment-p04bcov0001",
+      "hfa-beeper-message-p04bcov0001",
+      "hfa-beeper-thread-p04bcov0001",
+      "hfa-car-rental-p04bcov0001",
+      "hfa-event-ticket-p04bcov0001",
+      "hfa-git-commit-p04bcov0001",
+      "hfa-git-message-p04bcov0001",
+      "hfa-git-repository-p04bcov0001",
+      "hfa-git-thread-p04bcov0001",
+      "hfa-grocery-order-p04bcov0001",
+      "hfa-imessage-attachment-p04bcov0001",
+      "hfa-imessage-message-p04bcov0001",
+      "hfa-imessage-thread-p04bcov0001",
+      "hfa-knowledge-p04bcov0001",
+      "hfa-meal-order-p04bcov0001",
+      "hfa-media-asset-p04bcov0001",
+      "hfa-medical-record-p04bcov0001",
+      "hfa-meeting-transcript-p04bcov0001",
+      "hfa-payroll-p04bcov0001",
+      "hfa-person-p04balex0001",
+      "hfa-shipment-p04bcov0001",
+      "hfa-vaccination-p04bcov0001"
+    ],
+    "inferred_edge": [
+      "hfa-observation-p04btrip001"
+    ],
+    "malformed_attachment": [
+      "hfa-email-attachment-p04bbad0001"
+    ],
+    "manual_correction": [
+      "hfa-finance-p04bcorr001"
+    ],
+    "multi_currency_refund": [
+      "hfa-finance-p04beur0001",
+      "hfa-finance-p04bref0001"
+    ],
+    "multi_leg": [
+      "hfa-flight-p04bin00001",
+      "hfa-flight-p04bout0001"
+    ],
+    "namesake": [
+      "hfa-organization-p04bpayr0001",
+      "hfa-person-p04balex0001",
+      "hfa-person-p04balex0002"
+    ],
+    "not_the_same_person": [
+      "hfa-person-p04balex0002"
+    ],
+    "reply_authorization": [
+      "hfa-email-message-p04breply01",
+      "hfa-email-message-p04breq0001",
+      "hfa-email-message-p04bstale01",
+      "hfa-email-thread-p04bauth0001",
+      "hfa-email-thread-p04bneg00001"
+    ],
+    "same_charge": [
+      "hfa-accommodation-p04bhotl001",
+      "hfa-email-attachment-p04brcpt001",
+      "hfa-finance-p04bchg0001",
+      "hfa-finance-p04blook001",
+      "hfa-organization-p04bloft0001",
+      "hfa-purchase-p04bhotl001",
+      "hfa-purchase-p04blook001"
+    ],
+    "same_trip": [
+      "hfa-accommodation-p04bhotl001",
+      "hfa-email-message-p04bbook001",
+      "hfa-finance-p04bchg0001",
+      "hfa-flight-p04bin00001",
+      "hfa-flight-p04blook001",
+      "hfa-flight-p04bout0001",
+      "hfa-observation-p04btrip001",
+      "hfa-organization-p04bloft0001",
+      "hfa-person-p04bjord0001",
+      "hfa-place-p04bloft0001",
+      "hfa-ride-p04bairp001"
+    ],
+    "shared_external_id": [
+      "hfa-email-message-p04bshaream",
+      "hfa-email-message-p04bsharebm",
+      "hfa-email-thread-p04bsharea01",
+      "hfa-email-thread-p04bshareb01"
+    ],
+    "source_duplicate": [
+      "hfa-email-message-p04bdupsrc1",
+      "hfa-email-message-p04bdupsrc2"
+    ],
+    "subscription_ambiguity": [
+      "hfa-subscription-p04bcncl001",
+      "hfa-subscription-p04brenw001"
+    ],
+    "timezone_interval": [
+      "hfa-calendar-event-p04bintv001",
+      "hfa-calendar-event-p04bmidn001",
+      "hfa-calendar-event-p04bnotz001"
+    ]
+  },
+  "hashes": {
+    "ann_vectors": "a21a7a57bf165947f9ad4dda477cd418aa6668e51bf204dce7f4a0ae1b0b2715",
+    "cards": "3e467e6261c89dc9699cce3d53bc71de022611f9b1f316d0fbe0434d0642f65e",
+    "queries": "97ac8acdec9195e23f22544aded70f142e7e3eee3d667f8cab7b3284a6f673cb",
+    "relations": "4c8d6bafb8975ef7f8ea0b4ccbbdb491f84bc8c6b9cc794f1c2bcc161b48d01d"
+  },
+  "query_splits": {
+    "calibration": [
+      "q-p04b-agg-eur-net",
+      "q-p04b-ann-modulo-adversary",
+      "q-p04b-exact-alex-primary",
+      "q-p04b-lex-loft-stay",
+      "q-p04b-lex-midnight",
+      "q-p04b-person-namesake"
+    ],
+    "held_out": [
+      "q-p04b-agg-same-charge",
+      "q-p04b-exact-flight-out",
+      "q-p04b-lex-auth-reply",
+      "q-p04b-lex-lookalike-excluded",
+      "q-p04b-lex-suppressed-excluded",
+      "q-p04b-renewal-lifecycle"
+    ]
+  },
+  "relation_case_ids": [
+    "rel-p04b-same-trip",
+    "rel-p04b-same-charge",
+    "rel-p04b-not-the-same-person",
+    "rel-p04b-reply-is-authorization",
+    "rel-p04b-renewal-is-not-current"
+  ],
+  "seed": 20260906,
+  "type_count": 36,
+  "types": [
+    "accommodation",
+    "beeper_attachment",
+    "beeper_message",
+    "beeper_thread",
+    "calendar_event",
+    "car_rental",
+    "document",
+    "email_attachment",
+    "email_message",
+    "email_thread",
+    "event_ticket",
+    "finance",
+    "flight",
+    "git_commit",
+    "git_message",
+    "git_repository",
+    "git_thread",
+    "grocery_order",
+    "imessage_attachment",
+    "imessage_message",
+    "imessage_thread",
+    "knowledge",
+    "meal_order",
+    "media_asset",
+    "medical_record",
+    "meeting_transcript",
+    "observation",
+    "organization",
+    "payroll",
+    "person",
+    "place",
+    "purchase",
+    "ride",
+    "shipment",
+    "subscription",
+    "vaccination"
+  ]
+}

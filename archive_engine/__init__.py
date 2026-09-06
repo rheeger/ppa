@@ -37,9 +37,11 @@ from archive_engine.contracts import (
 from archive_engine.errors import (
     AccessDeniedError,
     CapabilityUnavailableError,
+    CursorInvalidError,
     EngineError,
     IncompatibleContractError,
     IncompatibleStateError,
+    QueryValidationError,
     RetryableEngineError,
 )
 from archive_engine.runtime import ArchiveRuntime
@@ -54,6 +56,7 @@ __all__ = [
     "ArchiveRuntime",
     "ArtifactHash",
     "CapabilityUnavailableError",
+    "CursorInvalidError",
     "ChangeBatch",
     "ChangeRecord",
     "ChunkEvidenceRef",
@@ -66,6 +69,7 @@ __all__ = [
     "MessageEvidenceRef",
     "OutputReceipt",
     "OutputRevision",
+    "QueryValidationError",
     "RetryableEngineError",
     "RunEvidence",
     "ServingEdge",
@@ -76,7 +80,18 @@ __all__ = [
 ]
 
 _SIBLING_MODULES = frozenset(
-    {"access", "changes", "corrections", "execution_mode", "publication", "recovery_manifest", "runtime"}
+    {
+        "access",
+        "analytics",
+        "changes",
+        "corrections",
+        "execution_mode",
+        "publication",
+        "query",
+        "query_cursor",
+        "recovery_manifest",
+        "runtime",
+    }
 )
 
 

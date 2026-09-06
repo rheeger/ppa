@@ -459,6 +459,12 @@ class ServingIndexHandle:
         req.update(_access_req(kwargs))
         return list(_crate().serving_index_query(self._native, req) or [])
 
+    def typed_query(self, **kwargs: Any) -> dict[str, Any]:
+        req = dict(kwargs)
+        req.update(_access_req(kwargs))
+        payload = _crate().serving_index_typed_query(self._native, req)
+        return dict(payload or {})
+
     def vector(self, query_vector: list[float], **kwargs: Any) -> list[dict[str, Any]]:
         req = {
             "limit": int(kwargs.get("limit", 20) or 20),

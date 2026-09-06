@@ -37,5 +37,13 @@ class IncompatibleContractError(IncompatibleStateError):
     """Serialized shared record is missing fields or has an unknown version."""
 
 
+class QueryValidationError(IncompatibleContractError):
+    """Unknown field, operator, type, or over-budget predicate AST."""
+
+
+class CursorInvalidError(IncompatibleStateError):
+    """Cursor integrity, snapshot, policy, or predicate fingerprint mismatch."""
+
+
 class PublisherBusyError(RetryableEngineError):
     """Another process holds the publication lease."""
