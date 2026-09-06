@@ -45,6 +45,22 @@ def test_cache_build_tier2(tmp_path: Path) -> None:
     assert cache.uids_for_rel_paths(rels)
 
 
+def test_malformed_cache_rebuilds_without_per_slug_walk(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("PPA_TEST_PG_DSN", raising=False)
+    vault = load_fixture_vault(tmp_path / "vault", include_graphs=True)
+    cache_path = VaultScanCache.cache_path_for_vault(vault)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_bytes(b"this is not a sqlite database")
+    monkeypatch.setattr(
+        "archive_vault.vault.find_note_by_slug",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("per-slug vault walk")),
+    )
+    cache = VaultScanCache.build_or_load(vault, tier=2, progress_every=0)
+    assert cache.note_count() == len(list(iter_note_paths(vault)))
+    assert cache.tier() == 2
+    assert not cache_path.read_bytes().startswith(b"this is not")
+
+
 def test_cache_hit(tmp_path: Path) -> None:
     vault = load_fixture_vault(tmp_path / "vault", include_graphs=True)
     c1 = VaultScanCache.build_or_load(vault, tier=1, progress_every=0)

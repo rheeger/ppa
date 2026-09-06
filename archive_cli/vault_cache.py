@@ -443,6 +443,21 @@ class VaultScanCache:
             except sqlite3.OperationalError as exc:
                 logger.warning("vault-cache miss reason=open_failed err=%s", exc)
                 miss_reason = "open_failed"
+            except sqlite3.DatabaseError as exc:
+                logger.warning("vault-cache miss reason=malformed err=%s", exc)
+                miss_reason = "malformed"
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                for extra in ("", "-wal", "-shm"):
+                    victim = Path(f"{cache_path}{extra}") if extra else cache_path
+                    try:
+                        victim.unlink()
+                    except FileNotFoundError:
+                        pass
+                    except OSError as unlink_exc:
+                        logger.warning("vault-cache unlink_failed path=%s err=%s", victim, unlink_exc)
         else:
             miss_reason = "file_not_found"
 
@@ -504,7 +519,7 @@ class VaultScanCache:
             except OSError:
                 logger.info("vault-cache build_complete tier=%d notes=%d", tier, result.note_count())
             return result
-        except (OSError, PermissionError, sqlite3.OperationalError) as exc:
+        except (OSError, PermissionError, sqlite3.OperationalError, sqlite3.DatabaseError) as exc:
             logger.warning(
                 "vault-cache WARNING cache_write_failed reason=%s falling_back_to_in_memory",
                 exc,
