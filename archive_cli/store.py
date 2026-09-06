@@ -12,7 +12,6 @@ from archive_vault.vault import find_note_by_slug
 from .config import load_archive_config
 from .contracts import ArchiveStore
 from .embedding_provider import get_embedding_provider
-from .errors import ServingIndexUnavailableError
 from .explain import retrieval_explain_payload, retrieval_explain_payload_v2
 from .features import archive_context, build_context_json, build_context_text
 from .index_config import (
@@ -169,34 +168,22 @@ class DefaultArchiveStore(ArchiveStore):
             return None, rel
         return path.read_text(encoding="utf-8"), rel
 
+    def _exact_read_service(self):
+        engine = getattr(self, "_engine", None)
+        if engine is None:
+            from .engine_factory import build_exact_read_service, schema_binding_for
+
+            engine = build_exact_read_service(
+                vault=self.vault,
+                index=self.index,
+                serving_factory=self._serving if self._is_warehouse_index() else None,
+                schema_binding=schema_binding_for(self.config.index_schema),
+            )
+            self._engine = engine
+        return engine
+
     def read(self, path_or_uid: str) -> dict[str, Any]:
-        if path_or_uid.endswith(".md"):
-            content, rel = self._contained_text(path_or_uid)
-            return {
-                "path_or_uid": path_or_uid,
-                "content": content or "",
-                "found": content is not None,
-                "rel_path": rel,
-            }
-        rel_path = None
-        if self._is_warehouse_index():
-            try:
-                rel_path = self._serving().read_path(path_or_uid)
-            except ServingIndexUnavailableError:
-                rel_path = None
-        if not rel_path:
-            rel_path = self.index.read_path_for_uid(path_or_uid)
-        if rel_path is None:
-            return {"path_or_uid": path_or_uid, "content": "", "found": False}
-        content, rel = self._contained_text(str(rel_path))
-        if content is None:
-            return {"path_or_uid": path_or_uid, "content": "", "found": False}
-        return {
-            "path_or_uid": path_or_uid,
-            "content": content,
-            "found": True,
-            "rel_path": rel or str(rel_path),
-        }
+        return self._exact_read_service().read(path_or_uid)
 
     def query(
         self,
