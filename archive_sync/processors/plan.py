@@ -77,6 +77,8 @@ def build_processor_plan(
                 stale_reasons=list(evaluation.stale_reasons),
                 current_input_hash=current_hash,
                 output_identity=output_id,
+                input_revision=current_hash,
+                processor_version=decl.processor_version,
             )
             summary.items.append(item)
             if evaluation.skipped:

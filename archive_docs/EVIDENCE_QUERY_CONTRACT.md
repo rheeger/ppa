@@ -1,0 +1,98 @@
+# Evidence query contract (P10-A / P10-B / P10-C / P10-D)
+
+**Version:** `p10d.1`  
+**Owner:** P10 evidence-query. Client registration is installed. This document is the contract; P09 public docs stay P09-owned.
+
+This is the first product surface that can read a **full eligible set** (or say that it did not). Clients synthesize answers from the returned rows. The archive does not answer for you.
+
+## Execution
+
+Typed queries go through `archive_engine.query.execute_typed_query` and an explicit `AccessContext`. Retrieval uses `runtime.retrieval` / `runtime.query`. Native serving implements filter + keyset pagination over registered metadata fields. Postgres is a **read-only warehouse analytical adapter** for allowlisted aggregates, not a semantic-search fallback.
+
+Saved scopes resolve through `archive_engine.scopes.resolve_effective_scope`. A named preset is looked up in the instance/fixture catalog. Unknown names fail closed (`QueryValidationError`). Request filters replace the same preset dimension. AccessContext is an upper bound and is never widened. An empty intersection is `empty_scope` with zero rows — never unscoped search.
+
+## Typed request
+
+`StructuredQueryRequest` carries:
+
+- `archive_id` and `AccessContext` (required; deny is explicit)
+- optional predicate AST and/or legacy `type_filter` / `source_filter` / `people_filter` / `org_filter` / date filters
+- selected safe fields, order field/direction, page size, cursor
+- optional `count` / `sum` aggregate
+- optional as-of checkpoint / serving snapshot
+
+Predicate operators: `eq`, `in`, numeric/date `lt` / `lte` / `gt` / `gte`, `exists`, bounded `and` / `or`.
+
+Limits: AST depth 4, 16 terms, in-list length 32, page size 200, 32 returned fields. Unknown fields, type-incompatible operators, unsupported cross-type field access, and any `sql` / `raw_sql` key are rejected **before** execution.
+
+Registered serving fields: `uid`, `type`, `source`, `people`, `org`, `activity_at`, `corpus_state`, `summary`, `slug`, `emails`, `domains`. Type-specific projection fields (`amount`, `currency`, `event_type`) require a compatible `type` constraint.
+
+## Pagination and completeness
+
+Cursors are opaque, versioned, HMAC-integrity-protected, and bound to:
+
+- archive ID
+- serving/warehouse snapshot
+- access-policy fingerprint
+- predicate fingerprint
+- order field and direction
+- last `(order_value, uid)` keyset (nulls last; UID breaks ties)
+
+Changing filter, policy, or generation invalidates the cursor. Tampered or expired snapshots fail closed with `CursorInvalidError` (`cursor snapshot is stale; restart the query`).
+
+`QueryPage` always distinguishes:
+
+- `matched_total` + `total_status` (`exact` or `unknown`)
+- `complete` / `truncated`
+- `snapshot` vs `warehouse_checkpoint` (do not combine them as one consistent result without reconciliation)
+- `coverage` = `eligible_stored` — never “every real-world event”
+- `freshness` independent of coverage
+
+Counts and sums are computed over the **full eligible set after AccessContext**, or marked `unknown`. They are never derived from the current page alone. Restricted scopes are applied **before** totals.
+
+## Warehouse analytics
+
+`archive_engine.analytics.warehouse` compiles `count` / `sum` to parameterized, allowlisted SQL. Clients cannot submit SQL. Statement/row/group limits apply. Mixed serving generation and warehouse checkpoint without reconciliation is rejected.
+
+## Compatibility
+
+`archive_cli/commands/query.py` maps existing type/source/people/org filters onto this contract. Simple query row membership is preserved. `ppa analytics` and `archive_analytics` share `archive_cli/commands/analytics.py`.
+
+## Neighbor context (P10-B)
+
+After ranking, `archive_engine.context.expand_neighbors` adds at most one preceding and one following unit on the same thread / section / burst lane. Matched units and expansion units are separate lists with reasons (`ranked_hit`, `preceding_message`, `following_message`, `adjacent_chunk`).
+
+Every unit cites UID, chunk/message IDs, revision hash, and a half-open UTF-8 `SourceSpan`. Token estimates use the CLI whitespace-split bound (defaults: 2k per hit, 8k total). Overlapping expansions are dropped. Citations are never stripped to fit a budget — extra context units are skipped instead.
+
+If generation offsets no longer match the canonical file revision, the result is `stale-context/refresh-required` and no mismatched text is quoted. `span_unavailable` fails a span-required request even when the UID was retrieved. Denied and mixed-source neighbors are absent, not redacted. No `authorized=true` field is emitted.
+
+## Bounded graph (P10-B)
+
+`serving_index_graph_bounded` enforces depth (default 1, public max 2), max nodes/edges, elapsed budget, and optional relation-type filters **during** native BFS. High-degree hubs return a partial graph with `truncated`, `truncation_reason`, `frontier`, and surviving edge citations (`method`, `evidence_uids`). Denied neighbors are never entered.
+
+## Deterministic workflows (P10-C)
+
+`archive_engine.analytics` exposes three finite workflows over the full eligible set after AccessContext. They return facts, arithmetic, and ambiguity. They do not advise and they do not invent a current subscription.
+
+- **Subscriptions** (`rel-p04b-renewal-is-not-current`): group by service/account/plan. Latest event is last-observed (`last_observed_renewed` / `last_observed_canceled` / …). A later cancel conflicts with reading an old renewal as current. Simultaneous contradictions are `conflict`. Freshness stays `unknown` unless the source proves otherwise.
+- **Trip costs** (`rel-p04b-same-trip`, `rel-p04b-same-charge`): membership is confirmation / order / source-email identity. Lookalikes and proximity-only cards are excluded or unmatched. The supported actual charge is counted once; booking and segment estimates are listed separately. Currency groups never convert. Refunds stay negative. `q-p04b-agg-eur-net` is 100.00 + (−40.00) = 60.00 EUR.
+- **Changes since checkpoint**: committed journal records after a sequence, plus decision labels. Create/update/delete/correct/merge stay distinct. `embed` / `legacy_dirty` are derived refreshes, not life events. Deletes are bodyless tombstones. Cursors are sequence + snapshot bound.
+
+Evidence kinds remain `source_reported`, `derived`, `proposed_link`, or `unknown`. Proposed observations cannot become source facts. Totals refuse a truncated page.
+
+## Installed clients (P10-D)
+
+CLI `ppa analytics {query,context,subscriptions,trip-costs,changes-since}` and MCP `archive_analytics` return the same JSON contract (`client_contract_version=p10d.1`):
+
+- rows / hits, citations, totals (`matched_total`, `total_status`)
+- effective / saved scope payload
+- completeness: `complete`, `truncated`, `coverage=eligible_stored` (or `empty_scope`), `freshness`
+- `served_checkpoint` vs `materialized_checkpoint` — divergence is `stale`, not silently mixed
+- evidence kinds: `source_reported` / `derived` / `proposed_link` / `unknown`
+- `production_proven=false`
+
+`ppa query` / `archive_query` and `ppa evidence` / `archive_evidence` accept `--saved-scope` / `saved_scope_name`. Context expansion labels matched vs adjacent units. Legacy simple query still works.
+
+These clients do not convert currency, do not emit financial or health advice, and do not invent a current subscription.
+
+Capability deltas for P09/P04 matrices live in `archive_docs/reports/p10-runtime-capability-delta.md`. P09 owns README / ARCHITECTURE / MCP_SETUP / runtime-contract rewrites.

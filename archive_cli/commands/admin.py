@@ -64,7 +64,13 @@ def embed_pending(
     logger: logging.Logger,
     **kwargs: Any,
 ) -> dict[str, Any]:
-    """Embed pending chunks; forwards kwargs to ``store.embed_pending``."""
+    """Embed pending chunks; forwards kwargs to ``store.embed_pending``.
+
+    This is the unscoped admin route. Dirty processor embed must pass an
+    allowlist on ``store.embed_pending`` directly and must not come through here.
+    """
+    if kwargs.get("uid_allowlist") is None and kwargs.get("chunk_key_allowlist") is None:
+        kwargs["unscoped"] = True
     logger.info("embed_pending_start kwargs=%s", kwargs)
     result = store.embed_pending(**kwargs)
     logger.info(

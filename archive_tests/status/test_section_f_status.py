@@ -106,6 +106,10 @@ def test_json_status_shape_blocked() -> None:
     assert REQUIRED_TOP_LEVEL_KEYS.issubset(payload.keys())
     assert payload["blocked"] is True
     assert payload["v3_readiness"]["ready"] is False
+    assert payload["fresh"] is False
+    assert payload["production_proven"] is False
+    assert payload["instance_policy"]["inherits_local_seed_exception"] is False
+    assert payload["analytics"]["cli"] == "pending"
 
 
 def test_human_readable_status_golden_lines() -> None:

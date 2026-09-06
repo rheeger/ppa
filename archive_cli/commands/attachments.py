@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from archive_sync.adapters.gmail_messages import GmailMessagesAdapter
+from archive_vault.paths import PathEscapeError, resolve_contained_path
 from archive_vault.yaml_parser import parse_frontmatter
 
 from ..errors import InvalidInputError
@@ -80,6 +81,11 @@ def fetch_attachment(
     rel_path = str(note.get("rel_path") or "")
     if not rel_path and str(path_or_uid).endswith(".md"):
         rel_path = str(path_or_uid)
+    if rel_path:
+        try:
+            resolve_contained_path(store.vault, rel_path, purpose="read")
+        except PathEscapeError:
+            return {"found": False, "path_or_uid": path_or_uid}
 
     result: dict[str, Any] = {
         "found": True,

@@ -1,7 +1,9 @@
 # PPA Runtime Contract
 
-> **Status**: Frozen as of Phase 2.9 (2026-03-23).
-> This document is the single authoritative reference for all PPA runtime surfaces.
+> **Status**: Serving cutover and nightly `maintain` changed the contract after Phase 2.9.
+> Live query is the Rust serving index. Postgres is the warehouse. Instance config
+> is CLI > env > instance file > defaults (`ppa.json` / `ppa.yml` / `ppa.yaml`).
+> Arnold host vars and storage paths below are **historical** unless labeled current.
 > Any breaking change requires an explicit migration step.
 
 ---
@@ -43,7 +45,11 @@ Both invoke `archive_mcp.__main__:main`. This starts the MCP server using stdio 
 | `explain <query>`          | Retrieval explain payload (JSON)                                                        | Safe                 |
 | `embedding-status`         | Embedding coverage (JSON)                                                               | Safe                 |
 | `embedding-backlog`        | Pending embedding chunks (JSON)                                                         | Safe                 |
-| `status`                   | Index + runtime status JSON (same as MCP `archive_status_json`)                         | Safe                 |
+| `status`                   | Current-instance production status (Section F). Never claims fresh from a manifest.     | Safe                 |
+| `instance-status`          | Native/warehouse/auth/backup capability. `fresh` is always false for a manifest.        | Safe                 |
+| `readiness`                | Fail-closed current-instance readiness. `local_seed_living_corpus` does not transfer.   | Safe                 |
+| `setup`                    | Fixture-only independent archive (`sample.fixture`). Does not overwrite an existing root. | Safe on empty root |
+| `maintain`                 | Incremental maintain + serving publish                                                  | Safe                 |
 | `rebuild-indexes`          | Truncate and rebuild all index tables from vault                                        | **DESTRUCTIVE**      |
 | `index-status`             | Report index health (human-readable text, MCP parity)                                   | Slow, may OOM        |
 | `bootstrap-postgres`       | Create extensions and base schema layout                                                | Safe on fresh DB     |
@@ -68,13 +74,17 @@ MCP tools whose names end in `_json` (for example `archive_search_json`, `archiv
 
 ### 2.1 Resolution rule
 
-PPA code reads `PPA_*` env vars exclusively via `_ppa_env()`. No alias fallback exists.
-Integration layers (e.g. the hey-arnold Makefile) are responsible for translating
-their own variable names to `PPA_*` when invoking PPA subprocesses.
+Instance resolution is **CLI override > environment > instance file > defaults**.
+`instance_dir` / an explicit vault path is CLI-equivalent for `storage.vault_path`.
+Bound instances skip CWD `ppa.yml` discovery so a leftover `PPA_PATH` cannot steal the root.
 
-1. **`PPA_*`** env var (only source checked)
-2. Config file value (if applicable)
-3. Code default
+`_ppa_env()` is the getter for `PPA_*` in feature code. Historical `ARCHIVE_*` aliases
+still exist on some launcher seams; do not treat them as the instance contract.
+
+1. CLI overrides / bound instance directory
+2. **`PPA_*`** env var
+3. Instance config file (`ppa.json` / `ppa.yml` / `ppa.yaml`)
+4. Code default
 
 ### 2.2 Core environment variables
 
@@ -127,18 +137,18 @@ These control rebuild, embedding, and flush behavior.
 | `PPA_STATEMENT_TIMEOUT_MS`         | `30000`        |
 | `PPA_CONNECT_TIMEOUT`              | `5`            |
 
-### 2.4 Arnold integration environment variables
+### 2.4 Historical Arnold integration environment variables
 
-These are instance-specific to the Arnold deployment and do not use the `PPA_*` canonical prefix. They are part of the Arnold integration seam (§9) and are expected to be provided by the thin Arnold wrapper.
+These belonged to one historical host. They are **not** the independent-instance contract and are not required for fixture setup or a second archive.
 
 | Variable                              | Purpose                                    |
 | ------------------------------------- | ------------------------------------------ |
-| `PPA_USE_ARNOLD_OPENAI_KEY`           | Use Arnold's 1Password-resolved OpenAI key |
-| `PPA_OPENAI_API_KEY_OP_REF`           | 1Password reference for OpenAI key         |
-| `PPA_OP_SERVICE_ACCOUNT_TOKEN_FILE`   | 1Password service account token file       |
-| `PPA_OP_SERVICE_ACCOUNT_TOKEN_OP_REF` | 1Password service account token OP ref     |
+| `PPA_USE_ARNOLD_OPENAI_KEY`           | Historical 1Password-resolved OpenAI key   |
+| `PPA_OPENAI_API_KEY_OP_REF`           | Historical 1Password reference             |
+| `PPA_OP_SERVICE_ACCOUNT_TOKEN_FILE`   | Historical service-account token file      |
+| `PPA_OP_SERVICE_ACCOUNT_TOKEN_OP_REF` | Historical service-account OP ref          |
 
-All four also accept `ARCHIVE_*` aliases (`ARCHIVE_USE_ARNOLD_OPENAI_KEY`, etc.).
+Some launchers still accept `ARCHIVE_*` spellings of the same names. New instances should set `PPA_INDEX_DSN`, `PPA_PATH` / instance dir, `PPA_INDEX_SCHEMA`, and embedding refs only.
 
 ### 2.5 Removed environment variables
 
@@ -150,18 +160,20 @@ All four also accept `ARCHIVE_*` aliases (`ARCHIVE_USE_ARNOLD_OPENAI_KEY`, etc.)
 
 ## 3. Config File Discovery
 
-1. Explicit: `PPA_CONFIG_PATH` (or `ARCHIVE_CONFIG_PATH`)
-2. Auto-discover in CWD (first match wins):
-   - `archive-mcp.yml` / `archive-mcp.yaml` / `archive-mcp.json`
+1. Bound instance directory (`--instance-dir` / `ppa setup` root / explicit vault)
+2. Explicit: `PPA_CONFIG_PATH` (or historical `ARCHIVE_CONFIG_PATH`)
+3. Auto-discover in CWD **only when no instance dir or vault is bound** (first match wins):
    - `ppa.yml` / `ppa.yaml` / `ppa.json`
+   - legacy `archive-mcp.yml` / `archive-mcp.yaml` / `archive-mcp.json`
 
-Config files are optional. Environment variables always win.
+Config files are optional. CLI and env beat the file. Secrets are never printed by `config explain`.
 
 ### Config precedence
 
-1. Environment variables
-2. Config file
-3. Code defaults
+1. CLI overrides / bound instance directory
+2. Environment variables
+3. Instance config file
+4. Code defaults
 
 ---
 
@@ -171,7 +183,7 @@ Tool profiles gate which MCP tools are exposed. Set via `PPA_MCP_TOOL_PROFILE` (
 
 ### `full` (default)
 
-All tools exposed. Used for local development and direct Arnold access.
+All tools exposed. Used for local development on the current instance. Historical Arnold access used this profile; it is not a second-instance default.
 
 ### `read-only`
 
@@ -326,7 +338,11 @@ The seed-links subsystem (8 tables, 11 MCP tools, 3,373 lines) is opt-in, gated 
 
 ## 8. Runtime Identities and Storage Layout
 
-### Identities
+### Identities (current)
+
+Each independent instance owns its vault root, derived `archive_id` (hash of canonical root + schema binding, or `PPA_ARCHIVE_ID`), warehouse schema, serving generation, and journal checkpoint. Two instances may share external card IDs.
+
+### Historical identities (Arnold host ops)
 
 | Identity   | Owns                                    | Runs                              |
 | ---------- | --------------------------------------- | --------------------------------- |
@@ -334,7 +350,7 @@ The seed-links subsystem (8 tables, 11 MCP tools, 3,373 lines) is opt-in, gated 
 | `arnold`   | OpenClaw, passkey gate                  | General agent, does not own vault |
 | `postgres` | Postgres data paths (inside Docker)     | Postgres container                |
 
-### Storage layout (Arnold)
+### Historical storage layout (Arnold)
 
 | Path                              | Contents                   |
 | --------------------------------- | -------------------------- |
@@ -343,11 +359,13 @@ The seed-links subsystem (8 tables, 11 MCP tools, 3,373 lines) is opt-in, gated 
 | `/srv/hfa-secure/postgres`        | Postgres data directory    |
 | `/mnt/user/backups/hfa-encrypted` | Encrypted backup artifacts |
 
+Do not copy this layout as the independent-instance default. See `archive_docs/runbooks/install-independent-archive.md` and P07 restore.
+
 ---
 
-## 9. Arnold Integration Seam
+## 9. Historical Arnold Integration Seam
 
-Arnold is a thin consumer of the PPA engine. The integration seam consists of:
+Arnold was a thin consumer of one instance. That host is **not** the product home and is **not** a readiness prerequisite. The historical seam consisted of:
 
 ### What Arnold provides
 

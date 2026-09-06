@@ -1,4 +1,5 @@
-//! Typed projection + edge rules loaded from `materializer_registry.json` (see `scripts/export_materializer_registry.py`).
+//! Typed projection + edge rules loaded from `materializer_registry.json`.
+//! Authority: `archive_scripts/export_materializer_registry.py` (live Python card registry).
 
 use std::collections::HashMap;
 use std::sync::OnceLock;

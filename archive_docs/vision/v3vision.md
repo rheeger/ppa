@@ -4,17 +4,17 @@
 
 ## The Core Thesis
 
-After v2, PPA is a **personal knowledge system** — 37 card types, 17 adapters, 46 knowledge facets, full MCP surface, automated maintenance. It understands your life well enough to answer questions instantly, build context automatically, and get smarter over time. But it runs on one machine, for one person, configured by hand.
+After v2, PPA is a **personal knowledge system** — **36** card types (`CARD_TYPES`), adapters plus a fixture connector, a full MCP retrieval surface, and automated `maintain`. `archive_knowledge` is an empty lexical fallback: there is **no** populated 46-facet cache. The engine is Python orchestration plus **shipped Rust serving** (walk, cache, materialize, query). Postgres is the warehouse, not the live query engine.
 
-v3 takes PPA from **one user to many**. The goal: anyone with a Linux server (or a Mac with Docker) can run their own private archive. The CLI setup wizard replaces manual configuration. Vault encryption replaces trust-the-OS. Docker Compose replaces "read the Makefile and figure it out." The engine stays Python, the database stays Postgres, the interface stays MCP — but the operational experience goes from "built by and for its creator" to "built for anyone comfortable with a terminal."
+v3 takes PPA from **one user to many independent instances**. The goal: anyone with a Linux server (or a Mac with Docker) can run their own private archive. `ppa setup` now exists for fixture-only roots. Vault encryption UX and Docker Compose as the product installer remain later. The interface stays MCP. Saved scopes are reusable filters, not household ACLs.
 
 The v3 user is someone who already lives inside Claude, Cursor, and chatbots — and wants those tools to actually know them. They're comfortable with Docker, API keys, and SSH. They found PPA on Hacker News or GitHub. They don't need a GUI; they need a clean `ppa setup` and good docs.
 
 **Fully open source.** The engine, all connectors, all knowledge domains — everything is MIT-licensed. Anyone can clone, build, and run PPA with zero limitations. Zero phone-home. Zero license keys. Zero artificial restrictions.
 
-**v4 builds on v3** with a native Mac app, OAuth proxy service, signed connector feed, billing, and a full Rust engine rewrite. See `v4vision.md`. v3 is the foundation that proves PPA works for people who aren't its creator.
+**v4 builds on v3** with a native Mac app, OAuth proxy service, signed connector feed, and billing. Incremental Rust remains; a greenfield rewrite of scanner / FTS / MCP is outdated (`archive_crate` already ships those loops). See `v4vision.md`. v3 is the foundation that proves PPA works for people who aren't its creator.
 
-**Prerequisite:** v3 packaging assumes v2.5 readiness on Arnold — a high-signal corpus, source updaters that actually refresh, processors that run on dirty inputs, and `ppa readiness` reporting ready after soak. Do not start Phase 10+ until that gate passes. See `v2.5vision.md`.
+**Prerequisite:** v2.5-done is the **local seed living archive**. Arnold is not a gate and is not the long-term home. Formal leftover `ready: false` (`local_seed_living_corpus`) is bound to that original instance only — new installs do not inherit it. See `v2.5vision.md` and `archive_cli/status/instance_policy.py`.
 
 ---
 
@@ -40,8 +40,9 @@ v2 principles 1–9 remain in force. v3 adds:
 ┌──────────────────────────────────────────────────────────────┐
 │                    PPA Core Engine (Python)                    │
 │                                                                │
-│  vault (markdown)  ·  index (Postgres)     ·  extractors      │
-│  knowledge cache   ·  MCP server (stdio)   ·  maintain cycle  │
+│  vault (markdown)  ·  warehouse (Postgres) ·  extractors      │
+│  Rust serving      ·  MCP server (stdio)   ·  maintain cycle  │
+│  knowledge cache is empty/deferred — archive_knowledge falls back to search │
 │  entity resolution ·  embedding (BYOK)     ·  enrichment      │
 └───────────────────────────┬────────────────────────────────────┘
                             │
@@ -73,7 +74,7 @@ No service layer. No cloud. No phone-home. Everything runs on the user's hardwar
 
 ## Card Type Inventory
 
-**Unchanged from v2.** All 37 types (22 existing + 11 derived + 2 entity + 2 system) carry forward. v3 does not add new card types — it changes who can run the engine and how they set it up.
+**36 types** in `CARD_TYPES` (not 37). v3 does not add new card types — it changes who can run the engine and how they set it up. `knowledge` / `observation` remain schema-only until a later increment writes sourced cards.
 
 Future card types driven by community connectors (post-v3): `bank_transaction`, `crypto_transaction`, `reading_highlight`, `workout`, `sleep_record`, `recipe`. These arrive via the connector contribution framework, not as core types.
 
@@ -320,7 +321,7 @@ $ ppa setup
     → Extract structured data from emails (meal orders, flights, rides...)
     → Build the search index
     → Compute embeddings for semantic search
-    → Generate knowledge cache (what you eat, where you travel, who you talk to)
+    → Knowledge cache stays deferred (empty `archive_knowledge` fallback)
 
   Each step shows its own progress. Total time depends on inbox size.
   Run 'ppa status' anytime to check.
@@ -371,10 +372,10 @@ $ ppa status
   ├── purchase      1,456
   └── (12 more types...)
 
-  Knowledge:      46 facets across 9 domains
-  ├── Fresh:      41
-  ├── Stale:       5 (refreshing on next maintain cycle)
-  └── Empty:       0
+  Knowledge:      deferred (no 46-facet cache; archive_knowledge is search fallback)
+  ├── Fresh:      0
+  ├── Stale:      n/a
+  └── Empty:      schema types exist; no generator
 
   Embeddings:     100% (438,291 / 438,291 chunks)
   Last maintain:  2 hours ago (next: in 4 hours)

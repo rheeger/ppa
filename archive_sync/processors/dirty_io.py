@@ -106,6 +106,7 @@ def load_input_snapshots_from_file(path: Path) -> list[ProcessorInputSnapshot] |
                 output_failed=bool(item.get("output_failed", False)),
                 upstream_output_hash=str(item.get("upstream_output_hash") or ""),
                 recorded_upstream_output_hash=str(item.get("recorded_upstream_output_hash") or ""),
+                feedback_generation=int(item.get("feedback_generation") or 0),
             )
         )
     return snapshots
@@ -338,6 +339,7 @@ def resolve_snapshots_for_uids(
     default_processor_decision: str = "",
     source_dirty: bool = True,
     progress_every: int = 500,
+    feedback_generation: int = 0,
 ) -> list[ProcessorInputSnapshot]:
     """Resolve card_type / corpus_state / hash fields for dirty UIDs (bulk SQL / cache)."""
 
@@ -398,6 +400,7 @@ def resolve_snapshots_for_uids(
                 recorded_corpus_state=recorded_corpus,
                 output_exists=output_exists,
                 output_failed=output_failed,
+                feedback_generation=feedback_generation,
             )
         )
         log_ratio_progress(
@@ -450,6 +453,31 @@ def load_dirty_inputs(
         default_card_type=default_card_type,
         default_processor_decision=default_processor_decision,
         source_dirty=True,
+    )
+
+
+def enqueue_output_snapshots(
+    uids: Iterable[str],
+    *,
+    vault_path: str | Path | None = None,
+    store: Any | None = None,
+    state_store: ProcessorStateStore | None = None,
+    source_dirty: bool = True,
+    feedback_generation: int = 0,
+    default_card_type: str = "email_thread",
+    default_processor_decision: str = "",
+) -> list[ProcessorInputSnapshot]:
+    """Resolve snapshots for output UIDs produced in this run — never a full-corpus scan."""
+
+    return resolve_snapshots_for_uids(
+        uids,
+        vault_path=vault_path,
+        store=store,
+        state_store=state_store,
+        default_card_type=default_card_type,
+        default_processor_decision=default_processor_decision,
+        source_dirty=source_dirty,
+        feedback_generation=feedback_generation,
     )
 
 

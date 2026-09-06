@@ -35,7 +35,7 @@ FILTER_HINT = (
 CARD_STACK_PLAYBOOK = """\
 HOW TO COMPOSE QUERIES
 Every retrieval tool is available: archive_search, archive_hybrid_search,
-archive_query, archive_person, archive_read, archive_read_many,
+archive_query, archive_analytics, archive_person, archive_read, archive_read_many,
 archive_evidence, archive_timeline, archive_temporal_neighbors,
 archive_graph, archive_vector_search, archive_knowledge, archive_stats.
 Start wide or narrow. Then follow parent / attachment / duplicate UIDs.
@@ -56,6 +56,8 @@ Start wide or narrow. Then follow parent / attachment / duplicate UIDs.
   read those UIDs when you need the text.
 - Weak lexical → archive_hybrid_search or archive_vector_search.
 - Relationships → archive_graph from a known card.
+- Subscriptions, trip costs, changes-since, or typed query + saved scope →
+  archive_analytics. Completeness and evidence kinds are in the JSON.
 
 Defaults (often 8–12) are starting points, not caps.
 """
@@ -81,9 +83,15 @@ HOW IT WORKS
 - Indexes (Postgres + embeddings) are derived. If reads work but search looks
   stale, the index is stale — do not invent.
 - Filters: type_filter, source_filter, people_filter, start_date, end_date.
-- Some deployments are read-only. A PPA_MCP_TOOL_PROFILE error means the tool
-  is disabled, not that the archive is empty.
+- Some deployments are read-only. A PPA_MCP_TOOL_PROFILE denial
+  (ok=false, status=denied) means the tool is disabled, not that the
+  archive is empty. Error/denial JSON is never empty success.
 - Empty / timeout / unreachable: fail closed. Do not fabricate archive facts.
+- high/medium/low is retrieval evidence quality, not the probability a
+  proposition is true. One exact identifier match may be high without
+  implying source completeness. Eleven weak hits are not high.
+- coverage, freshness, and truncated stay unknown when unknown. Read
+  confidence_reason; do not infer completeness from result count.
 - Email / attachment / document / duplicate / thread stacks can be large.
   Compose: list compactly when you want a dated stack; read bodies for the
   UIDs you will use; follow parent/attachment/duplicate pointers on demand.
@@ -95,6 +103,7 @@ DO
 - Open-ended recall → archive_hybrid_search (or archive_hybrid_search_json).
   Raise limit for a wider scan; follow UIDs with evidence or read.
 - Known type/person/source → archive_query (multi-type = more than one call).
+- Deterministic workflows / saved scopes → archive_analytics (JSON; no FX or advice).
 - Exact phrase → archive_search / archive_search_json.
 - Who is X → archive_person, then search / query / hybrid / evidence with
   people_filter.
@@ -107,7 +116,9 @@ DO
   already have the UIDs.
 - Retry: reformulate, change filters, switch modes, raise limit. Never stop
   after one miss.
-- Check confidence. Low = narrow, widen, or say the archive does not have it.
+- Check confidence and confidence_reason. Low = narrow, widen, or say
+  the archive does not have it. High is exact-identifier evidence
+  quality, not corpus completeness.
 - Prefer *_json tools when you will parse results.
 - Search a person by name (people_filter) and separately by email (query=).
 
@@ -131,6 +142,7 @@ ROUTING
 - Who / relationship → archive_person, then archive_graph
 - When / timeline → archive_evidence or archive_timeline or archive_temporal_neighbors
 - Aggregations (orders, rides, shops) → archive_query + type_filter, aggregate yourself
+- Subscriptions / trip costs / changes-since → archive_analytics (facts + completeness)
 """
 )
 
@@ -150,19 +162,22 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         f"{FILTER_HINT}"
     ),
     "archive_search_json": (
-        "Same as archive_search, structured JSON (paths, summaries, confidence). "
-        "Prefer this when you will parse. Not canonical evidence — read cards "
-        "you will cite."
+        "Same as archive_search, structured JSON (paths, summaries, confidence, "
+        "confidence_reason, EvidenceEnvelope). Prefer this when you will parse. "
+        "Not canonical evidence — read cards you will cite. ok=false is an "
+        "error or denial, not a zero-hit search."
     ),
     "archive_query": (
         "Structured filter by frontmatter. Use when you know the card type, "
         "person, source, or org. Multi-type is fine — call again with another "
-        "type_filter. "
+        "type_filter. Optional saved_scope_name narrows; it never widens policy. "
+        "Empty intersection is empty-scope, not search-everything. "
         f"{FILTER_HINT} "
         "Examples: type_filter=email_message people_filter=Sarah; "
         "type_filter=calendar_event; type_filter=ride. "
-        "Aggregate client-side. No date args here — use archive_evidence "
-        "or archive_timeline / hybrid start_date/end_date."
+        "Totals and completeness are labeled. Aggregate client-side or use "
+        "archive_analytics for the three workflows. Dates: start_date/end_date "
+        "or archive_evidence / archive_timeline."
     ),
     "archive_hybrid_search": (
         "Open-ended discovery: lexical + semantic + graph. Start here when "
@@ -175,8 +190,9 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     ),
     "archive_hybrid_search_json": (
         "Same as archive_hybrid_search as JSON (rows, scores, confidence, "
-        "matched_by). Prefer this when parsing. Previews are not extracts — "
-        "read cards you will cite."
+        "confidence_reason, matched_by, EvidenceEnvelope). Prefer this when "
+        "parsing. Previews are not extracts — read cards you will cite. "
+        "ok=false is an error or denial, not a zero-hit search."
     ),
     "archive_vector_search": (
         "Semantic-only recall over embeddings. Use for vague conceptual questions "
@@ -189,8 +205,19 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "(uid, date, type, title, support, recency, parent/duplicate/attachment "
         "UIDs as links). Active corpus only. Default limit 12 — raise it to "
         "go wider. Set narrative=true for a short dated outline citing UIDs. "
+        "expand_context labels matched vs adjacent context. saved_scope_name "
+        "narrows. Completeness (coverage/freshness/truncated) is visible. "
         "Use search/hybrid/query first when you want a wide scan; use "
         "archive_read when you need bodies. "
+        f"{FILTER_HINT}"
+    ),
+    "archive_analytics": (
+        "Read-only typed query, neighbor context, or a deterministic workflow "
+        "as JSON. workflow=query|context|subscription_lifecycle|trip_costs|"
+        "changes_since. Same rows/totals/citations/scopes as `ppa analytics`. "
+        "Saved scopes apply; invalid presets fail; empty intersection is empty. "
+        "Labels source_reported vs derived vs proposed_link. No FX, no "
+        "financial or health advice, production_proven=false. "
         f"{FILTER_HINT}"
     ),
     "archive_read": (

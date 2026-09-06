@@ -51,7 +51,7 @@ ignore = ["E501"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["archive_cli*", "archive_vault*", "archive_sync*", "archive_doctor*", "archive_auth*"]
+include = ["archive_cli*", "archive_vault*", "archive_sync*", "archive_doctor*", "archive_auth*", "archive_engine*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

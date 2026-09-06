@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 
 try:
@@ -24,7 +25,18 @@ except ImportError:  # pragma: no cover
             raise RuntimeError("mcp package is required to run ppa")
 
 
+from archive_engine.redaction import redact_text
+from archive_engine.access import (
+    PROFILE_LABELS,
+    TOOL_PROFILES,
+    VALID_TOOL_PROFILES,
+    normalize_tool_profile,
+    resolve_access_context,
+    tool_permitted,
+)
+
 from .commands import admin, attachments, explain
+from .commands import analytics as analytics_cmd
 from .commands import evidence as evidence_cmd
 from .commands import formatters as fmt
 from .commands import graph as graph_cmd
@@ -34,12 +46,19 @@ from .commands import search as search_cmd
 from .commands import seed_links as seed_cmd
 from .commands import status as status_cmd
 from .commands._resolve import resolve_index, resolve_store
+from .commands.confidence import client_failure_payload
 from .errors import InvalidInputError, PpaError, SeedLinksDisabledError, ServingIndexUnavailableError
 from .index_config import get_seed_links_enabled
 from .index_store import get_default_embedding_model, get_default_embedding_version
 from .mcp_instructions import TOOL_DESCRIPTIONS, build_server_instructions
 
 _SEED_LINKS_DISABLED_MSG = "Seed links are not enabled. Set PPA_SEED_LINKS_ENABLED=1 to enable."
+
+
+def _delegated_store():
+    """CLI/MCP share the instance facade. Do not construct a second engine."""
+
+    return resolve_store()
 
 _log = logging.getLogger("ppa.server")
 
@@ -61,8 +80,15 @@ def _log_tool_done(tool_name: str, t0: float, **extra: object) -> None:
 
 
 def _log_tool_return_error(tool_name: str, message: str) -> str:
-    _log.error("tool=%s error=%s", tool_name, message)
-    return message
+    safe = redact_text(message)
+    _log.error("tool=%s error=%s", tool_name, safe)
+    if "Tool disabled" in message:
+        status, error = "denied", "tool_disabled"
+    elif "Invalid PPA_MCP_TOOL_PROFILE" in message:
+        status, error = "denied", "invalid_profile"
+    else:
+        status, error = "error", "error"
+    return json.dumps(client_failure_payload(status=status, error=error, message=safe, tool=tool_name))
 
 
 _server_instructions = build_server_instructions()
@@ -84,69 +110,40 @@ def _tool(name: str):
 
 
 _TOOL_PROFILES: dict[str, set[str] | None] = {
-    "full": None,
-    "read-only": {
-        "archive_search",
-        "archive_read",
-        "archive_query",
-        "archive_graph",
-        "archive_person",
-        "archive_timeline",
-        "archive_evidence",
-        "archive_temporal_neighbors",
-        "archive_knowledge",
-        "archive_stats",
-        "archive_vector_search",
-        "archive_hybrid_search",
-        "archive_search_json",
-        "archive_hybrid_search_json",
-        "archive_read_many",
-        "archive_status_json",
-        "archive_retrieval_explain_json",
-    },
-    "remote-read": {
-        "archive_search",
-        "archive_query",
-        "archive_timeline",
-        "archive_evidence",
-        "archive_stats",
-        "archive_search_json",
-    },
-    "admin-only": {
-        "archive_validate",
-        "archive_duplicates",
-        "archive_duplicate_uids",
-        "archive_rebuild_indexes",
-        "archive_bootstrap_postgres",
-        "archive_index_status",
-        "archive_projection_inventory",
-        "archive_projection_status",
-        "archive_projection_explain",
-        "archive_retrieval_explain",
-        "archive_embedding_status",
-        "archive_embedding_backlog",
-        "archive_embed_estimate",
-        "archive_embed_pending",
-        "archive_seed_link_surface",
-        "archive_seed_link_enqueue",
-        "archive_seed_link_backfill",
-        "archive_seed_link_refresh",
-        "archive_seed_link_worker",
-        "archive_seed_link_promote",
-        "archive_seed_link_report",
-        "archive_link_candidates",
-        "archive_link_candidate",
-        "archive_review_link_candidate",
-        "archive_link_quality_gate",
-        "archive_status_json",
-    },
+    name: None if tools is None else set(tools) for name, tools in TOOL_PROFILES.items()
 }
+_VALID_TOOL_PROFILES = VALID_TOOL_PROFILES
+_PROFILE_LABELS = PROFILE_LABELS
+
+
+def _normalize_tool_profile() -> tuple[str, str | None]:
+    """Return ``(normalized_profile, invalid_error)``.
+
+    Unset env uses the documented ``full`` default. Empty or unknown values
+    fail closed — they do not widen to unrestricted access.
+    """
+
+    return normalize_tool_profile(
+        os.environ.get("PPA_MCP_TOOL_PROFILE") if "PPA_MCP_TOOL_PROFILE" in os.environ else None,
+        present="PPA_MCP_TOOL_PROFILE" in os.environ,
+    )
+
+
+def _entry_access() -> object:
+    """Resolve the process AccessContext once per tool call. Never widen later."""
+
+    return resolve_access_context(os.environ.get("PPA_ARCHIVE_ID", "mcp") or "mcp")
 
 
 def _tool_profile_error(tool_name: str) -> str | None:
-    from .index_config import _ppa_env
-
-    profile = _ppa_env("PPA_MCP_TOOL_PROFILE", default="full").lower() or "full"
+    profile, invalid = _normalize_tool_profile()
+    if invalid:
+        return invalid
+    access = _entry_access()
+    if access.deny and access.deny_reason:
+        return access.deny_reason
+    if not tool_permitted(access, tool_name):
+        return f"Tool disabled by PPA_MCP_TOOL_PROFILE={profile or access.profile}"
     allowed = _TOOL_PROFILES.get(profile)
     if allowed is None:
         return None
@@ -156,10 +153,13 @@ def _tool_profile_error(tool_name: str) -> str | None:
 
 
 def _ppa_err(tool: str, exc: BaseException) -> str:
-    _log.error("tool=%s ppa_error=%s", tool, str(exc))
+    safe = redact_text(str(exc))
+    _log.error("tool=%s ppa_error=%s", tool, safe)
     if isinstance(exc, ServingIndexUnavailableError):
-        return json.dumps({"error": "serving_index_unavailable", "tool": tool})
-    return str(exc)
+        error = "serving_index_unavailable"
+    else:
+        error = type(exc).__name__
+    return json.dumps(client_failure_payload(status="error", error=error, message=safe, tool=tool))
 
 
 @_tool("archive_search")
@@ -171,7 +171,7 @@ def archive_search(query: str, limit: int = 20) -> str:
         profile_error = _tool_profile_error("archive_search")
         if profile_error:
             return _log_tool_return_error("archive_search", profile_error)
-        store = resolve_store()
+        store = _delegated_store()
         result = search_cmd.search(query, limit=limit, store=store, logger=_log)
         rows = result["rows"]
         out = fmt.format_search(result)
@@ -219,7 +219,7 @@ def archive_read(
         profile_error = _tool_profile_error("archive_read")
         if profile_error:
             return _log_tool_return_error("archive_read", profile_error)
-        store = resolve_store()
+        store = _delegated_store()
         payload = read_cmd.read(
             path_or_uid,
             store=store,
@@ -246,6 +246,9 @@ def archive_query(
     people_filter: str = "",
     org_filter: str = "",
     limit: int = 20,
+    saved_scope_name: str = "",
+    start_date: str = "",
+    end_date: str = "",
 ) -> str:
     """Structured query by frontmatter fields."""
 
@@ -256,18 +259,22 @@ def archive_query(
         people_filter=people_filter,
         org_filter=org_filter,
         limit=limit,
+        saved_scope_name=saved_scope_name,
     )
     try:
         profile_error = _tool_profile_error("archive_query")
         if profile_error:
             return _log_tool_return_error("archive_query", profile_error)
-        store = resolve_store()
+        store = _delegated_store()
         result = query_cmd.query(
             type_filter=type_filter,
             source_filter=source_filter,
             people_filter=people_filter,
             org_filter=org_filter,
+            start_date=start_date,
+            end_date=end_date,
             limit=limit,
+            saved_scope_name=saved_scope_name,
             store=store,
             logger=_log,
         )
@@ -300,7 +307,7 @@ def archive_graph(note_path: str, hops: int = 2) -> str:
 
     profile_error = _tool_profile_error("archive_graph")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_graph", profile_error)
     t0 = _log_tool_call("archive_graph", note_path=note_path, hops=hops)
     try:
         store = resolve_store()
@@ -324,7 +331,7 @@ def archive_person(name: str) -> str:
 
     profile_error = _tool_profile_error("archive_person")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_person", profile_error)
     t0 = _log_tool_call("archive_person", name=name)
     try:
         store = resolve_store()
@@ -348,6 +355,8 @@ def archive_evidence(
     end_date: str = "",
     limit: int = 12,
     narrative: bool = False,
+    expand_context: bool = False,
+    saved_scope_name: str = "",
 ) -> str:
     """Compact chronological evidence listing."""
 
@@ -365,7 +374,7 @@ def archive_evidence(
         profile_error = _tool_profile_error("archive_evidence")
         if profile_error:
             return _log_tool_return_error("archive_evidence", profile_error)
-        store = resolve_store()
+        store = _delegated_store()
         result = evidence_cmd.evidence(
             query=query,
             type_filter=type_filter,
@@ -375,6 +384,8 @@ def archive_evidence(
             end_date=end_date,
             limit=limit,
             narrative=narrative,
+            expand_context=expand_context,
+            saved_scope_name=saved_scope_name,
             store=store,
             logger=_log,
         )
@@ -389,13 +400,70 @@ def archive_evidence(
         raise
 
 
+@_tool("archive_analytics")
+def archive_analytics(
+    workflow: str,
+    type_filter: str = "",
+    source_filter: str = "",
+    people_filter: str = "",
+    org_filter: str = "",
+    start_date: str = "",
+    end_date: str = "",
+    limit: int = 20,
+    saved_scope_name: str = "",
+    scopes_json: str = "",
+    cards_json: str = "",
+    records_json: str = "",
+    hit_uid: str = "",
+    snapshot_id: str = "",
+) -> str:
+    """Typed query, neighbor context, or a deterministic workflow as JSON."""
+
+    t0 = _log_tool_call("archive_analytics", workflow=workflow, saved_scope_name=saved_scope_name)
+    try:
+        profile_error = _tool_profile_error("archive_analytics")
+        if profile_error:
+            return _log_tool_return_error("archive_analytics", profile_error)
+        store = None
+        access = None
+        if not cards_json and not records_json and workflow in {"query", "typed_query"}:
+            store = resolve_store()
+            access = store.access
+        payload = analytics_cmd.execute_client_request(
+            workflow,
+            access=access,
+            type_filter=type_filter,
+            source_filter=source_filter,
+            people_filter=people_filter,
+            org_filter=org_filter,
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
+            saved_scope_name=saved_scope_name,
+            scopes=scopes_json,
+            cards=cards_json,
+            records=records_json,
+            hit_uid=hit_uid or analytics_cmd.REPLY,
+            store=store,
+            snapshot_id=snapshot_id or "p10d-journal",
+        )
+        out = json.dumps(payload, indent=2, default=str)
+        _log_tool_done("archive_analytics", t0, workflow=workflow)
+        return out
+    except PpaError as exc:
+        return _ppa_err("archive_analytics", exc)
+    except Exception as exc:
+        _log.error("tool=archive_analytics error=%s", str(exc))
+        raise
+
+
 @_tool("archive_timeline")
 def archive_timeline(start_date: str = "", end_date: str = "", limit: int = 20) -> str:
     """Notes in date range."""
 
     profile_error = _tool_profile_error("archive_timeline")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_timeline", profile_error)
     t0 = _log_tool_call("archive_timeline", start_date=start_date, end_date=end_date, limit=limit)
     try:
         store = resolve_store()
@@ -427,7 +495,7 @@ def archive_temporal_neighbors(
 
     profile_error = _tool_profile_error("archive_temporal_neighbors")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_temporal_neighbors", profile_error)
     t0 = _log_tool_call("archive_temporal_neighbors", timestamp=timestamp, direction=direction, limit=limit)
     try:
         store = resolve_store()
@@ -453,7 +521,7 @@ def archive_knowledge(domain: str, fallback_query: str = "", limit: int = 5) -> 
 
     profile_error = _tool_profile_error("archive_knowledge")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_knowledge", profile_error)
     t0 = _log_tool_call("archive_knowledge", domain=domain, limit=limit)
     try:
         store = resolve_store()
@@ -476,7 +544,7 @@ def archive_stats() -> str:
 
     profile_error = _tool_profile_error("archive_stats")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_stats", profile_error)
     t0 = _log_tool_call("archive_stats")
     try:
         index = resolve_index()
@@ -494,7 +562,7 @@ def archive_validate() -> str:
 
     profile_error = _tool_profile_error("archive_validate")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_validate", profile_error)
     t0 = _log_tool_call("archive_validate")
     try:
         vault = resolve_store().vault
@@ -514,7 +582,7 @@ def archive_duplicates() -> str:
 
     profile_error = _tool_profile_error("archive_duplicates")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_duplicates", profile_error)
     t0 = _log_tool_call("archive_duplicates")
     try:
         vault = resolve_store().vault
@@ -537,7 +605,7 @@ def archive_duplicate_uids(limit: int = 20) -> str:
 
     profile_error = _tool_profile_error("archive_duplicate_uids")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_duplicate_uids", profile_error)
     t0 = _log_tool_call("archive_duplicate_uids", limit=limit)
     try:
         index = resolve_index()
@@ -556,7 +624,7 @@ def archive_rebuild_indexes() -> str:
 
     profile_error = _tool_profile_error("archive_rebuild_indexes")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_rebuild_indexes", profile_error)
     t0 = _log_tool_call("archive_rebuild_indexes")
     try:
         store = resolve_store()
@@ -578,7 +646,7 @@ def archive_bootstrap_postgres() -> str:
 
     profile_error = _tool_profile_error("archive_bootstrap_postgres")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_bootstrap_postgres", profile_error)
     t0 = _log_tool_call("archive_bootstrap_postgres")
     try:
         vault = resolve_store().vault
@@ -595,7 +663,7 @@ def archive_index_status() -> str:
 
     profile_error = _tool_profile_error("archive_index_status")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_index_status", profile_error)
     t0 = _log_tool_call("archive_index_status")
     try:
         store = resolve_store()
@@ -615,7 +683,7 @@ def archive_projection_inventory() -> str:
 
     profile_error = _tool_profile_error("archive_projection_inventory")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_projection_inventory", profile_error)
     t0 = _log_tool_call("archive_projection_inventory")
     try:
         store = resolve_store()
@@ -633,7 +701,7 @@ def archive_projection_status() -> str:
 
     profile_error = _tool_profile_error("archive_projection_status")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_projection_status", profile_error)
     t0 = _log_tool_call("archive_projection_status")
     try:
         store = resolve_store()
@@ -651,7 +719,7 @@ def archive_projection_explain(card_uid: str) -> str:
 
     profile_error = _tool_profile_error("archive_projection_explain")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_projection_explain", profile_error)
     t0 = _log_tool_call("archive_projection_explain", card_uid=card_uid)
     try:
         store = resolve_store()
@@ -669,7 +737,7 @@ def archive_embedding_status(embedding_model: str = "", embedding_version: int =
 
     profile_error = _tool_profile_error("archive_embedding_status")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_embedding_status", profile_error)
     t0 = _log_tool_call(
         "archive_embedding_status",
         embedding_model=embedding_model,
@@ -699,7 +767,7 @@ def archive_embedding_backlog(limit: int = 20, embedding_model: str = "", embedd
 
     profile_error = _tool_profile_error("archive_embedding_backlog")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_embedding_backlog", profile_error)
     t0 = _log_tool_call(
         "archive_embedding_backlog",
         limit=limit,
@@ -729,7 +797,7 @@ def archive_embed_estimate(embedding_model: str = "", embedding_version: int = 0
 
     profile_error = _tool_profile_error("archive_embed_estimate")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_embed_estimate", profile_error)
     t0 = _log_tool_call("archive_embed_estimate", embedding_model=embedding_model, embedding_version=embedding_version)
     try:
         store = resolve_store()
@@ -751,7 +819,7 @@ def archive_embed_pending(limit: int = 20, embedding_model: str = "", embedding_
 
     profile_error = _tool_profile_error("archive_embed_pending")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_embed_pending", profile_error)
     t0 = _log_tool_call(
         "archive_embed_pending",
         limit=limit,
@@ -786,7 +854,7 @@ def archive_seed_link_surface() -> str:
         return _SEED_LINKS_DISABLED_MSG
     profile_error = _tool_profile_error("archive_seed_link_surface")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_seed_link_surface", profile_error)
     t0 = _log_tool_call("archive_seed_link_surface")
     try:
         payload = seed_cmd.seed_link_surface(logger=_log)
@@ -817,7 +885,7 @@ def archive_seed_link_enqueue(
         return _SEED_LINKS_DISABLED_MSG
     profile_error = _tool_profile_error("archive_seed_link_enqueue")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_seed_link_enqueue", profile_error)
     t0 = _log_tool_call(
         "archive_seed_link_enqueue",
         modules=modules,
@@ -861,7 +929,7 @@ def archive_seed_link_backfill(
         return _SEED_LINKS_DISABLED_MSG
     profile_error = _tool_profile_error("archive_seed_link_backfill")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_seed_link_backfill", profile_error)
     t0 = _log_tool_call(
         "archive_seed_link_backfill",
         limit=limit,
@@ -907,7 +975,7 @@ def archive_seed_link_refresh(
         return _SEED_LINKS_DISABLED_MSG
     profile_error = _tool_profile_error("archive_seed_link_refresh")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_seed_link_refresh", profile_error)
     t0 = _log_tool_call(
         "archive_seed_link_refresh",
         source_uids=source_uids,
@@ -942,7 +1010,7 @@ def archive_seed_link_worker(limit: int = 0, modules: str = "", workers: int = 0
         return _SEED_LINKS_DISABLED_MSG
     profile_error = _tool_profile_error("archive_seed_link_worker")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_seed_link_worker", profile_error)
     t0 = _log_tool_call(
         "archive_seed_link_worker",
         limit=limit,
@@ -976,7 +1044,7 @@ def archive_seed_link_promote(limit: int = 0, workers: int = 1) -> str:
         return _SEED_LINKS_DISABLED_MSG
     profile_error = _tool_profile_error("archive_seed_link_promote")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_seed_link_promote", profile_error)
     t0 = _log_tool_call("archive_seed_link_promote", limit=limit, workers=workers)
     try:
         index = resolve_index()
@@ -1002,7 +1070,7 @@ def archive_seed_link_report(rebuild_if_dirty: bool = True) -> str:
         return _SEED_LINKS_DISABLED_MSG
     profile_error = _tool_profile_error("archive_seed_link_report")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_seed_link_report", profile_error)
     t0 = _log_tool_call("archive_seed_link_report", rebuild_if_dirty=rebuild_if_dirty)
     try:
         index = resolve_index()
@@ -1028,7 +1096,7 @@ def archive_link_candidates(
         return _SEED_LINKS_DISABLED_MSG
     profile_error = _tool_profile_error("archive_link_candidates")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_link_candidates", profile_error)
     t0 = _log_tool_call(
         "archive_link_candidates",
         status=status,
@@ -1064,7 +1132,7 @@ def archive_link_candidate(candidate_id: int) -> str:
         return _SEED_LINKS_DISABLED_MSG
     profile_error = _tool_profile_error("archive_link_candidate")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_link_candidate", profile_error)
     t0 = _log_tool_call("archive_link_candidate", candidate_id=candidate_id)
     try:
         index = resolve_index()
@@ -1088,7 +1156,7 @@ def archive_review_link_candidate(candidate_id: int, reviewer: str, action: str,
         return _SEED_LINKS_DISABLED_MSG
     profile_error = _tool_profile_error("archive_review_link_candidate")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_review_link_candidate", profile_error)
     t0 = _log_tool_call(
         "archive_review_link_candidate",
         candidate_id=candidate_id,
@@ -1121,7 +1189,7 @@ def archive_link_quality_gate() -> str:
         return _SEED_LINKS_DISABLED_MSG
     profile_error = _tool_profile_error("archive_link_quality_gate")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_link_quality_gate", profile_error)
     t0 = _log_tool_call("archive_link_quality_gate")
     try:
         index = resolve_index()
@@ -1176,7 +1244,7 @@ def archive_vector_search(
             end_date=end_date,
         )
         rows = result["rows"]
-        out = fmt.format_vector_search(model, version, rows, confidence=str(result.get("confidence", "")))
+        out = fmt.format_vector_search(model, version, rows, confidence=str(result.get("confidence", "")), reason=str(result.get("confidence_reason", "")), coverage=str((result.get("evidence") or {}).get("coverage", "")), freshness=str((result.get("evidence") or {}).get("freshness", "")))
         _log_tool_done("archive_vector_search", t0, result_count=len(rows))
         return out
     except PpaError as exc:
@@ -1198,7 +1266,7 @@ def archive_retrieval_explain(
 
     profile_error = _tool_profile_error("archive_retrieval_explain")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_retrieval_explain", profile_error)
     t0 = _log_tool_call(
         "archive_retrieval_explain",
         query=query,
@@ -1266,7 +1334,7 @@ def archive_hybrid_search(
             end_date=end_date,
         )
         rows = payload["rows"]
-        out = fmt.format_hybrid_search(query, rows, confidence=str(payload.get("confidence", "")))
+        out = fmt.format_hybrid_search(query, rows, confidence=str(payload.get("confidence", "")), reason=str(payload.get("confidence_reason", "")), coverage=str((payload.get("evidence") or {}).get("coverage", "")), freshness=str((payload.get("evidence") or {}).get("freshness", "")))
         _log_tool_done("archive_hybrid_search", t0, result_count=len(rows))
         return out
     except PpaError as exc:
@@ -1282,7 +1350,7 @@ def archive_search_json(query: str, limit: int = 20) -> str:
 
     profile_error = _tool_profile_error("archive_search_json")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_search_json", profile_error)
     t0 = _log_tool_call("archive_search_json", query=query, limit=limit)
     try:
         store = resolve_store()
@@ -1295,7 +1363,7 @@ def archive_search_json(query: str, limit: int = 20) -> str:
         )
         return json.dumps(result, indent=2)
     except PpaError as exc:
-        return str(exc)
+        return _ppa_err("archive_search_json", exc)
 
 
 @_tool("archive_hybrid_search_json")
@@ -1314,7 +1382,7 @@ def archive_hybrid_search_json(
 
     profile_error = _tool_profile_error("archive_hybrid_search_json")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_hybrid_search_json", profile_error)
     t0 = _log_tool_call(
         "archive_hybrid_search_json",
         query=query,
@@ -1347,7 +1415,7 @@ def archive_hybrid_search_json(
         )
         return json.dumps(payload, indent=2)
     except PpaError as exc:
-        return str(exc)
+        return _ppa_err("archive_hybrid_search_json", exc)
 
 
 @_tool("archive_read_many")
@@ -1356,7 +1424,7 @@ def archive_read_many(paths_json: str | list[str]) -> str:
 
     profile_error = _tool_profile_error("archive_read_many")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_read_many", profile_error)
     try:
         store = resolve_store()
         paths = read_cmd.parse_paths_json(paths_json)
@@ -1365,9 +1433,9 @@ def archive_read_many(paths_json: str | list[str]) -> str:
         _log_tool_done("archive_read_many", t0, requested=len(paths))
         return json.dumps(result, indent=2)
     except InvalidInputError as exc:
-        return str(exc)
+        return _ppa_err("archive_read_many", exc)
     except PpaError as exc:
-        return str(exc)
+        return _ppa_err("archive_read_many", exc)
 
 
 @mcp.tool()
@@ -1383,7 +1451,7 @@ def archive_fetch_attachment(
 
     profile_error = _tool_profile_error("archive_fetch_attachment")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_fetch_attachment", profile_error)
     t0 = _log_tool_call(
         "archive_fetch_attachment",
         path_or_uid=path_or_uid,
@@ -1412,9 +1480,9 @@ def archive_fetch_attachment(
         )
         return json.dumps(result, indent=2)
     except InvalidInputError as exc:
-        return str(exc)
+        return _ppa_err("archive_fetch_attachment", exc)
     except PpaError as exc:
-        return str(exc)
+        return _ppa_err("archive_fetch_attachment", exc)
 
 
 @_tool("archive_status_json")
@@ -1423,7 +1491,7 @@ def archive_status_json() -> str:
 
     profile_error = _tool_profile_error("archive_status_json")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_status_json", profile_error)
     t0 = _log_tool_call("archive_status_json")
     try:
         store = resolve_store()
@@ -1431,7 +1499,7 @@ def archive_status_json() -> str:
         _log_tool_done("archive_status_json", t0, keys=list(result.keys())[:15])
         return json.dumps(result, indent=2)
     except PpaError as exc:
-        return str(exc)
+        return _ppa_err("archive_status_json", exc)
 
 
 @mcp.tool()
@@ -1446,7 +1514,7 @@ def archive_retrieval_explain_json(
 
     profile_error = _tool_profile_error("archive_retrieval_explain_json")
     if profile_error:
-        return profile_error
+        return _log_tool_return_error("archive_retrieval_explain_json", profile_error)
     t0 = _log_tool_call(
         "archive_retrieval_explain_json",
         query=query,
@@ -1469,7 +1537,7 @@ def archive_retrieval_explain_json(
         _log_tool_done("archive_retrieval_explain_json", t0, keys=list(payload.keys())[:12])
         return json.dumps(payload, indent=2)
     except PpaError as exc:
-        return str(exc)
+        return _ppa_err("archive_retrieval_explain_json", exc)
 
 
 if __name__ == "__main__":

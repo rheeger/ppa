@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 # Shared with index_store ranking; keep in sync with CARD_TYPE_PRIORS there.
@@ -13,8 +13,17 @@ from archive_cli.corpus_hygiene.state_store import (
 
 from .index_config import _format_activity_at
 from .index_store import CARD_TYPE_PRIORS
+from .rank_fusion import (
+    FUSION_STRATEGY,
+    FusionOptions,
+    apply_rrf_scores,
+    apply_thread_diversity,
+    query_has_historical_dates,
+    query_requests_current_ops,
+    sort_fused_rows,
+)
 
-PIPELINE_VERSION = "2026.03.19.hfa1"
+PIPELINE_VERSION = "2026.09.06.p01b2"
 
 
 @dataclass(frozen=True)
@@ -37,6 +46,9 @@ class FilterInference:
     phrases: tuple[str, ...] = ()
     emails: tuple[str, ...] = ()
     external_ids: tuple[str, ...] = ()
+    historical: bool = False
+    current_ops: bool = False
+    has_exact_identifier: bool = False
 
 
 @dataclass(frozen=True)
@@ -148,6 +160,8 @@ def fuse_lexical_vector_rows(
             "provenance_score": 0.08 if exact_match else 0.04,
             "graph_hops": "0" if card_uid in anchor_uids else "",
             "corpus_state": row.get("corpus_state"),
+            "parent_thread": str(row.get("parent_thread") or row.get("thread") or ""),
+            "thread": str(row.get("thread") or ""),
             "score": 0.0,
         }
     for row in vector_rows:
@@ -172,6 +186,8 @@ def fuse_lexical_vector_rows(
                 "provenance_score": float(row["provenance_score"]),
                 "graph_hops": "",
                 "corpus_state": row.get("corpus_state"),
+                "parent_thread": str(row.get("parent_thread") or row.get("thread") or ""),
+                "thread": str(row.get("thread") or ""),
                 "score": 0.0,
             },
         )
@@ -196,36 +212,24 @@ def fuse_lexical_vector_rows(
         if not entry["graph_hops"] and trust > 0.0:
             entry["graph_hops"] = "1"
             entry["graph_neighbor_trust"] = trust
-        graph_boost = 0.22 * float(entry.get("graph_neighbor_trust", 0.0))
-        exact_boost = 3.0 if bool(entry["exact_match"]) else 0.0
-        lexical_component = min(float(entry["lexical_score"]), 1.5) * (1.2 if not bool(entry["exact_match"]) else 1.4)
-        vector_component = float(entry["vector_similarity"]) * 1.2
-        multi_signal_boost = 0.2 if str(entry["matched_by"]) == "hybrid" else 0.0
-        raw = (
-            exact_boost
-            + lexical_component
-            + vector_component
-            + multi_signal_boost
-            + graph_boost
-            + _card_type_prior(str(entry["type"]))
-            + float(entry.get("recency_score", 0.0))
-            + float(entry.get("provenance_score", 0.0))
-        )
-        entry["score"] = round(raw * float(entry["retrieval_weight"]), 6)
+        if trust > 0.0:
+            entry["graph_neighbor_trust"] = trust
+        entry["type_prior"] = _card_type_prior(str(entry["type"]))
+        entry["score"] = 0.0
     return ranked
 
 
-def rank_fused_hybrid_rows(fused: list[dict[str, Any]], *, final_limit: int) -> list[dict[str, Any]]:
-    fused.sort(
-        key=lambda entry: (
-            -float(entry["score"]),
-            -int(bool(entry["exact_match"])),
-            -float(entry["vector_similarity"]),
-            -float(entry["lexical_score"]),
-            str(entry["rel_path"]),
-        )
-    )
-    return fused[:final_limit]
+def rank_fused_hybrid_rows(
+    fused: list[dict[str, Any]],
+    *,
+    final_limit: int,
+    options: FusionOptions | None = None,
+) -> list[dict[str, Any]]:
+    opts = options or FusionOptions.from_env()
+    apply_rrf_scores(fused, opts)
+    sort_fused_rows(fused)
+    diversified = apply_thread_diversity(fused, opts)
+    return diversified[:final_limit]
 
 
 def fuse_and_rank_hybrid(
@@ -233,32 +237,65 @@ def fuse_and_rank_hybrid(
     *,
     final_limit: int,
     pipeline_meta: dict[str, Any] | None = None,
+    fusion: FusionOptions | None = None,
 ) -> list[dict[str, Any]]:
-    """Fuse + score + sort; preserves legacy hybrid ordering logic."""
+    """Fuse lexical/semantic ranks with RRF, then apply diversity and freshness."""
+    query = inputs.query_cleaned
+    opts = fusion or FusionOptions.from_env(
+        historical_query=query_has_historical_dates(query),
+        exact_ids_present=False,
+        ranking_profile=(
+            "current_ops"
+            if query_requests_current_ops(query) and not query_has_historical_dates(query)
+            else None
+        ),
+    )
+    if query_has_historical_dates(query):
+        opts = replace(opts, ranking_profile="default", historical_query=True)
     meta = pipeline_meta if pipeline_meta is not None else {}
     meta["pipeline_version"] = PIPELINE_VERSION
-    meta["fusion_strategy"] = "lexical_vector_union_with_graph_boost"
-    meta["subqueries_used"] = list(inputs.subqueries_used) or ([inputs.query_cleaned] if inputs.query_cleaned else [])
+    meta["fusion_strategy"] = FUSION_STRATEGY
+    meta["ranking_version"] = "p01b2-rrf-1"
+    meta["subqueries_used"] = list(inputs.subqueries_used) or ([query] if query else [])
     meta["lexical_candidate_count"] = len(inputs.lexical_rows)
     meta["vector_candidate_count"] = len(inputs.vector_rows)
     meta["graph_neighbor_count"] = len(inputs.neighbor_trust)
+    meta["rare_token_weight"] = opts.rare_token_weight
+    meta["ranking_profile"] = opts.ranking_profile
     fused = fuse_lexical_vector_rows(inputs.lexical_rows, inputs.vector_rows, inputs.neighbor_trust)
-    return rank_fused_hybrid_rows(fused, final_limit=final_limit)
+    if any(bool(row.get("exact_match")) for row in fused):
+        opts = replace(opts, exact_ids_present=True)
+    return rank_fused_hybrid_rows(fused, final_limit=final_limit, options=opts)
 
 
 def score_breakdown_for_row(row: dict[str, Any]) -> dict[str, float]:
     """Decompose final score into named components (for explain)."""
+    trust = float(row.get("graph_neighbor_trust", 0.0))
+    if "rrf_score" in row or "lexical_rank" in row:
+        return {
+            "exact_boost": float(row.get("rrf_exact", 0.0) or 0.0),
+            "lexical_component": float(row.get("rrf_lexical", 0.0) or 0.0),
+            "vector_component": float(row.get("rrf_vector", 0.0) or 0.0),
+            "multi_signal_boost": 0.2 if str(row.get("matched_by", "")) == "hybrid" else 0.0,
+            "graph_boost": float(row.get("rrf_graph", 0.0) or 0.0),
+            "graph_neighbor_trust": trust,
+            "type_prior": float(row.get("type_prior", _card_type_prior(str(row.get("type", ""))))),
+            "recency": float(row.get("recency_score", 0.0) or 0.0),
+            "provenance": float(row.get("provenance_score", 0.0) or 0.0),
+            "rerank_contribution": float(row.get("rerank_contribution", 0.0) or 0.0),
+            "corpus_weight": retrieval_weight_for_corpus_state(row.get("corpus_state")),
+            "rrf_score": float(row.get("rrf_score", 0.0) or 0.0),
+            "rare_token_boost": float(row.get("rare_token_boost", 0.0) or 0.0),
+            "age_decay": float(row.get("age_decay", 1.0) or 1.0),
+            "lexical_rarity": float(row.get("lexical_rarity", row.get("lexical_score", 0.0)) or 0.0),
+        }
     exact_boost = 3.0 if bool(row.get("exact_match")) else 0.0
     lexical_component = min(float(row.get("lexical_score", 0.0)), 1.5) * (
         1.2 if not bool(row.get("exact_match")) else 1.4
     )
     vector_component = float(row.get("vector_similarity", 0.0)) * 1.2
     multi_signal_boost = 0.2 if str(row.get("matched_by", "")) == "hybrid" else 0.0
-    trust = float(row.get("graph_neighbor_trust", 0.0))
     graph_boost = 0.22 * trust if str(row.get("graph_hops", "")) == "1" else 0.0
-    type_prior = _card_type_prior(str(row.get("type", "")))
-    recency = float(row.get("recency_score", 0.0))
-    provenance = float(row.get("provenance_score", 0.0))
     return {
         "exact_boost": exact_boost,
         "lexical_component": round(lexical_component, 6),
@@ -266,9 +303,9 @@ def score_breakdown_for_row(row: dict[str, Any]) -> dict[str, float]:
         "multi_signal_boost": multi_signal_boost,
         "graph_boost": graph_boost,
         "graph_neighbor_trust": trust,
-        "type_prior": type_prior,
-        "recency": recency,
-        "provenance": provenance,
+        "type_prior": _card_type_prior(str(row.get("type", ""))),
+        "recency": float(row.get("recency_score", 0.0)),
+        "provenance": float(row.get("provenance_score", 0.0)),
         "rerank_contribution": float(row.get("rerank_contribution", 0.0)),
         "corpus_weight": retrieval_weight_for_corpus_state(row.get("corpus_state")),
     }
@@ -281,6 +318,6 @@ class PipelineResult:
     rows: list[dict[str, Any]]
     query_plan: QueryPlan | None = None
     fetch: HybridFetchInputs | None = None
-    fusion_strategy: str = "lexical_vector_union_with_graph_boost"
+    fusion_strategy: str = FUSION_STRATEGY
     pipeline_version: str = PIPELINE_VERSION
     extra: dict[str, Any] = field(default_factory=dict)

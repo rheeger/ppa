@@ -11,15 +11,95 @@ Naming convention: format_<tool_name_without_archive_prefix>().
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from archive_cli.index_config import _activity_date
 
 
-def _confidence_footer(*, confidence: str = "", row_count: int = 0) -> str:
-    if not confidence:
+def _completeness_footer(result: dict[str, Any] | None) -> str:
+    if not result:
         return ""
-    return f"\n--- Confidence: {confidence} | {row_count} results ---"
+    parts: list[str] = []
+    if result.get("empty_scope"):
+        parts.append("empty_scope")
+    label = str(result.get("completeness_label") or "").strip()
+    if label:
+        parts.append(f"completeness={label}")
+    if result.get("truncated"):
+        parts.append("truncated")
+    if result.get("stale"):
+        parts.append("stale")
+    if result.get("complete") is False:
+        parts.append("incomplete")
+    coverage = result.get("coverage")
+    if coverage:
+        parts.append(f"coverage={coverage}")
+    freshness = result.get("freshness")
+    if freshness:
+        parts.append(f"freshness={freshness}")
+    served = result.get("served_checkpoint") or result.get("snapshot")
+    materialized = result.get("materialized_checkpoint") or result.get("warehouse_checkpoint")
+    if served:
+        parts.append(f"served={served}")
+    if materialized:
+        parts.append(f"materialized={materialized}")
+    if served and materialized and served != materialized:
+        parts.append("checkpoint_diverged")
+    kinds = []
+    for item in result.get("evidence") or result.get("rows") or result.get("hits") or []:
+        if isinstance(item, dict) and item.get("evidence_kind"):
+            kinds.append(str(item["evidence_kind"]))
+    if kinds:
+        parts.append("kinds=" + ",".join(dict.fromkeys(kinds)))
+    if not parts:
+        return ""
+    return "\n--- " + " | ".join(parts) + " ---"
+
+
+def _confidence_footer(
+    *,
+    confidence: str = "",
+    row_count: int = 0,
+    result: dict[str, Any] | None = None,
+    reason: str = "",
+    coverage: str = "",
+    freshness: str = "",
+) -> str:
+    if not confidence:
+        return _completeness_footer(result)
+    parts = [f"Confidence: {confidence}", f"{row_count} results"]
+    if reason:
+        parts.append(f"reason={reason}")
+    if coverage:
+        parts.append(f"coverage={coverage}")
+    if freshness:
+        parts.append(f"freshness={freshness}")
+    return "\n--- " + " | ".join(parts) + " ---" + _completeness_footer(result)
+
+
+def _envelope_footer(result: dict, *, row_count: int, confidence: str = "") -> str:
+    evidence = result.get("evidence") if isinstance(result.get("evidence"), dict) else {}
+    return _confidence_footer(
+        confidence=confidence or str(result.get("confidence") or ""),
+        row_count=row_count,
+        result=result,
+        reason=str(result.get("confidence_reason") or evidence.get("confidence_reason") or ""),
+        coverage=str(evidence.get("coverage") or result.get("coverage") or ""),
+        freshness=str(evidence.get("freshness") or result.get("freshness") or ""),
+    )
+
+
+def _format_failure(result: dict) -> str:
+    return json.dumps(
+        {
+            "ok": False,
+            "status": result.get("status") or "error",
+            "error": result.get("error") or "error",
+            "message": result.get("message") or str(result.get("error") or "error"),
+            "tool": result.get("tool") or "",
+        }
+    )
 
 
 def _corpus_state_tag(row: dict) -> str:
@@ -41,12 +121,14 @@ def format_search_line(row: dict) -> str:
 
 def format_search(result: dict) -> str:
     """Format archive_search / archive_query result as text lines."""
+    if result.get("ok") is False or result.get("error"):
+        return _format_failure(result)
     rows = result.get("rows", [])
     if not rows:
         base = "No matches"
     else:
         base = "\n".join(format_search_line(r) for r in rows)
-    return base + _confidence_footer(confidence=str(result.get("confidence", "")), row_count=len(rows))
+    return base + _envelope_footer(result, row_count=len(rows))
 
 
 def format_graph(rel_path: str, graph: dict[str, Any]) -> str:
@@ -97,10 +179,7 @@ def format_evidence(result: dict) -> str:
     narrative = str(result.get("narrative") or "").strip()
     if narrative:
         base = f"{base}\n\nNarrative:\n{narrative}"
-    return base + _confidence_footer(
-        confidence=str(result.get("confidence", "")),
-        row_count=len(hits),
-    )
+    return base + _envelope_footer(result, row_count=len(hits))
 
 
 def format_timeline(result: dict) -> str:
@@ -514,7 +593,16 @@ def format_link_quality_gate(gate: dict) -> str:
     return "\n".join(lines)
 
 
-def format_vector_search(model: str, version: int, rows: list[dict], *, confidence: str = "") -> str:
+def format_vector_search(
+    model: str,
+    version: int,
+    rows: list[dict],
+    *,
+    confidence: str = "",
+    reason: str = "",
+    coverage: str = "",
+    freshness: str = "",
+) -> str:
     """Format archive_vector_search result."""
     if not rows:
         base = f"No vector matches for {model} v{version}"
@@ -533,10 +621,24 @@ def format_vector_search(model: str, version: int, rows: list[dict], *, confiden
                 f"  preview: {row['preview']}"
             )
         base = "\n".join(lines)
-    return base + _confidence_footer(confidence=confidence, row_count=len(rows))
+    return base + _confidence_footer(
+        confidence=confidence,
+        row_count=len(rows),
+        reason=reason,
+        coverage=coverage,
+        freshness=freshness,
+    )
 
 
-def format_hybrid_search(query: str, rows: list[dict], *, confidence: str = "") -> str:
+def format_hybrid_search(
+    query: str,
+    rows: list[dict],
+    *,
+    confidence: str = "",
+    reason: str = "",
+    coverage: str = "",
+    freshness: str = "",
+) -> str:
     """Format archive_hybrid_search result."""
     if not rows:
         base = f"No hybrid matches for '{query}'"
@@ -561,4 +663,10 @@ def format_hybrid_search(query: str, rows: list[dict], *, confidence: str = "") 
                 f"  preview: {preview}"
             )
         base = "\n".join(lines)
-    return base + _confidence_footer(confidence=confidence, row_count=len(rows))
+    return base + _confidence_footer(
+        confidence=confidence,
+        row_count=len(rows),
+        reason=reason,
+        coverage=coverage,
+        freshness=freshness,
+    )

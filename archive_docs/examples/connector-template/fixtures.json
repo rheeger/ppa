@@ -1,0 +1,49 @@
+{
+  "records": [
+    {
+      "provider_object_id": "contrib-msg-001",
+      "account_scope": "contrib-a@example.test",
+      "thread_id": "contrib-thr-001",
+      "subject": "Contributor template evidence",
+      "snippet": "Same provider object, account A.",
+      "body": "A contributor package writes an account-scoped email_message card from fixtures.",
+      "from_email": "sender@example.test",
+      "from_name": "Template Sender",
+      "to_emails": ["contrib-a@example.test"],
+      "sent_at": "2026-09-06T16:00:00Z",
+      "created": "2026-09-06",
+      "direction": "inbound"
+    },
+    {
+      "provider_object_id": "contrib-msg-001",
+      "account_scope": "contrib-b@example.test",
+      "thread_id": "contrib-thr-001",
+      "subject": "Contributor template evidence",
+      "snippet": "Same provider object, account B.",
+      "body": "A contributor package writes an account-scoped email_message card from fixtures.",
+      "from_email": "sender@example.test",
+      "from_name": "Template Sender",
+      "to_emails": ["contrib-b@example.test"],
+      "sent_at": "2026-09-06T16:01:00Z",
+      "created": "2026-09-06",
+      "direction": "inbound"
+    }
+  ],
+  "required_owned": [
+    "summary",
+    "subject",
+    "snippet",
+    "account_email",
+    "gmail_message_id",
+    "from_email",
+    "sent_at",
+    "message_body_sha"
+  ],
+  "negatives": [
+    {
+      "provider_object_id": "inferred-person-should-not-emit",
+      "reason": "false_promotion",
+      "must_not_set": ["same_person", "authorized_charge", "inferred_link"]
+    }
+  ]
+}

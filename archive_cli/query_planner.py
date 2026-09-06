@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .rank_fusion import query_has_historical_dates, query_requests_current_ops
 from .retrieval_pipeline import FilterInference, PlannedQuery, QueryPlan
 
 # Obvious source tokens -> index source_filter substring (caller may refine).
@@ -105,6 +106,9 @@ class DeterministicQueryPlanner:
             phrases=phrases,
             emails=emails,
             external_ids=external_ids,
+            historical=query_has_historical_dates(text),
+            current_ops=query_requests_current_ops(text),
+            has_exact_identifier=bool(emails or external_ids),
         )
 
         queries: list[PlannedQuery] = [PlannedQuery(text=text, role="primary", weight=1.0)]

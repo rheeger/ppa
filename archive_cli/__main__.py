@@ -32,6 +32,7 @@ from .commands import read as read_cmd
 from .commands import search as search_cmd
 from .commands import seed_links as seed_cmd
 from .commands import status as status_cmd
+from .command_registry import dispatch_product_command, register_product_commands
 from .commands._resolve import resolve_index, resolve_store
 from .errors import PpaError, VaultNotFoundError
 from .index_config import get_seed_links_enabled
@@ -148,6 +149,7 @@ def main() -> None:
         help="Skip vault scan cache; always read files from disk (slower but guaranteed fresh)",
     )
     subparsers = parser.add_subparsers(dest="command")
+    register_product_commands(subparsers)
 
     serve_parser = subparsers.add_parser("serve", help="Start MCP server (stdio or HTTP)")
     serve_parser.add_argument(
@@ -544,7 +546,11 @@ def main() -> None:
     query_parser.add_argument("--source", dest="source_filter", default="")
     query_parser.add_argument("--people", dest="people_filter", default="")
     query_parser.add_argument("--org", dest="org_filter", default="")
+    query_parser.add_argument("--start", dest="start_date", default="")
+    query_parser.add_argument("--end", dest="end_date", default="")
     query_parser.add_argument("--limit", type=int, default=12)
+    query_parser.add_argument("--saved-scope", dest="saved_scope_name", default="")
+    query_parser.add_argument("--scopes-json", default="")
     graph_parser = subparsers.add_parser("graph", help="Wikilink graph from a note (JSON)")
     graph_parser.add_argument("note_path")
     graph_parser.add_argument("--hops", type=int, default=2)
@@ -584,6 +590,13 @@ def main() -> None:
         action="store_true",
         help="Stitch hits into a short dated outline citing UIDs (not extracts)",
     )
+    evidence_parser.add_argument(
+        "--expand-context",
+        action="store_true",
+        help="Label matched hits vs adjacent context when neighbor units are supplied",
+    )
+    evidence_parser.add_argument("--saved-scope", dest="saved_scope_name", default="")
+    evidence_parser.add_argument("--scopes-json", default="")
     tn_parser = subparsers.add_parser("temporal-neighbors", help="Cards near a timestamp (JSON)")
     tn_parser.add_argument("timestamp")
     tn_parser.add_argument("--direction", default="both", choices=("forward", "backward", "both"))
@@ -1346,6 +1359,8 @@ def main() -> None:
         args.port = 0
     # Stderr-only logging for all subcommands; keep stdout for MCP JSON-RPC / CLI JSON. See archive_cli/log.py.
     configure_logging(verbose=args.verbose)
+    if dispatch_product_command(args):
+        return
     log_file = str(getattr(args, "log_file", "") or "").strip()
     if log_file:
         from .log import attach_file_log
@@ -1496,7 +1511,11 @@ def main() -> None:
                 source_filter=args.source_filter,
                 people_filter=args.people_filter,
                 org_filter=args.org_filter,
+                start_date=getattr(args, "start_date", "") or "",
+                end_date=getattr(args, "end_date", "") or "",
                 limit=args.limit,
+                saved_scope_name=getattr(args, "saved_scope_name", "") or "",
+                scopes=getattr(args, "scopes_json", "") or "",
                 store=store,
                 logger=_cli_log,
             )
@@ -1542,6 +1561,9 @@ def main() -> None:
                 type_filter=args.type_filter,
                 source_filter=args.source_filter,
                 people_filter=args.people_filter,
+                saved_scope_name=getattr(args, "saved_scope_name", "") or "",
+                scopes=getattr(args, "scopes_json", "") or "",
+                expand_context=bool(getattr(args, "expand_context", False)),
                 start_date=args.start_date,
                 end_date=args.end_date,
                 limit=args.limit,

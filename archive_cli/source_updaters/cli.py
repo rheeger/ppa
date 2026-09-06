@@ -226,6 +226,10 @@ def cmd_run(args: argparse.Namespace) -> int:
             "dry_run": not apply,
             **one.report.to_dict(),
         }
+        from archive_cli.commands.maintain import read_freshness_watermarks, source_cursor_progress
+
+        payload["source_cursors"] = source_cursor_progress([one.report.to_dict()])
+        payload["served_freshness"] = read_freshness_watermarks(getattr(store, "vault", None))
         _emit(payload, args)
         _commit_state_store(store)
         if one.exit_hint == 4:
@@ -252,6 +256,10 @@ def cmd_run(args: argparse.Namespace) -> int:
     payload = multi.to_dict()
     payload["apply"] = apply
     payload["dry_run"] = not apply
+    from archive_cli.commands.maintain import read_freshness_watermarks, source_cursor_progress
+
+    payload["source_cursors"] = source_cursor_progress([report.to_dict() for report in multi.reports])
+    payload["served_freshness"] = read_freshness_watermarks(getattr(store, "vault", None))
     _emit(payload, args)
     _commit_state_store(store)
     if multi.exit_code == 4:

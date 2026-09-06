@@ -1,23 +1,31 @@
-"""Identity map helpers and batch cache."""
+"""Identity map helpers, redirects, and batch cache."""
 
 from __future__ import annotations
 
 import json
-import os
 import re
-import tempfile
 from pathlib import Path
+from typing import Any
+
+from archive_vault.change_journal import OPERATION_CREATE, OPERATION_UPDATE, ChangeJournal
+from archive_vault.paths import normalize_vault_rel
 
 IDENTIFIER_PREFIX_ALIASES = {
     "emails": "email",
     "phones": "phone",
 }
 
+IDENTITY_MAP_REL = "_meta/identity-map.json"
+IDENTITY_MAP_UID = "hfa-identity-canonical"
+REDIRECT_UID_PREFIX = "redirect:"
+REDIRECT_WIKILINK_PREFIX = "redirect-wikilink:"
+UID_ALIAS_PREFIX = "uid:"
+
 
 def identity_map_path(vault_path: str | Path) -> Path:
     """Return the on-disk identity map path."""
 
-    return Path(vault_path) / "_meta" / "identity-map.json"
+    return Path(vault_path) / IDENTITY_MAP_REL
 
 
 def _normalize_identifier(prefix: str, value: str) -> str:
@@ -73,22 +81,21 @@ def load_identity_map(vault_path: str | Path) -> dict[str, str]:
 
 
 def save_identity_map(vault_path: str | Path, entries: dict[str, str]) -> None:
-    """Atomically persist the identity map to disk."""
+    """Persist the identity map through the P02 change journal."""
 
-    path = identity_map_path(vault_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    vault = Path(vault_path)
+    rel = str(normalize_vault_rel(IDENTITY_MAP_REL))
     payload = {"_comment": "Alias -> canonical person wikilink", **dict(sorted(entries.items()))}
-    fd, tmp_path = tempfile.mkstemp(prefix="identity-map-", suffix=".tmp", dir=str(path.parent))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2, sort_keys=True)
-        os.replace(tmp_path, path)
-    except Exception:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
+    content = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    operation = OPERATION_UPDATE if (vault / rel).is_file() else OPERATION_CREATE
+    with ChangeJournal(vault) as journal:
+        journal.apply_mutation(
+            uid=IDENTITY_MAP_UID,
+            rel_path=rel,
+            operation=operation,
+            content=content,
+            source="identity",
+        )
 
 
 def upsert_identity_map(
@@ -117,7 +124,79 @@ def resolve_any(vault_path: str | Path, prefix: str, value: str) -> str | None:
     normalized = _normalize_identifier(prefix, value)
     if not normalized:
         return None
-    return load_identity_map(vault_path).get(f"{prefix}:{normalized}")
+    return canonicalize_wikilink(load_identity_map(vault_path), f"{prefix}:{normalized}", lookup=True)
+
+
+def canonicalize_wikilink(entries: dict[str, str], key_or_wikilink: str, *, lookup: bool = False) -> str | None:
+    """Follow recorded redirect-wikilink hops. Does not guess owners."""
+
+    current = entries.get(key_or_wikilink) if lookup else key_or_wikilink
+    if not current:
+        return None
+    seen: set[str] = set()
+    while current and current not in seen:
+        seen.add(current)
+        nxt = entries.get(f"{REDIRECT_WIKILINK_PREFIX}{current}")
+        if not nxt:
+            return current
+        current = nxt
+    return current
+
+
+def redirect_target_uid(vault_path: str | Path, uid: str) -> str | None:
+    entries = load_identity_map(vault_path)
+    target = entries.get(f"{REDIRECT_UID_PREFIX}{uid}")
+    return str(target) if target else None
+
+
+def resolve_uid_wikilink(vault_path: str | Path, uid: str) -> str | None:
+    entries = load_identity_map(vault_path)
+    return canonicalize_wikilink(entries, f"{UID_ALIAS_PREFIX}{uid}", lookup=True)
+
+
+def apply_alias_moves(entries: dict[str, str], moves: list[dict[str, str]]) -> dict[str, str]:
+    updated = dict(entries)
+    for move in moves:
+        key = str(move.get("key") or "")
+        dest = str(move.get("to") or "")
+        if key and dest:
+            updated[key] = dest
+    return updated
+
+
+def revert_alias_moves(entries: dict[str, str], moves: list[dict[str, str]]) -> dict[str, str]:
+    updated = dict(entries)
+    for move in moves:
+        key = str(move.get("key") or "")
+        src = str(move.get("from") or "")
+        dest = str(move.get("to") or "")
+        if not key:
+            continue
+        if updated.get(key) == dest:
+            if src:
+                updated[key] = src
+            else:
+                updated.pop(key, None)
+    return updated
+
+
+def person_alias_pairs(wikilink: str, card: dict[str, Any]) -> list[tuple[str, str]]:
+    identifiers: dict[str, str | list[str]] = {
+        "name": str(card.get("summary") or ""),
+        "emails": list(card.get("emails") or []),
+        "phones": list(card.get("phones") or []),
+        "github": str(card.get("github") or ""),
+        "linkedin": str(card.get("linkedin") or ""),
+        "twitter": str(card.get("twitter") or ""),
+        "instagram": str(card.get("instagram") or ""),
+        "telegram": str(card.get("telegram") or ""),
+        "discord": str(card.get("discord") or ""),
+    }
+    pairs = _iter_identifier_pairs(identifiers)
+    uid = str(card.get("uid") or "")
+    if uid:
+        pairs.append(("uid", uid))
+    return pairs
 
 
 class IdentityCache:
@@ -132,7 +211,7 @@ class IdentityCache:
         normalized = _normalize_identifier(prefix, value)
         if not normalized:
             return None
-        return self.entries.get(f"{prefix}:{normalized}")
+        return canonicalize_wikilink(self.entries, f"{prefix}:{normalized}", lookup=True)
 
     def upsert(self, wikilink: str, identifiers: dict[str, str | list[str]]) -> None:
         for prefix, value in _iter_identifier_pairs(identifiers):

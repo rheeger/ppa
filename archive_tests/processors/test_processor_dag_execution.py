@@ -423,7 +423,20 @@ class _MockStore:
 
     def embed_pending(self, **kwargs):
         self.embed_calls.append(dict(kwargs))
-        return {"embedded": 1, "failed": 0}
+        allow = {str(uid) for uid in (kwargs.get("uid_allowlist") or set())}
+        uid = next(iter(allow), "uid-emb-1")
+        key = f"ck-{uid}"
+        return {
+            "embedded": 1,
+            "failed": 0,
+            "selected": 1,
+            "selected_chunk_keys": [key],
+            "completed_chunk_keys": [key],
+            "reused_chunk_keys": [],
+            "failed_chunk_keys": [],
+            "pending_chunk_keys": [],
+            "chunk_keys_by_uid": {uid: [key]},
+        }
 
 
 def _active_snap(uid: str, *, processor_decision: str = "typed_extraction") -> ProcessorInputSnapshot:
@@ -517,14 +530,19 @@ def test_apply_materialization_calls_incremental_rebuild(tmp_path: Path) -> None
     assert all(r.status == "complete" for r in result.item_results)
 
 
-def test_apply_embedding_calls_embed_pending_dirty_limit(tmp_path: Path) -> None:
+def test_apply_embedding_calls_embed_pending_dirty_allowlist(tmp_path: Path) -> None:
     vault = _minimal_vault(tmp_path)
     store = _MockStore(vault)
     result = _apply_default(tmp_path, processor_key=PROCESSOR_EMBEDDING, uid="uid-emb-1", store=store)
     assert result.executed is True
     assert store.embed_calls
-    assert store.embed_calls[0]["limit"] == 1
-    assert store.embed_calls[0]["limit"] != 0
+    call = store.embed_calls[0]
+    assert call["uid_allowlist"] == {"uid-emb-1"}
+    assert call["limit"] == 0
+    assert not call.get("unscoped")
+    assert result.item_results[0].status == "complete"
+    assert result.item_results[0].receipt is not None
+    assert result.item_results[0].receipt.chunk_keys == ("ck-uid-emb-1",)
 
 
 def test_apply_embedding_full_backlog_requires_opt_in(tmp_path: Path) -> None:
@@ -539,6 +557,8 @@ def test_apply_embedding_full_backlog_requires_opt_in(tmp_path: Path) -> None:
     )
     assert store.embed_calls
     assert store.embed_calls[0]["limit"] == 0
+    assert store.embed_calls[0]["unscoped"] is True
+    assert "uid_allowlist" not in store.embed_calls[0]
     assert result.executed is True
 
 
@@ -626,15 +646,17 @@ def test_apply_enrichment_calls_run_enrichment_for_uids(
     assert calls[0][2].get("workflow") == "email_thread"
 
 
-def test_apply_enrichment_without_broad_llm_skips(
+def test_apply_enrichment_without_broad_llm_runs_deterministic(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     vault = _minimal_vault(tmp_path)
     store = _MockStore(vault)
+    calls: list[list[str]] = []
 
-    def _enrich(*_a, **_k):
-        raise AssertionError("enrichment must not run without --allow-broad-llm")
+    def _enrich(*_a, **kwargs):
+        calls.append(list(kwargs.get("uids") or _a[1] if len(_a) > 1 else []))
+        return type("Metrics", (), {"enriched_card_uids": ["uid-enr-skip"], "errors": 0})()
 
     monkeypatch.setattr(
         "archive_sync.llm_enrichment.enrichment_orchestrator.run_enrichment_for_uids",
@@ -649,8 +671,8 @@ def test_apply_enrichment_without_broad_llm_skips(
         allow_broad_llm=False,
     )
     assert result.executed is True
-    assert all(r.status == "skipped" for r in result.item_results)
-    assert any(r.skip_reason == "missing_broad_llm_opt_in" for r in result.item_results)
+    assert calls
+    assert not any(getattr(r, "skip_reason", "") == "missing_broad_llm_opt_in" for r in result.item_results)
 
 
 def test_apply_entity_resolution_passes_uid_allowlist(
@@ -679,15 +701,17 @@ def test_apply_entity_resolution_passes_uid_allowlist(
     assert calls[0]["dry_run"] is False
 
 
-def test_apply_entity_resolution_without_broad_llm_skips(
+def test_apply_entity_resolution_without_broad_llm_runs_deterministic(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     vault = _minimal_vault(tmp_path)
     store = _MockStore(vault)
+    calls: list[dict] = []
 
-    def _er(*_a, **_k):
-        raise AssertionError("entity resolution must not run without --allow-broad-llm")
+    def _er(vault_path, **kwargs):
+        calls.append({"vault_path": vault_path, **kwargs})
+        return {"created_uids": [], "changed_uids": [], "errors": []}
 
     monkeypatch.setattr("archive_sync.extractors.entity_resolution.run_entity_resolution", _er)
     result = _apply_default(
@@ -697,8 +721,8 @@ def test_apply_entity_resolution_without_broad_llm_skips(
         store=store,
         allow_broad_llm=False,
     )
-    assert all(r.status == "skipped" for r in result.item_results)
-    assert any(r.skip_reason == "missing_broad_llm_opt_in" for r in result.item_results)
+    assert calls
+    assert not any(getattr(r, "skip_reason", "") == "missing_broad_llm_opt_in" for r in result.item_results)
 
 
 def test_suppressed_inputs_skip_without_calling_embed_pending(tmp_path: Path) -> None:

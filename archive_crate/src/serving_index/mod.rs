@@ -1,11 +1,14 @@
 mod dirty;
+mod evidence;
 mod generation;
 mod graph;
 mod lexical;
 mod metadata;
 mod rank;
 mod schema;
+mod segments;
 mod vector;
+mod vector_train;
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -17,10 +20,11 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule};
 use serde::Serialize;
 
-use crate::serving_index::graph::GraphStore;
+use crate::serving_index::graph::{GraphBudget, GraphStore, StoredEdge};
 use crate::serving_index::lexical::LexicalIndex;
-use crate::serving_index::metadata::{CardMeta, MetadataStore};
-use crate::serving_index::vector::{IvfMmapAnn, VectorAnn};
+use crate::serving_index::metadata::{AccessPolicy, CardMeta, ChunkAdjacency, MetadataStore, TypedPredicate};
+use crate::serving_index::vector::IvfMmapAnn;
+use crate::serving_index::vector_train::TrainConfig;
 
 #[pyclass]
 pub struct ServingIndex {
@@ -30,41 +34,17 @@ pub struct ServingIndex {
     dir: PathBuf,
     meta: MetadataStore,
     graph: GraphStore,
-    lexical: Option<LexicalIndex>,
-    vectors: Option<IvfMmapAnn>,
+    lexical: Vec<LexicalIndex>,
+    vectors: Vec<IvfMmapAnn>,
     chunk_to_card: HashMap<String, (String, String, i32)>,
+    chunk_adj: ChunkAdjacency,
+    chunk_evidence: HashMap<String, serde_json::Value>,
+    live_chunk_keys: HashSet<String>,
+    chain_depth: usize,
+    embedding_spec: Option<serde_json::Value>,
 }
 
 static OPEN_LOCK: Mutex<()> = Mutex::new(());
-
-fn chunk_map_path(dir: &Path) -> PathBuf {
-    dir.join("chunks.jsonl")
-}
-
-fn load_chunk_map(dir: &Path) -> PyResult<HashMap<String, (String, String, i32)>> {
-    let path = chunk_map_path(dir);
-    let mut out = HashMap::new();
-    if !path.exists() {
-        return Ok(out);
-    }
-    let f = fs::File::open(&path).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
-    for line in BufReader::new(f).lines() {
-        let line = line.map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        let v: serde_json::Value = serde_json::from_str(&line)
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-        let key = v.get("chunk_key").and_then(|x| x.as_str()).unwrap_or("").to_string();
-        let card = v.get("card_uid").and_then(|x| x.as_str()).unwrap_or("").to_string();
-        let ctype = v.get("chunk_type").and_then(|x| x.as_str()).unwrap_or("").to_string();
-        let idx = v.get("chunk_index").and_then(|x| x.as_i64()).unwrap_or(0) as i32;
-        if !key.is_empty() {
-            out.insert(key, (card, ctype, idx));
-        }
-    }
-    Ok(out)
-}
 
 #[pymethods]
 impl ServingIndex {
@@ -86,11 +66,43 @@ fn open_generation(index_root: &Path) -> PyResult<ServingIndex> {
             "serving_index_unavailable",
         ));
     }
-    let meta = MetadataStore::load(&dir)?;
-    let graph = GraphStore::load(&dir)?;
-    let lexical = LexicalIndex::open(&dir.join("tantivy")).ok();
-    let vectors = IvfMmapAnn::open(&dir).ok();
-    let chunk_to_card = load_chunk_map(&dir)?;
+    if dir.join("INCOMPLETE").exists() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "serving_index_incomplete",
+        ));
+    }
+    let format = read_format_version(&dir)?;
+    if format != schema::SERVING_INDEX_FORMAT_VERSION {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "serving_index_format_unsupported: found {format}, need {} ({})",
+            schema::SERVING_INDEX_FORMAT_VERSION,
+            schema::VECTOR_IMPL
+        )));
+    }
+    let resolved = segments::resolve_live(index_root, &gid)?;
+    let meta = MetadataStore::from_cards(resolved.cards.values().cloned());
+    let graph = GraphStore::from_edges(resolved.edges.values().cloned());
+    let chunk_to_card = resolved.chunk_to_card();
+    let mut chunk_adj = ChunkAdjacency::default();
+    for (chunk_key, (card_uid, chunk_type, chunk_index)) in &chunk_to_card {
+        chunk_adj.insert(card_uid.clone(), chunk_type.clone(), *chunk_index, chunk_key.clone());
+    }
+    chunk_adj.finalize();
+    let mut lexical = Vec::new();
+    let mut vectors = Vec::new();
+    let mut embedding_spec = resolved.embedding_spec.clone();
+    for seg in &resolved.chain {
+        if seg.join("tantivy").exists() {
+            if let Ok(lex) = LexicalIndex::open(&seg.join("tantivy")) {
+                lexical.push(lex);
+            }
+        }
+        if seg.join("embedding_keys.txt").exists() || seg.join("embeddings.bin").exists() {
+            let ann = IvfMmapAnn::open(seg)?;
+            embedding_spec = segments::check_spec_compat(embedding_spec.as_ref(), ann.embedding_spec())?;
+            vectors.push(ann);
+        }
+    }
     Ok(ServingIndex {
         generation_id: gid,
         dir,
@@ -99,7 +111,23 @@ fn open_generation(index_root: &Path) -> PyResult<ServingIndex> {
         lexical,
         vectors,
         chunk_to_card,
+        chunk_adj,
+        chunk_evidence: resolved.chunk_evidence(),
+        live_chunk_keys: resolved.live_chunk_keys,
+        chain_depth: resolved.chain.len().max(1),
+        embedding_spec,
     })
+}
+
+fn read_format_version(dir: &Path) -> PyResult<u32> {
+    let raw = fs::read_to_string(dir.join("manifest.json"))
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+    let value: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    Ok(value
+        .get("serving_index_format_version")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as u32)
 }
 
 fn req_str(req: &Bound<'_, PyDict>, key: &str) -> String {
@@ -118,7 +146,117 @@ fn req_i64(req: &Bound<'_, PyDict>, key: &str, default: i64) -> i64 {
         .unwrap_or(default)
 }
 
+fn req_bool(req: &Bound<'_, PyDict>, key: &str) -> bool {
+    req.get_item(key)
+        .ok()
+        .flatten()
+        .and_then(|v| v.extract::<bool>().ok())
+        .unwrap_or(false)
+}
+
+fn req_str_list(req: &Bound<'_, PyDict>, key: &str) -> Vec<String> {
+    if let Some(value) = req.get_item(key).ok().flatten() {
+        if let Ok(items) = value.extract::<Vec<String>>() {
+            return items
+                .into_iter()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+        if let Ok(raw) = value.extract::<String>() {
+            return raw
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+    }
+    Vec::new()
+}
+
+fn access_policy(req: &Bound<'_, PyDict>) -> AccessPolicy {
+    let deny = req_bool(req, "access_deny");
+    let sources = req_str_list(req, "access_sources");
+    let domains = req_str_list(req, "access_domains");
+    let restricted = req_bool(req, "access_restricted") || deny || !sources.is_empty() || !domains.is_empty();
+    AccessPolicy {
+        deny,
+        restricted,
+        allowed_sources: sources,
+        allowed_domains: domains,
+    }
+}
+
+fn resolve_graph_start(idx: &ServingIndex, start: &str) -> String {
+    if idx.meta.by_uid.contains_key(start) {
+        return start.to_string();
+    }
+    idx.meta
+        .by_path
+        .get(start)
+        .cloned()
+        .or_else(|| idx.meta.by_path.get(&format!("{start}.md")).cloned())
+        .unwrap_or_else(|| start.to_string())
+}
+
+fn graph_map_to_json(
+    idx: &ServingIndex,
+    graph: HashMap<String, Vec<StoredEdge>>,
+    policy: &AccessPolicy,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut out = serde_json::Map::new();
+    for (node, targets) in graph {
+        let items: Vec<serde_json::Value> = targets
+            .into_iter()
+            .filter(|edge| card_allowed(idx, &edge.neighbor_uid, policy))
+            .map(|edge| {
+                let path = idx
+                    .meta
+                    .by_uid
+                    .get(&edge.neighbor_uid)
+                    .map(|c| c.rel_path.clone())
+                    .unwrap_or_else(|| edge.neighbor_uid.clone());
+                let mut item = edge.to_json(path);
+                if let Some(obj) = item.as_object_mut() {
+                    if edge.method == "inferred" {
+                        obj.insert("match_channel".into(), serde_json::json!("seed-link"));
+                    } else {
+                        obj.insert("match_channel".into(), serde_json::json!("graph"));
+                    }
+                }
+                item
+            })
+            .collect();
+        let key = idx
+            .meta
+            .by_uid
+            .get(&node)
+            .map(|c| c.rel_path.clone())
+            .unwrap_or(node);
+        out.insert(key, serde_json::Value::Array(items));
+    }
+    out
+}
+
+fn card_allowed(idx: &ServingIndex, uid: &str, policy: &AccessPolicy) -> bool {
+    idx.meta
+        .by_uid
+        .get(uid)
+        .map(|card| policy.permits(card) && !MetadataStore::is_suppressed(card))
+        .unwrap_or(false)
+}
+
 fn card_to_row(card: &CardMeta, extra: serde_json::Value) -> serde_json::Value {
+    let corpus_state = if card.corpus_state.is_empty() {
+        schema::UNKNOWN
+    } else {
+        card.corpus_state.as_str()
+    };
+    let provenance = if card.provenance_summary.is_empty() {
+        schema::UNKNOWN
+    } else {
+        card.provenance_summary.as_str()
+    };
     let mut row = serde_json::json!({
         "card_uid": card.card_uid,
         "uid": card.card_uid,
@@ -127,8 +265,14 @@ fn card_to_row(card: &CardMeta, extra: serde_json::Value) -> serde_json::Value {
         "type": card.r#type,
         "activity_at": card.activity_at,
         "activity_end_at": card.activity_end_at,
-        "corpus_state": card.corpus_state,
+        "corpus_state": corpus_state,
+        "retrieval_weight": card.retrieval_weight,
         "slug": card.slug,
+        "aliases": card.aliases,
+        "emails": card.emails,
+        "external_ids": card.external_ids,
+        "source_revision": card.source_revision,
+        "provenance_summary": provenance,
     });
     if let Some(obj) = row.as_object_mut() {
         if let Some(extra_obj) = extra.as_object() {
@@ -167,16 +311,66 @@ pub fn serving_index_search(
     let people_filter = req_str(&req, "people_filter");
     let start_date = req_str(&req, "start_date");
     let end_date = req_str(&req, "end_date");
-    let hits = if let Some(lex) = &idx.lexical {
-        lex.search(&query, limit * 4, &type_filter)?
-    } else {
-        Vec::new()
-    };
+    let policy = access_policy(&req);
     let mut rows = Vec::new();
-    for (uid, score) in hits {
-        if let Some(card) = idx.meta.by_uid.get(&uid) {
-            if !idx.meta.matches_filters(
+    let mut seen = HashSet::new();
+    if let Some(card) = idx.meta.exact_identifier(&query) {
+        if idx.meta.eligible(
+            card,
+            &policy,
+            &type_filter,
+            &source_filter,
+            &people_filter,
+            "",
+            &start_date,
+            &end_date,
+        ) {
+            let (exact, slug_e, sum_e, ext_e, per_e) = rank::exact_flags(card, &query);
+            rows.push(card_to_row(
                 card,
+                serde_json::json!({
+                    "matched_by": "exact",
+                    "match_channel": "exact",
+                    "exact_match": true,
+                    "slug_exact": slug_e,
+                    "summary_exact": sum_e,
+                    "external_id_exact": ext_e,
+                    "person_exact": per_e,
+                    "serving_generation": idx.generation_id,
+                    "citation": {
+                        "card_uid": card.card_uid,
+                        "source_revision": card.source_revision,
+                        "generation": idx.generation_id,
+                        "match_channel": "exact",
+                    },
+                    "uid_exact": i32::from(exact),
+                }),
+            ));
+            seen.insert(card.card_uid.clone());
+        }
+    }
+    let mut merged: HashMap<String, f32> = HashMap::new();
+    for lex in &idx.lexical {
+        for (uid, score) in lex.search(&query, limit * 4, &type_filter)? {
+            if !idx.meta.by_uid.contains_key(&uid) {
+                continue;
+            }
+            let entry = merged.entry(uid).or_insert(score);
+            if score > *entry {
+                *entry = score;
+            }
+        }
+    }
+    let mut hits: Vec<(String, f32)> = merged.into_iter().collect();
+    hits.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    for (uid, score) in hits {
+        if !seen.insert(uid.clone()) {
+            continue;
+        }
+        if let Some(card) = idx.meta.by_uid.get(&uid) {
+            if !idx.meta.eligible(
+                card,
+                &policy,
                 &type_filter,
                 &source_filter,
                 &people_filter,
@@ -187,16 +381,25 @@ pub fn serving_index_search(
                 continue;
             }
             let (exact, slug_e, sum_e, ext_e, per_e) = rank::exact_flags(card, &query);
+            let channel = if exact { "exact" } else { "lexical" };
             rows.push(card_to_row(
                 card,
                 serde_json::json!({
-                    "matched_by": "lexical",
+                    "matched_by": channel,
+                    "match_channel": channel,
                     "lexical_score": score,
                     "exact_match": exact,
                     "slug_exact": slug_e,
                     "summary_exact": sum_e,
                     "external_id_exact": ext_e,
                     "person_exact": per_e,
+                    "serving_generation": idx.generation_id,
+                    "citation": {
+                        "card_uid": card.card_uid,
+                        "source_revision": card.source_revision,
+                        "generation": idx.generation_id,
+                        "match_channel": channel,
+                    },
                 }),
             ));
         }
@@ -221,13 +424,15 @@ pub fn serving_index_query(
     let start_date = req_str(&req, "start_date");
     let end_date = req_str(&req, "end_date");
     let limit = req_i64(&req, "limit", 20).max(1) as usize;
+    let policy = access_policy(&req);
     let mut cards: Vec<&CardMeta> = idx
         .meta
         .by_uid
         .values()
         .filter(|c| {
-            idx.meta.matches_filters(
+            idx.meta.eligible(
                 c,
+                &policy,
                 &type_filter,
                 &source_filter,
                 &people_filter,
@@ -244,6 +449,98 @@ pub fn serving_index_query(
 }
 
 #[pyfunction]
+pub fn serving_index_typed_query(
+    py: Python<'_>,
+    handle: &Bound<'_, ServingIndex>,
+    req: Bound<'_, PyDict>,
+) -> PyResult<PyObject> {
+    let idx = handle.borrow();
+    let policy = access_policy(&req);
+    let order_field = req_str(&req, "order_field");
+    let order_field = if order_field.is_empty() { "uid".to_string() } else { order_field };
+    let order_direction = req_str(&req, "order_direction");
+    let order_direction = if order_direction.is_empty() {
+        "asc".to_string()
+    } else {
+        order_direction
+    };
+    let page_size = req_i64(&req, "page_size", 20).clamp(1, 200) as usize;
+    let after_uid = req_str(&req, "after_uid");
+    let after_value = req_str(&req, "after_value");
+    let after_null = req_bool(&req, "after_null");
+    let pred = if let Some(raw) = req.get_item("predicate").ok().flatten() {
+        if raw.is_none() {
+            None
+        } else {
+            let json = py
+                .import_bound("json")?
+                .call_method1("dumps", (raw,))?
+                .extract::<String>()?;
+            Some(
+                serde_json::from_str::<TypedPredicate>(&json)
+                    .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("invalid predicate: {e}")))?,
+            )
+        }
+    } else {
+        None
+    };
+    let page = idx
+        .meta
+        .typed_query_page(
+            &policy,
+            pred.as_ref(),
+            &order_field,
+            &order_direction,
+            &after_uid,
+            &after_value,
+            after_null,
+            page_size,
+        )
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let rows: Vec<serde_json::Value> = page
+        .rows
+        .into_iter()
+        .map(|card| {
+            card_to_row(
+                card,
+                serde_json::json!({
+                    "serving_generation": idx.generation_id,
+                    "source": card.sources,
+                    "sources": card.sources,
+                    "people": card.people,
+                    "orgs": card.orgs,
+                    "required_sources": if card.required_sources.is_empty() { card.sources.clone() } else { card.required_sources.clone() },
+                    "domains": card.domains,
+                    "lineage_complete": card.lineage_complete,
+                }),
+            )
+        })
+        .collect();
+    let mut payload = serde_json::json!({
+        "rows": rows,
+        "matched_total": page.matched_total,
+        "total_status": "exact",
+        "snapshot": idx.generation_id,
+        "truncated": page.truncated,
+    });
+    if let Some(obj) = payload.as_object_mut() {
+        if let Some(next) = page.next {
+            obj.insert(
+                "next_after".into(),
+                serde_json::json!({
+                    "uid": next.uid,
+                    "order_value": next.order_value,
+                    "order_null": next.order_null,
+                }),
+            );
+        } else {
+            obj.insert("next_after".into(), serde_json::Value::Null);
+        }
+    }
+    json_to_py(py, payload)
+}
+
+#[pyfunction]
 pub fn serving_index_vector(
     py: Python<'_>,
     handle: &Bound<'_, ServingIndex>,
@@ -257,29 +554,144 @@ pub fn serving_index_vector(
     let people_filter = req_str(&req, "people_filter");
     let start_date = req_str(&req, "start_date");
     let end_date = req_str(&req, "end_date");
-    let Some(ann) = &idx.vectors else {
+    let policy = access_policy(&req);
+    if idx.vectors.is_empty() {
         return json_to_py(py, serde_json::Value::Array(vec![]));
     };
-    let knn = ann.knn(&query_vector, limit * 8);
-    let mut best: HashMap<String, (f32, String, i32, usize)> = HashMap::new();
-    for (chunk_key, sim) in knn {
-        if let Some((card_uid, ctype, cidx)) = idx.chunk_to_card.get(&chunk_key) {
-            let e = best.entry(card_uid.clone()).or_insert((sim, ctype.clone(), *cidx, 0));
+    if !query_vector.iter().all(|v| v.is_finite()) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "query embedding contains non-finite values",
+        ));
+    }
+    let dim = idx
+        .vectors
+        .iter()
+        .map(|ann| ann.dim())
+        .find(|d| *d != 0)
+        .unwrap_or(0);
+    if !query_vector.is_empty() && dim != 0 && query_vector.len() != dim {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "query dimension {} != serving dimension {}",
+            query_vector.len(),
+            dim
+        )));
+    }
+    if let Some(expected) = &idx.embedding_spec {
+        if let Some(raw) = req.get_item("embedding_spec").ok().flatten() {
+            if let Ok(got) = raw.extract::<String>() {
+                let got_v: serde_json::Value = serde_json::from_str(&got)
+                    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+                segments::check_spec_compat(Some(expected), Some(&got_v))?;
+            }
+        }
+    }
+    let default_nprobe = idx.vectors.first().map(|a| a.nprobe() as i64).unwrap_or(32);
+    let default_budget = idx
+        .vectors
+        .first()
+        .map(|a| a.candidate_budget() as i64)
+        .unwrap_or(4096);
+    let nprobe = req_i64(&req, "nprobe", default_nprobe).max(1) as usize;
+    let budget = req_i64(&req, "candidate_budget", default_budget).max(1) as usize;
+    let has_filter = policy.restricted
+        || policy.deny
+        || !type_filter.is_empty()
+        || !source_filter.is_empty()
+        || !people_filter.is_empty()
+        || !start_date.is_empty()
+        || !end_date.is_empty();
+    let per_k = (limit * 8).max(budget).max(limit * idx.chain_depth);
+    let mut report = crate::serving_index::vector::KnnReport {
+        hits: Vec::new(),
+        nlist: 0,
+        nprobe,
+        lists_probed: 0,
+        candidates_scored: 0,
+        scanned_all: false,
+        skipped_invalid: 0,
+        skipped_zero: 0,
+        truncated: false,
+    };
+    let mut best_key: HashMap<String, f32> = HashMap::new();
+    for ann in &idx.vectors {
+        let eligible = if has_filter {
+            let mut set = HashSet::new();
+            for (i, key) in ann.keys().iter().enumerate() {
+                if !idx.live_chunk_keys.contains(key) {
+                    continue;
+                }
+                if let Some((uid, _, _)) = idx.chunk_to_card.get(key) {
+                    if let Some(card) = idx.meta.by_uid.get(uid) {
+                        if idx.meta.eligible(
+                            card,
+                            &policy,
+                            &type_filter,
+                            &source_filter,
+                            &people_filter,
+                            "",
+                            &start_date,
+                            &end_date,
+                        ) {
+                            set.insert(i);
+                        }
+                    }
+                }
+            }
+            Some(set)
+        } else {
+            None
+        };
+        let part = ann.knn_live(
+            &query_vector,
+            per_k,
+            &idx.live_chunk_keys,
+            nprobe,
+            budget.max(per_k),
+            eligible.as_ref(),
+        );
+        report.nlist = report.nlist.max(part.nlist);
+        report.lists_probed += part.lists_probed;
+        report.candidates_scored += part.candidates_scored;
+        report.scanned_all |= part.scanned_all;
+        report.skipped_invalid += part.skipped_invalid;
+        report.skipped_zero += part.skipped_zero;
+        report.truncated |= part.truncated;
+        for hit in part.hits {
+            let e = best_key.entry(hit.key.clone()).or_insert(hit.score);
+            if hit.score > *e {
+                *e = hit.score;
+            }
+        }
+    }
+    let mut union_hits: Vec<(String, f32)> = best_key.into_iter().collect();
+    union_hits.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    report.hits = union_hits
+        .into_iter()
+        .map(|(key, score)| crate::serving_index::vector::KnnHit { key, score })
+        .collect();
+    let mut best: HashMap<String, (f32, String, i32, usize, String)> = HashMap::new();
+    for hit in &report.hits {
+        if let Some((card_uid, ctype, cidx)) = idx.chunk_to_card.get(&hit.key) {
+            let e = best
+                .entry(card_uid.clone())
+                .or_insert((hit.score, ctype.clone(), *cidx, 0, hit.key.clone()));
             e.3 += 1;
-            if sim > e.0 {
-                e.0 = sim;
+            if hit.score > e.0 {
+                e.0 = hit.score;
                 e.1 = ctype.clone();
                 e.2 = *cidx;
+                e.4 = hit.key.clone();
             }
         }
     }
     let mut rows = Vec::new();
     let mut items: Vec<_> = best.into_iter().collect();
     items.sort_by(|a, b| b.1.0.partial_cmp(&a.1.0).unwrap_or(std::cmp::Ordering::Equal));
-    for (uid, (sim, ctype, cidx, matched)) in items {
+    for (uid, (sim, ctype, cidx, matched, chunk_key)) in items {
         if let Some(card) = idx.meta.by_uid.get(&uid) {
-            if !idx.meta.matches_filters(
+            if !idx.meta.eligible(
                 card,
+                &policy,
                 &type_filter,
                 &source_filter,
                 &people_filter,
@@ -289,19 +701,42 @@ pub fn serving_index_vector(
             ) {
                 continue;
             }
+            let provenance = if card.provenance_summary.is_empty() {
+                schema::UNKNOWN
+            } else {
+                card.provenance_summary.as_str()
+            };
+            let evidence = idx.chunk_evidence.get(&chunk_key).cloned().unwrap_or(serde_json::Value::Null);
             rows.push(card_to_row(
                 card,
                 serde_json::json!({
                     "matched_by": "vector",
+                    "match_channel": "vector",
                     "score": sim,
                     "similarity": sim,
                     "vector_similarity": sim,
                     "chunk_type": ctype,
                     "chunk_index": cidx,
                     "matched_chunk_count": matched,
+                    "chunk_key": chunk_key,
+                    "evidence_ref": evidence,
                     "preview": card.summary.chars().take(160).collect::<String>(),
-                    "provenance_bias": "mixed",
-                    "provenance_score": 0.04,
+                    "provenance_bias": provenance,
+                    "provenance_score": 0.0,
+                    "serving_generation": idx.generation_id,
+                    "ann_nlist": report.nlist,
+                    "ann_nprobe": report.nprobe,
+                    "ann_lists_probed": report.lists_probed,
+                    "ann_candidates": report.candidates_scored,
+                    "ann_scanned_all": report.scanned_all,
+                    "truncated": report.truncated,
+                    "citation": {
+                        "card_uid": card.card_uid,
+                        "source_revision": card.source_revision,
+                        "generation": idx.generation_id,
+                        "match_channel": "vector",
+                        "chunk_key": chunk_key,
+                    },
                 }),
             ));
         }
@@ -327,16 +762,70 @@ pub fn serving_index_hybrid(
     let people_filter = req_str(&req, "people_filter");
     let start_date = req_str(&req, "start_date");
     let end_date = req_str(&req, "end_date");
-    let cap = (limit * 8).max(limit);
+    let policy = access_policy(&req);
+    let cap = (limit * 8).max(limit).max(limit * idx.chain_depth);
     let mut lexical = HashMap::new();
-    if let Some(lex) = &idx.lexical {
+    for lex in &idx.lexical {
         for (uid, score) in lex.search(query, cap, &type_filter)? {
-            lexical.insert(uid, score);
+            if !idx.meta.by_uid.contains_key(&uid) {
+                continue;
+            }
+            let e = lexical.entry(uid).or_insert(score);
+            if score > *e {
+                *e = score;
+            }
         }
     }
     let mut vector = HashMap::new();
-    if let Some(ann) = &idx.vectors {
+    for ann in &idx.vectors {
+        if policy.restricted || policy.deny {
+            let mut eligible = HashSet::new();
+            for (i, key) in ann.keys().iter().enumerate() {
+                if !idx.live_chunk_keys.contains(key) {
+                    continue;
+                }
+                if let Some((uid, _, _)) = idx.chunk_to_card.get(key) {
+                    if let Some(card) = idx.meta.by_uid.get(uid) {
+                        if idx.meta.eligible(
+                            card,
+                            &policy,
+                            &type_filter,
+                            &source_filter,
+                            &people_filter,
+                            "",
+                            &start_date,
+                            &end_date,
+                        ) {
+                            eligible.insert(i);
+                        }
+                    }
+                }
+            }
+            let part = ann.knn_live(
+                &query_vector,
+                cap,
+                &idx.live_chunk_keys,
+                ann.nprobe(),
+                cap,
+                Some(&eligible),
+            );
+            for hit in part.hits {
+                if let Some((card_uid, ctype, cidx)) = idx.chunk_to_card.get(&hit.key) {
+                    let e = vector
+                        .entry(card_uid.clone())
+                        .or_insert((hit.score, ctype.clone(), *cidx, 0usize));
+                    e.3 += 1;
+                    if hit.score > e.0 {
+                        *e = (hit.score, ctype.clone(), *cidx, e.3);
+                    }
+                }
+            }
+            continue;
+        }
         for (chunk_key, sim) in ann.knn(&query_vector, cap) {
+            if !idx.live_chunk_keys.contains(&chunk_key) {
+                continue;
+            }
             if let Some((card_uid, ctype, cidx)) = idx.chunk_to_card.get(&chunk_key) {
                 let e = vector
                     .entry(card_uid.clone())
@@ -364,8 +853,9 @@ pub fn serving_index_hybrid(
             .by_uid
             .get(uid)
             .map(|c| {
-                idx.meta.matches_filters(
+                idx.meta.eligible(
                     c,
+                    &policy,
                     &type_filter,
                     &source_filter,
                     &people_filter,
@@ -381,8 +871,9 @@ pub fn serving_index_hybrid(
             .by_uid
             .get(uid)
             .map(|c| {
-                idx.meta.matches_filters(
+                idx.meta.eligible(
                     c,
+                    &policy,
                     &type_filter,
                     &source_filter,
                     &people_filter,
@@ -393,59 +884,112 @@ pub fn serving_index_hybrid(
             })
             .unwrap_or(false)
     });
-    let trust = idx.graph.neighbor_trust(&anchors);
-    let rows = rank::fuse(&lexical, &vector, &trust, &idx.meta.by_uid, query, limit);
+    let trust = idx.graph.neighbor_trust(&anchors, |uid| card_allowed(&idx, uid, &policy));
+    let rows = rank::fuse(&lexical, &vector, &trust, &idx.meta.by_uid, query, limit, &policy);
     json_to_py(py, serde_json::Value::Array(rows))
 }
 
 #[pyfunction]
+#[pyo3(signature = (handle, start, hops, req=None))]
 pub fn serving_index_graph(
     py: Python<'_>,
     handle: &Bound<'_, ServingIndex>,
     start: &str,
     hops: usize,
+    req: Option<Bound<'_, PyDict>>,
 ) -> PyResult<PyObject> {
     let idx = handle.borrow();
-    let uid = if idx.meta.by_uid.contains_key(start) {
-        start.to_string()
-    } else {
-        idx.meta
-            .by_path
-            .get(start)
-            .cloned()
-            .or_else(|| idx.meta.by_path.get(&format!("{start}.md")).cloned())
-            .unwrap_or_else(|| start.to_string())
-    };
+    let policy = req.as_ref().map(access_policy).unwrap_or_else(AccessPolicy::unrestricted);
+    let uid = resolve_graph_start(&idx, start);
     let hops = hops.clamp(1, 2);
-    let graph = idx.graph.hops(&uid, hops);
-    let mut out = serde_json::Map::new();
-    for (node, targets) in graph {
-        let items: Vec<serde_json::Value> = targets
-            .into_iter()
-            .map(|(path_or_uid, edge_type)| {
-                let path = idx
-                    .meta
-                    .by_uid
-                    .get(&path_or_uid)
-                    .map(|c| c.rel_path.clone())
-                    .unwrap_or(path_or_uid);
-                serde_json::json!({"path": path, "edge_type": edge_type})
-            })
-            .collect();
-        let key = idx
-            .meta
-            .by_uid
-            .get(&node)
-            .map(|c| c.rel_path.clone())
-            .unwrap_or(node);
-        out.insert(key, serde_json::Value::Array(items));
-    }
-    json_to_py(py, serde_json::Value::Object(out))
+    let bounded = idx
+        .graph
+        .hops_bounded(&uid, &GraphBudget::compat(hops), |node| card_allowed(&idx, node, &policy));
+    json_to_py(py, serde_json::Value::Object(graph_map_to_json(&idx, bounded.graph, &policy)))
 }
 
 #[pyfunction]
-pub fn serving_index_person(py: Python<'_>, handle: &Bound<'_, ServingIndex>, name: &str) -> PyResult<PyObject> {
+#[pyo3(signature = (handle, start, hops, req=None))]
+pub fn serving_index_graph_bounded(
+    py: Python<'_>,
+    handle: &Bound<'_, ServingIndex>,
+    start: &str,
+    hops: usize,
+    req: Option<Bound<'_, PyDict>>,
+) -> PyResult<PyObject> {
     let idx = handle.borrow();
+    let policy = req.as_ref().map(access_policy).unwrap_or_else(AccessPolicy::unrestricted);
+    let uid = resolve_graph_start(&idx, start);
+    let mut budget = GraphBudget::public(hops);
+    if let Some(req) = req.as_ref() {
+        let max_depth = req_i64(req, "max_depth", budget.max_depth as i64).clamp(1, 2) as usize;
+        budget.max_depth = max_depth;
+        let max_nodes = req_i64(req, "max_nodes", budget.max_nodes as i64);
+        if max_nodes > 0 {
+            budget.max_nodes = max_nodes as usize;
+        }
+        let max_edges = req_i64(req, "max_edges", budget.max_edges as i64);
+        if max_edges > 0 {
+            budget.max_edges = max_edges as usize;
+        }
+        let elapsed = req_i64(req, "max_elapsed_ms", budget.max_elapsed_ms as i64);
+        budget.max_elapsed_ms = if elapsed < 0 { 0 } else { elapsed as u64 };
+        let types = req_str_list(req, "allowed_relation_types");
+        if !types.is_empty() {
+            budget.allowed_relation_types = types.into_iter().collect();
+        }
+    }
+    let bounded = idx
+        .graph
+        .hops_bounded(&uid, &budget, |node| card_allowed(&idx, node, &policy));
+    let payload = serde_json::json!({
+        "graph": graph_map_to_json(&idx, bounded.graph, &policy),
+        "truncated": bounded.truncated,
+        "truncation_reason": bounded.truncation_reason,
+        "nodes_visited": bounded.nodes_visited,
+        "edges_emitted": bounded.edges_emitted,
+        "max_nodes": budget.max_nodes,
+        "max_edges": budget.max_edges,
+        "depth": budget.max_depth,
+        "frontier": bounded.frontier,
+    });
+    json_to_py(py, payload)
+}
+
+#[pyfunction]
+pub fn serving_index_adjacent_chunks(
+    py: Python<'_>,
+    handle: &Bound<'_, ServingIndex>,
+    chunk_key: &str,
+) -> PyResult<PyObject> {
+    let idx = handle.borrow();
+    let Some((card_uid, chunk_type, chunk_index)) = idx.chunk_to_card.get(chunk_key) else {
+        return json_to_py(py, serde_json::Value::Null);
+    };
+    let (preceding, following) = idx.chunk_adj.neighbors(card_uid, chunk_type, *chunk_index);
+    json_to_py(
+        py,
+        serde_json::json!({
+            "chunk_key": chunk_key,
+            "card_uid": card_uid,
+            "chunk_type": chunk_type,
+            "chunk_index": chunk_index,
+            "preceding": preceding,
+            "following": following,
+        }),
+    )
+}
+
+#[pyfunction]
+#[pyo3(signature = (handle, name, req=None))]
+pub fn serving_index_person(
+    py: Python<'_>,
+    handle: &Bound<'_, ServingIndex>,
+    name: &str,
+    req: Option<Bound<'_, PyDict>>,
+) -> PyResult<PyObject> {
+    let idx = handle.borrow();
+    let policy = req.as_ref().map(access_policy).unwrap_or_else(AccessPolicy::unrestricted);
     let needle = name.trim().to_lowercase().replace(' ', "-");
     let uid = idx
         .meta
@@ -455,45 +999,64 @@ pub fn serving_index_person(py: Python<'_>, handle: &Bound<'_, ServingIndex>, na
         .cloned();
     if let Some(uid) = uid {
         if let Some(card) = idx.meta.by_uid.get(&uid) {
-            return json_to_py(
-                py,
-                serde_json::json!({"found": true, "rel_path": card.rel_path, "card_uid": uid}),
-            );
+            if policy.permits(card) && !MetadataStore::is_suppressed(card) {
+                return json_to_py(
+                    py,
+                    serde_json::json!({"found": true, "rel_path": card.rel_path, "card_uid": uid}),
+                );
+            }
         }
     }
     json_to_py(py, serde_json::json!({"found": false, "rel_path": "", "card_uid": ""}))
 }
 
 #[pyfunction]
+#[pyo3(signature = (handle, uids, req=None))]
 pub fn serving_index_pointers(
     py: Python<'_>,
     handle: &Bound<'_, ServingIndex>,
     uids: Vec<String>,
+    req: Option<Bound<'_, PyDict>>,
 ) -> PyResult<PyObject> {
     let idx = handle.borrow();
-    let map = idx.graph.pointers(&uids);
+    let policy = req.as_ref().map(access_policy).unwrap_or_else(AccessPolicy::unrestricted);
+    let visible: Vec<String> = uids
+        .into_iter()
+        .filter(|uid| card_allowed(&idx, uid, &policy))
+        .collect();
+    let mut map = idx.graph.pointers(&visible);
+    for slot in map.values_mut() {
+        for list in slot.values_mut() {
+            list.retain(|uid| card_allowed(&idx, uid, &policy));
+        }
+    }
     json_to_py(py, serde_json::to_value(map).unwrap_or(serde_json::json!({})))
 }
 
 #[pyfunction]
+#[pyo3(signature = (handle, uids, hops, req=None))]
 pub fn serving_index_neighbor_uids(
     handle: &Bound<'_, ServingIndex>,
     uids: Vec<String>,
     hops: usize,
+    req: Option<Bound<'_, PyDict>>,
 ) -> PyResult<Vec<String>> {
     let idx = handle.borrow();
+    let policy = req.as_ref().map(access_policy).unwrap_or_else(AccessPolicy::unrestricted);
     let hops = hops.clamp(1, 2);
     let mut out = HashSet::new();
     for uid in uids {
         let uid = uid.trim();
-        if uid.is_empty() {
+        if uid.is_empty() || !card_allowed(&idx, uid, &policy) {
             continue;
         }
         out.insert(uid.to_string());
-        for (node, targets) in idx.graph.hops(uid, hops) {
+        for (node, targets) in idx.graph.hops_where(uid, hops, |node| card_allowed(&idx, node, &policy)) {
             out.insert(node);
-            for (target, _) in targets {
-                out.insert(target);
+            for edge in targets {
+                if card_allowed(&idx, &edge.neighbor_uid, &policy) {
+                    out.insert(edge.neighbor_uid);
+                }
             }
         }
     }
@@ -513,6 +1076,7 @@ pub fn serving_index_timeline(
     let source_filter = req_str(&req, "source_filter");
     let people_filter = req_str(&req, "people_filter");
     let limit = req_i64(&req, "limit", 20).max(1) as usize;
+    let policy = access_policy(&req);
     let cards = idx.meta.timeline_range(
         &start_date,
         &end_date,
@@ -520,6 +1084,7 @@ pub fn serving_index_timeline(
         &type_filter,
         &source_filter,
         &people_filter,
+        &policy,
     );
     let rows: Vec<serde_json::Value> = cards
         .into_iter()
@@ -548,6 +1113,7 @@ pub fn serving_index_temporal_neighbors(
     let type_filter = req_str(&req, "type_filter");
     let source_filter = req_str(&req, "source_filter");
     let people_filter = req_str(&req, "people_filter");
+    let policy = access_policy(&req);
     let Some(hits) = idx.meta.temporal_neighbors(
         timestamp,
         direction,
@@ -555,6 +1121,7 @@ pub fn serving_index_temporal_neighbors(
         &type_filter,
         &source_filter,
         &people_filter,
+        &policy,
     ) else {
         return json_to_py(
             py,
@@ -587,12 +1154,18 @@ struct Manifest {
     analyzer_id: String,
     vector_impl: String,
     pipeline_version: String,
+    ranking_version: String,
     card_count: usize,
     chunk_count: usize,
     embedding_count: usize,
+    nlist: usize,
+    nprobe: usize,
+    ivf_checksum: String,
+    embedding_spec: Option<serde_json::Value>,
 }
 
 #[pyfunction]
+#[pyo3(signature = (dest_generation, cards_jsonl, chunks_jsonl, embedding_keys_path, embeddings_bin_path, dim, edges_jsonl, train_config=None))]
 pub fn serving_index_build(
     py: Python<'_>,
     dest_generation: &str,
@@ -602,6 +1175,7 @@ pub fn serving_index_build(
     embeddings_bin_path: &str,
     dim: usize,
     edges_jsonl: &str,
+    train_config: Option<&str>,
 ) -> PyResult<PyObject> {
     let dest = PathBuf::from(dest_generation);
     py.allow_threads(|| {
@@ -652,8 +1226,12 @@ pub fn serving_index_build(
         } else {
             0
         };
-        let _ = dim;
-        vector::write_ivf_assignments(&dest, key_count)?;
+        let cfg: TrainConfig = match train_config {
+            Some(raw) if !raw.trim().is_empty() => serde_json::from_str(raw)
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("train_config: {e}")))?,
+            _ => TrainConfig::default(),
+        };
+        let ivf_meta = vector::write_trained_ivf(&dest, dim, &cfg)?;
         let chunk_count = if dest.join("chunks.jsonl").exists() {
             BufReader::new(fs::File::open(dest.join("chunks.jsonl")).map_err(|e| {
                 pyo3::exceptions::PyIOError::new_err(e.to_string())
@@ -670,9 +1248,14 @@ pub fn serving_index_build(
             analyzer_id: schema::ANALYZER_ID.to_string(),
             vector_impl: schema::VECTOR_IMPL.to_string(),
             pipeline_version: rank::pipeline_version().to_string(),
+            ranking_version: rank::ranking_version().to_string(),
             card_count: cards.len(),
             chunk_count,
             embedding_count: key_count,
+            nlist: ivf_meta.nlist,
+            nprobe: ivf_meta.nprobe,
+            ivf_checksum: ivf_meta.checksum.clone(),
+            embedding_spec: ivf_meta.embedding_spec.clone(),
         };
         fs::write(
             dest.join("manifest.json"),
@@ -731,14 +1314,96 @@ pub fn serving_index_read_path(handle: &Bound<'_, ServingIndex>, uid: &str) -> P
     Ok(idx.meta.by_uid.get(uid).map(|c| c.rel_path.clone()))
 }
 
+#[pyfunction]
+#[pyo3(signature = (generation_dir, query_vector, k, nprobe=None, candidate_budget=None))]
+pub fn serving_index_ann_knn(
+    py: Python<'_>,
+    generation_dir: &str,
+    query_vector: Vec<f32>,
+    k: usize,
+    nprobe: Option<usize>,
+    candidate_budget: Option<usize>,
+) -> PyResult<PyObject> {
+    if query_vector.iter().any(|v| !v.is_finite()) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "query embedding contains non-finite values",
+        ));
+    }
+    let ann = IvfMmapAnn::open(Path::new(generation_dir))?;
+    if ann.dim() != 0 && query_vector.len() != ann.dim() {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "query dimension {} != serving dimension {}",
+            query_vector.len(),
+            ann.dim()
+        )));
+    }
+    let report = ann.knn_report(
+        &query_vector,
+        k.max(1),
+        None,
+        nprobe.unwrap_or(ann.nprobe()),
+        candidate_budget.unwrap_or(4096),
+    );
+    let hits: Vec<serde_json::Value> = report
+        .hits
+        .iter()
+        .map(|h| serde_json::json!({"key": h.key, "score": h.score}))
+        .collect();
+    json_to_py(
+        py,
+        serde_json::json!({
+            "hits": hits,
+            "nlist": report.nlist,
+            "nprobe": report.nprobe,
+            "lists_probed": report.lists_probed,
+            "candidates_scored": report.candidates_scored,
+            "scanned_all": report.scanned_all,
+            "truncated": report.truncated,
+            "skipped_invalid": report.skipped_invalid,
+            "skipped_zero": report.skipped_zero,
+        }),
+    )
+}
+
+#[pyfunction]
+pub fn serving_index_resolve_layout(py: Python<'_>, index_root: &str) -> PyResult<PyObject> {
+    let root = Path::new(index_root);
+    let Some(gid) = generation::read_active(root)? else {
+        return Err(pyo3::exceptions::PyFileNotFoundError::new_err(
+            "serving_index_unavailable",
+        ));
+    };
+    let resolved = segments::resolve_live(root, &gid)?;
+    json_to_py(py, resolved.to_json())
+}
+
+#[pyfunction]
+pub fn serving_index_chunk_evidence(
+    py: Python<'_>,
+    handle: &Bound<'_, ServingIndex>,
+    chunk_key: &str,
+) -> PyResult<PyObject> {
+    let idx = handle.borrow();
+    json_to_py(
+        py,
+        idx.chunk_evidence
+            .get(chunk_key)
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    )
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ServingIndex>()?;
     m.add_function(wrap_pyfunction!(serving_index_open, m)?)?;
     m.add_function(wrap_pyfunction!(serving_index_search, m)?)?;
     m.add_function(wrap_pyfunction!(serving_index_query, m)?)?;
+    m.add_function(wrap_pyfunction!(serving_index_typed_query, m)?)?;
     m.add_function(wrap_pyfunction!(serving_index_vector, m)?)?;
     m.add_function(wrap_pyfunction!(serving_index_hybrid, m)?)?;
     m.add_function(wrap_pyfunction!(serving_index_graph, m)?)?;
+    m.add_function(wrap_pyfunction!(serving_index_graph_bounded, m)?)?;
+    m.add_function(wrap_pyfunction!(serving_index_adjacent_chunks, m)?)?;
     m.add_function(wrap_pyfunction!(serving_index_person, m)?)?;
     m.add_function(wrap_pyfunction!(serving_index_pointers, m)?)?;
     m.add_function(wrap_pyfunction!(serving_index_neighbor_uids, m)?)?;
@@ -750,5 +1415,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(serving_index_mark_dirty, m)?)?;
     m.add_function(wrap_pyfunction!(serving_index_truncate_dirty, m)?)?;
     m.add_function(wrap_pyfunction!(serving_index_read_path, m)?)?;
+    m.add_function(wrap_pyfunction!(serving_index_ann_knn, m)?)?;
+    m.add_function(wrap_pyfunction!(serving_index_chunk_evidence, m)?)?;
+    m.add_function(wrap_pyfunction!(serving_index_resolve_layout, m)?)?;
     Ok(())
 }

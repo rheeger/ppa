@@ -1,6 +1,8 @@
 from archive_vault.provenance import (
+    PROVENANCE_METHOD_HUMAN,
     ProvenanceEntry,
     compute_input_hash,
+    merge_provenance,
     read_provenance,
     validate_provenance,
     write_provenance,
@@ -35,3 +37,26 @@ def test_compute_input_hash_is_deterministic():
     left = compute_input_hash({"a": 1, "b": ["x", "y"]})
     right = compute_input_hash({"b": ["x", "y"], "a": 1})
     assert left == right
+
+
+def test_validate_provenance_allows_human_override_on_deterministic_amount():
+    errors = validate_provenance(
+        {"amount": 38.0, "currency": "USD"},
+        {
+            "amount": ProvenanceEntry("decision:abc", "2026-09-06", PROVENANCE_METHOD_HUMAN),
+            "currency": ProvenanceEntry("amex", "2026-09-06", "deterministic"),
+        },
+    )
+    assert errors == []
+
+
+def test_merge_provenance_protects_overridden_fields():
+    existing = {
+        "amount": ProvenanceEntry("decision:abc", "2026-09-06", PROVENANCE_METHOD_HUMAN),
+    }
+    incoming = {
+        "amount": ProvenanceEntry("amex", "2026-09-07", "deterministic"),
+    }
+    merged = merge_provenance(existing, incoming, protected_fields=frozenset({"amount"}))
+    assert merged["amount"].method == PROVENANCE_METHOD_HUMAN
+    assert merged["amount"].source == "decision:abc"

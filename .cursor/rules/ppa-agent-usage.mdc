@@ -1,10 +1,11 @@
 ---
-description: PPA archive retrieval guidance — apply when using archive-seed-local, archive-arnold, or any ppa MCP server
-globs: []
-alwaysApply: false
+description: PPA archive retrieval — warm MCP only; never a new archive_cli per question
+alwaysApply: true
 ---
 
 # PPA archive usage
+
+**Do not** spawn `python -m archive_cli` / `ppa <query>` once per question against the living archive. That cold-opens the multi-GB search index. Use the already-running MCP. See `ppa-no-cold-cli-query.mdc`.
 
 ## Decision tree
 

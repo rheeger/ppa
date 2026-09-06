@@ -11,6 +11,7 @@ import re
 from typing import Any
 
 from archive_cli.index_config import _activity_date, _format_activity_at
+from archive_engine.context import CONTEXT_CONTRACT_VERSION, ExpandedHit
 
 DEFAULT_EVIDENCE_LIMIT = 12
 TITLE_CHARS = 80
@@ -243,6 +244,21 @@ def assert_compact_payload(payload: dict[str, Any]) -> None:
             text = str(hit.get(key) or "")
             if len(text) > SUPPORT_CHARS + 20:
                 raise AssertionError(f"{key} too long for compact listing")
+
+
+def attach_context_labels(hit: dict[str, Any], expanded: ExpandedHit) -> dict[str, Any]:
+    """Label matched vs context citations without dumping bodies onto compact hits."""
+
+    labeled = dict(hit)
+    labeled["matched_uids"] = [item.uid for item in expanded.matched]
+    labeled["context_uids"] = [item.uid for item in expanded.context]
+    labeled["context_reasons"] = [item.reason for item in expanded.context]
+    labeled["stale_context"] = expanded.stale
+    labeled["stale_reason"] = expanded.stale_reason
+    labeled["context_truncated"] = expanded.truncated
+    labeled["citations"] = [item.citation_summary() for item in (*expanded.matched, *expanded.context)]
+    labeled["context_contract_version"] = CONTEXT_CONTRACT_VERSION
+    return labeled
 
 
 def narrative_outline(hits: list[dict[str, Any]]) -> str:

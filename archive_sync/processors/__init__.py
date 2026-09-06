@@ -23,16 +23,21 @@ from .constants import (
 )
 from .declarations import (
     ProcessorDeclaration,
+    ProcessorDependency,
+    ProcessorGraphError,
     declaration_for_key,
+    dependencies_for,
     iter_processor_declarations,
     topological_order,
     validate_all_declarations,
     validate_declaration,
+    validate_processor_graph,
 )
 from .dirty_io import dirty_uids_from_source_reports, load_dirty_inputs, load_dirty_uids
 from .input_hash import compute_input_hash, format_output_identity
 from .plan import build_processor_plan, processors_for_dirty_input
 from .runner import ProcessorExecutionResult, run_processors
+from .scheduler import ProcessorScheduler, SchedulerEvent, dependency_receipt_digest
 from .staleness import ProcessorInputSnapshot, StalenessEvaluation, evaluate_staleness
 from .state_store import ProcessorInputStateRecord, ProcessorStateRecord, ProcessorStateStore
 from .status import status_payload
@@ -57,7 +62,10 @@ __all__ = [
     "STALE_PROCESSOR_VERSION",
     "STALE_UPSTREAM",
     "ProcessorDeclaration",
+    "ProcessorDependency",
     "ProcessorExecutionResult",
+    "ProcessorGraphError",
+    "ProcessorScheduler",
     "ProcessorInputSnapshot",
     "ProcessorInputStateRecord",
     "ProcessorPlanItem",
@@ -65,10 +73,13 @@ __all__ = [
     "ProcessorRunReport",
     "ProcessorStateRecord",
     "ProcessorStateStore",
+    "SchedulerEvent",
     "StalenessEvaluation",
     "build_processor_plan",
     "compute_input_hash",
     "declaration_for_key",
+    "dependencies_for",
+    "dependency_receipt_digest",
     "dirty_uids_from_source_reports",
     "evaluate_staleness",
     "format_output_identity",
@@ -81,4 +92,5 @@ __all__ = [
     "topological_order",
     "validate_all_declarations",
     "validate_declaration",
+    "validate_processor_graph",
 ]

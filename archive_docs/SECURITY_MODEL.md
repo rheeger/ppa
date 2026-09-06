@@ -2,7 +2,7 @@
 
 ## Scope
 
-This document covers the production security posture for the HFA vault, `ppa`, the Hey Arnold VM, the passkey gate, and remote archive access from Robbie's Mac.
+**Historical host model.** This document describes the HFA vault on the Hey Arnold VM, the passkey gate, and remote access from one creator machine. Independent instances use instance-bound config, contained I/O, and `AccessContext` (P05). Do not treat Arnold as the product home.
 
 It assumes:
 

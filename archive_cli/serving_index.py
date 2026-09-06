@@ -6,33 +6,411 @@ mmap handle keyed by (vault, index_root, ACTIVE generation).
 
 from __future__ import annotations
 
+import array
 import json
 import logging
+import math
 import os
+import resource
 import shutil
+import sys
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from archive_engine.contracts import (
+    CHUNK_EVIDENCE_REF_VERSION,
+    UNKNOWN,
+    ChunkEvidenceRef,
+    EmbeddingSpec,
+    ServingEdge,
+)
+from archive_engine.publication import (
+    ServingSnapshot,
+    pin_generation,
+    publish_snapshot,
+    referenced_generations,
+    should_compact,
+    unpin_generation,
+    walk_generation_chain,
+)
+
+from .corpus_hygiene.state_store import QUARANTINE_RETRIEVAL_WEIGHT
 from .errors import ServingIndexUnavailableError
 from .index_config import (
+    CHUNK_SCHEMA_VERSION,
     get_default_embedding_model,
     get_default_embedding_version,
     get_query_embed_cache_max_age_days,
     get_query_embed_cache_max_rows,
     get_query_embed_cache_path,
     get_query_embed_cache_ram_entries,
+    get_rebuild_progress_every,
+    get_serving_candidate_budget,
+    get_serving_export_batch_size,
     get_serving_index_max_rss_mb,
     get_serving_index_path,
+    get_serving_nlist,
+    get_serving_nprobe,
+    get_serving_train_iters,
+    get_serving_train_memory_mb,
+    get_serving_train_sample,
+    get_serving_train_seed,
     get_vector_dimension,
 )
-from .query_embed_cache import QueryEmbedCache
+from .query_embed_cache import QueryEmbedCache, validate_embedding_spec
 
 logger = logging.getLogger("ppa.serving_index")
 
+KNOWN_CORPUS_STATES = frozenset({"active", "quarantine", "suppressed"})
+WAREHOUSE_EDGE_CONFIDENCE = 1.0
+INFERRED_EDGE_METHOD = "inferred"
+SERVING_EMBEDDING_METRIC = "cosine"
+SERVING_EMBEDDING_NORMALIZATION = "l2"
+REQUIRED_SERVING_INDEX_FORMAT = 2
+REQUIRED_VECTOR_IMPL = "ivf_centroids_v2"
+
+
+class ServingFidelityError(ValueError):
+    """Trust-critical serving export would invent active/trusted policy."""
+
+
+def serving_embedding_spec() -> EmbeddingSpec:
+    """Build the live serving EmbeddingSpec from config. Does not invent model identity."""
+
+    provider = os.environ.get("PPA_EMBEDDING_PROVIDER", "").strip() or "unspecified"
+    spec = EmbeddingSpec(
+        provider_namespace=provider,
+        model=get_default_embedding_model(),
+        model_revision=str(get_default_embedding_version()),
+        dimension=get_vector_dimension(),
+        metric=SERVING_EMBEDDING_METRIC,
+        normalization=SERVING_EMBEDDING_NORMALIZATION,
+        chunk_schema=str(CHUNK_SCHEMA_VERSION),
+    )
+    return validate_embedding_spec(spec)
+
+
+def serving_train_config(spec: EmbeddingSpec | None = None) -> dict[str, Any]:
+    """Frozen ANN training knobs for serving_index_build."""
+
+    return {
+        "nlist": get_serving_nlist(),
+        "nprobe": get_serving_nprobe(),
+        "train_sample": get_serving_train_sample(),
+        "train_iters": get_serving_train_iters(),
+        "seed": get_serving_train_seed(),
+        "candidate_budget": get_serving_candidate_budget(),
+        "memory_mb": get_serving_train_memory_mb(),
+        "embedding_spec": (spec or serving_embedding_spec()).to_payload(),
+    }
+
+
+def serving_chunk_evidence_ref(card_uid: str, chunk_key: str) -> ChunkEvidenceRef:
+    """Legacy-unavailable evidence for warehouse chunks. Does not invent spans."""
+
+    return ChunkEvidenceRef(
+        version=CHUNK_EVIDENCE_REF_VERSION,
+        archive_id="local",
+        card_uid=card_uid,
+        chunk_id=chunk_key,
+        chunk_schema_version=str(CHUNK_SCHEMA_VERSION),
+        algorithm_version="p01b-freeze-1",
+        evidence_kind=UNKNOWN,
+        lineage_complete=False,
+        span_unavailable=True,
+        message_refs_available=False,
+    )
+
+
+def build_serving_chunk(row: Any) -> dict[str, Any]:
+    uid = str(row["card_uid"])
+    key = str(row["chunk_key"])
+    return {
+        "chunk_key": key,
+        "card_uid": uid,
+        "chunk_type": str(row.get("chunk_type") or ""),
+        "chunk_index": int(row.get("chunk_index") or 0),
+        "evidence": serving_chunk_evidence_ref(uid, key).to_payload(),
+    }
+
+
+def serving_corpus_state(raw: Any) -> str:
+    cleaned = str(raw or "").strip()
+    if cleaned in KNOWN_CORPUS_STATES:
+        return cleaned
+    return UNKNOWN
+
+
+def serving_retrieval_weight(state: str) -> float | None:
+    if state == "quarantine":
+        return float(QUARANTINE_RETRIEVAL_WEIGHT)
+    if state == "active":
+        return 1.0
+    if state == "suppressed":
+        return 0.0
+    return None
+
+
+def _as_str_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    raw: Any = value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        if text[:1] in "[{":
+            try:
+                raw = json.loads(text)
+            except json.JSONDecodeError:
+                return [text]
+        else:
+            return [text]
+    if isinstance(raw, (list, tuple)):
+        return [str(item).strip() for item in raw if str(item).strip()]
+    return [str(raw).strip()] if str(raw).strip() else []
+
+
+def _optional_rows(conn: Any, sql: str, params: tuple[Any, ...] | None = None) -> list[Any]:
+    try:
+        conn.execute("SAVEPOINT ppa_optional_export")
+        rows = list(conn.execute(sql) if params is None else conn.execute(sql, params))
+        conn.execute("RELEASE SAVEPOINT ppa_optional_export")
+        return rows
+    except Exception:
+        try:
+            conn.execute("ROLLBACK TO SAVEPOINT ppa_optional_export")
+        except Exception:
+            pass
+        return []
+
+
+def _uid_clause(column: str, uids: list[str] | None) -> tuple[str, tuple[Any, ...]]:
+    if uids is None:
+        return "", ()
+    return f" AND {column} = ANY(%s)", (uids,)
+
+
+def load_serving_export_maps(conn: Any, schema: str, uids: list[str] | None = None) -> dict[str, Any]:
+    """Bulk-load relation / policy maps once per export."""
+
+    people: dict[str, list[str]] = {}
+    sources: dict[str, list[str]] = {}
+    orgs: dict[str, list[str]] = {}
+    aliases: dict[str, list[str]] = {}
+    emails: dict[str, list[str]] = {}
+    external_ids: dict[str, list[str]] = {}
+    corpus_states: dict[str, str] = {}
+
+    people_clause, people_params = _uid_clause("card_uid", uids)
+    map_params = people_params or None
+    for row in _optional_rows(conn, f"SELECT card_uid, person FROM {schema}.card_people WHERE TRUE{people_clause}", map_params):
+        people.setdefault(str(row["card_uid"]), []).append(str(row["person"]))
+    for row in _optional_rows(conn, f"SELECT card_uid, source FROM {schema}.card_sources WHERE TRUE{people_clause}", map_params):
+        sources.setdefault(str(row["card_uid"]), []).append(str(row["source"]))
+    for row in _optional_rows(conn, f"SELECT card_uid, org FROM {schema}.card_orgs WHERE TRUE{people_clause}", map_params):
+        orgs.setdefault(str(row["card_uid"]), []).append(str(row["org"]))
+    for row in _optional_rows(
+        conn,
+        f"SELECT card_uid, aliases_json, emails_json FROM {schema}.people WHERE TRUE{people_clause}",
+        map_params,
+    ):
+        uid = str(row["card_uid"])
+        aliases[uid] = _as_str_list(row.get("aliases_json"))
+        emails[uid] = _as_str_list(row.get("emails_json"))
+    for row in _optional_rows(
+        conn,
+        f"SELECT card_uid, external_id FROM {schema}.external_ids WHERE TRUE{people_clause}",
+        map_params,
+    ):
+        ext = str(row.get("external_id") or "").strip()
+        if ext:
+            external_ids.setdefault(str(row["card_uid"]), []).append(ext)
+    state_rows = _optional_rows(
+        conn,
+        f"SELECT card_uid, corpus_state FROM {schema}.card_corpus_state WHERE TRUE{people_clause}",
+        map_params,
+    )
+    corpus_state_table = False
+    try:
+        conn.execute("SAVEPOINT ppa_corpus_state_probe")
+        probe = list(conn.execute(f"SELECT 1 FROM {schema}.card_corpus_state LIMIT 1"))
+        conn.execute("RELEASE SAVEPOINT ppa_corpus_state_probe")
+        corpus_state_table = True
+        _ = probe
+    except Exception:
+        try:
+            conn.execute("ROLLBACK TO SAVEPOINT ppa_corpus_state_probe")
+        except Exception:
+            pass
+        corpus_state_table = False
+    if corpus_state_table:
+        for row in state_rows:
+            corpus_states[str(row["card_uid"])] = serving_corpus_state(row.get("corpus_state"))
+    return {
+        "people": people,
+        "sources": sources,
+        "orgs": orgs,
+        "aliases": aliases,
+        "emails": emails,
+        "external_ids": external_ids,
+        "corpus_states": corpus_states,
+        "corpus_state_table": corpus_state_table,
+    }
+
+
+def build_serving_card(row: Any, maps: dict[str, Any]) -> dict[str, Any]:
+    uid = str(row["uid"])
+    table_present = bool(maps.get("corpus_state_table"))
+    claimed = maps.get("corpus_states", {}).get(uid)
+    policy_present = table_present and uid in maps.get("corpus_states", {})
+    if not table_present and serving_corpus_state(claimed) == "active":
+        raise ServingFidelityError(f"missing corpus_state must not upgrade to active uid={uid}")
+    if policy_present:
+        state = serving_corpus_state(claimed)
+    else:
+        state = UNKNOWN
+    if state == "active" and not policy_present:
+        raise ServingFidelityError(f"missing corpus_state must not upgrade to active uid={uid}")
+    rec = {
+        "card_uid": uid,
+        "rel_path": str(row["rel_path"] or ""),
+        "summary": str(row["summary"] or ""),
+        "type": str(row["type"] or ""),
+        "slug": str(row["slug"] or ""),
+        "activity_at": str(row["activity_at"] or ""),
+        "activity_end_at": str(row["activity_end_at"] or ""),
+        "search_text": str(row["search_text"] or ""),
+        "people": list(maps["people"].get(uid, [])),
+        "sources": list(maps["sources"].get(uid, [])),
+        "orgs": list(maps["orgs"].get(uid, [])),
+        "aliases": list(maps["aliases"].get(uid, [])),
+        "emails": list(maps["emails"].get(uid, [])),
+        "external_ids": list(dict.fromkeys(maps["external_ids"].get(uid, []))),
+        "corpus_state": state,
+        "retrieval_weight": serving_retrieval_weight(state),
+        "source_revision": str(row.get("content_hash") or ""),
+        "provenance_summary": UNKNOWN,
+    }
+    return rec
+
+
+def build_warehouse_edge(row: Any) -> dict[str, Any]:
+    edge = ServingEdge(method=UNKNOWN, confidence=WAREHOUSE_EDGE_CONFIDENCE, evidence_uids=())
+    payload = edge.to_payload()
+    return {
+        "source_uid": str(row.get("source_uid") or ""),
+        "target_uid": str(row.get("target_uid") or ""),
+        "edge_type": str(row.get("edge_type") or ""),
+        "field_name": str(row.get("field_name") or ""),
+        "direction": "forward",
+        "method": payload["method"],
+        "confidence": payload["confidence"],
+        "evidence_uids": list(payload["evidence_uids"]),
+        "trust": payload["confidence"],
+    }
+
+
+def build_inferred_edge(row: Any) -> dict[str, Any]:
+    raw_conf = row.get("confidence")
+    confidence = None if raw_conf is None else float(raw_conf)
+    evidence = _as_str_list(row.get("evidence_uids"))
+    edge = ServingEdge(method=INFERRED_EDGE_METHOD, confidence=confidence, evidence_uids=tuple(evidence))
+    payload = edge.to_payload()
+    rec = {
+        "source_uid": str(row.get("source_uid") or row.get("source_card_uid") or ""),
+        "target_uid": str(row.get("target_uid") or row.get("target_card_uid") or ""),
+        "edge_type": str(row.get("edge_type") or row.get("proposed_link_type") or ""),
+        "field_name": str(row.get("field_name") or row.get("target_field_name") or ""),
+        "direction": "forward",
+        "method": payload["method"],
+        "confidence": payload["confidence"],
+        "evidence_uids": list(payload["evidence_uids"]),
+    }
+    if payload["confidence"] is None:
+        return rec
+    rec["trust"] = payload["confidence"]
+    return rec
+
+
+def _card_export_sql(schema: str, *, incremental: bool) -> str:
+    where = "WHERE c.uid = ANY(%s)" if incremental else ""
+    return f"""
+                SELECT c.uid, c.rel_path, c.summary, c.type, c.slug, c.activity_at,
+                       c.activity_end_at, COALESCE(c.search_text, '') AS search_text,
+                       COALESCE(c.content_hash, '') AS content_hash
+                FROM {schema}.cards c
+                {where}
+                """
+
+
+def load_serving_edges(conn: Any, schema: str, uids: list[str] | None = None) -> list[dict[str, Any]]:
+    edges: list[dict[str, Any]] = []
+    if uids is None:
+        warehouse_sql = f"""
+                        SELECT source_uid, target_uid, edge_type, field_name
+                        FROM {schema}.edges
+                        WHERE target_kind = 'card' AND target_uid <> ''
+                        """
+        warehouse_params: tuple[Any, ...] | None = None
+        inferred_sql = f"""
+                        SELECT lc.source_card_uid AS source_uid, lc.target_card_uid AS target_uid,
+                               lc.proposed_link_type AS edge_type, pq.target_field_name AS field_name,
+                               ld.final_confidence AS confidence
+                        FROM {schema}.link_candidates lc
+                        JOIN {schema}.promotion_queue pq
+                          ON pq.candidate_id = lc.candidate_id
+                         AND pq.promotion_target = 'derived_edge'
+                         AND pq.promotion_status = 'applied'
+                        LEFT JOIN {schema}.link_decisions ld ON ld.candidate_id = lc.candidate_id
+                        WHERE lc.target_kind = 'card' AND lc.target_card_uid <> ''
+                        """
+        inferred_params: tuple[Any, ...] | None = None
+    else:
+        warehouse_sql = f"""
+                        SELECT source_uid, target_uid, edge_type, field_name
+                        FROM {schema}.edges
+                        WHERE target_kind = 'card' AND target_uid <> ''
+                          AND (source_uid = ANY(%s) OR target_uid = ANY(%s))
+                        """
+        warehouse_params = (uids, uids)
+        inferred_sql = f"""
+                        SELECT lc.source_card_uid AS source_uid, lc.target_card_uid AS target_uid,
+                               lc.proposed_link_type AS edge_type, pq.target_field_name AS field_name,
+                               ld.final_confidence AS confidence
+                        FROM {schema}.link_candidates lc
+                        JOIN {schema}.promotion_queue pq
+                          ON pq.candidate_id = lc.candidate_id
+                         AND pq.promotion_target = 'derived_edge'
+                         AND pq.promotion_status = 'applied'
+                        LEFT JOIN {schema}.link_decisions ld ON ld.candidate_id = lc.candidate_id
+                        WHERE lc.target_kind = 'card' AND lc.target_card_uid <> ''
+                          AND (lc.source_card_uid = ANY(%s) OR lc.target_card_uid = ANY(%s))
+                        """
+        inferred_params = (uids, uids)
+    try:
+        for row in conn.execute(warehouse_sql, warehouse_params) if warehouse_params else conn.execute(warehouse_sql):
+            rec = build_warehouse_edge(row)
+            if rec["source_uid"] and rec["target_uid"]:
+                edges.append(rec)
+    except Exception:
+        logger.exception("serving_index warehouse edge export failed")
+    for row in _optional_rows(conn, inferred_sql, inferred_params):
+        rec = build_inferred_edge(row)
+        if rec["source_uid"] and rec["target_uid"]:
+            edges.append(rec)
+    return edges
+
 _LOCK = threading.RLock()
+_HANDLES: dict[str, ServingIndexHandle] = {}
 _HANDLE: ServingIndexHandle | None = None
+
+
+def _vault_handle_key(vault: Path) -> str:
+    return str(Path(vault).resolve())
 
 
 def _crate():
@@ -43,12 +421,43 @@ def _crate():
     return archive_crate
 
 
+def _access_req(kwargs: dict[str, Any]) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+    for key in (
+        "access_deny",
+        "access_restricted",
+        "access_policy_identity",
+        "access_sources",
+        "access_domains",
+    ):
+        if key in kwargs:
+            fields[key] = kwargs[key]
+    for key in (
+        "max_nodes",
+        "max_edges",
+        "max_depth",
+        "max_elapsed_ms",
+        "allowed_relation_types",
+    ):
+        if key in kwargs:
+            fields[key] = kwargs[key]
+    return fields
+
+
 class ServingIndexHandle:
     def __init__(self, vault: Path, index_root: Path, generation_id: str, native: Any):
         self.vault = Path(vault)
         self.index_root = Path(index_root)
         self.generation_id = generation_id
         self._native = native
+        self._closed = False
+        pin_generation(self.index_root, self.generation_id)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        unpin_generation(self.index_root, self.generation_id)
 
     def search(self, query: str, **kwargs: Any) -> list[dict[str, Any]]:
         req = {
@@ -60,10 +469,19 @@ class ServingIndexHandle:
             "start_date": str(kwargs.get("start_date", "") or ""),
             "end_date": str(kwargs.get("end_date", "") or ""),
         }
+        req.update(_access_req(kwargs))
         return list(_crate().serving_index_search(self._native, req) or [])
 
     def query(self, **kwargs: Any) -> list[dict[str, Any]]:
-        return list(_crate().serving_index_query(self._native, dict(kwargs)) or [])
+        req = dict(kwargs)
+        req.update(_access_req(kwargs))
+        return list(_crate().serving_index_query(self._native, req) or [])
+
+    def typed_query(self, **kwargs: Any) -> dict[str, Any]:
+        req = dict(kwargs)
+        req.update(_access_req(kwargs))
+        payload = _crate().serving_index_typed_query(self._native, req)
+        return dict(payload or {})
 
     def vector(self, query_vector: list[float], **kwargs: Any) -> list[dict[str, Any]]:
         req = {
@@ -73,7 +491,14 @@ class ServingIndexHandle:
             "people_filter": str(kwargs.get("people_filter", "") or ""),
             "start_date": str(kwargs.get("start_date", "") or ""),
             "end_date": str(kwargs.get("end_date", "") or ""),
+            "nprobe": int(kwargs.get("nprobe", 0) or 0),
+            "candidate_budget": int(kwargs.get("candidate_budget", 0) or 0),
         }
+        if req["nprobe"] <= 0:
+            req.pop("nprobe")
+        if req["candidate_budget"] <= 0:
+            req.pop("candidate_budget")
+        req.update(_access_req(kwargs))
         rows = list(_crate().serving_index_vector(self._native, query_vector, req) or [])
         for row in rows:
             if row.get("score") is None:
@@ -89,28 +514,63 @@ class ServingIndexHandle:
             "start_date": str(kwargs.get("start_date", "") or ""),
             "end_date": str(kwargs.get("end_date", "") or ""),
         }
+        req.update(_access_req(kwargs))
         return list(_crate().serving_index_hybrid(self._native, query, query_vector, req) or [])
 
-    def graph(self, note_path: str, hops: int = 2) -> dict[str, Any]:
-        return dict(_crate().serving_index_graph(self._native, note_path, int(hops) or 1) or {})
+    def graph(self, note_path: str, hops: int = 2, **kwargs: Any) -> dict[str, Any]:
+        return dict(_crate().serving_index_graph(self._native, note_path, int(hops) or 1, _access_req(kwargs)) or {})
 
-    def person(self, name: str) -> dict[str, Any]:
-        return dict(_crate().serving_index_person(self._native, name) or {})
+    def graph_bounded(self, note_path: str, hops: int = 1, **kwargs: Any) -> dict[str, Any]:
+        return dict(
+            _crate().serving_index_graph_bounded(self._native, note_path, int(hops) or 1, _access_req(kwargs)) or {}
+        )
 
-    def pointers(self, uids: list[str]) -> dict[str, dict[str, Any]]:
-        return dict(_crate().serving_index_pointers(self._native, list(uids)) or {})
+    def adjacent_chunks(self, chunk_key: str) -> dict[str, Any] | None:
+        payload = _crate().serving_index_adjacent_chunks(self._native, chunk_key)
+        return dict(payload) if payload else None
 
-    def neighbor_uids(self, uids: list[str], hops: int = 1) -> list[str]:
-        return list(_crate().serving_index_neighbor_uids(self._native, list(uids), int(hops) or 1) or [])
+    def person(self, name: str, **kwargs: Any) -> dict[str, Any]:
+        return dict(_crate().serving_index_person(self._native, name, _access_req(kwargs)) or {})
+
+    def pointers(self, uids: list[str], **kwargs: Any) -> dict[str, dict[str, Any]]:
+        return dict(_crate().serving_index_pointers(self._native, list(uids), _access_req(kwargs)) or {})
+
+    def neighbor_uids(self, uids: list[str], hops: int = 1, **kwargs: Any) -> list[str]:
+        return list(
+            _crate().serving_index_neighbor_uids(self._native, list(uids), int(hops) or 1, _access_req(kwargs)) or []
+        )
 
     def timeline(self, **kwargs: Any) -> list[dict[str, Any]]:
-        return list(_crate().serving_index_timeline(self._native, dict(kwargs)) or [])
+        req = dict(kwargs)
+        req.update(_access_req(kwargs))
+        return list(_crate().serving_index_timeline(self._native, req) or [])
 
     def temporal_neighbors(self, timestamp: str, **kwargs: Any) -> dict[str, Any]:
-        return dict(_crate().serving_index_temporal_neighbors(self._native, timestamp, dict(kwargs)) or {})
+        req = dict(kwargs)
+        req.update(_access_req(kwargs))
+        return dict(_crate().serving_index_temporal_neighbors(self._native, timestamp, req) or {})
 
     def read_path(self, uid: str) -> str | None:
         return _crate().serving_index_read_path(self._native, uid)
+
+
+def serving_index_format_version(status: dict[str, Any] | None) -> int:
+    """Read ACTIVE format from status/manifest. 0 means unknown or missing."""
+
+    payload = status or {}
+    raw = payload.get("serving_index_format")
+    if raw is None:
+        manifest = payload.get("manifest") or {}
+        if isinstance(manifest, dict):
+            raw = manifest.get("serving_index_format_version")
+    try:
+        return int(raw or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def serving_index_format_supported(status: dict[str, Any] | None) -> bool:
+    return serving_index_format_version(status) == REQUIRED_SERVING_INDEX_FORMAT
 
 
 def serving_index_status(vault: Path | None = None) -> dict[str, Any]:
@@ -160,12 +620,13 @@ def prune_retired_serving_generations(
     vault: Path | None = None,
     *,
     keep: str | None = None,
+    index_root: Path | None = None,
     logger: logging.Logger | None = None,
 ) -> list[str]:
-    """Delete generation dirs that are not ACTIVE. Search only serves ACTIVE."""
+    """Delete generations that are not ACTIVE, not in the parent chain, and not pinned."""
 
     log = logger or logging.getLogger("ppa.serving_index")
-    root = get_serving_index_path(vault)
+    root = Path(index_root) if index_root is not None else get_serving_index_path(vault)
     gens = root / "generations"
     if keep is None:
         active_path = root / "ACTIVE"
@@ -174,13 +635,14 @@ def prune_retired_serving_generations(
         except OSError:
             keep = ""
     keep = str(keep or "").strip()
+    retain = referenced_generations(root, keep)
     removed: list[str] = []
     if not gens.is_dir():
         return removed
     for child in sorted(gens.iterdir()):
         if not child.is_dir():
             continue
-        if keep and child.name == keep:
+        if child.name in retain:
             continue
         try:
             shutil.rmtree(child)
@@ -220,13 +682,51 @@ def merge_jsonl_by_key(src: Path, dest: Path, *, key: str, replacements: list[di
 
 def mark_serving_index_dirty(vault: Path | str, reason: str, uids: list[str] | None = None) -> None:
     root = get_serving_index_path(Path(vault))
+    uid_list = list(uids or [])
     try:
-        _crate().serving_index_mark_dirty(str(root), reason, list(uids or []))
+        _crate().serving_index_mark_dirty(str(root), reason, uid_list)
     except ServingIndexUnavailableError:
         root.mkdir(parents=True, exist_ok=True)
-        line = json.dumps({"ts": str(int(time.time())), "reason": reason, "uids": list(uids or [])})
+        line = json.dumps({"ts": str(int(time.time())), "reason": reason, "uids": uid_list})
         with (root / "DIRTY").open("a", encoding="utf-8") as fh:
             fh.write(line + "\n")
+    _import_legacy_dirty(Path(vault), root, uid_list, reason)
+
+
+def _import_legacy_dirty(vault: Path, index_root: Path, uids: list[str], reason: str) -> None:
+    """Retain DIRTY writes and convert them into journal records when possible."""
+
+    try:
+        from archive_vault.change_journal import ChangeJournal
+
+        if not Path(vault).is_dir():
+            return
+        with ChangeJournal(vault) as journal:
+            journal.import_legacy_dirty(uids, reason=reason or "legacy_dirty")
+            dirty = index_root / "DIRTY"
+            if dirty.is_file() and not uids:
+                journal.import_dirty_file(dirty)
+    except Exception:
+        logger.debug("journal legacy DIRTY import failed reason=%s", reason, exc_info=True)
+
+
+def close_serving_handles(*, vault: Path | None = None) -> None:
+    """Close pinned native handles. ``vault=None`` closes every instance."""
+
+    global _HANDLE
+    with _LOCK:
+        if vault is None:
+            for handle in list(_HANDLES.values()):
+                handle.close()
+            _HANDLES.clear()
+            _HANDLE = None
+            return
+        key = _vault_handle_key(vault)
+        handle = _HANDLES.pop(key, None)
+        if handle is not None:
+            handle.close()
+        if _HANDLE is handle:
+            _HANDLE = None
 
 
 def get_serving_handle(vault: Path) -> ServingIndexHandle:
@@ -237,17 +737,435 @@ def get_serving_handle(vault: Path) -> ServingIndexHandle:
     gid = str(status.get("serving_index_generation") or "")
     if not gid or not status.get("serving_index_ready"):
         raise ServingIndexUnavailableError("serving_index_unavailable")
+    found = serving_index_format_version(status)
+    if found != REQUIRED_SERVING_INDEX_FORMAT:
+        raise ServingIndexUnavailableError(
+            f"serving_index_format_unsupported: found {found}, need {REQUIRED_SERVING_INDEX_FORMAT} ({REQUIRED_VECTOR_IMPL})"
+        )
+    key = _vault_handle_key(vault)
     with _LOCK:
+        if _HANDLE is None:
+            stale = _HANDLES.pop(key, None)
+            if stale is not None:
+                stale.close()
+            existing = None
+        else:
+            existing = _HANDLES.get(key)
         if (
-            _HANDLE is not None
-            and _HANDLE.vault.resolve() == Path(vault).resolve()
-            and _HANDLE.index_root.resolve() == root.resolve()
-            and _HANDLE.generation_id == gid
+            existing is not None
+            and existing.index_root.resolve() == root.resolve()
+            and existing.generation_id == gid
         ):
-            return _HANDLE
+            _HANDLE = existing
+            return existing
+        if existing is not None:
+            existing.close()
+            _HANDLES.pop(key, None)
         native = crate.serving_index_open(str(root))
-        _HANDLE = ServingIndexHandle(Path(vault), root, gid, native)
-        return _HANDLE
+        handle = ServingIndexHandle(Path(vault), root, gid, native)
+        _HANDLES[key] = handle
+        _HANDLE = handle
+        return handle
+
+
+def _snapshot_binding(vault: Path, gid: str) -> tuple[str, int]:
+    try:
+        from archive_vault.change_journal import ChangeJournal
+
+        with ChangeJournal(vault) as journal:
+            watermark = int(journal.consumer_cursor("warehouse").high_watermark or 0)
+            archive_id = journal.archive_id
+        return f"{archive_id}:warehouse:{watermark}:{gid}", watermark
+    except Exception:
+        return f"export:{gid}", 0
+
+
+def _decode_embedding(raw: Any, dim: int) -> list[float] | None:
+    if raw is None:
+        return None
+    if isinstance(raw, (bytes, bytearray, memoryview)) and len(raw) == dim * 4:
+        return array.array("f", raw).tolist()
+    if isinstance(raw, str):
+        nums = [float(x) for x in raw.strip("[]").split(",") if x.strip()]
+    else:
+        nums = [float(x) for x in raw]
+    if len(nums) != dim:
+        return None
+    return nums
+
+
+def _pack_embedding(raw: Any, dim: int) -> bytes | None:
+    if raw is None:
+        return None
+    if isinstance(raw, (bytes, bytearray, memoryview)) and len(raw) == dim * 4:
+        return bytes(raw)
+    nums = _decode_embedding(raw, dim)
+    if nums is None:
+        return None
+    return array.array("f", nums).tobytes()
+
+
+def _format_mins_secs(seconds: float) -> str:
+    if not math.isfinite(seconds) or seconds < 0:
+        return "?"
+    total = int(round(seconds))
+    m, s = divmod(total, 60)
+    return f"{m}:{s:02d}"
+
+
+def _rss_mb() -> float:
+    try:
+        usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    except Exception:
+        return 0.0
+    if sys.platform == "darwin":
+        return usage / (1024 * 1024)
+    return usage / 1024.0
+
+
+def _first_row(result: Any) -> Any:
+    fetchone = getattr(result, "fetchone", None)
+    if fetchone is not None:
+        return fetchone()
+    try:
+        return result[0]
+    except (TypeError, IndexError, KeyError):
+        return None
+
+
+def _row_int(row: Any) -> int:
+    if row is None:
+        return 0
+    if isinstance(row, dict):
+        return int(next(iter(row.values())))
+    if isinstance(row, (list, tuple)):
+        return int(row[0])
+    return int(row)
+
+
+def _query_count(conn: Any, sql: str, params: tuple[Any, ...] | None = None) -> int:
+    result = conn.execute(sql) if params is None else conn.execute(sql, params)
+    return _row_int(_first_row(result))
+
+
+def _iter_server_rows(
+    conn: Any,
+    sql: str,
+    params: tuple[Any, ...] | None,
+    *,
+    name: str,
+    batch: int,
+) -> Any:
+    """Prefer a named server-side cursor so the client never fetchall's millions of rows."""
+
+    cursor_factory = getattr(conn, "cursor", None)
+    if cursor_factory is None:
+        yield from (conn.execute(sql) if params is None else conn.execute(sql, params))
+        return
+    try:
+        cur = cursor_factory(name=name)
+    except TypeError:
+        yield from (conn.execute(sql) if params is None else conn.execute(sql, params))
+        return
+    if hasattr(cur, "__enter__"):
+        with cur:
+            if hasattr(cur, "itersize"):
+                cur.itersize = batch
+            if params is None:
+                cur.execute(sql)
+            else:
+                cur.execute(sql, params)
+            yield from cur
+        return
+    try:
+        if hasattr(cur, "itersize"):
+            cur.itersize = batch
+        if params is None:
+            cur.execute(sql)
+        else:
+            cur.execute(sql, params)
+        yield from cur
+    finally:
+        closer = getattr(cur, "close", None)
+        if closer is not None:
+            closer()
+
+
+def _log_export_progress(
+    log: logging.Logger,
+    label: str,
+    done: int,
+    total: int,
+    started: float,
+    *,
+    every: int,
+    force: bool = False,
+) -> None:
+    if not force and every <= 0:
+        return
+    if not force and done != total and (every <= 0 or done % every != 0):
+        return
+    elapsed = time.monotonic() - started
+    rate = done / elapsed if elapsed > 0 else 0.0
+    remain = (total - done) / rate if rate > 0 and total > done else (0.0 if done >= total > 0 else float("nan"))
+    pct = (100.0 * done / total) if total else 0.0
+    log.info(
+        "serving_index_export %s %s/%s (%.1f%%) elapsed=%s eta_remaining=%s rate_rows_per_s=%.1f rss_mb=%.0f",
+        label,
+        done,
+        total if total else "?",
+        pct,
+        _format_mins_secs(elapsed),
+        _format_mins_secs(remain),
+        rate,
+        _rss_mb(),
+    )
+
+
+@dataclass
+class _EmbeddingExport:
+    items: list[tuple[str, tuple[float, ...]]]
+    count: int
+    keys_path: str = ""
+    bin_path: str = ""
+
+
+def _export_embeddings(
+    conn: Any,
+    schema: str,
+    *,
+    dim: int,
+    uids: list[str] | None,
+    dest_dir: Path | None = None,
+    log: logging.Logger | None = None,
+    progress_every: int | None = None,
+) -> _EmbeddingExport:
+    """Stream warehouse vectors in bounded batches. Never hold 4M×dim Python floats."""
+
+    log = log or logger
+    model = get_default_embedding_model()
+    version = get_default_embedding_version()
+    batch = get_serving_export_batch_size()
+    every = get_rebuild_progress_every() if progress_every is None else progress_every
+    out: list[tuple[str, tuple[float, ...]]] = []
+    if uids is None:
+        count_sql = f"""
+            SELECT COUNT(*) AS n
+            FROM {schema}.embeddings e
+            JOIN {schema}.chunks c ON c.chunk_key = e.chunk_key
+            WHERE e.embedding_model = %s AND e.embedding_version = %s
+            """
+        sql = f"""
+            SELECT e.chunk_key, e.embedding
+            FROM {schema}.embeddings e
+            JOIN {schema}.chunks c ON c.chunk_key = e.chunk_key
+            WHERE e.embedding_model = %s AND e.embedding_version = %s
+            """
+        params: tuple[Any, ...] = (model, version)
+    else:
+        count_sql = f"""
+            SELECT COUNT(*) AS n
+            FROM {schema}.embeddings e
+            JOIN {schema}.chunks c ON c.chunk_key = e.chunk_key
+            WHERE e.embedding_model = %s AND e.embedding_version = %s
+              AND c.card_uid = ANY(%s)
+            """
+        sql = f"""
+            SELECT e.chunk_key, e.embedding
+            FROM {schema}.embeddings e
+            JOIN {schema}.chunks c ON c.chunk_key = e.chunk_key
+            WHERE e.embedding_model = %s AND e.embedding_version = %s
+              AND c.card_uid = ANY(%s)
+            """
+        params = (model, version, uids)
+    started = time.monotonic()
+    log.info("serving_index_export embeddings start batch=%s dest=%s", batch, dest_dir or "memory")
+    try:
+        total = _query_count(conn, count_sql, params)
+    except Exception:
+        logger.exception("serving_index embed count failed")
+        total = 0
+    log.info("serving_index_export embeddings counted total=%s rss_mb=%.0f", total, _rss_mb())
+    keys_path = ""
+    bin_path = ""
+    count = 0
+    vf = None
+    kf = None
+    try:
+        if dest_dir is not None:
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            keys_dest = dest_dir / "embedding_keys.txt"
+            bin_dest = dest_dir / "embeddings.bin"
+            vf = bin_dest.open("wb")
+            kf = keys_dest.open("w", encoding="utf-8")
+            keys_path = str(keys_dest)
+            bin_path = str(bin_dest)
+        rows = _iter_server_rows(conn, sql, params, name="ppa_serving_emb_export", batch=batch)
+        for row in rows:
+            packed = _pack_embedding(row["embedding"] if not isinstance(row, tuple) else row[1], dim)
+            if packed is None:
+                continue
+            key = str(row["chunk_key"] if not isinstance(row, tuple) else row[0]).strip()
+            if not key:
+                continue
+            if vf is not None and kf is not None:
+                vf.write(packed)
+                kf.write(key + "\n")
+            else:
+                nums = array.array("f")
+                nums.frombytes(packed)
+                out.append((key, tuple(nums)))
+            count += 1
+            _log_export_progress(log, "embeddings", count, total, started, every=every)
+    except Exception:
+        logger.exception("serving_index embed export failed")
+        if vf is not None:
+            vf.close()
+            vf = None
+        if kf is not None:
+            kf.close()
+            kf = None
+        return _EmbeddingExport(items=out, count=count, keys_path=keys_path, bin_path=bin_path)
+    finally:
+        if vf is not None:
+            vf.close()
+        if kf is not None:
+            kf.close()
+    _log_export_progress(log, "embeddings", count, total or count, started, every=every, force=True)
+    log.info(
+        "serving_index_export embeddings done count=%s elapsed=%s rss_mb=%.0f",
+        count,
+        _format_mins_secs(time.monotonic() - started),
+        _rss_mb(),
+    )
+    return _EmbeddingExport(items=out, count=count, keys_path=keys_path, bin_path=bin_path)
+
+
+def _export_warehouse_snapshot(
+    store: Any,
+    *,
+    incremental: bool,
+    dirty_uids: list[str],
+    skip_embeddings: bool,
+    log: logging.Logger,
+    gid: str,
+) -> ServingSnapshot:
+    schema = str(getattr(store.index, "schema", "ppa"))
+    dim = get_vector_dimension()
+    spec = serving_embedding_spec()
+    index = store.index
+    cards: list[dict[str, Any]] = []
+    chunks: list[dict[str, Any]] = []
+    embeddings: list[tuple[str, tuple[float, ...]]] = []
+    edges: list[dict[str, Any]] = []
+    emb_export = _EmbeddingExport(items=[], count=0)
+    every = get_rebuild_progress_every()
+    batch = get_serving_export_batch_size()
+    mode_name = "incremental" if incremental else "full"
+    export_dir = get_serving_index_path(Path(store.vault)) / ".export-tmp" / gid
+    log.info(
+        "serving_index_export start mode=%s generation=%s dim=%s batch=%s progress_every=%s",
+        mode_name,
+        gid,
+        dim,
+        batch,
+        every,
+    )
+    with index._connect() as conn:
+        conn.execute("SET statement_timeout = 0")
+        t_maps = time.monotonic()
+        log.info("serving_index_export maps start rss_mb=%.0f", _rss_mb())
+        maps = load_serving_export_maps(conn, schema, dirty_uids if incremental else None)
+        log.info(
+            "serving_index_export maps done people=%s sources=%s elapsed=%s rss_mb=%.0f",
+            len(maps.get("people") or {}),
+            len(maps.get("sources") or {}),
+            _format_mins_secs(time.monotonic() - t_maps),
+            _rss_mb(),
+        )
+        card_sql = _card_export_sql(schema, incremental=incremental)
+        if incremental:
+            card_total = _query_count(
+                conn,
+                f"SELECT COUNT(*) AS n FROM {schema}.cards c WHERE c.uid = ANY(%s)",
+                (dirty_uids,),
+            )
+            card_params: tuple[Any, ...] | None = (dirty_uids,)
+        else:
+            card_total = _query_count(conn, f"SELECT COUNT(*) AS n FROM {schema}.cards")
+            card_params = None
+        t_cards = time.monotonic()
+        log.info("serving_index_export cards start total=%s rss_mb=%.0f", card_total, _rss_mb())
+        for row in _iter_server_rows(conn, card_sql, card_params, name="ppa_serving_card_export", batch=batch):
+            cards.append(build_serving_card(row, maps))
+            _log_export_progress(log, "cards", len(cards), card_total, t_cards, every=every)
+        _log_export_progress(log, "cards", len(cards), card_total or len(cards), t_cards, every=every, force=True)
+        if incremental:
+            chunk_sql = f"SELECT chunk_key, card_uid, chunk_type, chunk_index FROM {schema}.chunks WHERE card_uid = ANY(%s)"
+            chunk_params: tuple[Any, ...] | None = (dirty_uids,)
+            chunk_total = _query_count(
+                conn,
+                f"SELECT COUNT(*) AS n FROM {schema}.chunks WHERE card_uid = ANY(%s)",
+                (dirty_uids,),
+            )
+        else:
+            chunk_sql = f"SELECT chunk_key, card_uid, chunk_type, chunk_index FROM {schema}.chunks"
+            chunk_params = None
+            chunk_total = _query_count(conn, f"SELECT COUNT(*) AS n FROM {schema}.chunks")
+        t_chunks = time.monotonic()
+        log.info("serving_index_export chunks start total=%s rss_mb=%.0f", chunk_total, _rss_mb())
+        for row in _iter_server_rows(conn, chunk_sql, chunk_params, name="ppa_serving_chunk_export", batch=batch):
+            chunks.append(build_serving_chunk(row))
+            _log_export_progress(log, "chunks", len(chunks), chunk_total, t_chunks, every=every)
+        _log_export_progress(log, "chunks", len(chunks), chunk_total or len(chunks), t_chunks, every=every, force=True)
+        if not skip_embeddings:
+            emb_export = _export_embeddings(
+                conn,
+                schema,
+                dim=dim,
+                uids=dirty_uids if incremental else None,
+                dest_dir=export_dir,
+                log=log,
+                progress_every=every,
+            )
+            embeddings = emb_export.items
+        t_edges = time.monotonic()
+        log.info("serving_index_export edges start rss_mb=%.0f", _rss_mb())
+        edges = load_serving_edges(conn, schema, dirty_uids if incremental else None)
+        log.info(
+            "serving_index_export edges done count=%s elapsed=%s rss_mb=%.0f",
+            len(edges),
+            _format_mins_secs(time.monotonic() - t_edges),
+            _rss_mb(),
+        )
+    present = {str(row["card_uid"]) for row in cards}
+    deleted = tuple(uid for uid in dirty_uids if uid not in present) if incremental else ()
+    snapshot_id, watermark = _snapshot_binding(Path(store.vault), gid)
+    log.info(
+        "serving_index_export done mode=%s cards=%s chunks=%s embeddings=%s edges=%s deleted=%s snapshot=%s rss_mb=%.0f",
+        mode_name,
+        len(cards),
+        len(chunks),
+        emb_export.count or len(embeddings),
+        len(edges),
+        len(deleted),
+        snapshot_id,
+        _rss_mb(),
+    )
+    return ServingSnapshot(
+        snapshot_id=snapshot_id,
+        source_watermark=watermark,
+        cards=tuple(cards),
+        chunks=tuple(chunks),
+        edges=tuple(edges),
+        embeddings=tuple(embeddings),
+        embedding_spec=spec,
+        deleted_uids=deleted,
+        dirty_uids=tuple(dirty_uids) if incremental else (),
+        embedding_keys_path=emb_export.keys_path,
+        embeddings_bin_path=emb_export.bin_path,
+        embedding_count=emb_export.count,
+    )
 
 
 def publish_serving_index(
@@ -260,11 +1178,8 @@ def publish_serving_index(
 ) -> dict[str, Any]:
     """Build a new generation from the Postgres warehouse and atomically publish it.
 
-    Called only from maintain / rebuild. Never from the MCP query path.
-    Incremental when ACTIVE exists and ``dirty_uids`` is a non-empty concrete set:
-    copy prior jsonl, patch those UIDs, hardlink embeddings.bin.
-    ``dirty_uids=None`` is a full rebuild publish. Maintain passes the
-    run's concrete UID set so an empty DIRTY cannot skip a night that wrote cards.
+    Incremental writes only dirty UIDs plus tombstones. Parent artifacts stay
+    immutable. Compaction is an explicit full rebuild, never a silent copy.
     """
     log = logger or logging.getLogger("ppa.serving_index")
     vault = Path(store.vault)
@@ -281,378 +1196,92 @@ def publish_serving_index(
             return {"ok": True, "skipped": "dirty_without_uids", "generation": active_gid, **status}
         incremental = bool(concrete and status.get("serving_index_ready") and active_gid)
     gid = dest_generation or str(int(time.time() * 1000))
+    mode = "delta" if incremental else "full"
+    log.info(
+        "serving_index_publish start mode=%s generation=%s keep_active=%s incremental=%s dirty_uids=%s",
+        mode,
+        gid,
+        active_gid,
+        incremental,
+        len(concrete),
+    )
+    force_compact = False
+    if incremental and active_gid:
+        try:
+            depth = len(walk_generation_chain(root, active_gid)) + 1
+        except Exception:
+            depth = 2
+        if should_compact(chain_depth=depth, delta_vectors=0, live_vectors=0):
+            log.info("serving_index_publish mode=compact reason=max_chain_depth parent=%s", active_gid)
+            incremental = False
+            mode = "compact"
+            force_compact = True
     if incremental:
         log.info("serving_index_publish incremental uids=%s generation=%s", len(concrete), gid)
-    dest = root / "generations" / gid
-    dest.mkdir(parents=True, exist_ok=True)
-    prev = root / "generations" / active_gid if incremental else None
-    if incremental:
-        log.info("serving_index_export mode=incremental dirty_uids=%s from=%s", len(concrete), active_gid)
-    cards_path = dest / "cards.jsonl"
-    chunks_path = dest / "chunks.jsonl"
-    edges_path = dest / "edges.jsonl"
-    keys_path = dest / "embedding_keys.txt"
-    vec_path = dest / "embeddings.bin"
-    schema = str(getattr(store.index, "schema", "ppa"))
-    dim = get_vector_dimension()
-    index = store.index
-    card_count = 0
-    chunk_count = 0
-    embed_count = 0
-
-    def _eta(started: float, done: int, total: int) -> str:
-        elapsed = max(time.monotonic() - started, 0.001)
-        rate = done / elapsed
-        remain = max(total - done, 0) / rate if rate else 0
-        em, es = divmod(int(elapsed), 60)
-        rm, rs = divmod(int(remain), 60)
-        pct = (100.0 * done / total) if total else 0.0
-        return (
-            f"rows={done}/{total} ({pct:.0f}%) elapsed={em}:{es:02d} "
-            f"eta_remaining={rm}:{rs:02d} rate_rows_per_s={rate:.1f}"
-        )
-
-    if incremental and prev is not None:
-        for name in ("embeddings.bin", "embedding_keys.txt"):
-            src = prev / name
-            dst = dest / name
-            if src.exists():
-                if dst.exists():
-                    dst.unlink()
-                try:
-                    os.link(src, dst)
-                except OSError:
-                    shutil.copy2(src, dst)
-        patched_cards: list[dict[str, Any]] = []
-        patched_chunks: list[dict[str, Any]] = []
-        patched_edges: list[dict[str, Any]] = []
-        with index._connect() as conn:
-            conn.execute("SET statement_timeout = 0")
-            people_map: dict[str, list[str]] = {}
-            src_map: dict[str, list[str]] = {}
-            org_map: dict[str, list[str]] = {}
-            for row in conn.execute(
-                f"SELECT card_uid, person FROM {schema}.card_people WHERE card_uid = ANY(%s)",
-                (concrete,),
-            ):
-                people_map.setdefault(str(row["card_uid"]), []).append(str(row["person"]))
-            for row in conn.execute(
-                f"SELECT card_uid, source FROM {schema}.card_sources WHERE card_uid = ANY(%s)",
-                (concrete,),
-            ):
-                src_map.setdefault(str(row["card_uid"]), []).append(str(row["source"]))
-            try:
-                for row in conn.execute(
-                    f"SELECT card_uid, org FROM {schema}.card_orgs WHERE card_uid = ANY(%s)",
-                    (concrete,),
-                ):
-                    org_map.setdefault(str(row["card_uid"]), []).append(str(row["org"]))
-            except Exception:
-                pass
-            for row in conn.execute(
-                f"""
-                SELECT c.uid, c.rel_path, c.summary, c.type, c.slug, c.activity_at,
-                       c.activity_end_at, COALESCE(c.search_text, '') AS search_text
-                FROM {schema}.cards c
-                WHERE c.uid = ANY(%s)
-                """,
-                (concrete,),
-            ):
-                uid = str(row["uid"])
-                patched_cards.append(
-                    {
-                        "card_uid": uid,
-                        "rel_path": str(row["rel_path"] or ""),
-                        "summary": str(row["summary"] or ""),
-                        "type": str(row["type"] or ""),
-                        "slug": str(row["slug"] or ""),
-                        "activity_at": str(row["activity_at"] or ""),
-                        "activity_end_at": str(row["activity_end_at"] or ""),
-                        "search_text": str(row["search_text"] or ""),
-                        "people": people_map.get(uid, []),
-                        "sources": src_map.get(uid, []),
-                        "orgs": org_map.get(uid, []),
-                        "corpus_state": "active",
-                        "aliases": [],
-                        "emails": [],
-                    }
-                )
-            for row in conn.execute(
-                f"SELECT chunk_key, card_uid, chunk_type, chunk_index FROM {schema}.chunks WHERE card_uid = ANY(%s)",
-                (concrete,),
-            ):
-                patched_chunks.append(
-                    {
-                        "chunk_key": str(row["chunk_key"]),
-                        "card_uid": str(row["card_uid"]),
-                        "chunk_type": str(row["chunk_type"] or ""),
-                        "chunk_index": int(row["chunk_index"] or 0),
-                    }
-                )
-            try:
-                for row in conn.execute(
-                    f"""
-                    SELECT source_uid, target_uid, edge_type, field_name
-                    FROM {schema}.edges
-                    WHERE target_kind = 'card' AND target_uid <> ''
-                      AND (source_uid = ANY(%s) OR target_uid = ANY(%s))
-                    """,
-                    (concrete, concrete),
-                ):
-                    patched_edges.append(
-                        {
-                            "source_uid": str(row["source_uid"] or ""),
-                            "target_uid": str(row["target_uid"] or ""),
-                            "edge_type": str(row["edge_type"] or ""),
-                            "field_name": str(row["field_name"] or ""),
-                            "trust": 1.0,
-                        }
-                    )
-            except Exception:
-                log.exception("serving_index incremental edge export failed")
-        card_count = merge_jsonl_by_key(prev / "cards.jsonl", cards_path, key="card_uid", replacements=patched_cards)
-        chunk_count = merge_jsonl_by_key(
-            prev / "chunks.jsonl", chunks_path, key="chunk_key", replacements=patched_chunks
-        )
-        edge_count = 0
-        if (prev / "edges.jsonl").exists():
-            with edges_path.open("w", encoding="utf-8") as fh:
-                for raw in (prev / "edges.jsonl").read_text(encoding="utf-8").splitlines():
-                    if not raw.strip():
-                        continue
-                    try:
-                        row = json.loads(raw)
-                    except json.JSONDecodeError:
-                        continue
-                    pair = (
-                        str(row.get("source_uid") or ""),
-                        str(row.get("target_uid") or ""),
-                        str(row.get("edge_type") or ""),
-                    )
-                    if pair[0] in concrete or pair[1] in concrete:
-                        continue
-                    fh.write(raw + "\n")
-                    edge_count += 1
-                for row in patched_edges:
-                    fh.write(json.dumps(row, ensure_ascii=False) + "\n")
-                    edge_count += 1
-        else:
-            with edges_path.open("w", encoding="utf-8") as fh:
-                for row in patched_edges:
-                    fh.write(json.dumps(row, ensure_ascii=False) + "\n")
-                    edge_count += 1
-        embed_count = sum(1 for line in keys_path.open(encoding="utf-8") if line.strip()) if keys_path.exists() else 0
-        log.info(
-            "serving_index_export done mode=incremental patched_cards=%s patched_chunks=%s edges=%s embeddings_hardlinked=%s",
-            len(patched_cards),
-            len(patched_chunks),
-            edge_count,
-            embed_count,
-        )
-    if not (incremental and prev is not None):
-        with index._connect() as conn:
-            conn.execute("SET statement_timeout = 0")
-            log.info("serving_index_export start schema=%s dest=%s dim=%s", schema, dest, dim)
-            people_map: dict[str, list[str]] = {}
-            src_map: dict[str, list[str]] = {}
-            org_map: dict[str, list[str]] = {}
-            for row in conn.execute(f"SELECT card_uid, person FROM {schema}.card_people"):
-                people_map.setdefault(str(row["card_uid"]), []).append(str(row["person"]))
-            for row in conn.execute(f"SELECT card_uid, source FROM {schema}.card_sources"):
-                src_map.setdefault(str(row["card_uid"]), []).append(str(row["source"]))
-            try:
-                for row in conn.execute(f"SELECT card_uid, org FROM {schema}.card_orgs"):
-                    org_map.setdefault(str(row["card_uid"]), []).append(str(row["org"]))
-            except Exception:
-                pass
-            card_total = int(conn.execute(f"SELECT COUNT(*) AS c FROM {schema}.cards").fetchone()["c"] or 0)
-            t_cards = time.monotonic()
-            with cards_path.open("w", encoding="utf-8") as fh:
-                rows = conn.execute(
-                    f"""
-                    SELECT c.uid, c.rel_path, c.summary, c.type, c.slug, c.activity_at,
-                           c.activity_end_at, COALESCE(c.search_text, '') AS search_text
-                    FROM {schema}.cards c
-                    """
-                )
-                for row in rows:
-                    uid = str(row["uid"])
-                    rec = {
-                        "card_uid": uid,
-                        "rel_path": str(row["rel_path"] or ""),
-                        "summary": str(row["summary"] or ""),
-                        "type": str(row["type"] or ""),
-                        "slug": str(row["slug"] or ""),
-                        "activity_at": str(row["activity_at"] or ""),
-                        "activity_end_at": str(row["activity_end_at"] or ""),
-                        "search_text": str(row["search_text"] or ""),
-                        "people": people_map.get(uid, []),
-                        "sources": src_map.get(uid, []),
-                        "orgs": org_map.get(uid, []),
-                        "corpus_state": "active",
-                        "aliases": [],
-                        "emails": [],
-                    }
-                    fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
-                    card_count += 1
-                    if card_count % 25000 == 0 or card_count == card_total:
-                        log.info("serving_index_export stage=cards %s", _eta(t_cards, card_count, card_total))
-            chunk_total = int(conn.execute(f"SELECT COUNT(*) AS c FROM {schema}.chunks").fetchone()["c"] or 0)
-            t_chunks = time.monotonic()
-            with chunks_path.open("w", encoding="utf-8") as fh:
-                for row in conn.execute(f"SELECT chunk_key, card_uid, chunk_type, chunk_index FROM {schema}.chunks"):
-                    fh.write(
-                        json.dumps(
-                            {
-                                "chunk_key": str(row["chunk_key"]),
-                                "card_uid": str(row["card_uid"]),
-                                "chunk_type": str(row["chunk_type"] or ""),
-                                "chunk_index": int(row["chunk_index"] or 0),
-                            }
-                        )
-                        + "\n"
-                    )
-                    chunk_count += 1
-                    if chunk_count % 50000 == 0 or chunk_count == chunk_total:
-                        log.info("serving_index_export stage=chunks %s", _eta(t_chunks, chunk_count, chunk_total))
-            model = get_default_embedding_model()
-            version = get_default_embedding_version()
-            if skip_embeddings and vec_path.exists() and keys_path.exists():
-                embed_count = sum(1 for line in keys_path.open(encoding="utf-8") if line.strip())
-                log.info("serving_index_export skip embeddings existing=%s", embed_count)
-            else:
-                embed_total = int(
-                    conn.execute(
-                        f"""
-                        SELECT COUNT(*) AS c FROM {schema}.embeddings
-                        WHERE embedding_model = %s AND embedding_version = %s
-                        """,
-                        (model, version),
-                    ).fetchone()["c"]
-                    or 0
-                )
-                t_emb = time.monotonic()
-                import array
-
-                with vec_path.open("wb") as vf, keys_path.open("w", encoding="utf-8") as kf:
-                    try:
-                        with conn.cursor(name="serving_emb_export") as cur:
-                            cur.itersize = 2000
-                            cur.execute(
-                                f"""
-                                SELECT chunk_key, embedding
-                                FROM {schema}.embeddings
-                                WHERE embedding_model = %s AND embedding_version = %s
-                                """,
-                                (model, version),
-                            )
-                            for row in cur:
-                                key = str(row["chunk_key"])
-                                emb = row["embedding"]
-                                if emb is None:
-                                    continue
-                                if isinstance(emb, str):
-                                    nums = [float(x) for x in emb.strip("[]").split(",") if x.strip()]
-                                else:
-                                    nums = list(emb)
-                                if len(nums) != dim:
-                                    continue
-                                vf.write(array.array("f", nums).tobytes())
-                                kf.write(key + "\n")
-                                embed_count += 1
-                                if embed_count % 25000 == 0 or embed_count == embed_total:
-                                    log.info(
-                                        "serving_index_export stage=embeddings %s",
-                                        _eta(t_emb, embed_count, embed_total),
-                                    )
-                    except Exception:
-                        log.exception("serving_index embed export failed")
-            edge_count = 0
-            t_edges = time.monotonic()
-            with edges_path.open("w", encoding="utf-8") as fh:
-                try:
-                    for row in conn.execute(
-                        f"""
-                        SELECT source_uid, target_uid, edge_type, field_name
-                        FROM {schema}.edges
-                        WHERE target_kind = 'card' AND target_uid <> ''
-                        """
-                    ):
-                        fh.write(
-                            json.dumps(
-                                {
-                                    "source_uid": str(row["source_uid"] or ""),
-                                    "target_uid": str(row["target_uid"] or ""),
-                                    "edge_type": str(row["edge_type"] or ""),
-                                    "field_name": str(row["field_name"] or ""),
-                                    "trust": 1.0,
-                                }
-                            )
-                            + "\n"
-                        )
-                        edge_count += 1
-                        if edge_count % 100000 == 0:
-                            log.info(
-                                "serving_index_export stage=edges rows=%s elapsed=%.0fs",
-                                edge_count,
-                                time.monotonic() - t_edges,
-                            )
-                except Exception:
-                    log.exception("serving_index edge export failed")
-            log.info(
-                "serving_index_export done cards=%s chunks=%s embeddings=%s edges=%s",
-                card_count,
-                chunk_count,
-                embed_count,
-                edge_count,
-            )
-    crate = _crate()
-    log.info("serving_index_build start dest=%s", dest)
-    report = crate.serving_index_build(
-        str(dest),
-        str(cards_path),
-        str(chunks_path),
-        str(keys_path),
-        str(vec_path),
-        dim,
-        str(edges_path),
+    spec = serving_embedding_spec()
+    dim = spec.dimension
+    snapshot = _export_warehouse_snapshot(
+        store,
+        incremental=incremental,
+        dirty_uids=concrete,
+        skip_embeddings=skip_embeddings,
+        log=log,
+        gid=gid,
     )
     rss_cap = get_serving_index_max_rss_mb()
-    est_mb = (embed_count * dim * 4) / (1024 * 1024)
+    embed_n = snapshot.embedding_count or len(snapshot.embeddings)
+    est_mb = (embed_n * dim * 4) / (1024 * 1024)
     if est_mb > rss_cap:
         if incremental:
             log.warning(
-                "serving_index_publish incremental rss_over_cap estimated_mb=%.1f cap=%s hardlinked_embeddings=1",
+                "serving_index_publish incremental rss_over_cap estimated_mb=%.1f cap=%s segment_embeddings=%s",
                 est_mb,
                 rss_cap,
+                len(snapshot.embeddings),
             )
         else:
             log.error("serving_index_refresh_failed reason=rss_cap estimated_mb=%.1f cap=%s", est_mb, rss_cap)
             return {"ok": False, "error": "serving_index_refresh_failed", "estimated_mb": est_mb}
-    crate.serving_index_publish(str(root), gid)
+    crate = _crate()
+    captured = None
+    try:
+        from archive_engine.changes import CONSUMER_PUBLICATION, consume_batch
+        from archive_vault.change_journal import ChangeJournal
+
+        if Path(store.vault).is_dir():
+            with ChangeJournal(store.vault) as journal:
+                captured = consume_batch(journal, CONSUMER_PUBLICATION)
+    except Exception:
+        logger.debug("publication captured batch unavailable", exc_info=True)
+        captured = None
+    receipt = publish_snapshot(
+        root,
+        snapshot,
+        generation_id=gid,
+        parent_generation=active_gid if incremental else "",
+        mode=mode,
+        force_compact=force_compact,
+        crate=crate,
+        vault=vault,
+        captured_batch=captured,
+    )
     crate.serving_index_truncate_dirty(str(root))
-    pruned = prune_retired_serving_generations(vault, keep=gid, logger=log)
+    pruned = prune_retired_serving_generations(vault, keep=receipt.generation_id, logger=log)
     cache = QueryEmbedCache(get_query_embed_cache_path(vault), ram_entries=get_query_embed_cache_ram_entries())
     cache.evict(max_rows=get_query_embed_cache_max_rows(), max_age_days=get_query_embed_cache_max_age_days())
     cache.close()
-    global _HANDLE
-    with _LOCK:
-        _HANDLE = None
-    log.info(
-        "serving_index_published generation=%s cards=%s chunks=%s embeddings=%s",
-        gid,
-        card_count,
-        chunk_count,
-        embed_count,
-    )
+    close_serving_handles(vault=vault)
     return {
         "ok": True,
-        "generation": gid,
-        "report": report,
-        "cards": card_count,
-        "chunks": chunk_count,
-        "embeddings": embed_count,
+        "generation": receipt.generation_id,
+        "report": receipt.to_payload(),
+        "cards": receipt.cards,
+        "chunks": receipt.chunks,
+        "embeddings": receipt.embeddings,
         "pruned_generations": pruned,
+        "mode": receipt.mode,
+        "parent_generation": receipt.parent_generation,
+        "snapshot_id": receipt.snapshot_id,
     }
 
 

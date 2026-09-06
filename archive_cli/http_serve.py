@@ -13,6 +13,8 @@ from collections.abc import Awaitable, Callable, MutableMapping
 from pathlib import Path
 from typing import Any
 
+from archive_engine.access import is_restricted, policy_identity, resolve_access_context
+from archive_engine.contracts import AccessContext
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.responses import JSONResponse
 
@@ -100,12 +102,30 @@ def configure_http_transport(mcp: Any, *, host: str, port: int) -> None:
     )
 
 
+def bind_http_access_context(*, archive_id: str | None = None) -> AccessContext:
+    """Resolve one AccessContext for the HTTP process. Invalid policy fails closed."""
+
+    aid = (archive_id or os.environ.get("PPA_ARCHIVE_ID") or "http").strip() or "http"
+    access = resolve_access_context(aid)
+    if access.deny and access.deny_reason:
+        raise RuntimeError(access.deny_reason)
+    _log.info(
+        "http_mcp_access policy=%s principal=%s profile=%s restricted=%s",
+        policy_identity(access),
+        access.principal,
+        access.profile,
+        is_restricted(access),
+    )
+    return access
+
+
 def run_http(mcp: Any, *, host: str, port: int, token: str) -> None:
     """Serve streamable HTTP with bearer auth. Blocks."""
     if not token:
         raise RuntimeError(
             f"HTTP MCP requires PPA_MCP_AUTH_TOKEN or a token file at {DEFAULT_TOKEN_FILE} (or PPA_MCP_AUTH_TOKEN_FILE)"
         )
+    bind_http_access_context()
 
     import anyio
     import uvicorn

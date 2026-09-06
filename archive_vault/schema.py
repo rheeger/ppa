@@ -21,6 +21,7 @@ TELEGRAM_URL_RE = re.compile(r"(?:https?://)?(?:www\.)?(?:t\.me|telegram\.me)/([
 class ProvenanceMethod(str, Enum):
     deterministic = "deterministic"
     llm = "llm"
+    human = "human"
 
 
 DETERMINISTIC_ONLY = frozenset(
@@ -51,6 +52,7 @@ DETERMINISTIC_ONLY = frozenset(
         "discord",
         "pronouns",
         "reports_to",
+        "redirect_to",
         "websites",
         "emails_seen_count",
         "amount",
@@ -571,6 +573,7 @@ class PersonCard(BaseCard):
     description: str = ""
     relationship_type: str = ""
     emails_seen_count: int = 0
+    redirect_to: str = ""
 
     @field_validator("emails")
     @classmethod
@@ -594,6 +597,7 @@ class PersonCard(BaseCard):
         "title",
         "description",
         "relationship_type",
+        "redirect_to",
         "discord",
         "pronouns",
         "reports_to",

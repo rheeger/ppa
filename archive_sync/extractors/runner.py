@@ -137,6 +137,17 @@ def note_content_matches(
 
 
 @dataclass
+class ExtractionOutput:
+    """One derived card written or reused from a source email."""
+
+    source_uid: str
+    output_uid: str
+    revision: str
+    rel_path: str
+    operation: str  # created | changed | unchanged | deleted
+
+
+@dataclass
 class ExtractionMetrics:
     """Per-extractor and aggregate metrics."""
 
@@ -151,6 +162,12 @@ class ExtractionMetrics:
     cards_per_second: float = 0.0
     rejected_emails: dict[str, int] = field(default_factory=dict)
     field_population: dict[str, dict[str, float]] = field(default_factory=dict)
+    created: list[ExtractionOutput] = field(default_factory=list)
+    changed: list[ExtractionOutput] = field(default_factory=list)
+    unchanged: list[ExtractionOutput] = field(default_factory=list)
+    deleted: list[ExtractionOutput] = field(default_factory=list)
+    failed_source_uids: list[str] = field(default_factory=list)
+    no_extraction_source_uids: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -165,6 +182,12 @@ class ExtractionMetrics:
             "cards_per_second": round(self.cards_per_second, 4),
             "rejected_emails": dict(self.rejected_emails),
             "field_population": dict(self.field_population),
+            "created": [item.__dict__ for item in self.created],
+            "changed": [item.__dict__ for item in self.changed],
+            "unchanged": [item.__dict__ for item in self.unchanged],
+            "deleted": [item.__dict__ for item in self.deleted],
+            "failed_source_uids": list(self.failed_source_uids),
+            "no_extraction_source_uids": list(self.no_extraction_source_uids),
         }
 
 
@@ -229,6 +252,10 @@ class ExtractionRunner:
         subject = str(fm.get("subject") or "")
         if not extractor.should_extract(subject, body):
             self._bump(lock, metrics, eid, "rejected", 1)
+            if uid:
+                with lock:
+                    if uid not in metrics.no_extraction_source_uids:
+                        metrics.no_extraction_source_uids.append(uid)
             return
         try:
             results = extractor.extract(fm, body, uid, item.rel_path, raw_body=raw_body)
@@ -236,10 +263,21 @@ class ExtractionRunner:
             log.exception("extract failed %s: %s", item.rel_path, exc)
             with lock:
                 metrics.errors += 1
+                if uid and uid not in metrics.failed_source_uids:
+                    metrics.failed_source_uids.append(uid)
             self._bump(lock, metrics, eid, "errors", 1)
             return
 
+        if not results:
+            if uid:
+                with lock:
+                    if uid not in metrics.no_extraction_source_uids:
+                        metrics.no_extraction_source_uids.append(uid)
+            return
+
         out_root = self._out_root()
+        from archive_sync.processors.input_hash import compute_output_revision
+
         for er in results:
             rt_warnings = validate_provenance_round_trip(
                 card_data=er.card.model_dump(mode="python"),
@@ -255,9 +293,16 @@ class ExtractionRunner:
                     metrics.extracted_cards += 1
                 self._bump(lock, metrics, eid, "extracted", 1)
                 continue
+            revision = compute_output_revision(
+                uid=str(er.card.uid),
+                payload={"rel_path": rel_out, "type": str(er.card.type), "body": er.body},
+            )
             if note_content_matches(out_root, rel_out, er.card, er.body):
                 with lock:
                     metrics.skipped_existing += 1
+                    metrics.unchanged.append(
+                        ExtractionOutput(uid, str(er.card.uid), revision, rel_out, "unchanged")
+                    )
                 self._bump(lock, metrics, eid, "skipped", 1)
                 continue
             # Staging runs: skip if an identical card already exists in the vault (post-promotion idempotency).
@@ -265,19 +310,34 @@ class ExtractionRunner:
                 if note_content_matches(Path(self.vault_path), rel_out, er.card, er.body):
                     with lock:
                         metrics.skipped_existing += 1
+                        metrics.unchanged.append(
+                            ExtractionOutput(uid, str(er.card.uid), revision, rel_out, "unchanged")
+                        )
                     self._bump(lock, metrics, eid, "skipped", 1)
                     continue
+            existed = (out_root / rel_out).is_file()
             try:
                 card_out = er.card.model_copy(update={"extraction_confidence": er.extraction_confidence})
+                out_root.mkdir(parents=True, exist_ok=True)
                 write_card(str(out_root), rel_out, card_out, er.body, er.provenance)
             except Exception as exc:
                 log.warning("write_card failed %s: %s", rel_out, exc)
                 with lock:
                     metrics.errors += 1
+                    if uid and uid not in metrics.failed_source_uids:
+                        metrics.failed_source_uids.append(uid)
                 self._bump(lock, metrics, eid, "errors", 1)
                 continue
+            record = ExtractionOutput(
+                uid,
+                str(er.card.uid),
+                revision,
+                rel_out,
+                "changed" if existed else "created",
+            )
             with lock:
                 metrics.extracted_cards += 1
+                (metrics.changed if existed else metrics.created).append(record)
             self._bump(lock, metrics, eid, "extracted", 1)
 
     def _iter_source_email_notes(self) -> list[_SourceEmailNote]:
@@ -299,6 +359,7 @@ class ExtractionRunner:
         scan_cache = VaultScanCache.build_or_load(vault, tier=1, progress_every=0)
         rows = scan_cache.frontmatter_rows_for_uids(self.uid_allowlist)
         notes: list[_SourceEmailNote] = []
+        found: set[str] = set()
         for row in rows:
             fm = dict(row.get("frontmatter") or {})
             if str(fm.get("type") or "") and str(fm.get("type")) != "email_message":
@@ -306,7 +367,22 @@ class ExtractionRunner:
             rel = str(row.get("rel_path") or "")
             if not rel:
                 continue
+            uid = str(fm.get("uid") or "").strip()
+            if uid:
+                found.add(uid)
             notes.append(_SourceEmailNote(rel_path=rel, frontmatter=fm))
+        missing = [uid for uid in self.uid_allowlist if uid not in found]
+        if missing:
+            from archive_vault.vault import read_note_by_uid
+
+            for uid in missing:
+                found_note = read_note_by_uid(self.vault_path, uid)
+                if not found_note:
+                    continue
+                rel, fm, _body, _prov = found_note
+                if str(fm.get("type") or "") not in {"", "email_message"}:
+                    continue
+                notes.append(_SourceEmailNote(rel_path=str(rel), frontmatter=dict(fm)))
         return notes
 
     def run(self) -> ExtractionMetrics:
@@ -358,6 +434,8 @@ class ExtractionRunner:
                         extractor=matched,
                     )
                 )
+            elif self.uid_allowlist is not None and uid:
+                metrics.no_extraction_source_uids.append(uid)
 
             if self.progress_every and scanned % self.progress_every == 0:
                 log.info(

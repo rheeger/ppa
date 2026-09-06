@@ -6,11 +6,12 @@ import logging
 from typing import Any
 
 from archive_cli.card_traversal import stack_pointers_from_frontmatter
+from archive_cli.retrieval_pipeline import PIPELINE_VERSION
 from archive_vault.yaml_parser import parse_frontmatter
 
 from ..errors import InvalidInputError
 from ..store import DefaultArchiveStore
-from .confidence import compute_confidence
+from .confidence import attach_retrieval_envelope
 
 
 def read(
@@ -31,20 +32,29 @@ def read(
     result = store.read(path_or_uid)
     logger.info("read_done found=%s", bool(result.get("found")))
     found = bool(result.get("found"))
-    result["confidence"] = compute_confidence(
+    attach_retrieval_envelope(
+        result,
+        query=path_or_uid,
         result_count=1 if found else 0,
         exact_match=found,
-        query_text=path_or_uid,
-    ).value
-    if found and (include_attachment_uids or include_duplicate_uids):
+        method="exact" if found else "unknown",
+        evidence_kind="source_reported" if found else "unknown",
+        pipeline_version=PIPELINE_VERSION,
+    )
+    if found:
         frontmatter, _body = parse_frontmatter(str(result.get("content") or ""))
-        ptrs = stack_pointers_from_frontmatter(frontmatter)
-        if include_attachment_uids:
-            result["attachment_uids"] = ptrs["attachment_uids"]
-        if include_duplicate_uids:
-            result["duplicate_uids"] = ptrs["duplicate_uids"]
-            if ptrs.get("parent_uid"):
-                result["parent_uid"] = ptrs["parent_uid"]
+        redirect_to = str(frontmatter.get("redirect_to") or "").strip()
+        if redirect_to:
+            result["redirect_to"] = redirect_to
+            result["redirect_provenance"] = "identity_decision"
+        if include_attachment_uids or include_duplicate_uids:
+            ptrs = stack_pointers_from_frontmatter(frontmatter)
+            if include_attachment_uids:
+                result["attachment_uids"] = ptrs["attachment_uids"]
+            if include_duplicate_uids:
+                result["duplicate_uids"] = ptrs["duplicate_uids"]
+                if ptrs.get("parent_uid"):
+                    result["parent_uid"] = ptrs["parent_uid"]
     return result
 
 

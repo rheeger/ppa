@@ -7,6 +7,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .constants import (
+    DEP_CONDITIONAL,
+    DEP_OPTIONAL,
+    DEP_REQUIRED,
+    DEPENDENCY_KINDS,
     EMAIL_PROMOTION_PROCESSOR_VERSION,
     EMAIL_THREAD_ENRICHMENT_VERSION,
     EMAIL_TYPED_EXTRACTION_VERSION,
@@ -42,6 +46,22 @@ from .constants import (
 )
 
 
+class ProcessorGraphError(ValueError):
+    """Static processor graph is cyclic or references an unknown dependency."""
+
+
+@dataclass(frozen=True)
+class ProcessorDependency:
+    """One directed edge. Kind is required, optional, or conditional."""
+
+    processor_key: str
+    kind: str = DEP_REQUIRED
+    when: str = ""
+
+    def to_dict(self) -> dict[str, str]:
+        return {"processor_key": self.processor_key, "kind": self.kind, "when": self.when}
+
+
 @dataclass(frozen=True)
 class ProcessorDeclaration:
     processor_key: str
@@ -53,6 +73,7 @@ class ProcessorDeclaration:
     input_hash_fields: tuple[str, ...] = ()
     active_only: bool = True
     depends_on: tuple[str, ...] = ()
+    dependencies: tuple[ProcessorDependency, ...] = ()
     idempotent: bool = True
     llm_dependent: bool = False
     rollback_strategy: str = ROLLBACK_SUPERSEDE
@@ -69,11 +90,20 @@ class ProcessorDeclaration:
             "input_hash_fields": list(self.input_hash_fields),
             "active_only": self.active_only,
             "depends_on": list(self.depends_on),
+            "dependencies": [dep.to_dict() for dep in dependencies_for(self)],
             "idempotent": self.idempotent,
             "llm_dependent": self.llm_dependent,
             "rollback_strategy": self.rollback_strategy,
             "enabled": self.enabled,
         }
+
+
+def dependencies_for(decl: ProcessorDeclaration) -> tuple[ProcessorDependency, ...]:
+    """Explicit edges, or required edges derived from ``depends_on``."""
+
+    if decl.dependencies:
+        return decl.dependencies
+    return tuple(ProcessorDependency(processor_key=key, kind=DEP_REQUIRED) for key in decl.depends_on)
 
 
 def _email_promotion_policy() -> ProcessorDeclaration:
@@ -97,7 +127,7 @@ def _email_typed_extraction() -> ProcessorDeclaration:
     return ProcessorDeclaration(
         processor_key=PROCESSOR_EMAIL_TYPED_EXTRACTION,
         processor_version=EMAIL_TYPED_EXTRACTION_VERSION,
-        input_card_types=("email_thread",),
+        input_card_types=("email_thread", "email_message"),
         input_filters={"processor_decision": "typed_extraction", "corpus_decision": "active"},
         output_kinds=(OUTPUT_KIND_DERIVED_CARDS,),
         output_identity="{processor_key}:{input_uid}:{extractor_version}",
@@ -114,7 +144,7 @@ def _email_thread_enrichment() -> ProcessorDeclaration:
     return ProcessorDeclaration(
         processor_key=PROCESSOR_EMAIL_THREAD_ENRICHMENT,
         processor_version=EMAIL_THREAD_ENRICHMENT_VERSION,
-        input_card_types=("email_thread",),
+        input_card_types=("email_thread", "purchase", "meal_order"),
         input_filters={"processor_decision": "thread_enrichment", "corpus_decision": "active"},
         output_kinds=(OUTPUT_KIND_SUMMARIES, OUTPUT_KIND_ENTITIES, OUTPUT_KIND_MATCHES),
         output_identity="{processor_key}:{input_uid}:{prompt_version}",
@@ -248,9 +278,37 @@ def validate_declaration(decl: ProcessorDeclaration) -> list[str]:
         errors.append("input_hash_fields is required")
     if not decl.rollback_strategy.strip():
         errors.append("rollback_strategy is required")
+    for dep in dependencies_for(decl):
+        if dep.kind not in DEPENDENCY_KINDS:
+            errors.append(f"unknown dependency kind {dep.kind!r} on {dep.processor_key}")
+        if dep.kind == DEP_CONDITIONAL and not dep.when.strip():
+            errors.append(f"conditional dependency {dep.processor_key} is missing when=")
+        if dep.kind == DEP_OPTIONAL and dep.when.strip():
+            errors.append(f"optional dependency {dep.processor_key} must not set when=")
+        if dep.processor_key not in PROCESSOR_KEYS:
+            errors.append(f"depends_on references unknown processor: {dep.processor_key}")
     for dep in decl.depends_on:
         if dep not in PROCESSOR_KEYS:
             errors.append(f"depends_on references unknown processor: {dep}")
+    return errors
+
+
+def validate_processor_graph(
+    declarations: Iterable[ProcessorDeclaration] | None = None,
+) -> list[str]:
+    """Reject static cycles and edges that point outside the provided set."""
+
+    decls = list(declarations) if declarations is not None else list(_PROCESSOR_DECLARATIONS)
+    by_key = {d.processor_key: d for d in decls}
+    errors: list[str] = []
+    for decl in decls:
+        for dep in dependencies_for(decl):
+            if dep.processor_key not in by_key:
+                errors.append(f"{decl.processor_key} depends on unknown {dep.processor_key}")
+    try:
+        topological_order(decls, require_declared_deps=True)
+    except ProcessorGraphError as exc:
+        errors.append(str(exc))
     return errors
 
 
@@ -258,28 +316,48 @@ def validate_all_declarations(
     declarations: Iterable[ProcessorDeclaration] | None = None,
 ) -> dict[str, list[str]]:
     decls = list(declarations) if declarations is not None else list(_PROCESSOR_DECLARATIONS)
-    return {d.processor_key: validate_declaration(d) for d in decls if validate_declaration(d)}
+    errors = {d.processor_key: validate_declaration(d) for d in decls if validate_declaration(d)}
+    graph_errors = validate_processor_graph(decls)
+    if graph_errors:
+        errors["__graph__"] = graph_errors
+    return errors
 
 
 def topological_order(
     declarations: Iterable[ProcessorDeclaration] | None = None,
+    *,
+    require_declared_deps: bool = False,
 ) -> list[str]:
-    """Return processor keys in dependency order (no execution)."""
+    """Return processor keys in dependency order (no execution).
+
+    Uses visiting/visited DFS so a static cycle is rejected instead of looping.
+    Filtered declaration subsets skip missing edges unless ``require_declared_deps``.
+    """
 
     decls = list(declarations) if declarations is not None else list(_PROCESSOR_DECLARATIONS)
     by_key = {d.processor_key: d for d in decls}
     visited: set[str] = set()
+    visiting: set[str] = set()
     order: list[str] = []
 
     def visit(key: str) -> None:
         if key in visited:
             return
-        visited.add(key)
+        if key in visiting:
+            cycle = " -> ".join([*visiting, key])
+            raise ProcessorGraphError(f"cycle detected: {cycle}")
+        visiting.add(key)
         decl = by_key.get(key)
         if decl:
-            for dep in decl.depends_on:
-                if dep in by_key:
-                    visit(dep)
+            for dep in dependencies_for(decl):
+                if dep.processor_key in by_key:
+                    visit(dep.processor_key)
+                elif require_declared_deps:
+                    raise ProcessorGraphError(
+                        f"unknown dependency {dep.processor_key} from {key}"
+                    )
+        visiting.remove(key)
+        visited.add(key)
         order.append(key)
 
     for decl in decls:

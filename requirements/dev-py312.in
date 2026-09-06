@@ -1,0 +1,8 @@
+# Dev/test extras for the Python 3.12 packaging profile.
+-r runtime-py312.in
+
+pytest>=7.0
+ruff==0.16.5
+maturin>=1.7
+build>=1.2
+pip-tools>=7.4

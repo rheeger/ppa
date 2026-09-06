@@ -67,6 +67,43 @@ ppa_make_secret_file() {
   printf '%s' "$secret_file"
 }
 
+ppa_require_openssl() {
+  if ! command -v openssl >/dev/null 2>&1; then
+    echo "openssl is required for encrypted backup; refusing plaintext fallback" >&2
+    exit 1
+  fi
+}
+
+ppa_sha256sum() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$@"
+  elif command -v gsha256sum >/dev/null 2>&1; then
+    gsha256sum "$@"
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$@"
+  else
+    echo "sha256sum or shasum is required for backup integrity; refusing plaintext fallback" >&2
+    exit 1
+  fi
+}
+
+ppa_paths_overlap() {
+  local left="${1:?}"
+  local right="${2:?}"
+  python3 - "$left" "$right" <<'PY'
+import sys
+from pathlib import Path
+left = Path(sys.argv[1]).expanduser()
+right = Path(sys.argv[2]).expanduser()
+try:
+    a = left.resolve()
+    b = right.resolve()
+except OSError:
+    sys.exit(1)
+sys.exit(0 if a == b or a in b.parents or b in a.parents else 1)
+PY
+}
+
 ppa_latest_backup_dir() {
   local backup_base="${1:?backup base required}"
   printf '%s' "${backup_base%/}/latest"

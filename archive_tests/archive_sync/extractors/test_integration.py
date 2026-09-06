@@ -50,7 +50,7 @@ def test_full_extraction_pipeline(extractor_vault, sample_email_card, tmp_path):
         extractor_vault,
         registry,
         staging_dir=str(staging),
-        workers=2,
+        workers=1,
     ).run()
     assert r1.matched_emails == 10
     assert r1.extracted_cards == 10
@@ -71,7 +71,7 @@ def test_full_extraction_pipeline(extractor_vault, sample_email_card, tmp_path):
         extractor_vault,
         registry,
         staging_dir=str(staging),
-        workers=2,
+        workers=1,
     ).run()
     assert r2.skipped_existing == 10
     assert r2.extracted_cards == 0

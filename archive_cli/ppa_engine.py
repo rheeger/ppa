@@ -1,22 +1,11 @@
-"""Select native Rust vs Python code paths (Phase 2.9+).
+"""Compatibility facade for execution-mode selection.
 
-Default is ``rust``. Set ``PPA_ENGINE=python`` to force legacy Python paths (e.g. when
-``archive_crate`` is not built).
+The implementation lives in ``archive_engine.execution_mode``. Callers that
+already imported ``archive_cli.ppa_engine`` keep working.
 """
 
 from __future__ import annotations
 
-import os
+from archive_engine.execution_mode import ppa_engine, use_rust_vault_cache_disk_build
 
-
-def ppa_engine() -> str:
-    raw = os.environ.get("PPA_ENGINE", "rust")
-    if not raw:
-        return "rust"
-    return str(raw).strip().lower()
-
-
-def use_rust_vault_cache_disk_build() -> bool:
-    """When True, ``VaultScanCache.build_or_load`` may write ``vault-scan-cache.sqlite3`` via Rust."""
-
-    return ppa_engine() == "rust"
+__all__ = ["ppa_engine", "use_rust_vault_cache_disk_build"]

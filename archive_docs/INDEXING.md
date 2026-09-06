@@ -17,17 +17,16 @@ The first indexing slice lives in `ppa` and provides:
 - semantic retrieval with card-level vector aggregation
 - hybrid retrieval with lexical, semantic, graph, recency, and provenance-aware ranking
 
-Postgres is now the primary backend for this derived index layer.
+Postgres is the **warehouse** for this derived index layer. Live MCP/CLI query uses the Rust serving generation at `<vault>/_meta/rust-search-index` (`ACTIVE`). Postgres FTS / pgvector is a test oracle, not the live query engine.
 
 ## Target End State
 
-The long-term target remains:
+- Rust serving index for lexical, vector, hybrid, graph, timeline, and neighbors
+- Postgres for metadata, operational state, embeddings admin, and warehouse COPY
+- normalized external ID and graph tables for multi-provider history
+- `pgvector` remains available in the warehouse; it is not the product query path
 
-- Postgres for metadata and operational state
-- `pgvector` for semantic retrieval
-- normalized external ID and graph tables for multi-provider history and agent navigation
-
-The current Postgres slice is the contract-shaping step for the larger `pgvector` and hybrid retrieval rollout.
+`maintain` / `rebuild-indexes` publish `ACTIVE`. A config manifest is not freshness.
 
 ## Index Contract
 

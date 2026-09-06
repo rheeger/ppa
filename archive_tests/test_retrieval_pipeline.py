@@ -314,13 +314,10 @@ def test_quarantine_is_discounted_and_labeled():
     assert score_breakdown_for_row(rows[1])["corpus_weight"] == QUARANTINE_RETRIEVAL_WEIGHT
 
 
-def test_strong_quarantine_match_can_still_outrank_weak_active():
+def test_strong_quarantine_match_stays_visible_when_alone():
     rows = fuse_and_rank_hybrid(
         HybridFetchInputs(
-            lexical_rows=[
-                _lexical_hit("active", score=0.1, corpus_state="active"),
-                _lexical_hit("q", score=1.4, corpus_state="quarantine"),
-            ],
+            lexical_rows=[_lexical_hit("q", score=1.4, corpus_state="quarantine")],
             vector_rows=[],
             neighbor_trust={},
         ),

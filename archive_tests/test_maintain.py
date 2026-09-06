@@ -72,50 +72,61 @@ def test_maintenance_full_cycle(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     store.index._connect.return_value = _connect_ctx(conn)
     store.vault = tmp_path
     store.rebuild.return_value = {"cards": 10}
+    captured: dict[str, Any] = {}
 
-    class M:
-        extracted_cards = 2
+    def fake_processors(*_a, **kwargs):
+        captured["extra"] = list(kwargs.get("extra_dirty_uids") or [])
+        captured["apply"] = kwargs.get("apply")
+        return (
+            1,
+            [
+                {
+                    "executed": True,
+                    "item_results": [
+                        {
+                            "processor_key": "email_typed_extraction",
+                            "input_uid": "u0",
+                            "status": "complete",
+                            "output_uids": ["purchase-a", "purchase-b"],
+                            "receipt": {"outputs": [{"uid": "purchase-a"}, {"uid": "purchase-b"}]},
+                        },
+                        {
+                            "processor_key": "entity_resolution",
+                            "input_uid": "purchase-a",
+                            "status": "complete",
+                            "output_uids": ["org-a", "org-b", "place-a"],
+                            "receipt": {
+                                "outputs": [{"uid": "org-a"}, {"uid": "org-b"}, {"uid": "place-a"}]
+                            },
+                        },
+                        {
+                            "processor_key": "materialization",
+                            "input_uid": "u0",
+                            "status": "complete",
+                            "output_uids": ["u0"],
+                            "receipt": {"outputs": [{"uid": "u0"}]},
+                        },
+                    ],
+                    "report": {
+                        "warnings": ["materialization incremental rebuild cards=10 dirty_uids=5"],
+                        "errors": [],
+                        "output_count": 6,
+                    },
+                }
+            ],
+            6,
+        )
 
-    runner_kwargs: dict[str, Any] = {}
-
-    class FakeRunner:
-        def __init__(self, *args, **kwargs):
-            runner_kwargs.update(kwargs)
-
-        def run(self):
-            return M()
-
-    monkeypatch.setattr(
-        "archive_sync.extractors.runner.ExtractionRunner",
-        FakeRunner,
-    )
-
-    er_kwargs: dict[str, Any] = {}
-
-    def fake_er(path, **kwargs):
-        er_kwargs.update(kwargs)
-        return {
-            "places_created": 1,
-            "places_merged": 0,
-            "orgs_created": 1,
-            "orgs_merged": 0,
-            "persons_linked": 1,
-        }
-
-    monkeypatch.setattr(
-        "archive_sync.extractors.entity_resolution.run_entity_resolution",
-        fake_er,
-    )
+    monkeypatch.setattr("archive_cli.commands.maintain._run_processors", fake_processors)
     rep = run_maintenance(store=store, logger=logging.getLogger("t"), dry_run=False)
     assert rep.new_cards_ingested == 5
     assert rep.cards_extracted == 2
     assert rep.entities_resolved == 3
     assert rep.cards_rebuilt == 10
-    assert runner_kwargs.get("uid_allowlist") == {f"u{i}" for i in range(5)}
-    assert er_kwargs.get("uid_allowlist") == {f"u{i}" for i in range(5)}
-    store.rebuild.assert_called_once()
-    assert store.rebuild.call_args.kwargs.get("force_full") is False
-    assert store.rebuild.call_args.kwargs.get("uid_allowlist") == {f"u{i}" for i in range(5)}
+    assert captured["apply"] is True
+    assert {f"u{i}" for i in range(5)} <= set(captured["extra"])
+    store.rebuild.assert_not_called()
+    assert any("routed through processor DAG" in step for step in rep.skipped_steps)
 
 
 def test_maintenance_idempotent() -> None:
@@ -163,22 +174,13 @@ def test_maintenance_partial_failure_extraction(monkeypatch: pytest.MonkeyPatch,
     store.vault = tmp_path
     store.rebuild.return_value = {"cards": 1}
 
-    def boom_run(self):
+    def boom_processors(*_a, **_k):
         raise RuntimeError("extract fail")
 
-    monkeypatch.setattr("archive_sync.extractors.runner.ExtractionRunner.run", boom_run)
-    monkeypatch.setattr(
-        "archive_sync.extractors.entity_resolution.run_entity_resolution",
-        lambda *a, **k: {
-            "places_created": 0,
-            "places_merged": 0,
-            "orgs_created": 0,
-            "orgs_merged": 0,
-            "persons_linked": 0,
-        },
-    )
+    monkeypatch.setattr("archive_cli.commands.maintain._run_processors", boom_processors)
     rep = run_maintenance(store=store, logger=logging.getLogger("t"), dry_run=False)
-    assert any(e.get("step") == "auto_extract" for e in rep.errors)
+    assert any(e.get("step") == "run_processors" for e in rep.errors)
+    store.rebuild.assert_not_called()
 
 
 def test_maintenance_missing_extractor_module(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -205,9 +207,13 @@ def test_maintenance_missing_extractor_module(monkeypatch: pytest.MonkeyPatch, t
     store.index._connect.return_value = _connect_ctx(conn)
     store.vault = tmp_path
     store.rebuild.return_value = {"cards": 0}
-    monkeypatch.setattr("archive_cli.commands.maintain._try_import", lambda p: None)
+    monkeypatch.setattr(
+        "archive_cli.commands.maintain._run_processors",
+        lambda *a, **k: (1, [{"executed": True, "item_results": [], "report": {}}], 0),
+    )
     rep = run_maintenance(store=store, logger=logging.getLogger("t"), dry_run=False)
-    assert any("extractor registry import failed" in s for s in rep.skipped_steps)
+    assert any("routed through processor DAG" in s for s in rep.skipped_steps)
+    store.rebuild.assert_not_called()
 
 
 def test_maintenance_missing_ingestion_table() -> None:
@@ -256,9 +262,13 @@ def test_maintenance_watermark_update(tmp_path: Path, monkeypatch: pytest.Monkey
     store.index._connect.return_value = _connect_ctx(conn)
     store.vault = tmp_path
     store.rebuild.return_value = {"cards": 1}
-    monkeypatch.setattr("archive_cli.commands.maintain._try_import", lambda p: None)
+    monkeypatch.setattr(
+        "archive_cli.commands.maintain._run_processors",
+        lambda *a, **k: (1, [{"executed": True, "item_results": [], "report": {}}], 0),
+    )
     run_maintenance(store=store, logger=logging.getLogger("t"), dry_run=False)
     assert commits
+    store.rebuild.assert_not_called()
 
 
 def test_maintenance_coverage_report_fields() -> None:
@@ -282,6 +292,10 @@ def test_maintenance_coverage_report_fields() -> None:
         "skipped_steps",
         "nothing_to_do",
         "publish_uids",
+        "journal_watermark",
+        "materialized_watermark",
+        "published_watermark",
+        "source_cursors",
     ):
         assert k in d
 
@@ -309,8 +323,15 @@ def test_maintenance_dry_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     store.index.schema = "ppa"
     store.index._connect.return_value = _connect_ctx(conn)
     store.vault = tmp_path
-    monkeypatch.setattr("archive_cli.commands.maintain._try_import", lambda p: None)
+    captured: dict[str, Any] = {}
+
+    def fake_processors(*_a, **kwargs):
+        captured["apply"] = kwargs.get("apply")
+        return (1, [{"executed": False, "item_results": [], "report": {}}], 0)
+
+    monkeypatch.setattr("archive_cli.commands.maintain._run_processors", fake_processors)
     rep = run_maintenance(store=store, logger=logging.getLogger("t"), dry_run=True)
+    assert captured["apply"] is False
     assert any("dry-run" in s for s in rep.skipped_steps)
     store.rebuild.assert_not_called()
 
@@ -548,8 +569,8 @@ def test_maintain_catch_up_handoff_dirty_uids_to_real_executor(
     assert "hfa-join-mail-1" in executed_uids
     assert any(r.get("status") == "complete" for r in proc.get("item_results") or [])
 
-    rebuild_calls = [c.kwargs for c in store.rebuild.call_args_list]
-    assert any(c.get("force_full") is False for c in rebuild_calls)
+    # Materialization inside the DAG may rebuild; maintain itself must not add a second chain.
+    assert "auto_extract" not in {e.get("step") for e in rep.errors}
 
 
 def test_maintain_processors_invoke_duplicate_linking_and_junk_purge(
@@ -730,15 +751,6 @@ def test_maintain_skips_second_rebuild_when_processors_applied(
             2,
         ),
     )
-    monkeypatch.setattr(
-        "archive_sync.extractors.runner.ExtractionRunner",
-        lambda *a, **k: mock.Mock(run=lambda: mock.Mock(extracted_cards=0)),
-    )
-    monkeypatch.setattr(
-        "archive_sync.extractors.entity_resolution.run_entity_resolution",
-        lambda *a, **k: {},
-    )
-
     rep = run_maintenance(
         store=store,
         logger=logging.getLogger("t"),
@@ -748,4 +760,4 @@ def test_maintain_skips_second_rebuild_when_processors_applied(
     )
     store.rebuild.assert_not_called()
     assert rep.cards_rebuilt == 2
-    assert any("already rematerialized" in s for s in rep.skipped_steps)
+    assert any("routed through processor DAG" in s for s in rep.skipped_steps)

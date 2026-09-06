@@ -10,6 +10,8 @@ a new card type is a two-file change:
 
 from __future__ import annotations
 
+import json
+
 from .contracts import CardTypeRegistration, DeclEdgeRule, ProjectionColumnSpec
 
 # ---------------------------------------------------------------------------
@@ -247,7 +249,14 @@ CARD_TYPE_REGISTRATIONS: tuple[CardTypeRegistration, ...] = (
             DeclEdgeRule("participants", "thread_has_person", "person", ("account_email", "participants")),
         ),
         chunk_builder_name="email_thread",
-        chunk_types=("thread_subject", "thread_context", "thread_summary", "thread_window", "thread_recent_window"),
+        chunk_types=(
+            "thread_subject",
+            "thread_context",
+            "thread_summary",
+            "thread_window",
+            "thread_recent_window",
+            "conversation_burst",
+        ),
     ),
     # ── email_message ───────────────────────────────────────────────────
     CardTypeRegistration(
@@ -340,6 +349,7 @@ CARD_TYPE_REGISTRATIONS: tuple[CardTypeRegistration, ...] = (
             "imessage_thread_summary",
             "imessage_thread_window",
             "imessage_thread_recent_window",
+            "conversation_burst",
         ),
     ),
     # ── imessage_message ────────────────────────────────────────────────
@@ -418,7 +428,7 @@ CARD_TYPE_REGISTRATIONS: tuple[CardTypeRegistration, ...] = (
         person_edge_type="mentions_person",
         edge_rules=(),
         chunk_builder_name=None,
-        chunk_types=(),
+        chunk_types=("conversation_burst",),
     ),
     # ── beeper_message ──────────────────────────────────────────────────
     CardTypeRegistration(
@@ -1085,6 +1095,169 @@ CARD_TYPE_REGISTRATIONS: tuple[CardTypeRegistration, ...] = (
 
 REGISTRATION_BY_CARD_TYPE: dict[str, CardTypeRegistration] = {reg.card_type: reg for reg in CARD_TYPE_REGISTRATIONS}
 
+# Projection source fields that are not Pydantic model fields. Handwritten
+# extras stay here; a new pair without an entry is a failed registry check.
+HANDWRITTEN_PROJECTION_SOURCES: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("beeper_attachment", "metadata_sha"),
+        ("beeper_thread", "service"),
+        ("email_thread", "participant_emails"),
+        ("finance", "counterparties"),
+        ("finance", "date_end"),
+        ("finance", "date_start"),
+        ("finance", "emails"),
+        ("finance", "location"),
+        ("finance", "phones"),
+        ("finance", "websites"),
+        ("git_commit", "branch_names"),
+        ("git_commit", "pull_numbers"),
+        ("git_repository", "fork_count"),
+        ("git_repository", "open_issue_count"),
+        ("git_repository", "repository_id"),
+        ("git_repository", "repository_name_with_owner"),
+        ("git_repository", "repository_url"),
+        ("git_repository", "stargazer_count"),
+        ("git_thread", "associated_pr_numbers"),
+        ("git_thread", "author_login"),
+        ("imessage_attachment", "attachment_type"),
+        ("imessage_attachment", "is_missing"),
+        ("imessage_attachment", "metadata_sha"),
+        ("imessage_message", "linked_message_event_id"),
+        ("imessage_message", "message_body_sha"),
+        ("imessage_message", "message_type"),
+        ("imessage_message", "reaction_key"),
+        ("imessage_message", "reply_to_event_id"),
+        ("imessage_message", "sender_id"),
+        ("imessage_message", "sender_identifier"),
+        ("imessage_message", "sender_name"),
+        ("imessage_message", "sender_person"),
+        ("imessage_thread", "counterpart_identifiers"),
+        ("imessage_thread", "counterpart_ids"),
+        ("imessage_thread", "counterpart_names"),
+        ("imessage_thread", "participant_identifiers"),
+        ("imessage_thread", "participant_ids"),
+        ("imessage_thread", "participant_names"),
+        ("imessage_thread", "protocol"),
+        ("imessage_thread", "thread_description"),
+        ("imessage_thread", "thread_title"),
+        ("imessage_thread", "thread_type"),
+        ("vaccination", "dose_number"),
+        ("vaccination", "facility_name"),
+        ("vaccination", "provider_name"),
+        ("vaccination", "recorded_at"),
+        ("vaccination", "series_complete"),
+    }
+)
+
 
 def get_registration(card_type: str) -> CardTypeRegistration | None:
     return REGISTRATION_BY_CARD_TYPE.get(card_type)
+
+
+def _column_payload(col) -> dict:
+    default = col.default
+    if hasattr(default, "item"):
+        default = default.item()
+    return {
+        "name": col.name,
+        "sql_type": col.sql_type,
+        "nullable": col.nullable,
+        "indexed": col.indexed,
+        "source_field": col.source_field,
+        "value_mode": col.value_mode,
+        "default": default,
+    }
+
+
+def materializer_registry_payload() -> dict:
+    """Deterministic native-registry document. Authority is this Python registry."""
+
+    from archive_cli.projections.base import SHARED_TYPED_COLUMNS
+    from archive_cli.projections.registry import PROJECTION_REGISTRY_VERSION
+
+    shared = [_column_payload(col) for col in SHARED_TYPED_COLUMNS]
+    card_types = []
+    for reg in CARD_TYPE_REGISTRATIONS:
+        card_types.append(
+            {
+                "card_type": reg.card_type,
+                "projection_table": reg.projection_table,
+                "person_edge_type": reg.person_edge_type,
+                "quality_critical_fields": list(reg.quality_critical_fields),
+                "edge_rules": [
+                    {
+                        "field_name": rule.field_name,
+                        "edge_type": rule.edge_type,
+                        "target": rule.target,
+                        "source_fields": list(rule.source_fields),
+                        "multi": rule.multi,
+                        "target_lookup_field": rule.target_lookup_field,
+                        "target_card_type": rule.target_card_type,
+                    }
+                    for rule in reg.edge_rules
+                ],
+                "shared_typed_columns": shared,
+                "typed_columns": [_column_payload(col) for col in reg.projection_columns],
+            }
+        )
+    return {
+        "registry_version": 1,
+        "projection_registry_version": PROJECTION_REGISTRY_VERSION,
+        "card_types": card_types,
+    }
+
+
+def dump_registry_json(payload: dict | None = None) -> str:
+    """Canonical native-registry serialization (indent=2, sorted keys, trailing newline)."""
+
+    return json.dumps(payload if payload is not None else materializer_registry_payload(), indent=2, sort_keys=True) + "\n"
+
+
+def validate_card_type_registrations() -> None:
+    """Fail with a named diagnostic when coverage or handwritten extras drift."""
+
+    from archive_cli.projections.registry import projection_for_card_type
+    from archive_vault.card_contracts import CARD_TYPE_SPECS
+    from archive_vault.schema import CARD_TYPES
+
+    registered = set(REGISTRATION_BY_CARD_TYPE)
+    expected = set(CARD_TYPES)
+    missing = sorted(expected - registered)
+    extra = sorted(registered - expected)
+    if missing or extra:
+        raise ValueError(f"card registry coverage drift missing={missing} extra={extra}")
+    handwritten: set[tuple[str, str]] = set()
+    for card_type, model in CARD_TYPES.items():
+        fields = set(model.model_fields)
+        spec = CARD_TYPE_SPECS[card_type]
+        reg = REGISTRATION_BY_CARD_TYPE[card_type]
+        projection = projection_for_card_type(card_type)
+        if spec.typed_projection != reg.projection_table:
+            raise ValueError(
+                f"projection table mismatch card_type={card_type} "
+                f"spec={spec.typed_projection} registration={reg.projection_table}"
+            )
+        if projection is None or projection.table_name != reg.projection_table:
+            raise ValueError(
+                f"projection registry mismatch card_type={card_type} table={reg.projection_table}"
+            )
+        unknown_quality = [name for name in reg.quality_critical_fields if name not in fields]
+        if unknown_quality:
+            raise ValueError(f"unknown quality field card_type={card_type} fields={unknown_quality}")
+        for col in reg.projection_columns:
+            source = col.source_field or col.name
+            if col.value_mode not in {"text", "json", "bool", "float", "int", "timestamptz"}:
+                continue
+            if source in fields or source == "rel_path":
+                continue
+            handwritten.add((card_type, source))
+        for rule in reg.edge_rules:
+            missing_sources = [name for name in rule.source_fields if name not in fields]
+            if missing_sources:
+                raise ValueError(
+                    f"unknown edge source card_type={card_type} field={rule.field_name} sources={missing_sources}"
+                )
+    if handwritten != set(HANDWRITTEN_PROJECTION_SOURCES):
+        added = sorted(handwritten - set(HANDWRITTEN_PROJECTION_SOURCES))
+        removed = sorted(set(HANDWRITTEN_PROJECTION_SOURCES) - handwritten)
+        raise ValueError(f"undocumented handwritten projection sources added={added} removed={removed}")

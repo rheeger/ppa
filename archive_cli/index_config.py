@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -37,6 +37,35 @@ SCAN_MANIFEST_VERSION = 1
 DEFAULT_POSTGRES_SCHEMA = "ppa"
 DEFAULT_VECTOR_DIMENSION = 1536
 DEFAULT_CHUNK_CHAR_LIMIT = 1200
+DEFAULT_BURST_TOKEN_LIMIT = 800
+DEFAULT_BURST_CHAT_GAP_SECONDS = 300
+BURST_ALGORITHM_VERSION = "p01b1-burst-1"
+DEFAULT_RRF_K = 60
+DEFAULT_DIVERSITY_CAP = 2
+DEFAULT_DIVERSITY_WINDOW = 10
+DEFAULT_RARE_TOKEN_WEIGHT = 0.0
+DEFAULT_CURRENT_OPS_HALF_LIFE_DAYS = 30
+DEFAULT_RERANK_TOP_N = 30
+DEFAULT_RERANK_TIMEOUT_MS = 2000
+DEFAULT_RRF_EXACT_WEIGHT = 2.0
+DEFAULT_RRF_LEXICAL_WEIGHT = 1.0
+DEFAULT_RRF_VECTOR_WEIGHT = 1.0
+DEFAULT_RRF_GRAPH_WEIGHT = 0.25
+MULTI_EVENT_CARD_TYPES = frozenset(
+    {
+        "calendar_event",
+        "meal_order",
+        "grocery_order",
+        "ride",
+        "flight",
+        "accommodation",
+        "car_rental",
+        "purchase",
+        "shipment",
+        "event_ticket",
+        "payroll",
+    }
+)
 DEFAULT_EMBEDDING_MODEL = "default-embedding-model"
 DEFAULT_EMBEDDING_VERSION = 1
 DEFAULT_EMBED_BATCH_SIZE = 32
@@ -49,6 +78,7 @@ DEFAULT_REBUILD_WORKERS = max(os.cpu_count() or 4, 1)
 DEFAULT_REBUILD_BATCH_SIZE = 1000
 DEFAULT_REBUILD_COMMIT_INTERVAL = 5000
 DEFAULT_REBUILD_PROGRESS_EVERY = 10000
+DEFAULT_SERVING_EXPORT_BATCH = 2000
 DEFAULT_REBUILD_EXECUTOR = "thread"
 DEFAULT_REBUILD_FLUSH_ROW_MULT = 120
 DEFAULT_REBUILD_FLUSH_MAX_EDGES = 100_000
@@ -117,11 +147,25 @@ def _ppa_env_bool(canonical: str) -> bool:
     return _ppa_env(canonical).lower() in {"1", "true", "yes", "on"}
 
 
+def _bound_instance():
+    from archive_engine.config import current_instance_config
+
+    return current_instance_config()
+
+
 def get_index_dsn() -> str:
+    bound = _bound_instance()
+    if bound is not None:
+        from archive_engine.config import current_secret_values
+
+        return current_secret_values().get("index_dsn") or ""
     return _ppa_env("PPA_INDEX_DSN")
 
 
 def get_index_schema() -> str:
+    bound = _bound_instance()
+    if bound is not None:
+        return bound.storage.index_schema
     return _ppa_env("PPA_INDEX_SCHEMA", default=DEFAULT_POSTGRES_SCHEMA)
 
 
@@ -130,6 +174,9 @@ def get_default_timezone() -> str:
 
 
 def get_vector_dimension() -> int:
+    bound = _bound_instance()
+    if bound is not None:
+        return bound.embeddings.dimension if bound.embeddings.dimension > 0 else DEFAULT_VECTOR_DIMENSION
     v = _ppa_env_int("PPA_VECTOR_DIMENSION", default=DEFAULT_VECTOR_DIMENSION)
     return v if v > 0 else DEFAULT_VECTOR_DIMENSION
 
@@ -151,11 +198,96 @@ def get_chunk_char_limit() -> int:
     return v if v > 0 else DEFAULT_CHUNK_CHAR_LIMIT
 
 
+def get_burst_token_limit() -> int:
+    v = _ppa_env_int("PPA_BURST_TOKEN_LIMIT", default=DEFAULT_BURST_TOKEN_LIMIT)
+    return v if v > 0 else DEFAULT_BURST_TOKEN_LIMIT
+
+
+def get_burst_chat_gap_seconds() -> int:
+    v = _ppa_env_int("PPA_BURST_CHAT_GAP_SECONDS", default=DEFAULT_BURST_CHAT_GAP_SECONDS)
+    return v if v > 0 else DEFAULT_BURST_CHAT_GAP_SECONDS
+
+
+def _ppa_env_float(canonical: str, default: float) -> float:
+    raw = _ppa_env(canonical, default=str(default))
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def get_rrf_k() -> int:
+    v = _ppa_env_int("PPA_RRF_K", default=DEFAULT_RRF_K)
+    return v if v > 0 else DEFAULT_RRF_K
+
+
+def get_rrf_channel_weight(channel: str) -> float:
+    defaults = {
+        "exact": DEFAULT_RRF_EXACT_WEIGHT,
+        "lexical": DEFAULT_RRF_LEXICAL_WEIGHT,
+        "vector": DEFAULT_RRF_VECTOR_WEIGHT,
+        "graph": DEFAULT_RRF_GRAPH_WEIGHT,
+    }
+    key = {
+        "exact": "PPA_RRF_EXACT_WEIGHT",
+        "lexical": "PPA_RRF_LEXICAL_WEIGHT",
+        "vector": "PPA_RRF_VECTOR_WEIGHT",
+        "graph": "PPA_RRF_GRAPH_WEIGHT",
+    }[channel]
+    v = _ppa_env_float(key, defaults[channel])
+    return v if v >= 0 else defaults[channel]
+
+
+def get_diversity_cap() -> int:
+    v = _ppa_env_int("PPA_DIVERSITY_CAP", default=DEFAULT_DIVERSITY_CAP)
+    return v if v >= 0 else DEFAULT_DIVERSITY_CAP
+
+
+def get_diversity_window() -> int:
+    v = _ppa_env_int("PPA_DIVERSITY_WINDOW", default=DEFAULT_DIVERSITY_WINDOW)
+    return v if v > 0 else DEFAULT_DIVERSITY_WINDOW
+
+
+def get_rare_token_weight() -> float:
+    v = _ppa_env_float("PPA_RARE_TOKEN_WEIGHT", DEFAULT_RARE_TOKEN_WEIGHT)
+    return v if v >= 0 else DEFAULT_RARE_TOKEN_WEIGHT
+
+
+def get_ranking_profile() -> str:
+    value = _ppa_env("PPA_RANKING_PROFILE", default="default").strip().lower()
+    return value if value else "default"
+
+
+def get_current_ops_half_life_days() -> float:
+    v = _ppa_env_float("PPA_CURRENT_OPS_HALF_LIFE_DAYS", float(DEFAULT_CURRENT_OPS_HALF_LIFE_DAYS))
+    return v if v > 0 else float(DEFAULT_CURRENT_OPS_HALF_LIFE_DAYS)
+
+
+def get_rerank_top_n() -> int:
+    v = _ppa_env_int("PPA_RERANK_TOP_N", default=DEFAULT_RERANK_TOP_N)
+    return v if v > 0 else DEFAULT_RERANK_TOP_N
+
+
+def get_rerank_timeout_ms() -> int:
+    v = _ppa_env_int("PPA_RERANK_TIMEOUT_MS", default=DEFAULT_RERANK_TIMEOUT_MS)
+    return v if v > 0 else DEFAULT_RERANK_TIMEOUT_MS
+
+
 def get_default_embedding_model() -> str:
+    bound = _bound_instance()
+    if bound is not None:
+        return bound.embeddings.model
     return _ppa_env("PPA_EMBEDDING_MODEL", default=DEFAULT_EMBEDDING_MODEL)
 
 
 def get_default_embedding_version() -> int:
+    bound = _bound_instance()
+    if bound is not None:
+        try:
+            version = int(bound.embeddings.model_revision)
+        except (TypeError, ValueError):
+            version = DEFAULT_EMBEDDING_VERSION
+        return version if version > 0 else DEFAULT_EMBEDDING_VERSION
     v = _ppa_env_int("PPA_EMBEDDING_VERSION", default=DEFAULT_EMBEDDING_VERSION)
     return v if v > 0 else DEFAULT_EMBEDDING_VERSION
 
@@ -293,11 +425,60 @@ def get_seed_links_enabled() -> bool:
     return _ppa_env_bool("PPA_SEED_LINKS_ENABLED")
 
 
+DEFAULT_CONTEXT_PRECEDING = 1
+DEFAULT_CONTEXT_FOLLOWING = 1
+DEFAULT_CONTEXT_MAX_TOKENS_PER_HIT = 2000
+DEFAULT_CONTEXT_MAX_TOKENS_TOTAL = 8000
+DEFAULT_GRAPH_MAX_DEPTH = 1
+DEFAULT_GRAPH_MAX_PUBLIC_DEPTH = 2
+DEFAULT_GRAPH_MAX_NODES = 256
+DEFAULT_GRAPH_MAX_EDGES = 512
+DEFAULT_GRAPH_MAX_ELAPSED_MS = 250
+
+
+def get_context_preceding() -> int:
+    return max(_ppa_env_int("PPA_CONTEXT_PRECEDING", DEFAULT_CONTEXT_PRECEDING), 0)
+
+
+def get_context_following() -> int:
+    return max(_ppa_env_int("PPA_CONTEXT_FOLLOWING", DEFAULT_CONTEXT_FOLLOWING), 0)
+
+
+def get_context_max_tokens_per_hit() -> int:
+    return max(_ppa_env_int("PPA_CONTEXT_MAX_TOKENS_PER_HIT", DEFAULT_CONTEXT_MAX_TOKENS_PER_HIT), 1)
+
+
+def get_context_max_tokens_total() -> int:
+    return max(_ppa_env_int("PPA_CONTEXT_MAX_TOKENS_TOTAL", DEFAULT_CONTEXT_MAX_TOKENS_TOTAL), 1)
+
+
+def get_graph_max_depth() -> int:
+    value = _ppa_env_int("PPA_GRAPH_MAX_DEPTH", DEFAULT_GRAPH_MAX_DEPTH)
+    return min(max(value, 1), DEFAULT_GRAPH_MAX_PUBLIC_DEPTH)
+
+
+def get_graph_max_nodes() -> int:
+    return max(_ppa_env_int("PPA_GRAPH_MAX_NODES", DEFAULT_GRAPH_MAX_NODES), 1)
+
+
+def get_graph_max_edges() -> int:
+    return max(_ppa_env_int("PPA_GRAPH_MAX_EDGES", DEFAULT_GRAPH_MAX_EDGES), 1)
+
+
+def get_graph_max_elapsed_ms() -> int:
+    return max(_ppa_env_int("PPA_GRAPH_MAX_ELAPSED_MS", DEFAULT_GRAPH_MAX_ELAPSED_MS), 0)
+
+
 def get_serving_index_path(vault: Path | None = None) -> Path:
     raw = _ppa_env("PPA_SERVING_INDEX_PATH")
     if raw:
         return Path(raw)
-    root = Path(vault) if vault is not None else Path(_ppa_env("PPA_PATH", default="."))
+    bound = _bound_instance()
+    if vault is not None:
+        return Path(vault) / "_meta" / "rust-search-index"
+    if bound is not None:
+        return Path(bound.storage.serving_index_path)
+    root = Path(_ppa_env("PPA_PATH", default="."))
     return root / "_meta" / "rust-search-index"
 
 
@@ -305,10 +486,87 @@ def get_serving_index_max_rss_mb() -> int:
     return max(_ppa_env_int("PPA_SERVING_INDEX_MAX_RSS_MB", default=8192), 256)
 
 
+def get_serving_nlist() -> int | None:
+    """Optional serving IVF list count. None means ``sqrt(N)`` clamped to 4096."""
+    raw = _ppa_env("PPA_SERVING_NLIST")
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def get_serving_nprobe() -> int:
+    """Selective probe count. Default 32; never silently becomes ``nlist`` at scale."""
+    return max(_ppa_env_int("PPA_SERVING_NPROBE", default=32), 1)
+
+
+def get_serving_train_sample() -> int:
+    return max(_ppa_env_int("PPA_SERVING_TRAIN_SAMPLE", default=100_000), 1)
+
+
+def get_serving_train_iters() -> int:
+    return max(_ppa_env_int("PPA_SERVING_TRAIN_ITERS", default=25), 1)
+
+
+def get_serving_train_seed() -> int:
+    return _ppa_env_int("PPA_SERVING_TRAIN_SEED", default=20260906)
+
+
+def get_serving_candidate_budget() -> int:
+    return max(_ppa_env_int("PPA_SERVING_CANDIDATE_BUDGET", default=4096), 1)
+
+
+def get_serving_train_memory_mb() -> int:
+    return max(_ppa_env_int("PPA_SERVING_TRAIN_MEMORY_MB", default=get_serving_index_max_rss_mb()), 64)
+
+
+def get_serving_export_batch_size() -> int:
+    """Client fetch size for warehouse embedding export. Keep bounded so 4M+ vectors are not fetchall'd."""
+    return max(_ppa_env_int("PPA_SERVING_EXPORT_BATCH", default=DEFAULT_SERVING_EXPORT_BATCH), 100)
+
+
+def _ppa_env_float(canonical: str, default: float) -> float:
+    raw = _ppa_env(canonical, default=str(default))
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def get_publication_max_chain_depth() -> int:
+    """Bounded parent walk before an explicit compaction rebuild."""
+    return max(_ppa_env_int("PPA_PUBLICATION_MAX_CHAIN_DEPTH", default=8), 1)
+
+
+def get_publication_delta_ratio() -> float:
+    """Delta/live-vector ratio that triggers explicit compaction."""
+    return max(_ppa_env_float("PPA_PUBLICATION_DELTA_RATIO", default=0.5), 0.01)
+
+
+def get_publication_disk_budget_mb() -> int:
+    """Hard ceiling for one publication candidate. ``0`` fails closed in tests."""
+    raw = _ppa_env("PPA_PUBLICATION_DISK_BUDGET_MB")
+    if raw == "0":
+        return 0
+    return max(_ppa_env_int("PPA_PUBLICATION_DISK_BUDGET_MB", default=1_000_000), 1)
+
+
+def get_publication_lease_stale_seconds() -> int:
+    return max(_ppa_env_int("PPA_PUBLICATION_LEASE_STALE_SECONDS", default=30), 1)
+
+
 def get_query_embed_cache_path(vault: Path | None = None) -> Path:
     raw = _ppa_env("PPA_QUERY_EMBED_CACHE_PATH")
     if raw:
         return Path(raw)
+    bound = _bound_instance()
+    if bound is not None:
+        bound_root = Path(bound.storage.vault_path).expanduser().resolve()
+        if vault is None or Path(vault).expanduser().resolve() == bound_root:
+            return Path(bound.storage.query_embed_cache_path)
     root = Path(vault) if vault is not None else Path(_ppa_env("PPA_PATH", default="."))
     return root / "_meta" / "query-embed-cache.sqlite"
 
@@ -336,6 +594,10 @@ class EmbeddingBatchResult:
     embedded: int = 0
     failed: int = 0
     last_error: str = ""
+    claimed_keys: list[str] = field(default_factory=list)
+    embedded_keys: list[str] = field(default_factory=list)
+    failed_keys: list[str] = field(default_factory=list)
+    card_uids: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

@@ -34,6 +34,7 @@ REQUIRED_RETRIEVAL_TOOLS = (
     "archive_search",
     "archive_search_json",
     "archive_query",
+    "archive_analytics",
     "archive_hybrid_search",
     "archive_hybrid_search_json",
     "archive_vector_search",

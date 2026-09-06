@@ -317,6 +317,10 @@ ADAPTER_SPECS: dict[str, AdapterSpec] = {
 
 
 def get_adapter_spec(source_id: str) -> AdapterSpec:
+    if source_id in {"gmail-messages", "calendar-events"}:
+        from archive_sync.connectors.legacy import adapter_spec_for
+
+        return adapter_spec_for(source_id)
     return ADAPTER_SPECS[source_id]
 
 

@@ -37,6 +37,8 @@ pub fn append_dirty(index_root: &Path, reason: &str, uids: &[String]) -> PyResul
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("open DIRTY: {e}")))?;
     writeln!(f, "{line}")
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("write DIRTY: {e}")))?;
+    f.sync_all()
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("fsync DIRTY: {e}")))?;
     Ok(1)
 }
 

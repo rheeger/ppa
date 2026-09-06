@@ -10,8 +10,17 @@ from typing import Any
 from archive_vault.schema import BaseCard, validate_card_permissive
 
 from .card_registry import REGISTRATION_BY_CARD_TYPE
+from .conversation_bursts import (  # BurstAffectedResolver / resolve_burst_affected re-exported for P01-B1
+    BURST_CHUNK_TYPE,
+    CONVERSATION_CARD_TYPES,
+    BurstAffectedResolver,
+    burst_chunk_records,
+    resolve_burst_affected,
+)
 from .features import CHUNKABLE_TEXT_FIELDS
 from .index_config import CHUNK_SCHEMA_VERSION, get_chunk_char_limit
+
+__all__ = ["BurstAffectedResolver", "resolve_burst_affected"]
 
 
 def _clean_text(value: str) -> str:
@@ -862,25 +871,32 @@ def _build_chunks(frontmatter: dict[str, Any], body: str) -> list[dict[str, Any]
     seen: set[tuple[str, str]] = set()
     chunk_type_counts: dict[str, int] = {}
 
-    def append_chunks(chunk_type: str, content: str, source_fields: list[str]) -> None:
+    def append_chunks(
+        chunk_type: str,
+        content: str,
+        source_fields: list[str],
+        extras: dict[str, Any] | None = None,
+    ) -> None:
         start_index = chunk_type_counts.get(chunk_type, 0)
-        for offset, piece in enumerate(_split_text_chunks(content, limit=limit)):
+        pieces = _split_text_chunks(content, limit=limit)
+        for offset, piece in enumerate(pieces):
             key = (chunk_type, piece)
             if key in seen:
                 continue
             seen.add(key)
             index = start_index + offset
-            chunks.append(
-                {
-                    "chunk_type": chunk_type,
-                    "chunk_index": index,
-                    "source_fields": source_fields,
-                    "content": piece,
-                    "content_hash": _chunk_hash(chunk_type, piece, source_fields),
-                    "token_count": _token_count(piece),
-                }
-            )
-        chunk_type_counts[chunk_type] = start_index + len(_split_text_chunks(content, limit=limit))
+            record = {
+                "chunk_type": chunk_type,
+                "chunk_index": index,
+                "source_fields": source_fields,
+                "content": piece,
+                "content_hash": _chunk_hash(chunk_type, piece, source_fields),
+                "token_count": _token_count(piece),
+            }
+            if extras:
+                record.update(extras)
+            chunks.append(record)
+        chunk_type_counts[chunk_type] = start_index + len(pieces)
 
     registration = REGISTRATION_BY_CARD_TYPE.get(card.type)
     builder_name = registration.chunk_builder_name if registration else None
@@ -895,4 +911,16 @@ def _build_chunks(frontmatter: dict[str, Any], body: str) -> list[dict[str, Any]
                 append_chunks(field_name, value.strip(), [field_name])
         if body.strip():
             append_chunks("body", body.strip(), ["body"])
+    if card.type in CONVERSATION_CARD_TYPES:
+        for burst in burst_chunk_records(frontmatter, body, card_type=card.type):
+            extras = {
+                "burst_key": burst["burst_key"],
+                "burst_sequence": burst["burst_sequence"],
+                "message_ids": burst["message_ids"],
+                "parent_thread": burst["parent_thread"],
+                "algorithm_version": burst["algorithm_version"],
+                "embed_eligible": burst["embed_eligible"],
+                "source_revisions": burst["source_revisions"],
+            }
+            append_chunks(BURST_CHUNK_TYPE, burst["content"], ["body", "messages"], extras)
     return chunks

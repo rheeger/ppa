@@ -88,7 +88,23 @@ def flush_deferred_vault_written() -> int:
                 mark_serving_index_dirty(key, "vault_written", sorted(uids_by_vault.get(key, set())))
             except Exception:
                 logger.debug("serving_index mark_dirty after deferred vault_written failed", exc_info=True)
+            _reconcile_journal(key)
     return len(pending)
+
+
+def _reconcile_journal(vault: Path | str) -> None:
+    """Replay prepared mutations left by a crash. Missing journal is not an error."""
+
+    try:
+        root = Path(vault)
+        if not root.is_dir():
+            return
+        from archive_vault.change_journal import ChangeJournal
+
+        with ChangeJournal(root) as journal:
+            journal.reconcile()
+    except Exception:
+        logger.debug("change journal reconcile after vault_written failed", exc_info=True)
 
 
 def mark_vault_written(vault: Path | str, uids: list[str] | None = None) -> None:
@@ -111,6 +127,7 @@ def mark_vault_written(vault: Path | str, uids: list[str] | None = None) -> None
         mark_serving_index_dirty(vault, "vault_written", uid_list)
     except Exception:
         logger.debug("serving_index mark_dirty after vault_written failed", exc_info=True)
+    _reconcile_journal(vault)
 
 
 def rebuild_vault_cache_after_writes(

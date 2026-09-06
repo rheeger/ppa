@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from test_server import FakeIndex, _seed_vault
+from archive_tests.test_server import FakeIndex, _seed_vault
 
 import archive_cli.commands._resolve as resolve_mod
 from archive_cli.card_traversal import (

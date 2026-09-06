@@ -77,6 +77,7 @@ def retrieval_explain_payload_v2(
     fusion_strategy: str,
     results: list[dict[str, Any]],
     reranker: dict[str, Any] | None = None,
+    evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Structured explain surface; see docs/RETRIEVAL_EXPLAIN_SCHEMA.md."""
     payload: dict[str, Any] = {
@@ -91,4 +92,6 @@ def retrieval_explain_payload_v2(
     }
     if reranker is not None:
         payload["reranker"] = reranker
+    if evidence is not None:
+        payload["evidence"] = evidence
     return payload

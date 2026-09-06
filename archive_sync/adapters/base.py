@@ -15,6 +15,7 @@ from time import perf_counter
 from typing import Any
 
 from archive_cli.vault_cache import VaultScanCache
+from archive_vault.change_journal import mutation_context
 from archive_vault.config import PPAConfig, load_config
 from archive_vault.identity import IdentityCache
 from archive_vault.identity_resolver import (
@@ -25,6 +26,12 @@ from archive_vault.identity_resolver import (
     merge_into_existing,
     resolve_person,
     resolve_person_snapshot,
+)
+from archive_vault.decisions import (
+    active_overrides_for,
+    note_source_conflicts,
+    overlay_overrides,
+    protected_field_names,
 )
 from archive_vault.provenance import PROVENANCE_EXEMPT_FIELDS, ProvenanceEntry, merge_provenance
 from archive_vault.schema import (
@@ -95,6 +102,7 @@ class PreparedIngestItem:
 
 class BaseAdapter(ABC):
     source_id: str = "unknown"
+    uses_connector_sdk: bool = False
     preload_existing_uid_index: bool = True
     enable_person_resolution: bool = True
     parallel_person_matching: bool = False
@@ -336,6 +344,9 @@ class BaseAdapter(ABC):
             return f"GitMessages/{year_month}/{card.uid}.md"
         return f"{card.type.title()}/{card.uid}.md"
 
+    def _protected_overrides(self, vault_path: str | Path, uid: str) -> dict:
+        return active_overrides_for(vault_path, uid)
+
     def _merge_generic_card(
         self,
         vault_path: str | Path,
@@ -348,9 +359,21 @@ class BaseAdapter(ABC):
         existing_card = validate_card_permissive(frontmatter)
         merged_data = existing_card.model_dump(mode="python")
         incoming_data = card.model_dump(mode="python")
+        uid = str(merged_data.get("uid") or getattr(card, "uid", "") or "")
+        overrides = self._protected_overrides(vault_path, uid)
+        protected = protected_field_names(overrides)
+        if overrides:
+            note_source_conflicts(
+                vault_path,
+                uid,
+                incoming_data,
+                incoming_source=str(self.source_id or ""),
+            )
         changed = False
 
         for field_name, incoming_value in incoming_data.items():
+            if field_name in protected:
+                continue
             if field_name not in merged_data or field_name == "updated":
                 continue
             existing_value = merged_data[field_name]
@@ -375,9 +398,31 @@ class BaseAdapter(ABC):
         if changed:
             merged_data["updated"] = date.today().isoformat()
 
+        if overrides:
+            merged_data, _ = overlay_overrides(merged_data, overrides)
         merged_card = validate_card_strict(merged_data)
-        merged_provenance = merge_provenance(existing_provenance, provenance)
-        write_card(vault_path, str(rel_path), merged_card, body=merged_body, provenance=merged_provenance)
+        merged_provenance = merge_provenance(
+            existing_provenance,
+            provenance,
+            protected_fields=protected,
+        )
+        self._write_canonical_card(vault_path, rel_path, merged_card, merged_body, merged_provenance)
+
+    def _write_canonical_card(
+        self,
+        vault_path: str | Path,
+        rel_path: Path | str,
+        card: BaseCard,
+        body: str,
+        provenance: dict[str, ProvenanceEntry],
+        *,
+        run_id: str = "",
+    ) -> None:
+        """Write-seam emission: journaled ``write_card`` with adapter source/account."""
+
+        account = str(getattr(card, "account_email", "") or getattr(card, "account", "") or "")
+        with mutation_context(source=str(self.source_id or ""), account=account, run_id=run_id):
+            write_card(vault_path, str(rel_path), card, body=body, provenance=provenance)
 
     def _replace_generic_card(
         self,
@@ -391,9 +436,21 @@ class BaseAdapter(ABC):
         existing_card = validate_card_permissive(frontmatter)
         merged_data = existing_card.model_dump(mode="python")
         incoming_data = card.model_dump(mode="python")
+        uid = str(merged_data.get("uid") or getattr(card, "uid", "") or "")
+        overrides = self._protected_overrides(vault_path, uid)
+        protected = protected_field_names(overrides)
+        if overrides:
+            note_source_conflicts(
+                vault_path,
+                uid,
+                incoming_data,
+                incoming_source=str(self.source_id or ""),
+            )
         changed = False
 
         for field_name, incoming_value in incoming_data.items():
+            if field_name in protected:
+                continue
             if field_name in {"uid", "type", "source_id", "created"}:
                 continue
             if field_name == "source":
@@ -426,9 +483,15 @@ class BaseAdapter(ABC):
         if changed:
             merged_data["updated"] = date.today().isoformat()
 
+        if overrides:
+            merged_data, _ = overlay_overrides(merged_data, overrides)
         merged_card = validate_card_strict(merged_data)
-        merged_provenance = merge_provenance(existing_provenance, provenance)
-        write_card(vault_path, str(rel_path), merged_card, body=merged_body, provenance=merged_provenance)
+        merged_provenance = merge_provenance(
+            existing_provenance,
+            provenance,
+            protected_fields=protected,
+        )
+        self._write_canonical_card(vault_path, rel_path, merged_card, merged_body, merged_provenance)
 
     def merge_card(
         self,
@@ -487,6 +550,11 @@ class BaseAdapter(ABC):
             progress_every,
         )
         config = _run_logged("load config", lambda: load_config(vault))
+        if getattr(self, "uses_connector_sdk", False):
+            from archive_sync.connectors.contracts import validate_manifest
+            from archive_sync.connectors.legacy import manifest_for_source
+
+            validate_manifest(manifest_for_source(self.source_id))
         cursor_key = _run_logged("resolve cursor key", lambda: self.get_cursor_key(**kwargs))
         cursor = _run_logged("load sync state", lambda: load_sync_state(vault).get(cursor_key, {}))
         if not isinstance(cursor, dict):
@@ -669,7 +737,7 @@ class BaseAdapter(ABC):
 
             rel_path = self._card_rel_path(vault, card)
             if not dry_run:
-                write_card(vault, rel_path, card, body=prepared.body, provenance=prepared.provenance)
+                self._write_canonical_card(vault, rel_path, card, prepared.body, prepared.provenance)
                 self.after_card_write(
                     vault,
                     card,
@@ -773,7 +841,7 @@ class BaseAdapter(ABC):
 
             rel_path = self._person_rel_path(vault, card)
             if not dry_run:
-                write_card(vault, rel_path, card, body=prepared.body, provenance=prepared.provenance)
+                self._write_canonical_card(vault, rel_path, card, prepared.body, prepared.provenance)
                 wikilink = f"[[{Path(rel_path).stem}]]"
                 identity_cache.upsert(wikilink, self._person_identity_aliases(card))
                 people_index.upsert(wikilink, card.model_dump(mode="python"))

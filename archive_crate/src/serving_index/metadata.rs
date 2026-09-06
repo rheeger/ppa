@@ -49,7 +49,169 @@ pub struct CardMeta {
     #[serde(default)]
     pub emails: Vec<String>,
     #[serde(default)]
+    pub external_ids: Vec<String>,
+    #[serde(default)]
     pub search_text: String,
+    #[serde(default)]
+    pub source_revision: String,
+    #[serde(default)]
+    pub retrieval_weight: Option<f64>,
+    #[serde(default)]
+    pub provenance_summary: String,
+    #[serde(default)]
+    pub domains: Vec<String>,
+    #[serde(default)]
+    pub required_sources: Vec<String>,
+    #[serde(default)]
+    pub accounts: Vec<String>,
+    #[serde(default)]
+    pub lineage_complete: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct AccessPolicy {
+    pub deny: bool,
+    pub restricted: bool,
+    pub allowed_sources: Vec<String>,
+    pub allowed_domains: Vec<String>,
+}
+
+fn norm_label(value: &str) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+}
+
+fn source_allowed(allowed: &[String], source: &str) -> bool {
+    let needle = norm_label(source);
+    if needle.is_empty() {
+        return false;
+    }
+    allowed.iter().any(|item| {
+        let allow = norm_label(item);
+        !allow.is_empty()
+            && (needle == allow || needle.starts_with(&format!("{allow}:")) || allow.starts_with(&format!("{needle}:")))
+    })
+}
+
+fn classify_domain(card: &CardMeta) -> String {
+    if !card.domains.is_empty() {
+        return norm_label(&card.domains[0]);
+    }
+    let kind = card.r#type.replace('-', "_").to_ascii_lowercase();
+    match kind.as_str() {
+        "medical_record" | "vaccination" | "health_metric" => "medical".into(),
+        "finance" | "purchase" | "meal_order" | "grocery_order" | "ride" | "flight" | "subscription"
+        | "invoice" | "receipt" | "bank_transaction" | "tax_document" => "finance".into(),
+        "email_message" | "email_thread" | "email_attachment" | "imessage_message" | "imessage_thread"
+        | "imessage_attachment" | "beeper_message" | "beeper_thread" | "beeper_attachment" | "sms" => {
+            "communication".into()
+        }
+        "calendar_event" | "meeting_transcript" => "calendar".into(),
+        "person" | "organization" | "place" => "identity".into(),
+        "git_repository" | "git_commit" | "git_thread" | "git_message" => "code".into(),
+        "media_asset" | "document" => "media".into(),
+        _ => {
+            let joined = card
+                .sources
+                .iter()
+                .map(|s| norm_label(s))
+                .collect::<Vec<_>>()
+                .join(" ");
+            if ["medical", "health", "hospital", "clinic", "ehr"]
+                .iter()
+                .any(|m| joined.contains(m))
+            {
+                "medical".into()
+            } else if ["bank", "finance", "stripe", "plaid", "tax", "payroll"]
+                .iter()
+                .any(|m| joined.contains(m))
+            {
+                "finance".into()
+            } else if kind.is_empty() {
+                "unknown".into()
+            } else {
+                "general".into()
+            }
+        }
+    }
+}
+
+impl AccessPolicy {
+    pub fn unrestricted() -> Self {
+        Self::default()
+    }
+
+    pub fn permits(&self, card: &CardMeta) -> bool {
+        if self.deny {
+            return false;
+        }
+        if !self.restricted {
+            return true;
+        }
+        let required: &[String] = if !card.required_sources.is_empty() {
+            &card.required_sources
+        } else {
+            &card.sources
+        };
+        if required.is_empty() {
+            return false;
+        }
+        if !self.allowed_sources.is_empty() {
+            for source in required {
+                if !source_allowed(&self.allowed_sources, source) {
+                    return false;
+                }
+            }
+        }
+        if card.lineage_complete == Some(false) {
+            return false;
+        }
+        if !self.allowed_domains.is_empty() {
+            let domain = classify_domain(card);
+            if domain.is_empty() || domain == "unknown" {
+                return false;
+            }
+            if !self.allowed_domains.iter().any(|d| norm_label(d) == domain) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct ChunkAdjacency {
+    by_card_type: HashMap<(String, String), Vec<(i32, String)>>,
+}
+
+impl ChunkAdjacency {
+    pub fn insert(&mut self, card_uid: String, chunk_type: String, chunk_index: i32, chunk_key: String) {
+        self.by_card_type
+            .entry((card_uid, chunk_type))
+            .or_default()
+            .push((chunk_index, chunk_key));
+    }
+
+    pub fn finalize(&mut self) {
+        for slot in self.by_card_type.values_mut() {
+            slot.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
+        }
+    }
+
+    pub fn neighbors(&self, card_uid: &str, chunk_type: &str, chunk_index: i32) -> (Option<String>, Option<String>) {
+        let Some(slot) = self.by_card_type.get(&(card_uid.to_string(), chunk_type.to_string())) else {
+            return (None, None);
+        };
+        let Some(position) = slot.iter().position(|(index, _)| *index == chunk_index) else {
+            return (None, None);
+        };
+        let preceding = position.checked_sub(1).map(|index| slot[index].1.clone());
+        let following = slot.get(position + 1).map(|item| item.1.clone());
+        (preceding, following)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -57,6 +219,8 @@ pub struct MetadataStore {
     pub by_uid: HashMap<String, CardMeta>,
     pub by_slug: HashMap<String, String>,
     pub by_path: HashMap<String, String>,
+    pub by_email: HashMap<String, String>,
+    pub by_external_id: HashMap<String, String>,
     /// Cards with a parseable `activity_at`, sorted by `(at_ms, uid)`.
     pub by_activity: Vec<ActivityEntry>,
     /// Indexes into `by_activity` for cards that have an interval end.
@@ -79,6 +243,41 @@ fn is_date_only(raw: &str) -> bool {
 }
 
 impl MetadataStore {
+    fn index_card(&mut self, card: CardMeta) {
+        if !card.slug.is_empty() {
+            self.by_slug.insert(card.slug.to_lowercase(), card.card_uid.clone());
+        }
+        if !card.rel_path.is_empty() {
+            self.by_path.insert(card.rel_path.clone(), card.card_uid.clone());
+        }
+        for alias in &card.aliases {
+            self.by_slug.insert(alias.to_lowercase(), card.card_uid.clone());
+        }
+        for email in &card.emails {
+            let key = email.to_lowercase();
+            if !key.is_empty() {
+                self.by_email.insert(key, card.card_uid.clone());
+            }
+        }
+        for ext in &card.external_ids {
+            let key = ext.trim().to_string();
+            if !key.is_empty() {
+                self.by_external_id.insert(key.clone(), card.card_uid.clone());
+                self.by_external_id.insert(key.to_lowercase(), card.card_uid.clone());
+            }
+        }
+        self.by_uid.insert(card.card_uid.clone(), card);
+    }
+
+    pub fn from_cards(cards: impl IntoIterator<Item = CardMeta>) -> Self {
+        let mut store = MetadataStore::default();
+        for card in cards {
+            store.index_card(card);
+        }
+        store.rebuild_activity_index();
+        store
+    }
+
     pub fn load(dir: &Path) -> PyResult<Self> {
         let path = dir.join("cards.jsonl");
         let mut store = MetadataStore::default();
@@ -94,19 +293,42 @@ impl MetadataStore {
             }
             let card: CardMeta = serde_json::from_str(&line)
                 .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-            if !card.slug.is_empty() {
-                store.by_slug.insert(card.slug.to_lowercase(), card.card_uid.clone());
-            }
-            if !card.rel_path.is_empty() {
-                store.by_path.insert(card.rel_path.clone(), card.card_uid.clone());
-            }
-            for alias in &card.aliases {
-                store.by_slug.insert(alias.to_lowercase(), card.card_uid.clone());
-            }
-            store.by_uid.insert(card.card_uid.clone(), card);
+            store.index_card(card);
         }
         store.rebuild_activity_index();
         Ok(store)
+    }
+
+    pub fn is_suppressed(card: &CardMeta) -> bool {
+        card.corpus_state == "suppressed"
+    }
+
+    pub fn exact_identifier(&self, query: &str) -> Option<&CardMeta> {
+        let q = query.trim();
+        if q.is_empty() {
+            return None;
+        }
+        if let Some(card) = self.by_uid.get(q) {
+            return Some(card);
+        }
+        let lower = q.to_lowercase();
+        if let Some(uid) = self.by_slug.get(&lower) {
+            return self.by_uid.get(uid);
+        }
+        if let Some(uid) = self.by_email.get(&lower) {
+            return self.by_uid.get(uid);
+        }
+        if let Some(uid) = self
+            .by_external_id
+            .get(q)
+            .or_else(|| self.by_external_id.get(&lower))
+        {
+            return self.by_uid.get(uid);
+        }
+        if let Some(uid) = self.by_path.get(q) {
+            return self.by_uid.get(uid);
+        }
+        None
     }
 
     fn rebuild_activity_index(&mut self) {
@@ -131,6 +353,31 @@ impl MetadataStore {
         self.by_activity = entries;
     }
 
+    pub fn eligible(
+        &self,
+        card: &CardMeta,
+        policy: &AccessPolicy,
+        type_filter: &str,
+        source_filter: &str,
+        people_filter: &str,
+        org_filter: &str,
+        start_date: &str,
+        end_date: &str,
+    ) -> bool {
+        if !policy.permits(card) {
+            return false;
+        }
+        self.matches_filters(
+            card,
+            type_filter,
+            source_filter,
+            people_filter,
+            org_filter,
+            start_date,
+            end_date,
+        )
+    }
+
     pub fn matches_filters(
         &self,
         card: &CardMeta,
@@ -141,6 +388,9 @@ impl MetadataStore {
         start_date: &str,
         end_date: &str,
     ) -> bool {
+        if Self::is_suppressed(card) {
+            return false;
+        }
         if !type_filter.is_empty() && card.r#type != type_filter {
             return false;
         }
@@ -208,6 +458,7 @@ impl MetadataStore {
         type_filter: &str,
         source_filter: &str,
         people_filter: &str,
+        policy: &AccessPolicy,
     ) -> Vec<&CardMeta> {
         let start_key = start_date.get(..10).unwrap_or(start_date);
         let end_key = end_date.get(..10).unwrap_or(end_date);
@@ -225,7 +476,7 @@ impl MetadataStore {
                 if !end_key.is_empty() && act > end_key {
                     break;
                 }
-                if self.matches_neighbor_filters(card, type_filter, source_filter, people_filter)
+                if self.eligible(card, policy, type_filter, source_filter, people_filter, "", "", "")
                     && (start_key.is_empty() || act >= start_key)
                 {
                     out.push(card);
@@ -247,6 +498,7 @@ impl MetadataStore {
         type_filter: &str,
         source_filter: &str,
         people_filter: &str,
+        policy: &AccessPolicy,
     ) -> Option<Vec<NeighborHit<'_>>> {
         let ts_ms = activity_ms(timestamp)?;
         let (window_start, window_end) = if is_date_only(timestamp) {
@@ -273,6 +525,7 @@ impl MetadataStore {
                 type_filter,
                 source_filter,
                 people_filter,
+                policy,
                 &mut seen,
                 &mut out,
             );
@@ -285,6 +538,7 @@ impl MetadataStore {
                 type_filter,
                 source_filter,
                 people_filter,
+                policy,
                 &mut seen,
                 &mut out,
             );
@@ -296,6 +550,7 @@ impl MetadataStore {
                 type_filter,
                 source_filter,
                 people_filter,
+                policy,
                 &mut seen,
                 &mut out,
             );
@@ -313,6 +568,7 @@ impl MetadataStore {
         type_filter: &str,
         source_filter: &str,
         people_filter: &str,
+        policy: &AccessPolicy,
         seen: &mut HashSet<String>,
         out: &mut Vec<NeighborHit<'a>>,
     ) {
@@ -327,7 +583,7 @@ impl MetadataStore {
                 continue;
             }
             if let Some(card) = self.by_uid.get(&entry.uid) {
-                if self.matches_neighbor_filters(card, type_filter, source_filter, people_filter) {
+                if self.eligible(card, policy, type_filter, source_filter, people_filter, "", "", "") {
                     out.push(NeighborHit { card, leg: "during" });
                     added += 1;
                 }
@@ -353,7 +609,7 @@ impl MetadataStore {
                 continue;
             }
             if let Some(card) = self.by_uid.get(&entry.uid) {
-                if self.matches_neighbor_filters(card, type_filter, source_filter, people_filter) {
+                if self.eligible(card, policy, type_filter, source_filter, people_filter, "", "", "") {
                     out.push(NeighborHit { card, leg: "during" });
                     added += 1;
                 }
@@ -368,6 +624,7 @@ impl MetadataStore {
         type_filter: &str,
         source_filter: &str,
         people_filter: &str,
+        policy: &AccessPolicy,
         seen: &mut HashSet<String>,
         out: &mut Vec<NeighborHit<'a>>,
     ) {
@@ -381,7 +638,7 @@ impl MetadataStore {
                 continue;
             }
             if let Some(card) = self.by_uid.get(&entry.uid) {
-                if self.matches_neighbor_filters(card, type_filter, source_filter, people_filter) {
+                if self.eligible(card, policy, type_filter, source_filter, people_filter, "", "", "") {
                     out.push(NeighborHit {
                         card,
                         leg: "forward",
@@ -399,6 +656,7 @@ impl MetadataStore {
         type_filter: &str,
         source_filter: &str,
         people_filter: &str,
+        policy: &AccessPolicy,
         seen: &mut HashSet<String>,
         out: &mut Vec<NeighborHit<'a>>,
     ) {
@@ -412,7 +670,7 @@ impl MetadataStore {
                 continue;
             }
             if let Some(card) = self.by_uid.get(&entry.uid) {
-                if self.matches_neighbor_filters(card, type_filter, source_filter, people_filter) {
+                if self.eligible(card, policy, type_filter, source_filter, people_filter, "", "", "") {
                     out.push(NeighborHit {
                         card,
                         leg: "backward",
@@ -421,5 +679,471 @@ impl MetadataStore {
                 }
             }
         }
+    }
+
+    pub fn typed_field_value(card: &CardMeta, field: &str) -> Option<TypedFieldValue> {
+        match field {
+            "uid" | "card_uid" => Some(TypedFieldValue::Text(card.card_uid.clone())),
+            "type" | "card_type" => Some(TypedFieldValue::Text(card.r#type.clone())),
+            "source" | "sources" => Some(TypedFieldValue::List(card.sources.clone())),
+            "people" => Some(TypedFieldValue::List(card.people.clone())),
+            "org" | "orgs" | "organization" => Some(TypedFieldValue::List(card.orgs.clone())),
+            "activity_at" => Some(TypedFieldValue::Text(card.activity_at.clone())),
+            "corpus_state" => Some(TypedFieldValue::Text(card.corpus_state.clone())),
+            "summary" => Some(TypedFieldValue::Text(card.summary.clone())),
+            "slug" => Some(TypedFieldValue::Text(card.slug.clone())),
+            "emails" => Some(TypedFieldValue::List(card.emails.clone())),
+            "domains" => Some(TypedFieldValue::List(card.domains.clone())),
+            _ => None,
+        }
+    }
+
+    pub fn matches_typed_predicate(card: &CardMeta, pred: &TypedPredicate) -> Result<bool, String> {
+        match pred.op.as_str() {
+            "and" => {
+                for child in &pred.predicates {
+                    if !Self::matches_typed_predicate(card, child)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+            "or" => {
+                if pred.predicates.is_empty() {
+                    return Ok(false);
+                }
+                for child in &pred.predicates {
+                    if Self::matches_typed_predicate(card, child)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
+            "exists" => {
+                let value = Self::typed_field_value(card, &pred.field)
+                    .ok_or_else(|| format!("unknown field: {}", pred.field))?;
+                Ok(!value.is_empty())
+            }
+            "in" => {
+                let value = Self::typed_field_value(card, &pred.field)
+                    .ok_or_else(|| format!("unknown field: {}", pred.field))?;
+                let items = pred.value.as_array().cloned().unwrap_or_default();
+                Ok(items.iter().any(|item| value.matches_eq(item)))
+            }
+            "eq" | "lt" | "lte" | "gt" | "gte" => {
+                let value = Self::typed_field_value(card, &pred.field)
+                    .ok_or_else(|| format!("unknown field: {}", pred.field))?;
+                Ok(value.compare(pred.op.as_str(), &pred.value))
+            }
+            other => Err(format!("unsupported predicate operator: {other}")),
+        }
+    }
+
+    pub fn typed_query_page<'a>(
+        &'a self,
+        policy: &AccessPolicy,
+        pred: Option<&TypedPredicate>,
+        order_field: &str,
+        order_direction: &str,
+        after_uid: &str,
+        after_value: &str,
+        after_null: bool,
+        page_size: usize,
+    ) -> Result<TypedQueryPage<'a>, String> {
+        if !matches!(
+            order_field,
+            "uid" | "type" | "activity_at" | "summary" | "slug" | "corpus_state"
+        ) {
+            return Err(format!("order field {order_field} is not sortable"));
+        }
+        if let Some(node) = pred {
+            validate_typed_predicate(node)?;
+        }
+        let desc = order_direction == "desc";
+        let mut eligible: Vec<&CardMeta> = self
+            .by_uid
+            .values()
+            .filter(|card| {
+                if !policy.permits(card) || Self::is_suppressed(card) {
+                    return false;
+                }
+                match pred {
+                    None => true,
+                    Some(node) => Self::matches_typed_predicate(card, node).unwrap_or(false),
+                }
+            })
+            .collect();
+        eligible.sort_by(|a, b| typed_order_cmp(a, b, order_field, desc));
+        let start = if after_uid.is_empty() {
+            0
+        } else {
+            eligible
+                .iter()
+                .position(|card| typed_after(*card, order_field, desc, after_value, after_uid, after_null))
+                .unwrap_or(eligible.len())
+        };
+        let remaining = eligible.len().saturating_sub(start);
+        let take = page_size.min(remaining);
+        let rows = eligible[start..start + take].to_vec();
+        let next = if remaining > page_size {
+            rows.last().map(|card| {
+                let value = order_value(card, order_field);
+                TypedAfter {
+                    uid: card.card_uid.clone(),
+                    order_value: value.clone(),
+                    order_null: value.is_empty(),
+                }
+            })
+        } else {
+            None
+        };
+        Ok(TypedQueryPage {
+            rows,
+            matched_total: eligible.len(),
+            next,
+            truncated: false,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct TypedPredicate {
+    pub op: String,
+    #[serde(default)]
+    pub field: String,
+    #[serde(default)]
+    pub value: serde_json::Value,
+    #[serde(default)]
+    pub predicates: Vec<TypedPredicate>,
+}
+
+#[derive(Debug, Clone)]
+pub enum TypedFieldValue {
+    Text(String),
+    List(Vec<String>),
+}
+
+impl TypedFieldValue {
+    fn is_empty(&self) -> bool {
+        match self {
+            TypedFieldValue::Text(value) => value.trim().is_empty(),
+            TypedFieldValue::List(values) => values.iter().all(|item| item.trim().is_empty()),
+        }
+    }
+
+    fn matches_eq(&self, other: &serde_json::Value) -> bool {
+        self.compare("eq", other)
+    }
+
+    fn compare(&self, op: &str, other: &serde_json::Value) -> bool {
+        let right = match other {
+            serde_json::Value::String(value) => value.clone(),
+            serde_json::Value::Number(num) => num.to_string(),
+            serde_json::Value::Bool(flag) => flag.to_string(),
+            serde_json::Value::Null => String::new(),
+            _ => return false,
+        };
+        match self {
+            TypedFieldValue::List(values) => {
+                if op != "eq" {
+                    return false;
+                }
+                let needle = right.to_ascii_lowercase();
+                values.iter().any(|item| {
+                    let hay = item.to_ascii_lowercase();
+                    hay == needle || hay.contains(&needle)
+                })
+            }
+            TypedFieldValue::Text(left) => {
+                if op == "eq" {
+                    return left.eq_ignore_ascii_case(&right);
+                }
+                let left_key = if right.len() == 10 { left.get(..10).unwrap_or(left) } else { left.as_str() };
+                match op {
+                    "lt" => left_key < right.as_str(),
+                    "lte" => left_key <= right.as_str(),
+                    "gt" => left_key > right.as_str(),
+                    "gte" => left_key >= right.as_str(),
+                    _ => false,
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TypedAfter {
+    pub uid: String,
+    pub order_value: String,
+    pub order_null: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct TypedQueryPage<'a> {
+    pub rows: Vec<&'a CardMeta>,
+    pub matched_total: usize,
+    pub next: Option<TypedAfter>,
+    pub truncated: bool,
+}
+
+fn validate_typed_predicate(pred: &TypedPredicate) -> Result<(), String> {
+    match pred.op.as_str() {
+        "and" | "or" => {
+            if pred.predicates.is_empty() {
+                return Err(format!("{} requires child predicates", pred.op));
+            }
+            for child in &pred.predicates {
+                validate_typed_predicate(child)?;
+            }
+            Ok(())
+        }
+        "eq" | "in" | "lt" | "lte" | "gt" | "gte" | "exists" => {
+            if pred.field.is_empty() {
+                return Err("predicate field is required".into());
+            }
+            if MetadataStore::typed_field_value(&CardMeta::default(), &pred.field).is_none() {
+                return Err(format!("unknown field: {}", pred.field));
+            }
+            if matches!(pred.op.as_str(), "lt" | "lte" | "gt" | "gte")
+                && matches!(pred.field.as_str(), "source" | "sources" | "people" | "org" | "orgs" | "emails" | "domains")
+            {
+                return Err(format!("operator {} is not valid for list field {}", pred.op, pred.field));
+            }
+            Ok(())
+        }
+        other => Err(format!("unsupported predicate operator: {other}")),
+    }
+}
+
+fn order_value(card: &CardMeta, field: &str) -> String {
+    match MetadataStore::typed_field_value(card, field) {
+        Some(TypedFieldValue::Text(value)) => value,
+        Some(TypedFieldValue::List(values)) => values.first().cloned().unwrap_or_default(),
+        None => String::new(),
+    }
+}
+
+fn typed_order_cmp(a: &CardMeta, b: &CardMeta, field: &str, desc: bool) -> std::cmp::Ordering {
+    let av = order_value(a, field);
+    let bv = order_value(b, field);
+    let a_null = av.is_empty();
+    let b_null = bv.is_empty();
+    let null_ord = a_null.cmp(&b_null);
+    if null_ord != std::cmp::Ordering::Equal {
+        return null_ord;
+    }
+    let value_ord = if desc { bv.cmp(&av) } else { av.cmp(&bv) };
+    if value_ord != std::cmp::Ordering::Equal {
+        return value_ord;
+    }
+    a.card_uid.cmp(&b.card_uid)
+}
+
+fn typed_after(card: &CardMeta, field: &str, desc: bool, last_value: &str, last_uid: &str, last_null: bool) -> bool {
+    let value = order_value(card, field);
+    let null = value.is_empty();
+    if desc {
+        if last_null && !null {
+            return false;
+        }
+        if null && !last_null {
+            return true;
+        }
+        if null && last_null {
+            return card.card_uid.as_str() > last_uid;
+        }
+        if value == last_value {
+            return card.card_uid.as_str() > last_uid;
+        }
+        return value.as_str() < last_value;
+    }
+    if last_null && !null {
+        return true;
+    }
+    if null && !last_null {
+        return false;
+    }
+    if null && last_null {
+        return card.card_uid.as_str() > last_uid;
+    }
+    if value == last_value {
+        return card.card_uid.as_str() > last_uid;
+    }
+    value.as_str() > last_value
+}
+
+#[cfg(test)]
+mod access_tests {
+    use super::*;
+
+    fn card(uid: &str, sources: &[&str], kind: &str) -> CardMeta {
+        CardMeta {
+            card_uid: uid.into(),
+            r#type: kind.into(),
+            sources: sources.iter().map(|s| (*s).to_string()).collect(),
+            corpus_state: "active".into(),
+            ..CardMeta::default()
+        }
+    }
+
+    #[test]
+    fn unrestricted_permits_unknown_lineage() {
+        let policy = AccessPolicy::unrestricted();
+        assert!(policy.permits(&card("u1", &[], "person")));
+    }
+
+    #[test]
+    fn adjacent_chunks_follow_sorted_index() {
+        let mut adj = ChunkAdjacency::default();
+        adj.insert("card".into(), "body".into(), 2, "ck-2".into());
+        adj.insert("card".into(), "body".into(), 0, "ck-0".into());
+        adj.insert("card".into(), "body".into(), 1, "ck-1".into());
+        adj.finalize();
+        assert_eq!(adj.neighbors("card", "body", 1), (Some("ck-0".into()), Some("ck-2".into())));
+        assert_eq!(adj.neighbors("card", "body", 0), (None, Some("ck-1".into())));
+    }
+
+    #[test]
+    fn restricted_denies_unknown_and_mixed_source() {
+        let policy = AccessPolicy {
+            restricted: true,
+            allowed_sources: vec!["gmail".into()],
+            ..AccessPolicy::default()
+        };
+        assert!(!policy.permits(&card("u1", &[], "person")));
+        assert!(policy.permits(&card("u2", &["gmail"], "email_message")));
+        assert!(!policy.permits(&card("u3", &["gmail", "medical"], "purchase")));
+    }
+
+    #[test]
+    fn missing_lineage_is_deny_when_restricted() {
+        let policy = AccessPolicy {
+            restricted: true,
+            allowed_sources: vec!["gmail".into()],
+            ..AccessPolicy::default()
+        };
+        let mut derived = card("u4", &["gmail"], "purchase");
+        derived.lineage_complete = Some(false);
+        assert!(!policy.permits(&derived));
+    }
+
+    fn person(uid: &str, summary: &str) -> CardMeta {
+        CardMeta {
+            card_uid: uid.into(),
+            r#type: "person".into(),
+            summary: summary.into(),
+            sources: vec!["test".into()],
+            corpus_state: "active".into(),
+            ..CardMeta::default()
+        }
+    }
+
+    #[test]
+    fn typed_query_pages_all_eligible_exactly_once() {
+        let store = MetadataStore::from_cards([
+            person("hfa-person-a", "Alex Rivera"),
+            person("hfa-person-b", "Alex Rivera"),
+            person("hfa-person-c", "Jordan Hale"),
+            CardMeta {
+                card_uid: "hfa-person-sup".into(),
+                r#type: "person".into(),
+                summary: "Alex Rivera".into(),
+                sources: vec!["test".into()],
+                corpus_state: "suppressed".into(),
+                ..CardMeta::default()
+            },
+        ]);
+        let pred = TypedPredicate {
+            op: "and".into(),
+            predicates: vec![
+                TypedPredicate {
+                    op: "eq".into(),
+                    field: "type".into(),
+                    value: serde_json::json!("person"),
+                    ..TypedPredicate::default()
+                },
+                TypedPredicate {
+                    op: "eq".into(),
+                    field: "summary".into(),
+                    value: serde_json::json!("Alex Rivera"),
+                    ..TypedPredicate::default()
+                },
+            ],
+            ..TypedPredicate::default()
+        };
+        let first = store
+            .typed_query_page(&AccessPolicy::unrestricted(), Some(&pred), "uid", "asc", "", "", false, 1)
+            .unwrap();
+        assert_eq!(first.matched_total, 2);
+        assert_eq!(first.rows.len(), 1);
+        assert_eq!(first.rows[0].card_uid, "hfa-person-a");
+        let after = first.next.expect("next page");
+        let second = store
+            .typed_query_page(
+                &AccessPolicy::unrestricted(),
+                Some(&pred),
+                "uid",
+                "asc",
+                &after.uid,
+                &after.order_value,
+                after.order_null,
+                1,
+            )
+            .unwrap();
+        assert_eq!(second.rows[0].card_uid, "hfa-person-b");
+        assert!(second.next.is_none());
+        let seen: Vec<_> = first
+            .rows
+            .iter()
+            .chain(second.rows.iter())
+            .map(|card| card.card_uid.as_str())
+            .collect();
+        assert_eq!(seen, vec!["hfa-person-a", "hfa-person-b"]);
+    }
+
+    #[test]
+    fn typed_query_rejects_unknown_field() {
+        let store = MetadataStore::from_cards([person("hfa-person-a", "Alex")]);
+        let pred = TypedPredicate {
+            op: "eq".into(),
+            field: "not_a_field".into(),
+            value: serde_json::json!("x"),
+            ..TypedPredicate::default()
+        };
+        let err = store
+            .typed_query_page(&AccessPolicy::unrestricted(), Some(&pred), "uid", "asc", "", "", false, 10)
+            .unwrap_err();
+        assert!(err.contains("unknown field"), "{err}");
+    }
+
+    #[test]
+    fn restricted_policy_applied_before_typed_count() {
+        let store = MetadataStore::from_cards([
+            person("hfa-person-a", "Alex Rivera"),
+            CardMeta {
+                card_uid: "hfa-person-denied".into(),
+                r#type: "person".into(),
+                summary: "Alex Rivera".into(),
+                sources: vec!["other".into()],
+                corpus_state: "active".into(),
+                ..CardMeta::default()
+            },
+        ]);
+        let policy = AccessPolicy {
+            restricted: true,
+            allowed_sources: vec!["test".into()],
+            ..AccessPolicy::default()
+        };
+        let pred = TypedPredicate {
+            op: "eq".into(),
+            field: "summary".into(),
+            value: serde_json::json!("Alex Rivera"),
+            ..TypedPredicate::default()
+        };
+        let page = store
+            .typed_query_page(&policy, Some(&pred), "uid", "asc", "", "", false, 10)
+            .unwrap();
+        assert_eq!(page.matched_total, 1);
+        assert_eq!(page.rows[0].card_uid, "hfa-person-a");
     }
 }
