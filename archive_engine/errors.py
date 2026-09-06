@@ -44,5 +44,9 @@ class IncompatibleContractError(IncompatibleStateError):
     """Serialized shared record is missing fields or has an unknown version."""
 
 
+class ConfigError(IncompatibleStateError):
+    """Instance configuration is malformed, unknown-critical, or incompatible."""
+
+
 class PublisherBusyError(RetryableEngineError):
     """Another process holds the publication lease."""

@@ -1,6 +1,12 @@
 """PPA Google OAuth token management — extracted from arnoldlib for standalone use."""
 
-from archive_auth.accounts import ACCOUNTS, INTERNAL_DOMAINS, is_internal_recipient
+from archive_auth.accounts import (
+    ACCOUNTS,
+    INTERNAL_DOMAINS,
+    configure_account_registry,
+    get_account_registry,
+    is_internal_recipient,
+)
 from archive_auth.token_manager import (
     CALENDAR_READONLY_SCOPES,
     CALENDAR_SCOPES,
@@ -32,6 +38,8 @@ from archive_auth.token_manager import (
 
 __all__ = [
     "ACCOUNTS",
+    "configure_account_registry",
+    "get_account_registry",
     "CALENDAR_READONLY_SCOPES",
     "CALENDAR_SCOPES",
     "CONTACTS_READONLY_SCOPES",

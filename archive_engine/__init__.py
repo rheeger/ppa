@@ -78,7 +78,19 @@ __all__ = [
 ]
 
 _SIBLING_MODULES = frozenset(
-    {"access", "changes", "corrections", "egress", "execution_mode", "publication", "recovery_manifest", "redaction", "runtime"}
+    {
+        "access",
+        "changes",
+        "config",
+        "corrections",
+        "egress",
+        "execution_mode",
+        "publication",
+        "recovery_manifest",
+        "redaction",
+        "runtime",
+        "scopes",
+    }
 )
 
 

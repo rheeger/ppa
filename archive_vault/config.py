@@ -27,8 +27,23 @@ def _config_path(vault_path: str | Path) -> Path:
     return Path(vault_path) / "_meta" / "ppa-config.json"
 
 
+def as_vault_tuning(config: PPAConfig) -> dict[str, float | int]:
+    """Map legacy vault keys into the named instance ``vault_tuning`` section."""
+
+    return {
+        "merge_threshold": config.merge_threshold,
+        "conflict_threshold": config.conflict_threshold,
+        "fuzzy_name_threshold": config.fuzzy_name_threshold,
+        "finance_min_amount": config.finance_min_amount,
+    }
+
+
 def load_config(vault_path: str | Path) -> PPAConfig:
-    """Load config from disk, ignoring unknown keys."""
+    """Load legacy `_meta/ppa-config.json`, ignoring unknown keys.
+
+    Instance schema v1 lives in ``archive_engine.config`` and rejects unknown
+    critical keys. This vault file stays a compatibility map into vault_tuning.
+    """
 
     path = _config_path(vault_path)
     if not path.exists():
