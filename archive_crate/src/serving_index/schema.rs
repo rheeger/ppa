@@ -1,7 +1,7 @@
 pub const SERVING_INDEX_FORMAT_VERSION: u32 = 2;
 pub const ANALYZER_ID: &str = "tantivy-en-v1";
 pub const VECTOR_IMPL: &str = "ivf_centroids_v2";
-pub const RANKING_VERSION: &str = "p01a-trust-1";
+pub const RANKING_VERSION: &str = "p01b2-rrf-1";
 pub const QUARANTINE_RETRIEVAL_WEIGHT: f64 = 0.35;
 pub const UNKNOWN: &str = "unknown";
 pub const CHUNK_EVIDENCE_REF_VERSION: u32 = 1;

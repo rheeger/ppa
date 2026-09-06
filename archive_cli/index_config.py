@@ -40,6 +40,32 @@ DEFAULT_CHUNK_CHAR_LIMIT = 1200
 DEFAULT_BURST_TOKEN_LIMIT = 800
 DEFAULT_BURST_CHAT_GAP_SECONDS = 300
 BURST_ALGORITHM_VERSION = "p01b1-burst-1"
+DEFAULT_RRF_K = 60
+DEFAULT_DIVERSITY_CAP = 2
+DEFAULT_DIVERSITY_WINDOW = 10
+DEFAULT_RARE_TOKEN_WEIGHT = 0.0
+DEFAULT_CURRENT_OPS_HALF_LIFE_DAYS = 30
+DEFAULT_RERANK_TOP_N = 30
+DEFAULT_RERANK_TIMEOUT_MS = 2000
+DEFAULT_RRF_EXACT_WEIGHT = 2.0
+DEFAULT_RRF_LEXICAL_WEIGHT = 1.0
+DEFAULT_RRF_VECTOR_WEIGHT = 1.0
+DEFAULT_RRF_GRAPH_WEIGHT = 0.25
+MULTI_EVENT_CARD_TYPES = frozenset(
+    {
+        "calendar_event",
+        "meal_order",
+        "grocery_order",
+        "ride",
+        "flight",
+        "accommodation",
+        "car_rental",
+        "purchase",
+        "shipment",
+        "event_ticket",
+        "payroll",
+    }
+)
 DEFAULT_EMBEDDING_MODEL = "default-embedding-model"
 DEFAULT_EMBEDDING_VERSION = 1
 DEFAULT_EMBED_BATCH_SIZE = 32
@@ -162,6 +188,71 @@ def get_burst_token_limit() -> int:
 def get_burst_chat_gap_seconds() -> int:
     v = _ppa_env_int("PPA_BURST_CHAT_GAP_SECONDS", default=DEFAULT_BURST_CHAT_GAP_SECONDS)
     return v if v > 0 else DEFAULT_BURST_CHAT_GAP_SECONDS
+
+
+def _ppa_env_float(canonical: str, default: float) -> float:
+    raw = _ppa_env(canonical, default=str(default))
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def get_rrf_k() -> int:
+    v = _ppa_env_int("PPA_RRF_K", default=DEFAULT_RRF_K)
+    return v if v > 0 else DEFAULT_RRF_K
+
+
+def get_rrf_channel_weight(channel: str) -> float:
+    defaults = {
+        "exact": DEFAULT_RRF_EXACT_WEIGHT,
+        "lexical": DEFAULT_RRF_LEXICAL_WEIGHT,
+        "vector": DEFAULT_RRF_VECTOR_WEIGHT,
+        "graph": DEFAULT_RRF_GRAPH_WEIGHT,
+    }
+    key = {
+        "exact": "PPA_RRF_EXACT_WEIGHT",
+        "lexical": "PPA_RRF_LEXICAL_WEIGHT",
+        "vector": "PPA_RRF_VECTOR_WEIGHT",
+        "graph": "PPA_RRF_GRAPH_WEIGHT",
+    }[channel]
+    v = _ppa_env_float(key, defaults[channel])
+    return v if v >= 0 else defaults[channel]
+
+
+def get_diversity_cap() -> int:
+    v = _ppa_env_int("PPA_DIVERSITY_CAP", default=DEFAULT_DIVERSITY_CAP)
+    return v if v >= 0 else DEFAULT_DIVERSITY_CAP
+
+
+def get_diversity_window() -> int:
+    v = _ppa_env_int("PPA_DIVERSITY_WINDOW", default=DEFAULT_DIVERSITY_WINDOW)
+    return v if v > 0 else DEFAULT_DIVERSITY_WINDOW
+
+
+def get_rare_token_weight() -> float:
+    v = _ppa_env_float("PPA_RARE_TOKEN_WEIGHT", DEFAULT_RARE_TOKEN_WEIGHT)
+    return v if v >= 0 else DEFAULT_RARE_TOKEN_WEIGHT
+
+
+def get_ranking_profile() -> str:
+    value = _ppa_env("PPA_RANKING_PROFILE", default="default").strip().lower()
+    return value if value else "default"
+
+
+def get_current_ops_half_life_days() -> float:
+    v = _ppa_env_float("PPA_CURRENT_OPS_HALF_LIFE_DAYS", float(DEFAULT_CURRENT_OPS_HALF_LIFE_DAYS))
+    return v if v > 0 else float(DEFAULT_CURRENT_OPS_HALF_LIFE_DAYS)
+
+
+def get_rerank_top_n() -> int:
+    v = _ppa_env_int("PPA_RERANK_TOP_N", default=DEFAULT_RERANK_TOP_N)
+    return v if v > 0 else DEFAULT_RERANK_TOP_N
+
+
+def get_rerank_timeout_ms() -> int:
+    v = _ppa_env_int("PPA_RERANK_TIMEOUT_MS", default=DEFAULT_RERANK_TIMEOUT_MS)
+    return v if v > 0 else DEFAULT_RERANK_TIMEOUT_MS
 
 
 def get_default_embedding_model() -> str:

@@ -139,12 +139,27 @@ def load_archive_config(explicit_path: str | None = None) -> ArchiveConfig:
                 },
                 dict(retrieval.get("query_planner") or {}),
             ),
+            "fusion": _merge_dict(
+                {
+                    "strategy": "rrf",
+                    "k": 60,
+                    "diversity_cap": 2,
+                    "diversity_window": 10,
+                    "rare_token_weight": 0.0,
+                    "ranking_profile": "default",
+                    "current_ops_half_life_days": 30,
+                },
+                dict(retrieval.get("fusion") or {}),
+            ),
             "reranker": _merge_dict(
                 {
                     "enabled": False,
                     "provider": "none",
                     "model": "",
+                    "endpoint": "",
+                    "timeout_ms": 2000,
                     "top_k": 30,
+                    "fail_closed": False,
                     "blend": {
                         "top_1_3_retrieval_weight": 0.75,
                         "top_4_10_retrieval_weight": 0.60,

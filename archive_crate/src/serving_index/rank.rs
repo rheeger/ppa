@@ -3,7 +3,12 @@ use std::collections::HashMap;
 use super::metadata::CardMeta;
 use super::schema::{QUARANTINE_RETRIEVAL_WEIGHT, RANKING_VERSION, UNKNOWN};
 
-const PIPELINE_VERSION: &str = "2026.09.06.p01a";
+const PIPELINE_VERSION: &str = "2026.09.06.p01b2";
+const DEFAULT_RRF_K: f64 = 60.0;
+const EXACT_WEIGHT: f64 = 2.0;
+const LEXICAL_WEIGHT: f64 = 1.0;
+const VECTOR_WEIGHT: f64 = 1.0;
+const GRAPH_WEIGHT: f64 = 0.25;
 
 pub fn pipeline_version() -> &'static str {
     PIPELINE_VERSION
@@ -107,6 +112,54 @@ pub fn fuse(
         .map(|(i, (uid, _))| (uid.clone(), ((1.0 - (i as f64 / total as f64)) * 0.06 * 1e6).round() / 1e6))
         .collect();
 
+    let mut lex_order: Vec<(String, f32)> = lexical
+        .iter()
+        .filter(|(_, s)| **s > 0.0)
+        .map(|(u, s)| (u.clone(), *s))
+        .collect();
+    lex_order.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then(a.0.cmp(&b.0)));
+    let lexical_ranks: HashMap<String, usize> = lex_order
+        .iter()
+        .enumerate()
+        .map(|(i, (uid, _))| (uid.clone(), i + 1))
+        .collect();
+    let mut vec_order: Vec<(String, f32)> = vector
+        .iter()
+        .filter(|(_, v)| v.0 > 0.0)
+        .map(|(u, v)| (u.clone(), v.0))
+        .collect();
+    vec_order.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then(a.0.cmp(&b.0)));
+    let vector_ranks: HashMap<String, usize> = vec_order
+        .iter()
+        .enumerate()
+        .map(|(i, (uid, _))| (uid.clone(), i + 1))
+        .collect();
+    let mut graph_order: Vec<(String, f64)> = neighbor_trust
+        .iter()
+        .filter(|(_, t)| **t > 0.0)
+        .map(|(u, t)| (u.clone(), *t))
+        .collect();
+    graph_order.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then(a.0.cmp(&b.0)));
+    let graph_ranks: HashMap<String, usize> = graph_order
+        .iter()
+        .enumerate()
+        .map(|(i, (uid, _))| (uid.clone(), i + 1))
+        .collect();
+    let mut exact_order: Vec<String> = uids
+        .iter()
+        .filter(|uid| meta.get(*uid).is_some_and(|c| exact_flags(c, query).0))
+        .cloned()
+        .collect();
+    exact_order.sort();
+    let exact_ranks: HashMap<String, usize> = exact_order
+        .iter()
+        .enumerate()
+        .map(|(i, uid)| (uid.clone(), i + 1))
+        .collect();
+    let rrf = |weight: f64, rank: Option<usize>| -> f64 {
+        rank.map(|r| weight / (DEFAULT_RRF_K + r as f64)).unwrap_or(0.0)
+    };
+
     let mut rows = Vec::new();
     for uid in uids {
         let Some(card) = meta.get(&uid) else {
@@ -131,23 +184,35 @@ pub fn fuse(
             }
         };
         let trust = *neighbor_trust.get(&uid).unwrap_or(&0.0);
-        let graph_boost = if trust > 0.0 { 0.22 * trust } else { 0.0 };
-        let exact_boost = if exact { 3.0 } else { 0.0 };
-        let lexical_component = (lex as f64).min(1.5) * if exact { 1.4 } else { 1.2 };
-        let vector_component = sim as f64 * 1.2;
-        let multi = if matched_by == "hybrid" { 0.2 } else { 0.0 };
         let provenance_bias = provenance_label(card);
         let provenance = provenance_score(provenance_bias);
         let rec = *recency.get(&uid).unwrap_or(&0.0);
-        let raw = exact_boost
-            + lexical_component
-            + vector_component
-            + multi
-            + graph_boost
-            + type_prior(&card.r#type)
-            + rec
-            + provenance;
-        let score = ((raw * corpus_weight(card)) * 1e6).round() / 1e6;
+        let rrf_exact = rrf(EXACT_WEIGHT, exact_ranks.get(&uid).copied());
+        let rrf_lex = rrf(LEXICAL_WEIGHT, lexical_ranks.get(&uid).copied());
+        let rrf_vec = rrf(VECTOR_WEIGHT, vector_ranks.get(&uid).copied());
+        let rrf_graph = rrf(GRAPH_WEIGHT, graph_ranks.get(&uid).copied());
+        let rrf_score = rrf_exact + rrf_lex + rrf_vec + rrf_graph;
+        let score = ((rrf_score * corpus_weight(card)) * 1e8).round() / 1e8;
+        let match_channel = {
+            let mut parts = Vec::new();
+            if exact {
+                parts.push("exact");
+            }
+            if lexical_ranks.contains_key(&uid) {
+                parts.push("lexical");
+            }
+            if vector_ranks.contains_key(&uid) {
+                parts.push("vector");
+            }
+            if graph_ranks.contains_key(&uid) {
+                parts.push("graph");
+            }
+            if parts.is_empty() {
+                matched_by.to_string()
+            } else {
+                parts.join("+")
+            }
+        };
         rows.push(serde_json::json!({
             "card_uid": uid,
             "rel_path": card.rel_path,
@@ -156,7 +221,7 @@ pub fn fuse(
             "activity_at": card.activity_at,
             "preview": card.summary.chars().take(160).collect::<String>(),
             "matched_by": matched_by,
-            "match_channel": matched_by,
+            "match_channel": match_channel,
             "lexical_score": lex,
             "vector_similarity": sim,
             "exact_match": exact,
@@ -175,15 +240,31 @@ pub fn fuse(
             "corpus_state": if card.corpus_state.is_empty() { UNKNOWN } else { card.corpus_state.as_str() },
             "retrieval_weight": card.retrieval_weight,
             "source_revision": card.source_revision,
+            "recency_score": rec,
+            "type_prior": type_prior(&card.r#type),
+            "rrf_score": ((rrf_score * 1e8).round()) / 1e8,
+            "rrf_exact": ((rrf_exact * 1e8).round()) / 1e8,
+            "rrf_lexical": ((rrf_lex * 1e8).round()) / 1e8,
+            "rrf_vector": ((rrf_vec * 1e8).round()) / 1e8,
+            "rrf_graph": ((rrf_graph * 1e8).round()) / 1e8,
             "score": score,
             "pipeline_version": PIPELINE_VERSION,
             "ranking_version": RANKING_VERSION,
+            "fusion_strategy": "rrf_k60",
         }));
     }
     rows.sort_by(|a, b| {
-        let sa = a.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0);
-        let sb = b.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0);
-        sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
+        let ea = a.get("exact_match").and_then(|v| v.as_bool()).unwrap_or(false);
+        let eb = b.get("exact_match").and_then(|v| v.as_bool()).unwrap_or(false);
+        eb.cmp(&ea).then_with(|| {
+            let sa = a.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let sb = b.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
+        }).then_with(|| {
+            let ua = a.get("card_uid").and_then(|v| v.as_str()).unwrap_or("");
+            let ub = b.get("card_uid").and_then(|v| v.as_str()).unwrap_or("");
+            ua.cmp(ub)
+        })
     });
     rows.truncate(limit);
     rows

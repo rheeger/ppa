@@ -19,6 +19,7 @@ from .index_config import (
     get_default_embedding_version,
     get_query_embed_cache_path,
     get_query_embed_cache_ram_entries,
+    get_rerank_top_n,
     get_seed_links_enabled,
     get_vector_dimension,
 )
@@ -27,7 +28,13 @@ from .projections.registry import projection_for_card_type
 from .query_embed_cache import QueryEmbedCache, QueryEmbedSpec
 from .query_planner import build_query_plan, effective_filters_from_plan
 from .query_timing import QueryPhaseTimes, add_ms, log_phase_times
-from .reranker import blend_rerank_scores, reranker_for_config
+from .rank_fusion import FUSION_STRATEGY
+from .reranker import (
+    RerankError,
+    apply_http_rerank_order,
+    blend_rerank_scores,
+    reranker_for_config,
+)
 from .retrieval_pipeline import (
     PIPELINE_VERSION,
     HybridFetchInputs,
@@ -451,9 +458,10 @@ class DefaultArchiveStore(ArchiveStore):
         )
         pipeline_meta: dict[str, Any] = {}
         rr_cfg = rc.get("reranker", {})
+        provider = str(rr_cfg.get("provider", "none")).strip().lower()
         pool_limit = limit
-        if rr_cfg.get("enabled") and str(rr_cfg.get("provider", "none")).lower() not in ("none", "", "noop"):
-            pool_limit = max(limit, int(rr_cfg.get("top_k", 30) or 30))
+        if rr_cfg.get("enabled") and provider not in ("none", "", "noop"):
+            pool_limit = max(limit, int(rr_cfg.get("top_k") or get_rerank_top_n() or 30))
         rows = fuse_and_rank_hybrid(
             HybridFetchInputs(
                 lexical_rows=merged_lex,
@@ -465,10 +473,14 @@ class DefaultArchiveStore(ArchiveStore):
             final_limit=pool_limit,
             pipeline_meta=pipeline_meta,
         )
-        rerank_note = {"provider": str(rr_cfg.get("provider", "none")), "enabled": bool(rr_cfg.get("enabled"))}
-        if rr_cfg.get("enabled") and str(rr_cfg.get("provider", "none")).lower() not in ("none", "", "noop"):
-            reranker = reranker_for_config(rc)
-            top_k = min(int(rr_cfg.get("top_k", 30)), len(rows))
+        rerank_note: dict[str, Any] = {
+            "provider": provider or "none",
+            "enabled": bool(rr_cfg.get("enabled")),
+            "degraded": False,
+            "used": "rrf",
+        }
+        if rr_cfg.get("enabled") and provider not in ("none", "", "noop"):
+            top_k = min(int(rr_cfg.get("top_k") or get_rerank_top_n() or 30), len(rows))
             head = rows[:top_k]
             ctx_on = bool(rc.get("context", {}).get("include_in_reranker_input", True))
             for row in head:
@@ -480,18 +492,34 @@ class DefaultArchiveStore(ArchiveStore):
                     row["context_text"] = build_context_text(cj)
                 else:
                     row["context_text"] = ""
-            rr_list = reranker.rerank(query, head)
-            by_uid = {x.card_uid: x for x in rr_list}
-            blend_cfg = rr_cfg.get("blend") or {}
-            head = blend_rerank_scores(
-                head,
-                by_uid,
-                top_1_3_retrieval_weight=float(blend_cfg.get("top_1_3_retrieval_weight", 0.75)),
-                top_4_10_retrieval_weight=float(blend_cfg.get("top_4_10_retrieval_weight", 0.60)),
-                rest_retrieval_weight=float(blend_cfg.get("rest_retrieval_weight", 0.40)),
-                preserve_exact_match_floor=bool(rr_cfg.get("preserve_exact_match_floor", True)),
-            )
-            rows = head + rows[top_k:]
+            try:
+                reranker = reranker_for_config(rc)
+                rr_list = reranker.rerank(query, head)
+                by_uid = {item.card_uid: item for item in rr_list}
+                preserve = bool(rr_cfg.get("preserve_exact_match_floor", True))
+                if provider == "heuristic":
+                    blend_cfg = rr_cfg.get("blend") or {}
+                    head = blend_rerank_scores(
+                        head,
+                        by_uid,
+                        top_1_3_retrieval_weight=float(blend_cfg.get("top_1_3_retrieval_weight", 0.75)),
+                        top_4_10_retrieval_weight=float(blend_cfg.get("top_4_10_retrieval_weight", 0.60)),
+                        rest_retrieval_weight=float(blend_cfg.get("rest_retrieval_weight", 0.40)),
+                        preserve_exact_match_floor=preserve,
+                    )
+                    rerank_note["used"] = "heuristic"
+                else:
+                    head = apply_http_rerank_order(head, by_uid, preserve_exact_match_floor=preserve)
+                    rerank_note["used"] = "http"
+                    if rr_list:
+                        rerank_note["model_revision"] = rr_list[0].model_revision
+                rows = head + rows[top_k:]
+            except RerankError as exc:
+                rerank_note["degraded"] = True
+                rerank_note["reason"] = str(exc)
+                rerank_note["used"] = "rrf"
+                if bool(rr_cfg.get("fail_closed")):
+                    raise
         rows = rows[:limit]
         return rows, {
             "plan": plan,
@@ -729,7 +757,7 @@ class DefaultArchiveStore(ArchiveStore):
         pipeline_meta = trace.get("pipeline_meta", {})
         fusion_strategy = str(
             pipeline_meta.get(
-                "fusion_strategy", "vector" if mode == "vector" else "lexical_vector_union_with_graph_boost"
+                "fusion_strategy", "vector" if mode == "vector" else FUSION_STRATEGY
             )
         )
         include_ctx = bool(rc.get("context", {}).get("include_in_result_payloads", True))
