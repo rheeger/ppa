@@ -125,14 +125,10 @@ def apply_max_items_kwarg(
 
 
 def build_adapter(adapter_source_id: str) -> BaseAdapter:
-    if adapter_source_id == "gmail-messages":
-        from archive_sync.adapters.gmail_messages import GmailMessagesAdapter
+    if adapter_source_id in {"gmail-messages", "calendar-events"}:
+        from archive_sync.connectors.legacy import adapter_for_source
 
-        return GmailMessagesAdapter()
-    if adapter_source_id == "calendar-events":
-        from archive_sync.adapters.calendar_events import CalendarEventsAdapter
-
-        return CalendarEventsAdapter()
+        return adapter_for_source(adapter_source_id)
     if adapter_source_id == "imessage":
         from archive_sync.adapters.imessage import IMessageAdapter
 

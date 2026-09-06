@@ -1,8 +1,8 @@
 """PPA engine package.
 
 P06-A owns shared contracts and the exact-read service.
-P07-A owns ``recovery_manifest`` as a sibling module in this package — this
-init does not claim recovery and does not register CLI commands.
+P07 owns ``recovery_manifest`` and ``recovery`` as sibling modules — this
+init does not register CLI commands (P09 owns parser wiring).
 
 Sibling modules remain importable as ``archive_engine.<name>`` even when they
 are not re-exported here.
@@ -37,7 +37,9 @@ from archive_engine.contracts import (
 from archive_engine.errors import (
     AccessDeniedError,
     CapabilityUnavailableError,
+    ConfigError,
     CursorInvalidError,
+    EgressDeniedError,
     EngineError,
     IncompatibleContractError,
     IncompatibleStateError,
@@ -58,7 +60,9 @@ __all__ = [
     "ArchiveRuntime",
     "ArtifactHash",
     "CapabilityUnavailableError",
+    "ConfigError",
     "CursorInvalidError",
+    "EgressDeniedError",
     "ChangeBatch",
     "ChangeRecord",
     "ChunkEvidenceRef",
@@ -88,14 +92,19 @@ _SIBLING_MODULES = frozenset(
         "access",
         "analytics",
         "changes",
+        "config",
         "context",
         "corrections",
+        "egress",
         "execution_mode",
         "publication",
         "query",
         "query_cursor",
+        "recovery",
         "recovery_manifest",
+        "redaction",
         "runtime",
+        "scopes",
     }
 )
 

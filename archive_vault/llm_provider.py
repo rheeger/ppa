@@ -13,6 +13,9 @@ from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 from urllib import error, request
 
+from archive_engine.errors import EgressDeniedError
+from archive_engine.egress import authorize_request, destination_from_url, guarded_urlopen
+from archive_engine.redaction import redact_text
 from archive_vault.provenance import compute_input_hash
 
 GROUNDING_INSTRUCTION = (
@@ -79,33 +82,38 @@ def _post_json(
     payload: dict[str, Any],
     *,
     timeout: float = _DEFAULT_HTTP_TIMEOUT,
+    destination: str | None = None,
 ) -> dict[str, Any] | None:
     data = json.dumps(payload).encode("utf-8")
     import random as _random
 
+    dest = destination or destination_from_url(url)
+    authorize_request(destination=dest, url=url)
     for attempt in range(_MAX_RETRIES + 1):
         req = request.Request(url, data=data, headers=headers, method="POST")
         try:
-            with request.urlopen(req, timeout=timeout) as response:
+            with guarded_urlopen(req, timeout=timeout, destination=dest, urlopen=request.urlopen) as response:
                 return json.loads(response.read().decode("utf-8"))
+        except EgressDeniedError:
+            raise
         except error.HTTPError as exc:
             if exc.code in (429, 500, 502, 503) and attempt < _MAX_RETRIES:
                 wait = _RETRY_BASE_WAIT * (2**attempt) + _random.uniform(0.5, 2.0)
                 _llm_log.info("%d retry %d/%d in %.1fs", exc.code, attempt + 1, _MAX_RETRIES, wait)
                 time.sleep(wait)
                 continue
-            _llm_log.warning("_post_json failed url=%s: %s", url, exc)
+            _llm_log.warning("_post_json failed url=%s: %s", redact_text(url), redact_text(str(exc)))
             return None
         except json.JSONDecodeError as exc:
-            _llm_log.warning("_post_json json-decode url=%s: %s", url, exc)
+            _llm_log.warning("_post_json json-decode url=%s: %s", redact_text(url), redact_text(str(exc)))
             return None
         except (OSError, error.URLError) as exc:
             if attempt < _MAX_RETRIES:
                 wait = _RETRY_BASE_WAIT * (2**attempt) + _random.uniform(0.5, 2.0)
-                _llm_log.info("network retry %d/%d in %.1fs: %s", attempt + 1, _MAX_RETRIES, wait, exc)
+                _llm_log.info("network retry %d/%d in %.1fs: %s", attempt + 1, _MAX_RETRIES, wait, redact_text(str(exc)))
                 time.sleep(wait)
                 continue
-            _llm_log.warning("_post_json failed url=%s: %s", url, exc)
+            _llm_log.warning("_post_json failed url=%s: %s", redact_text(url), redact_text(str(exc)))
             return None
     return None
 
@@ -134,7 +142,7 @@ class GeminiProvider:
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"maxOutputTokens": max_tokens},
         }
-        response = _post_json(url, {"Content-Type": "application/json"}, payload)
+        response = _post_json(url, {"Content-Type": "application/json"}, payload, destination="gemini")
         if not response:
             return None
         return self._extract_text(response)
@@ -185,7 +193,7 @@ class GeminiProvider:
         headers = {"Content-Type": "application/json"}
 
         t0 = time.perf_counter()
-        response = _post_json(url, headers, payload, timeout=_LLM_HTTP_TIMEOUT)
+        response = _post_json(url, headers, payload, timeout=_LLM_HTTP_TIMEOUT, destination="gemini")
         latency_ms = (time.perf_counter() - t0) * 1000.0
 
         content = self._extract_text(response) or ""
@@ -217,7 +225,7 @@ class GeminiProvider:
         ]
         payload["contents"] = retry_contents
         t0 = time.perf_counter()
-        response = _post_json(url, headers, payload, timeout=_LLM_HTTP_TIMEOUT)
+        response = _post_json(url, headers, payload, timeout=_LLM_HTTP_TIMEOUT, destination="gemini")
         latency_ms = (time.perf_counter() - t0) * 1000.0
         content = self._extract_text(response) or ""
         usage = (response or {}).get("usageMetadata") or {}
@@ -237,8 +245,10 @@ class GeminiProvider:
             return False
         url = f"https://generativelanguage.googleapis.com/v1beta/models?key={self._api_key()}"
         try:
-            data = _get_json(url, timeout=10.0)
+            data = _get_json(url, timeout=10.0, destination="gemini")
             return bool(data and "models" in data)
+        except EgressDeniedError:
+            return False
         except Exception:
             return False
 
@@ -277,6 +287,7 @@ class OpenAIProvider:
             "https://api.openai.com/v1/chat/completions",
             {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
             payload,
+            destination="openai",
         )
         if not response:
             return None
@@ -296,11 +307,14 @@ def _ollama_root_url(base_url: str) -> str:
     return b
 
 
-def _get_json(url: str, timeout: float = 30.0) -> dict[str, Any] | None:
+def _get_json(url: str, timeout: float = 30.0, *, destination: str | None = None) -> dict[str, Any] | None:
+    dest = destination or destination_from_url(url)
     req = request.Request(url, method="GET")
     try:
-        with request.urlopen(req, timeout=timeout) as response:
+        with guarded_urlopen(req, timeout=timeout, destination=dest, urlopen=request.urlopen) as response:
             return json.loads(response.read().decode("utf-8"))
+    except EgressDeniedError:
+        raise
     except (error.HTTPError, error.URLError, TimeoutError, json.JSONDecodeError):
         return None
 
@@ -363,7 +377,7 @@ class OllamaProvider:
             "think": False,
             "options": {"temperature": 0.0, "num_predict": max_tokens},
         }
-        response = _post_json(url, {"Content-Type": "application/json"}, payload, timeout=_LLM_HTTP_TIMEOUT)
+        response = _post_json(url, {"Content-Type": "application/json"}, payload, timeout=_LLM_HTTP_TIMEOUT, destination="ollama")
         content = _ollama_native_content(response)
         return content.strip() or None
 
@@ -401,7 +415,7 @@ class OllamaProvider:
                 },
             }
             t0 = time.perf_counter()
-            response = _post_json(url, headers, payload, timeout=_LLM_HTTP_TIMEOUT)
+            response = _post_json(url, headers, payload, timeout=_LLM_HTTP_TIMEOUT, destination="ollama")
             latency_ms = (time.perf_counter() - t0) * 1000.0
             content = _ollama_native_content(response)
             pt, ct = _ollama_native_usage(response)
@@ -432,7 +446,10 @@ class OllamaProvider:
     def health_check(self) -> bool:
         """True if Ollama responds and ``self.model`` appears in ``/api/tags``."""
 
-        data = _get_json(self._tags_url(), timeout=10.0)
+        try:
+            data = _get_json(self._tags_url(), timeout=10.0, destination="ollama")
+        except EgressDeniedError:
+            return False
         if not data or "models" not in data:
             return False
         models = data.get("models") or []
@@ -448,7 +465,10 @@ class OllamaProvider:
     def list_models(self) -> list[dict[str, Any]]:
         """Return installed model metadata from ``GET /api/tags``."""
 
-        data = _get_json(self._tags_url(), timeout=15.0)
+        try:
+            data = _get_json(self._tags_url(), timeout=15.0, destination="ollama")
+        except EgressDeniedError:
+            return []
         if not data:
             return []
         raw = data.get("models") or []
@@ -590,9 +610,12 @@ def decide_same_person(vault_path: str | Path, person_a: dict[str, Any], person_
     )
     max_tokens = int(load_llm_config(vault_path).get("max_tokens_tiebreak", 4))
     for provider in get_provider_chain(vault_path):
-        response = provider.complete(prompt, max_tokens=max_tokens)
-        if not response:
+        try:
+            response = provider.complete(prompt, max_tokens=max_tokens)
+        except EgressDeniedError:
             continue
+        if not response:
+            break
         normalized = response.strip().upper()
         if normalized in {"YES", "NO", "UNSURE"}:
             cache[cache_key] = normalized

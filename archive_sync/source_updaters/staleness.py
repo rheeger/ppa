@@ -63,3 +63,55 @@ def compute_staleness_state(
     if success_ts >= cutoff:
         return STALENESS_FRESH
     return STALENESS_STALE
+
+
+BURST_FRESHNESS_UNKNOWN = "unknown"
+BURST_FRESHNESS_INVALIDATED = "invalidated"
+COVERAGE_BOUNDED = "bounded"
+COVERAGE_UNKNOWN = "unknown"
+COVERAGE_COMPLETE = "complete"
+
+
+def burst_freshness_state(*, resolver_present: bool, keys_invalidated: int = 0) -> str:
+    """Unknown is honest when P01 burst resolution is not attached."""
+
+    if resolver_present and keys_invalidated > 0:
+        return BURST_FRESHNESS_INVALIDATED
+    return BURST_FRESHNESS_UNKNOWN
+
+
+def source_coverage_state(*, complete: bool = False, bounded: bool = False) -> str:
+    if complete:
+        return COVERAGE_COMPLETE
+    if bounded:
+        return COVERAGE_BOUNDED
+    return COVERAGE_UNKNOWN
+
+
+def connector_freshness_report(
+    *,
+    last_success_at: Any = None,
+    last_attempt_at: Any = None,
+    last_error: str = "",
+    last_run_status: str = "",
+    enabled: bool = True,
+    resolver_present: bool = False,
+    keys_invalidated: int = 0,
+    bounded: bool = True,
+    cursor_status: str = "active",
+) -> dict[str, str]:
+    return {
+        "staleness_state": compute_staleness_state(
+            last_success_at=last_success_at,
+            last_attempt_at=last_attempt_at,
+            last_error=last_error,
+            last_run_status=last_run_status,
+            enabled=enabled,
+        ),
+        "burst_freshness": burst_freshness_state(
+            resolver_present=resolver_present,
+            keys_invalidated=keys_invalidated,
+        ),
+        "coverage": source_coverage_state(bounded=bounded),
+        "cursor_status": cursor_status,
+    }

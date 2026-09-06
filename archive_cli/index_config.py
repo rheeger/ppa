@@ -117,11 +117,25 @@ def _ppa_env_bool(canonical: str) -> bool:
     return _ppa_env(canonical).lower() in {"1", "true", "yes", "on"}
 
 
+def _bound_instance():
+    from archive_engine.config import current_instance_config
+
+    return current_instance_config()
+
+
 def get_index_dsn() -> str:
+    bound = _bound_instance()
+    if bound is not None:
+        from archive_engine.config import current_secret_values
+
+        return current_secret_values().get("index_dsn") or ""
     return _ppa_env("PPA_INDEX_DSN")
 
 
 def get_index_schema() -> str:
+    bound = _bound_instance()
+    if bound is not None:
+        return bound.storage.index_schema
     return _ppa_env("PPA_INDEX_SCHEMA", default=DEFAULT_POSTGRES_SCHEMA)
 
 
@@ -130,6 +144,9 @@ def get_default_timezone() -> str:
 
 
 def get_vector_dimension() -> int:
+    bound = _bound_instance()
+    if bound is not None:
+        return bound.embeddings.dimension if bound.embeddings.dimension > 0 else DEFAULT_VECTOR_DIMENSION
     v = _ppa_env_int("PPA_VECTOR_DIMENSION", default=DEFAULT_VECTOR_DIMENSION)
     return v if v > 0 else DEFAULT_VECTOR_DIMENSION
 
@@ -152,10 +169,20 @@ def get_chunk_char_limit() -> int:
 
 
 def get_default_embedding_model() -> str:
+    bound = _bound_instance()
+    if bound is not None:
+        return bound.embeddings.model
     return _ppa_env("PPA_EMBEDDING_MODEL", default=DEFAULT_EMBEDDING_MODEL)
 
 
 def get_default_embedding_version() -> int:
+    bound = _bound_instance()
+    if bound is not None:
+        try:
+            version = int(bound.embeddings.model_revision)
+        except (TypeError, ValueError):
+            version = DEFAULT_EMBEDDING_VERSION
+        return version if version > 0 else DEFAULT_EMBEDDING_VERSION
     v = _ppa_env_int("PPA_EMBEDDING_VERSION", default=DEFAULT_EMBEDDING_VERSION)
     return v if v > 0 else DEFAULT_EMBEDDING_VERSION
 
@@ -341,7 +368,12 @@ def get_serving_index_path(vault: Path | None = None) -> Path:
     raw = _ppa_env("PPA_SERVING_INDEX_PATH")
     if raw:
         return Path(raw)
-    root = Path(vault) if vault is not None else Path(_ppa_env("PPA_PATH", default="."))
+    bound = _bound_instance()
+    if vault is not None:
+        return Path(vault) / "_meta" / "rust-search-index"
+    if bound is not None:
+        return Path(bound.storage.serving_index_path)
+    root = Path(_ppa_env("PPA_PATH", default="."))
     return root / "_meta" / "rust-search-index"
 
 
@@ -420,6 +452,11 @@ def get_query_embed_cache_path(vault: Path | None = None) -> Path:
     raw = _ppa_env("PPA_QUERY_EMBED_CACHE_PATH")
     if raw:
         return Path(raw)
+    bound = _bound_instance()
+    if bound is not None:
+        bound_root = Path(bound.storage.vault_path).expanduser().resolve()
+        if vault is None or Path(vault).expanduser().resolve() == bound_root:
+            return Path(bound.storage.query_embed_cache_path)
     root = Path(vault) if vault is not None else Path(_ppa_env("PPA_PATH", default="."))
     return root / "_meta" / "query-embed-cache.sqlite"
 

@@ -65,9 +65,18 @@ def load_builtin_scenarios() -> None:
     from archive_tests.acceptance.scenarios import p03_maintain as _p03d  # noqa: F401
     from archive_tests.acceptance.scenarios import p03_outputs as _p03c  # noqa: F401
     from archive_tests.acceptance.scenarios import p05_access as _p05_access  # noqa: F401
+    from archive_tests.acceptance.scenarios import p05_egress as _p05_egress  # noqa: F401
+    from archive_tests.acceptance.scenarios import p06_contracts as _p06_contracts  # noqa: F401
     from archive_tests.acceptance.scenarios import p06_runtime as _p06_runtime  # noqa: F401
     from archive_tests.acceptance.scenarios import p07_corrections as _p07_corrections  # noqa: F401
     from archive_tests.acceptance.scenarios import p07_identity as _p07_identity  # noqa: F401
+    from archive_tests.acceptance.scenarios import p07_restore as _p07_restore  # noqa: F401
+    from archive_tests.acceptance.scenarios import p08_contributor as _p08_contributor  # noqa: F401
+    from archive_tests.acceptance.scenarios import p08_existing as _p08_existing  # noqa: F401
+    from archive_tests.acceptance.scenarios import p08_lifecycle as _p08_lifecycle  # noqa: F401
+    from archive_tests.acceptance.scenarios import p08_sample as _p08_sample  # noqa: F401
+    from archive_tests.acceptance.scenarios import p09_config as _p09_config  # noqa: F401
+    from archive_tests.acceptance.scenarios import p09_install as _p09_install  # noqa: F401
     from archive_tests.acceptance.scenarios import p10_queries as _p10_queries
     from archive_tests.acceptance.scenarios import p10_context as _p10_context
     from archive_tests.acceptance.scenarios import p10_workflows as _p10_workflows  # noqa: F401

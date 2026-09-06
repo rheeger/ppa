@@ -21,6 +21,8 @@ import sys
 from pathlib import Path
 from typing import Final
 
+from archive_engine.redaction import redacting_formatter
+
 _PPA_LOGGER_NAME: Final = "ppa"
 _CONFIGURED = False
 _FILE_HANDLER_PATH: Path | None = None
@@ -44,12 +46,14 @@ def configure_logging(verbose: bool = False) -> None:
     root_ppa = logging.getLogger(_PPA_LOGGER_NAME)
     root_ppa.setLevel(logging.DEBUG if verbose else logging.INFO)
     if _CONFIGURED:
+        ensure_redacting_handlers()
         return
     handler = logging.StreamHandler(sys.stderr)
-    handler.setFormatter(logging.Formatter("%(asctime)s [%(name)s] %(levelname)s %(message)s"))
+    handler.setFormatter(redacting_formatter())
     root_ppa.addHandler(handler)
     root_ppa.propagate = False
     _CONFIGURED = True
+    ensure_redacting_handlers()
 
 
 def attach_file_log(path: Path) -> None:
@@ -65,6 +69,16 @@ def attach_file_log(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     root_ppa = logging.getLogger(_PPA_LOGGER_NAME)
     handler = _FlushingFileHandler(path, encoding="utf-8")
-    handler.setFormatter(logging.Formatter("%(asctime)s [%(name)s] %(levelname)s %(message)s"))
+    handler.setFormatter(redacting_formatter())
     root_ppa.addHandler(handler)
     _FILE_HANDLER_PATH = path
+    ensure_redacting_handlers()
+
+
+def ensure_redacting_handlers() -> None:
+    """Upgrade existing ``ppa.*`` handlers so secrets cannot leak through an older formatter."""
+
+    root_ppa = logging.getLogger(_PPA_LOGGER_NAME)
+    formatter = redacting_formatter()
+    for handler in root_ppa.handlers:
+        handler.setFormatter(formatter)

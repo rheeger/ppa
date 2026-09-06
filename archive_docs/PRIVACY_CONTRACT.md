@@ -103,6 +103,26 @@ Env (optional, fail-closed): `PPA_ACCESS_PRINCIPAL`, `PPA_ACCESS_PROFILE`,
 `PPA_ACCESS_ALLOWED_TOOLS`, `PPA_ACCESS_EGRESS_POLICY_REVISION`,
 `PPA_ACCESS_DENY`.
 
+## Provider egress (P05-C)
+
+Outbound provider calls go through `archive_engine.egress` attached to
+`runtime.providers`. Destination capabilities (`hash` / `ollama` /
+`openai` / `gemini` / `firecrawl` / `openclaw`) are declared here;
+provider construction stays in the existing registries. Unknown
+destinations fail closed.
+
+- `local-only` (`PPA_EGRESS_MODE=local-only` or a revision containing
+  `local-only`) blocks remote destinations and refuses a loopback
+  `Location` that points at a remote host.
+- Restricted `AccessContext` cannot send a denied source/domain to a
+  remote destination.
+- Provider failure does not substitute another destination.
+- Tokens, DSNs, and raw card bodies are redacted from `ppa.*` logs and
+  MCP error strings. Diagnostic IDs are hashes.
+- PPA does not encrypt vault, warehouse, caches, or backups. See
+  `DATA_BOUNDARIES.md`. Host LUKS / FileVault / Arnold runbooks are
+  operator choices, not engine guarantees.
+
 ## Later slices (not this contract's proof)
 
-- P05-C: provider egress, diagnostic redaction, at-rest inventory.
+- P09-B: user-facing setup for egress mode and secret references.

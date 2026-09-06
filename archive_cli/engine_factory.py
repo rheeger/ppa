@@ -7,7 +7,6 @@ do not invent a second path resolver.
 
 from __future__ import annotations
 
-import hashlib
 import os
 from collections.abc import Callable
 from pathlib import Path
@@ -46,14 +45,10 @@ def resolve_archive_identity(
     schema_binding: str,
     archive_id: str | None = None,
 ) -> ArchiveIdentity:
-    root = Path(vault).expanduser().resolve()
+    from archive_engine.config import archive_identity_for
+
     explicit = (archive_id if archive_id is not None else os.environ.get("PPA_ARCHIVE_ID", "")).strip()
-    if explicit:
-        aid = explicit
-    else:
-        material = f"{root.as_posix()}\n{schema_binding}".encode()
-        aid = hashlib.sha256(material).hexdigest()
-    return ArchiveIdentity(archive_id=aid, canonical_root=str(root), schema_binding=schema_binding)
+    return archive_identity_for(vault, schema_binding=schema_binding, archive_id=explicit)
 
 
 def trusted_local_access(archive_id: str, *, profile: str | None = None) -> AccessContext:
@@ -206,7 +201,7 @@ def build_runtime(
     warehouse = WarehouseAdapter(index, after_rebuild=_after_rebuild(vault) if serving_factory is not None else None)
     from .embedding_provider import get_embedding_provider
 
-    providers = EmbeddingProviderAdapter(provider_factory or get_embedding_provider)
+    providers = EmbeddingProviderAdapter(provider_factory or get_embedding_provider, access=access)
     return ArchiveRuntime(
         identity=resolved_identity,
         access=access,
