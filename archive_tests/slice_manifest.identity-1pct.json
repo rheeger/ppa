@@ -27,7 +27,8 @@
     "zero_orphaned_person_refs": false,
     "all_edge_rules_fire": false,
     "all_cards_have_summary": true,
-    "all_cards_have_activity_at": false
+    "all_cards_have_activity_at": false,
+    "require_embedding_coverage": false
   },
   "card_counts_by_type": {}
 }

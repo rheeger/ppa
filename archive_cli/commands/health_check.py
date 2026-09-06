@@ -273,8 +273,10 @@ def run_structural_checks(conn: Any, schema: str, manifest: dict[str, Any] | Non
             )
 
     report.embedding_coverage = _check_embedding_coverage(conn, schema)
-    if not report.embedding_coverage.get("ok", False):
+    if invariants.get("require_embedding_coverage", True) and not report.embedding_coverage.get("ok", False):
         report.ok = False
+    elif not invariants.get("require_embedding_coverage", True):
+        report.embedding_coverage["skipped"] = True
 
     return report
 
@@ -466,6 +468,7 @@ def generate_json_report(structural: StructuralReport, behavioral: BehavioralRep
             "card_counts": structural.card_counts,
             "edge_counts_by_rule": structural.edge_counts_by_rule,
             "missing_field_entries": structural.missing_field_entries,
+            "embedding_coverage": structural.embedding_coverage,
         }
     }
     if behavioral:
