@@ -102,7 +102,8 @@ def test_export_embeddings_streams_batches_and_logs_progress(tmp_path: Path, cap
     assert any("serving_index_export embeddings 2/5" in rec.message for rec in caplog.records)
     assert any("rss_mb=" in rec.message for rec in caplog.records)
     assert any("COUNT(*)" in sql for sql in executed)
-    assert any("SELECT chunk_key, embedding" in sql for sql in executed)
+    assert any("SELECT e.chunk_key, e.embedding" in sql for sql in executed)
+    assert any("JOIN" in sql and "chunks" in sql for sql in executed)
 
 
 def test_explain_sql_captures_failure() -> None:

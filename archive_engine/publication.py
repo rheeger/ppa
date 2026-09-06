@@ -511,40 +511,58 @@ def validate_generation(generation_dir: Path, spec: EmbeddingSpec | None = None)
         raise IncompatibleStateError(f"publication_validation_failed: manifest:{exc}") from exc
     if int(manifest.get("serving_index_format_version") or 0) != 2:
         errors.append("format")
-    cards = list(iter_jsonl(dest / "cards.jsonl"))
-    chunks = list(iter_jsonl(dest / "chunks.jsonl"))
-    if int(manifest.get("card_count") or 0) != len(cards):
+    card_count = 0
+    live_uids: set[str] = set()
+    for row in iter_jsonl(dest / "cards.jsonl"):
+        card_count += 1
+        uid = str(row.get("card_uid") or "").strip()
+        if uid:
+            live_uids.add(uid)
+    if int(manifest.get("card_count") or 0) != card_count:
         errors.append("card_count")
-    keys: list[str] = []
+    chunk_count = 0
+    chunk_keys: set[str] = set()
+    for row in iter_jsonl(dest / "chunks.jsonl"):
+        chunk_count += 1
+        key = str(row.get("chunk_key") or "").strip()
+        if key:
+            chunk_keys.add(key)
+    key_count = 0
+    orphan_count = 0
     with (dest / "embedding_keys.txt").open(encoding="utf-8") as fh:
-        keys = [line.strip() for line in fh if line.strip()]
+        for line in fh:
+            key = line.strip()
+            if not key:
+                continue
+            key_count += 1
+            if key not in chunk_keys:
+                orphan_count += 1
+                if orphan_count <= 8:
+                    errors.append(f"orphan_embedding:{key}")
+    if orphan_count > 8:
+        errors.append(f"orphan_embedding_count:{orphan_count}")
     bin_path = dest / "embeddings.bin"
     bin_len = bin_path.stat().st_size if bin_path.exists() else 0
     spec_payload = manifest.get("embedding_spec") if isinstance(manifest.get("embedding_spec"), Mapping) else {}
     dim = int((spec_payload or {}).get("dimension") or (spec.dimension if spec else 0) or 0)
-    if keys and dim and bin_len != len(keys) * dim * 4:
+    if key_count and dim and bin_len != key_count * dim * 4:
         errors.append("embeddings_truncated")
-    if keys and not (dest / "ivf_meta.json").exists():
+    if key_count and not (dest / "ivf_meta.json").exists():
         errors.append("missing:ivf_meta.json")
     if spec is not None and spec_payload:
         if _spec_space(spec) != _spec_space(spec_payload):
             errors.append("embedding_spec")
-    live_uids = {str(row.get("card_uid") or "") for row in cards}
     layout = read_layout(dest)
     for uid in layout.get("tombstone_uids") or []:
         if str(uid) in live_uids:
             errors.append(f"tombstone_live:{uid}")
-    chunk_keys = {str(row.get("chunk_key") or "") for row in chunks}
-    for key in keys:
-        if key not in chunk_keys:
-            errors.append(f"orphan_embedding:{key}")
     if errors:
         raise IncompatibleStateError("publication_validation_failed: " + ",".join(errors))
     return {
         "ok": True,
-        "cards": len(cards),
-        "chunks": len(chunks),
-        "embeddings": len(keys),
+        "cards": card_count,
+        "chunks": chunk_count,
+        "embeddings": key_count,
         "format": 2,
     }
 
@@ -961,6 +979,13 @@ def publish_snapshot(
         native = crate
         if native is None:
             import archive_crate as native
+        logger.info(
+            "serving_index_build start generation=%s embeddings=%s cards=%s chunks=%s",
+            gid,
+            embed_count,
+            len(snapshot.cards),
+            len(snapshot.chunks),
+        )
         native.serving_index_build(
             str(dest),
             str(dest / "cards.jsonl"),
@@ -971,6 +996,7 @@ def publish_snapshot(
             str(dest / "edges.jsonl"),
             json.dumps(_train_config(snapshot.embedding_spec)),
         )
+        logger.info("serving_index_build done generation=%s", gid)
         _maybe_fault(fault, "build")
         check_publication_budget(root, estimate_snapshot_bytes(snapshot), budget_mb=disk_budget_mb)
         report = validate_generation(dest, snapshot.embedding_spec)

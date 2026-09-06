@@ -951,13 +951,15 @@ def _export_embeddings(
     if uids is None:
         count_sql = f"""
             SELECT COUNT(*) AS n
-            FROM {schema}.embeddings
-            WHERE embedding_model = %s AND embedding_version = %s
+            FROM {schema}.embeddings e
+            JOIN {schema}.chunks c ON c.chunk_key = e.chunk_key
+            WHERE e.embedding_model = %s AND e.embedding_version = %s
             """
         sql = f"""
-            SELECT chunk_key, embedding
-            FROM {schema}.embeddings
-            WHERE embedding_model = %s AND embedding_version = %s
+            SELECT e.chunk_key, e.embedding
+            FROM {schema}.embeddings e
+            JOIN {schema}.chunks c ON c.chunk_key = e.chunk_key
+            WHERE e.embedding_model = %s AND e.embedding_version = %s
             """
         params: tuple[Any, ...] = (model, version)
     else:
