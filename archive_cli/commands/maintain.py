@@ -724,6 +724,20 @@ def run_maintenance(
             logger.exception("maintain_file_hygiene_failed")
             report.errors.append({"step": "file_hygiene", "error": str(exc)})
 
+    leftover_dirty: list[str] = []
+    if run_processors:
+        try:
+            from pathlib import Path
+
+            from archive_cli.serving_index import read_dirty_uids
+
+            leftover_dirty = read_dirty_uids(Path(store.vault))
+            if leftover_dirty:
+                logger.info("maintain leftover serving-index dirty uids=%s", len(leftover_dirty))
+                _extend_publish_uids(report, leftover_dirty)
+        except Exception:
+            logger.debug("maintain read leftover dirty uids failed", exc_info=True)
+
     if run_processors:
         try:
             apply = bool(apply_processors) and not dry_run
@@ -732,7 +746,7 @@ def run_maintenance(
                 schema,
                 apply=apply,
                 dirty_uids_path=dirty_uids_path,
-                extra_dirty_uids=hygiene_dirty,
+                extra_dirty_uids=_normalize_uids(list(hygiene_dirty) + leftover_dirty),
                 source_updater_reports=report.source_updater_reports or None,
                 processor_keys=processor_keys,
                 allow_full_embedding=allow_full_embedding,

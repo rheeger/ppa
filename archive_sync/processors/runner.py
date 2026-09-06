@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
+
+from archive_sync.cli_logging import log_ratio_progress
 
 from .batch import ProcessorPlanItem, ProcessorRunReport
 from .constants import (
@@ -113,13 +116,10 @@ class ProcessorExecutionResult:
 
 
 def _is_already_current(
-    state_store: ProcessorStateStore | None,
+    prior: ProcessorInputStateRecord | None,
     item: ProcessorPlanItem,
     processor_version: str,
 ) -> bool:
-    if state_store is None:
-        return False
-    prior = state_store.get_input_state(item.processor_key, item.input_uid)
     if prior is None:
         return False
     return (
@@ -640,8 +640,19 @@ def run_processors(
     executor = batch_executor or default_batch_executor
     by_key: dict[str, list[ProcessorPlanItem]] = defaultdict(list)
     decl_versions = {d.processor_key: d.processor_version for d in iter_processor_declarations()}
+    corpus_by_uid = {snap.input_uid: snap.corpus_state for snap in enriched}
+    classify_started = time.monotonic()
+    log.info("processor execute classify start items=%s", len(plan.items))
 
-    for item in plan.items:
+    for item_i, item in enumerate(plan.items, start=1):
+        log_ratio_progress(
+            log,
+            "processor execute classify",
+            item_i,
+            len(plan.items),
+            classify_started,
+            every=5000,
+        )
         if item.skipped:
             item_results.append(
                 ItemExecuteResult(
@@ -657,7 +668,8 @@ def run_processors(
         if not item.stale:
             continue
         version = decl_versions.get(item.processor_key, "")
-        if _is_already_current(state_store, item, version):
+        prior = (prior_by_uid.get(item.input_uid) or {}).get(item.processor_key)
+        if _is_already_current(prior, item, version):
             item_results.append(
                 ItemExecuteResult(
                     processor_key=item.processor_key,
@@ -713,12 +725,20 @@ def run_processors(
             continue
         by_key[item.processor_key].append(item)
 
+    log.info(
+        "processor execute classify done items=%s queued=%s elapsed=%.1fs",
+        len(plan.items),
+        sum(len(batch) for batch in by_key.values()),
+        time.monotonic() - classify_started,
+    )
+
     failed = 0
     completed = 0
     for key in topological_order():
         batch = by_key.get(key) or []
         if not batch:
             continue
+        log.info("processor execute batch start key=%s items=%s", key, len(batch))
         try:
             batch_result = executor(ctx, batch)
         except Exception as exc:
@@ -756,10 +776,7 @@ def run_processors(
                         processor_key=result.processor_key,
                         input_uid=result.input_uid,
                         input_hash=result.input_hash,
-                        input_corpus_state=next(
-                            (s.corpus_state for s in enriched if s.input_uid == result.input_uid),
-                            "active",
-                        ),
+                        input_corpus_state=corpus_by_uid.get(result.input_uid, "active"),
                         processor_version=version,
                         output_identity=result.output_identity,
                         output_uids=list(result.output_uids),

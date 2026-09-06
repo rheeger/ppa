@@ -625,6 +625,61 @@ def test_maintain_processors_invoke_duplicate_linking_and_junk_purge(
     assert not any(e.get("step") == "file_hygiene" for e in rep.errors)
 
 
+def test_maintain_processors_include_leftover_serving_dirty(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    monkeypatch.setattr(
+        "archive_cli.serving_index.read_dirty_uids",
+        lambda vault: ["hfa-email-message-leftover1", "hfa-calendar-event-leftover2"],
+    )
+    monkeypatch.setattr(
+        "archive_cli.commands.maintain._run_file_hygiene",
+        lambda *a, **k: ({"purged": 0}, {"cards_linked": 0}, ["hfa-document-hygiene1"]),
+    )
+
+    def fake_processors(*a, **kwargs):
+        captured["extra"] = list(kwargs.get("extra_dirty_uids") or [])
+        return (1, [{"executed": True, "item_results": []}], 0)
+
+    monkeypatch.setattr("archive_cli.commands.maintain._run_processors", fake_processors)
+
+    store = mock.MagicMock()
+    conn = mock.MagicMock()
+
+    def exec_side(sql, params=None):
+        m = mock.MagicMock()
+        s = str(sql)
+        if "last_maintenance_at" in s:
+            m.fetchone.return_value = None
+        elif "ingestion_log" in s:
+            m.fetchall.return_value = []
+            m.fetchone.return_value = None
+        else:
+            m.fetchone.return_value = None
+            m.fetchall.return_value = []
+        return m
+
+    conn.execute.side_effect = exec_side
+    store.vault = tmp_path
+    store.index.schema = "ppa"
+    store.index._connect.return_value = _connect_ctx(conn)
+    store.rebuild.return_value = {"cards": 0}
+
+    run_maintenance(
+        store=store,
+        logger=logging.getLogger("t"),
+        dry_run=False,
+        run_processors=True,
+        apply_processors=True,
+    )
+    assert "hfa-email-message-leftover1" in captured["extra"]
+    assert "hfa-calendar-event-leftover2" in captured["extra"]
+    assert "hfa-document-hygiene1" in captured["extra"]
+
+
 def test_maintain_skips_second_rebuild_when_processors_applied(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
