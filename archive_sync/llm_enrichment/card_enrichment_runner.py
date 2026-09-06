@@ -39,6 +39,7 @@ from archive_sync.llm_enrichment.workflows import imessage_thread as wf_imessage
 from archive_vault.llm_provider import GeminiProvider, LLMResponse, OllamaProvider
 from archive_vault.provenance import ProvenanceEntry, merge_provenance
 from archive_vault.schema import validate_card_strict
+from archive_vault.change_journal import mutation_context
 from archive_vault.vault import read_note, write_card
 
 log = logging.getLogger("ppa.card_enrichment")
@@ -171,7 +172,8 @@ class CardEnrichmentRunner:
                 input_hash=content_hash[:16] if content_hash else "",
             )
         prov = merge_provenance(existing_prov, incoming)
-        write_card(self.vault_path, rel_path, card, body, prov)
+        with mutation_context(source="card_enrichment"):
+            write_card(self.vault_path, rel_path, card, body, prov)
         self.metrics.vault_writes += 1
 
     def _apply_finance_enrichment(
@@ -193,7 +195,8 @@ class CardEnrichmentRunner:
                 input_hash=content_hash[:16] if content_hash else "",
             )
         prov = merge_provenance(existing_prov, incoming)
-        write_card(self.vault_path, rel_path, card, body, prov)
+        with mutation_context(source="card_enrichment"):
+            write_card(self.vault_path, rel_path, card, body, prov)
         self.metrics.vault_writes += 1
 
     def _apply_document_enrichment(
@@ -219,7 +222,8 @@ class CardEnrichmentRunner:
                 input_hash=ih,
             )
         prov = merge_provenance(existing_prov, incoming)
-        write_card(self.vault_path, rel_path, card, body, prov)
+        with mutation_context(source="card_enrichment"):
+            write_card(self.vault_path, rel_path, card, body, prov)
         self.metrics.vault_writes += 1
 
     def _process_one_email_thread(

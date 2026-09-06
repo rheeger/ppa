@@ -59,3 +59,4 @@ def load_builtin_scenarios() -> None:
     from archive_tests.acceptance.scenarios import p02_deltas as _p02_deltas  # noqa: F401
     from archive_tests.acceptance.scenarios import p02_failures as _p02_failures  # noqa: F401
     from archive_tests.acceptance.scenarios import p02_journal as _p02_journal  # noqa: F401
+    from archive_tests.acceptance.scenarios import p02_writers as _p02_writers  # noqa: F401

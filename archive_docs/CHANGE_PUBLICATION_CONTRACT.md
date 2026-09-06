@@ -94,29 +94,28 @@ snapshot references.
 `legacy_dirty` records when the UID is not already in the journal. DIRTY is
 not truncated here.
 
-## Writer inventory (P02-A / blocked until P02-D)
+## Writer inventory (P02-D)
 
-Covered in this slice:
+Covered:
 
-- `archive_vault.vault.write_card`
-- `archive_vault.vault.update_frontmatter_fields`
-- `archive_vault.vault.delete_card`
+- `archive_vault.vault.write_card` / `update_frontmatter_fields` / `delete_card`
 - `archive_sync.adapters.base` write seam (`_write_canonical_card`)
 - `mark_vault_written` reconcile hook
-- `mark_serving_index_dirty` DIRTY intake
+- `mark_serving_index_dirty` DIRTY intake (`legacy_dirty`)
+- `archive_cli/loader.py` warehouse materialization → `acknowledge_materialized`
+- `archive_cli/embedder.py` + `store.embed_pending` → `OPERATION_EMBED`
+- `archive_cli/batch_embedder.py` ingest → bounded `request_reconciliation`
+- `archive_cli/store.py` rebuild → warehouse ack + DIRTY
+- `archive_cli/corpus_hygiene/apply.py` vault-remove → `delete_card`
+- Enrichment vault writes (`card_enrichment_runner`) via `mutation_context`
+- Manual file edits via `request_reconciliation(uid_to_rel=...)` (no vault walk)
 
-Blocked adoption until P02-D (may change files or searchability without a
-first-class journaled operation):
+Adapter subclasses and extractors that call `write_card` still journal
+create/update. Direct `path.write_text` callers must call
+`request_reconciliation` with a cache-built UID map.
 
-- `archive_cli/loader.py` warehouse-only materialization
-- `archive_cli/embedder.py` / `batch_embedder.py` embedding-only completion
-- `archive_cli/store.py` rebuild dirty emission
-- `archive_cli/corpus_hygiene/apply.py` vault-remove
-- Adapter subclasses that call `write_card` outside the base write seam
-  (they still inherit journaling from `write_card`, but do not set
-  adapter `source`/`account` via `mutation_context`)
-- Enrichment / extractor / seed-link writers that bypass `write_card`
-- Direct `atomic_write_contained` / `path.write_text` callers
+P03 publisher port: `archive_engine.publication.publish(eligible_checkpoint, context)
+-> PublicationReceipt`.
 
 ## Rollback
 
@@ -166,9 +165,5 @@ Rules:
 - Pre-promotion validation is fail-closed. `COMPLETE` is fsynced before the
   `ACTIVE` rename. Publication acks only the captured `ChangeBatch`.
 
-`archive_engine.publication.publish_snapshot` is the publisher port P03 later
-calls as `publish(eligible_checkpoint, context) -> PublicationReceipt`.
-
-## Out of scope (later slices)
-
-Embedder/loader emission and writer coverage are P02-D.
+`archive_engine.publication.publish(eligible_checkpoint, context)` is the
+publisher port P03-D calls. `publish_snapshot` remains the generation writer.

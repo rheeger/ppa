@@ -251,7 +251,7 @@ class EmbedderMixin:
         if include_context_prefix:
             rows = conn.execute(
                 f"""
-                SELECT c.chunk_key, c.rel_path, c.chunk_type, c.chunk_index, c.content, c.token_count,
+                SELECT c.chunk_key, c.card_uid, c.rel_path, c.chunk_type, c.chunk_index, c.content, c.token_count,
                        ctx.card_type AS ctype,
                        ctx.summary,
                        ctx.activity_at,
@@ -267,7 +267,7 @@ class EmbedderMixin:
         else:
             rows = conn.execute(
                 f"""
-                SELECT c.chunk_key, c.rel_path, c.chunk_type, c.chunk_index, c.content, c.token_count
+                SELECT c.chunk_key, c.card_uid, c.rel_path, c.chunk_type, c.chunk_index, c.content, c.token_count
                 FROM {self.schema}.chunks c
                 WHERE c.chunk_key IN ({placeholders})
                 """,
@@ -384,6 +384,7 @@ class EmbedderMixin:
                 )
             conn.commit()
             result.embedded = len(batch)
+            result.card_uids = [str(row.get("card_uid") or "").strip() for row in batch if str(row.get("card_uid") or "").strip()]
             return result
 
     def copy_embeddings_from_schema(
@@ -674,6 +675,7 @@ class EmbedderMixin:
                     "failed": 0,
                     "chunk_schema_version": CHUNK_SCHEMA_VERSION,
                     "embedded": 0,
+                    "card_uids": [],
                 }
 
             remaining_limit = pending_chunks if limit <= 0 else min(limit, pending_chunks)
@@ -681,6 +683,7 @@ class EmbedderMixin:
             embedded = 0
             failed = 0
             last_error = ""
+            embedded_uids: set[str] = set()
             reserve_lock = Lock()
             progress_lock = Lock()
             should_rebuild_vector_index = embed_defer_vector_index()
@@ -782,11 +785,13 @@ class EmbedderMixin:
                     worker_result.claimed += batch_result.claimed
                     worker_result.embedded += batch_result.embedded
                     worker_result.failed += batch_result.failed
+                    worker_result.card_uids.extend(batch_result.card_uids)
                     if batch_result.last_error:
                         worker_result.last_error = batch_result.last_error
                     with progress_lock:
                         embedded += batch_result.embedded
                         failed += batch_result.failed
+                        embedded_uids.update(batch_result.card_uids)
                         if batch_result.last_error:
                             last_error = batch_result.last_error
                         fail_suffix = f" failed={failed}" if failed else ""
@@ -846,6 +851,7 @@ class EmbedderMixin:
                 "concurrency": concurrency,
                 "embedded": embedded,
                 "failed": failed,
+                "card_uids": sorted(embedded_uids),
             }
             if last_error:
                 result["last_error"] = last_error

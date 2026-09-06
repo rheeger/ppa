@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -403,6 +403,7 @@ class EmbeddingBatchResult:
     embedded: int = 0
     failed: int = 0
     last_error: str = ""
+    card_uids: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

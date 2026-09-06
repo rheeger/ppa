@@ -1270,6 +1270,19 @@ class LoaderMixin:
         )
         return counts, materialize_seconds, load_seconds, committed_cards
 
+    def _ack_warehouse_consumer(self, allowlist: set[str] | None) -> None:
+        """Emission boundary: warehouse cursor follows completed materialization."""
+
+        try:
+            from archive_engine.changes import acknowledge_materialized
+
+            acknowledge_materialized(
+                self.vault,
+                uids=sorted(allowlist) if allowlist else None,
+            )
+        except Exception:
+            logger.debug("warehouse journal ack skipped", exc_info=True)
+
     def rebuild_with_metrics(
         self,
         *,
@@ -1524,6 +1537,7 @@ class LoaderMixin:
                     "rebuild_mode": "seed_frozen" if seed_ok else "noop",
                     "rows_per_second": round(len(rows) / max(total_seconds, 0.001), 3),
                 }
+                self._ack_warehouse_consumer(allowlist)
                 return RebuildRunResult(counts=db_counts, metrics=metrics)
 
             if rebuild_mode == "incremental":
@@ -1695,6 +1709,7 @@ class LoaderMixin:
                     "cards_materialized": materialized,
                     "rows_per_second": round(len(rows_to_process) / max(total_seconds, 0.001), 3),
                 }
+                self._ack_warehouse_consumer(allowlist)
                 return RebuildRunResult(counts=final_counts, metrics=metrics)
 
             _log_rebuild_step(
@@ -1958,6 +1973,7 @@ class LoaderMixin:
             "rebuild_mode": "full",
             "rows_per_second": round(counts["cards"] / max(time.time() - started_at, 0.001), 3),
         }
+        self._ack_warehouse_consumer(allowlist)
         return RebuildRunResult(counts=counts, metrics=metrics)
 
     def _log_embedding_preservation_summary(self, conn, *, pre_count: int) -> None:

@@ -15,7 +15,7 @@ import shutil
 import threading
 import time
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -93,6 +93,9 @@ class PublicationReceipt:
     validation_summary: str = ""
     acked_watermark: int = 0
     lease_pid: int = 0
+    unresolved_gaps: tuple[int, ...] = ()
+    error: str = ""
+    eligible_checkpoint: int = 0
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -112,6 +115,9 @@ class PublicationReceipt:
             "validation_summary": self.validation_summary,
             "acked_watermark": self.acked_watermark,
             "lease_pid": self.lease_pid,
+            "unresolved_gaps": list(self.unresolved_gaps),
+            "error": self.error,
+            "eligible_checkpoint": self.eligible_checkpoint,
         }
 
 
@@ -974,3 +980,183 @@ def publish_snapshot(
     finally:
         if lease is not None:
             lease.release()
+
+
+@dataclass(frozen=True)
+class PublishContext:
+    """P03 maintain context. Store and snapshot are optional; vault is required."""
+
+    vault: Path
+    store: Any | None = None
+    index_root: Path | None = None
+    snapshot: ServingSnapshot | None = None
+    generation_id: str | None = None
+    parent_generation: str | None = None
+    mode: str = "incremental"
+    force_compact: bool = False
+    dirty_uids: tuple[str, ...] = ()
+    disk_budget_mb: int | None = None
+    crate: Any | None = None
+
+
+def _coerce_checkpoint(eligible_checkpoint: Any) -> int:
+    if eligible_checkpoint is None:
+        return 0
+    if isinstance(eligible_checkpoint, bool):
+        raise IncompatibleStateError("eligible_checkpoint must be an int or checkpoint binding")
+    if isinstance(eligible_checkpoint, int):
+        return int(eligible_checkpoint)
+    if isinstance(eligible_checkpoint, Mapping):
+        checkpoint = eligible_checkpoint.get("checkpoint")
+        if isinstance(checkpoint, Mapping):
+            value = checkpoint.get("value")
+            if isinstance(value, Mapping):
+                return int(value.get("high_watermark") or 0)
+            return int(checkpoint.get("high_watermark") or 0)
+        return int(eligible_checkpoint.get("high_watermark") or eligible_checkpoint.get("source_watermark") or 0)
+    return int(getattr(eligible_checkpoint, "high_watermark", 0) or 0)
+
+
+def _coerce_context(context: Any) -> PublishContext:
+    if isinstance(context, PublishContext):
+        return context
+    if not isinstance(context, Mapping):
+        raise IncompatibleStateError("publish context must be a mapping or PublishContext")
+    vault = context.get("vault")
+    if vault is None:
+        raise IncompatibleStateError("publish context.vault is required")
+    dirty = context.get("dirty_uids") or ()
+    snapshot = context.get("snapshot")
+    return PublishContext(
+        vault=Path(vault),
+        store=context.get("store"),
+        index_root=Path(context["index_root"]) if context.get("index_root") else None,
+        snapshot=snapshot if isinstance(snapshot, ServingSnapshot) else None,
+        generation_id=context.get("generation_id"),
+        parent_generation=context.get("parent_generation"),
+        mode=str(context.get("mode") or "incremental"),
+        force_compact=bool(context.get("force_compact")),
+        dirty_uids=tuple(str(uid) for uid in dirty if str(uid).strip()),
+        disk_budget_mb=context.get("disk_budget_mb"),
+        crate=context.get("crate"),
+    )
+
+
+def _publication_cursor(vault: Path) -> tuple[ChangeBatch | None, tuple[int, ...]]:
+    from archive_engine.changes import CONSUMER_PUBLICATION, consume_batch
+    from archive_vault.change_journal import ChangeJournal
+
+    try:
+        with ChangeJournal(vault) as journal:
+            batch = consume_batch(journal, CONSUMER_PUBLICATION, limit=10_000)
+            gaps = tuple(int(item) for item in journal.consumer_cursor(CONSUMER_PUBLICATION).gaps)
+            return batch, gaps
+    except Exception:
+        logger.debug("publication consume skipped", exc_info=True)
+        return None, ()
+
+
+def publish(eligible_checkpoint: Any, context: Any) -> PublicationReceipt:
+    """P03 publisher port: ``publish(eligible_checkpoint, context) -> PublicationReceipt``."""
+
+    ctx = _coerce_context(context)
+    watermark = _coerce_checkpoint(eligible_checkpoint)
+    captured, gaps = _publication_cursor(ctx.vault)
+    try:
+        if ctx.store is not None:
+            from archive_cli.serving_index import publish_serving_index
+
+            raw = publish_serving_index(
+                ctx.store,
+                dest_generation=ctx.generation_id,
+                dirty_uids=list(ctx.dirty_uids) or None,
+            )
+            payload = dict(raw.get("report") or raw or {})
+            if not raw.get("ok", True):
+                return PublicationReceipt(
+                    generation_id=str(payload.get("generation_id") or raw.get("generation") or ""),
+                    mode=str(payload.get("mode") or ctx.mode),
+                    parent_generation=str(payload.get("parent_generation") or ""),
+                    base_generation=str(payload.get("base_generation") or ""),
+                    snapshot_id=str(payload.get("snapshot_id") or ""),
+                    source_watermark=int(payload.get("source_watermark") or watermark),
+                    cards=int(payload.get("cards") or 0),
+                    chunks=int(payload.get("chunks") or 0),
+                    embeddings=int(payload.get("embeddings") or 0),
+                    tombstone_uids=tuple(payload.get("tombstone_uids") or ()),
+                    replaced_uids=tuple(payload.get("replaced_uids") or ()),
+                    compacted=bool(payload.get("compacted")),
+                    ok=False,
+                    validation_summary=str(payload.get("validation_summary") or ""),
+                    acked_watermark=int(payload.get("acked_watermark") or 0),
+                    unresolved_gaps=gaps,
+                    error=str(raw.get("error") or "publish_failed"),
+                    eligible_checkpoint=watermark,
+                )
+            return PublicationReceipt(
+                generation_id=str(payload.get("generation_id") or raw.get("generation") or ""),
+                mode=str(payload.get("mode") or ctx.mode),
+                parent_generation=str(payload.get("parent_generation") or ""),
+                base_generation=str(payload.get("base_generation") or ""),
+                snapshot_id=str(payload.get("snapshot_id") or ""),
+                source_watermark=int(payload.get("source_watermark") or watermark),
+                cards=int(payload.get("cards") or 0),
+                chunks=int(payload.get("chunks") or 0),
+                embeddings=int(payload.get("embeddings") or 0),
+                tombstone_uids=tuple(payload.get("tombstone_uids") or ()),
+                replaced_uids=tuple(payload.get("replaced_uids") or ()),
+                compacted=bool(payload.get("compacted")),
+                ok=True,
+                validation_summary=str(payload.get("validation_summary") or ""),
+                acked_watermark=int(payload.get("acked_watermark") or 0),
+                unresolved_gaps=tuple(payload.get("unresolved_gaps") or gaps),
+                eligible_checkpoint=watermark,
+            )
+        if ctx.snapshot is None:
+            raise IncompatibleStateError("publish context requires store or snapshot")
+        root = ctx.index_root
+        if root is None:
+            from archive_cli.index_config import get_serving_index_path
+
+            root = get_serving_index_path(ctx.vault)
+        chosen = ctx.mode
+        if chosen == "incremental":
+            chosen = "delta" if ctx.parent_generation else "full"
+        receipt = publish_snapshot(
+            root,
+            ctx.snapshot,
+            generation_id=ctx.generation_id,
+            parent_generation=ctx.parent_generation,
+            mode=chosen,
+            force_compact=ctx.force_compact,
+            crate=ctx.crate,
+            vault=ctx.vault,
+            captured_batch=captured,
+            disk_budget_mb=ctx.disk_budget_mb,
+        )
+        _, after_gaps = _publication_cursor(ctx.vault)
+        return replace(
+            receipt,
+            unresolved_gaps=after_gaps,
+            eligible_checkpoint=watermark,
+            source_watermark=watermark or receipt.source_watermark,
+        )
+    except (IncompatibleStateError, IncompatibleContractError, PublisherBusyError) as exc:
+        return PublicationReceipt(
+            generation_id=str(ctx.generation_id or ""),
+            mode=ctx.mode,
+            parent_generation=str(ctx.parent_generation or ""),
+            base_generation="",
+            snapshot_id="",
+            source_watermark=watermark,
+            cards=0,
+            chunks=0,
+            embeddings=0,
+            tombstone_uids=(),
+            replaced_uids=(),
+            compacted=False,
+            ok=False,
+            error=str(exc),
+            unresolved_gaps=gaps,
+            eligible_checkpoint=watermark,
+        )
