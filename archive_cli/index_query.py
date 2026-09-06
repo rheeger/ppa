@@ -127,6 +127,54 @@ def people_filter_exists_params(people_filter: str) -> list[Any]:
     ]
 
 
+def person_self_match_sql(schema: str, card_alias: str = "c") -> str:
+    """True when this row IS the person the needle names, not a card that links them."""
+
+    emails = _jsonb_text_array_sql("p.emails_json")
+    aliases = _jsonb_text_array_sql("p.aliases_json")
+    phones = _jsonb_text_array_sql("p.phones_json")
+    return f"""(
+        {card_alias}.type = 'person'
+        AND (
+            {card_alias}.uid = %s
+            OR lower({card_alias}.slug) = lower(%s)
+            OR lower({card_alias}.summary) = lower(%s)
+            OR lower({card_alias}.search_text) LIKE lower(%s)
+            OR EXISTS (
+                SELECT 1 FROM {schema}.people p
+                WHERE p.card_uid = {card_alias}.uid
+                  AND (
+                    EXISTS (
+                        SELECT 1 FROM jsonb_array_elements_text({emails}) e
+                        WHERE lower(e) = lower(%s)
+                    )
+                    OR EXISTS (
+                        SELECT 1 FROM jsonb_array_elements_text({aliases}) a
+                        WHERE lower(a) = lower(%s)
+                    )
+                    OR EXISTS (
+                        SELECT 1 FROM jsonb_array_elements_text({phones}) ph
+                        WHERE ph = ANY(%s)
+                    )
+                )
+            )
+        )
+    )"""
+
+
+def person_self_match_params(needle: str) -> list[Any]:
+    terms = people_filter_terms(needle)
+    return [
+        terms["parsed"],
+        terms["slug"],
+        terms["summary_l"],
+        terms["like"],
+        terms["email"] or terms["summary_l"],
+        terms["summary_l"],
+        terms["phone_forms"],
+    ]
+
+
 class QueryMixin:
     def status(self) -> dict[str, str]:
         self.ensure_ready()
@@ -386,7 +434,7 @@ class QueryMixin:
                        SELECT 1 FROM {self.schema}.external_ids ei
                        WHERE ei.card_uid = c.uid AND lower(ei.external_id) = %s
                    ) THEN 1 ELSE 0 END AS external_id_exact,
-                   CASE WHEN {people_filter_exists_sql(self.schema, "c.uid")}
+                   CASE WHEN {person_self_match_sql(self.schema, "c")}
                    THEN 1 ELSE 0 END AS person_exact
             FROM {self.schema}.cards c
         """
@@ -411,7 +459,7 @@ class QueryMixin:
                   AND c.search_document @@ plainto_tsquery('english', %s)
             """
             fts_sql = _wrap_lexical_order(inner_fts)
-            person_params = people_filter_exists_params(query)
+            person_params = person_self_match_params(query)
             select_head_params = [query, normalized_query, normalized_query, normalized_query, *person_params]
             fts_params = [
                 *select_head_params,
@@ -430,7 +478,7 @@ class QueryMixin:
                           SELECT 1 FROM {self.schema}.external_ids ei
                           WHERE ei.card_uid = c.uid AND lower(ei.external_id) = %s
                       )
-                      OR {people_filter_exists_sql(self.schema, "c.uid")}
+                      OR {person_self_match_sql(self.schema, "c")}
                   )
             """
             exact_sql = _wrap_lexical_order(inner_exact)

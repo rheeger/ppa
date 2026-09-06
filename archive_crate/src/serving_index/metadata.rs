@@ -372,6 +372,11 @@ impl MetadataStore {
         if let Some(uid) = self.by_email.get(&lower) {
             return self.by_uid.get(uid);
         }
+        for form in crate::canon::phone_alias_forms(q) {
+            if let Some(uid) = self.by_phone.get(&form) {
+                return self.by_uid.get(uid);
+            }
+        }
         if let Some(uid) = self
             .by_external_id
             .get(q)
@@ -1153,6 +1158,10 @@ mod access_tests {
             ..TypedPredicate::default()
         };
         assert!(store.matches_typed_predicate(&thread, &pred).unwrap());
+        assert_eq!(
+            store.exact_identifier("9147153533").map(|card| card.card_uid.as_str()),
+            Some("hfa-person-54fc3b19aeda")
+        );
     }
 
     #[test]

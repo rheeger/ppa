@@ -480,10 +480,18 @@ def merge_people(vault: Path, *, apply: bool) -> dict[str, Any]:
 def emit_same_conversation_edges(vault: Path) -> dict[str, Any]:
     """Record 1:1 email-handle vs phone-handle pairs that share one person. Does not smash chat IDs."""
 
+    from archive_vault.vault import read_note_frontmatter_file
+
     rows = _frontmatter_rows(vault, types=["imessage_thread"])
     by_person: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
-        fm = row.get("frontmatter") or {}
+        rel = str(row.get("rel_path") or "")
+        fm = dict(row.get("frontmatter") or {})
+        if rel:
+            try:
+                fm = dict(read_note_frontmatter_file(vault / rel, vault_root=vault).frontmatter)
+            except Exception as exc:
+                log.warning("same-conversation skip stale-cache rel=%s err=%s", rel, exc)
         handles = [str(h) for h in (fm.get("participant_handles") or [])]
         people = [canon_wikilink.parse(str(p)) for p in (fm.get("people") or [])]
         if len(handles) != 1 or len(people) != 1:

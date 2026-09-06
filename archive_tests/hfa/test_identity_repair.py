@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from archive_cli.commands.identity_repair import canonicalize_people, merge_people, run_census
-from archive_cli.index_query import _jsonb_text_array_sql, people_filter_terms
+from archive_cli.index_query import _jsonb_text_array_sql, people_filter_terms, person_self_match_sql
 from archive_cli.materializer import _build_search_text, _identifier_search_tokens
 from archive_engine.query import Predicate, row_matches_predicate
 from archive_vault.canon import phone as canon_phone
@@ -22,6 +22,12 @@ def _copy_fixture(vault: Path, name: str, dest_rel: str) -> None:
     dest = vault / dest_rel
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+
+
+def test_person_self_match_sql_is_person_card_only() -> None:
+    sql = person_self_match_sql("ppa", "c")
+    assert "c.type = 'person'" in sql
+    assert "card_people" not in sql
 
 
 def test_people_filter_terms_accept_name_slug_phone() -> None:
