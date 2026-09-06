@@ -7,15 +7,61 @@ import socket
 import subprocess
 import time
 import uuid
+from pathlib import Path
 
 import pytest
 from psycopg import connect
+
+OWNED_ROOT_MARKER = ".ppa-acceptance-owned"
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--require-integration",
+        action="store_true",
+        default=False,
+        help="Fail (do not skip-green) when required Docker or native engine is missing",
+    )
 
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "integration: requires a running Postgres instance")
     config.addinivalue_line("markers", "slow: long-running tests (>30 seconds)")
     config.addinivalue_line("markers", "openai: requires OpenAI API key (skipped in CI)")
+
+
+def require_integration_enabled(config: pytest.Config | None = None) -> bool:
+    if config is not None:
+        return bool(config.getoption("--require-integration"))
+    return False
+
+
+def assert_owned_test_root(path: Path) -> None:
+    """Refuse writes unless ``path`` is an owned acceptance/test root."""
+
+    root = Path(path).resolve()
+    marker = root / OWNED_ROOT_MARKER
+    if not marker.is_file():
+        raise AssertionError(f"refusing write outside owned test root (missing {OWNED_ROOT_MARKER}): {root}")
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[object]):
+    """Under --require-integration, a skipped integration/engine test is a failure."""
+
+    outcome = yield
+    report = outcome.get_result()
+    if not item.config.getoption("--require-integration"):
+        return
+    if report.when != "setup" or not report.skipped:
+        return
+    integration = item.get_closest_marker("integration") is not None
+    skip_text = str(report.longrepr)
+    required = integration or "Docker" in skip_text or "archive_crate" in skip_text or "native" in skip_text.lower()
+    if not required:
+        return
+    report.outcome = "failed"
+    report.longrepr = f"required integration skipped: {skip_text}"
 
 
 def _docker_available() -> bool:
@@ -48,7 +94,7 @@ PGVECTOR_IMAGE = "pgvector/pgvector:pg17"
 
 
 @pytest.fixture(scope="session")
-def pgvector_dsn() -> str:
+def pgvector_dsn(request: pytest.FixtureRequest) -> str:
     """Ephemeral Postgres+pgvector in Docker for integration tests."""
     # Tests reuse fixed schema names like "archive_resume_test"; bootstrap()
     # refuses to recreate populated schemas (added 2026-04-24 after the embedding
@@ -57,11 +103,16 @@ def pgvector_dsn() -> str:
     # explicitly via --force / PPA_BOOTSTRAP_FORCE=1.
     os.environ["PPA_BOOTSTRAP_FORCE"] = "1"
     preferred = os.environ.get("PPA_TEST_PG_DSN", "").strip()
-    if preferred:
+    strict = require_integration_enabled(request.config)
+    if preferred and strict:
+        pytest.fail("PPA_TEST_PG_DSN is forbidden under --require-integration; use an owned ephemeral container")
+    if preferred and not strict:
         wait_for_postgres(preferred)
         yield preferred
         return
     if not _docker_available():
+        if strict:
+            pytest.fail("Docker is required for live Postgres tests (--require-integration)")
         pytest.skip("Docker is required for live Postgres tests")
     container_name = f"ppa-test-{uuid.uuid4().hex[:10]}"
     port = _pick_port()
