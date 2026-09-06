@@ -29,6 +29,18 @@ def write_source_updater_report(repo_root: Path, report: SourceUpdaterRunReport)
     return paths
 
 
+def write_connector_lifecycle_report(repo_root: Path, payload: dict) -> str:
+    """P08-C freshness/replay artifact. Does not replace the updater report."""
+
+    run_id = str(payload.get("run_id") or "unknown")
+    connector_id = str(payload.get("connector_id") or "connector").replace(":", "_")
+    base = repo_root / "logs" / SOURCE_UPDATER_LOG_ROOT / f"connector-{connector_id}" / run_id
+    base.mkdir(parents=True, exist_ok=True)
+    path = base / "lifecycle.json"
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    return str(path)
+
+
 def _summary_md(report: SourceUpdaterRunReport) -> str:
     b = report.batch
     lines = [

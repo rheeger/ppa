@@ -42,6 +42,12 @@ def _event_uid(account_email: str, calendar_id: str, event_id: str) -> str:
     return generate_uid("calendar-event", EVENT_SOURCE, _event_identity(account_email, calendar_id, event_id))
 
 
+def event_scope_uid(account_email: str, calendar_id: str, event_id: str) -> str:
+    """Single calendar event identity for scoped replay. Not a calendar walk."""
+
+    return _event_uid(account_email, calendar_id, event_id)
+
+
 def _wikilink_from_uid(uid: str) -> str:
     return f"[[{uid}]]"
 
@@ -52,6 +58,7 @@ def _clean(value: str) -> str:
 
 class CalendarEventsAdapter(BaseAdapter):
     source_id = "calendar-events"
+    uses_connector_sdk = True
     preload_existing_uid_index = False
     enable_person_resolution = False
 

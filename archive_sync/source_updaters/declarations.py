@@ -255,9 +255,13 @@ def declaration_for_adapter_source_id(adapter_source_id: str, *, scope: str = ""
         return None
     scope = scope.strip() or "<account>"
     if lookup_id == "gmail-messages":
-        return _gmail_template(scope)
+        from archive_sync.connectors.legacy import declaration_for_gmail
+
+        return declaration_for_gmail(scope)
     if lookup_id == "calendar-events":
-        return _calendar_template(scope)
+        from archive_sync.connectors.legacy import declaration_for_calendar
+
+        return declaration_for_calendar(scope)
     if lookup_id == "imessage":
         return _imessage_template(scope or "local")
     if lookup_id == "otter-transcripts":
