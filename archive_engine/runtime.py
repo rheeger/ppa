@@ -7,12 +7,13 @@ share handles or card bytes.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from archive_engine.adapters.providers import EmbeddingProviderAdapter
 from archive_engine.adapters.retrieval import RetrievalAdapter
 from archive_engine.adapters.warehouse import WarehouseAdapter
-from archive_engine.contracts import AccessContext, ArchiveIdentity
+from archive_engine.contracts import AccessContext, AffectedContext, ArchiveIdentity
 from archive_engine.errors import IncompatibleStateError
 from archive_engine.service import ArchiveEngineService
 
@@ -29,6 +30,7 @@ class ArchiveRuntime:
         retrieval: RetrievalAdapter,
         warehouse: WarehouseAdapter,
         providers: EmbeddingProviderAdapter,
+        drain_pending: Callable[[], tuple[Any, ...]] | None = None,
     ) -> None:
         if access.archive_id != identity.archive_id:
             raise IncompatibleStateError("AccessContext.archive_id must match ArchiveIdentity.archive_id")
@@ -38,6 +40,7 @@ class ArchiveRuntime:
         self.retrieval = retrieval
         self.warehouse = warehouse
         self.providers = providers
+        self._drain_pending = drain_pending
         self._closed = False
 
     def read(self, path_or_uid: str, *, access: AccessContext | None = None) -> dict[str, Any]:
@@ -60,6 +63,16 @@ class ArchiveRuntime:
 
     def rebuild(self, **kwargs: Any) -> dict[str, Any]:
         return self.warehouse.rebuild(**kwargs)
+
+    def resolve_affected(self, uid: str, revision: str) -> AffectedContext:
+        return self.exact_read.resolve_affected(uid, revision)
+
+    def drain_pending_scopes(self) -> tuple[Any, ...]:
+        """Schedule pending connector scopes once the burst resolver is attached."""
+
+        if self._drain_pending is None:
+            return ()
+        return tuple(self._drain_pending() or ())
 
     def close(self) -> None:
         if self._closed:

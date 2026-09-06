@@ -54,6 +54,12 @@ from .mcp_instructions import TOOL_DESCRIPTIONS, build_server_instructions
 
 _SEED_LINKS_DISABLED_MSG = "Seed links are not enabled. Set PPA_SEED_LINKS_ENABLED=1 to enable."
 
+
+def _delegated_store():
+    """CLI/MCP share the instance facade. Do not construct a second engine."""
+
+    return resolve_store()
+
 _log = logging.getLogger("ppa.server")
 
 
@@ -165,7 +171,7 @@ def archive_search(query: str, limit: int = 20) -> str:
         profile_error = _tool_profile_error("archive_search")
         if profile_error:
             return _log_tool_return_error("archive_search", profile_error)
-        store = resolve_store()
+        store = _delegated_store()
         result = search_cmd.search(query, limit=limit, store=store, logger=_log)
         rows = result["rows"]
         out = fmt.format_search(result)
@@ -213,7 +219,7 @@ def archive_read(
         profile_error = _tool_profile_error("archive_read")
         if profile_error:
             return _log_tool_return_error("archive_read", profile_error)
-        store = resolve_store()
+        store = _delegated_store()
         payload = read_cmd.read(
             path_or_uid,
             store=store,
@@ -259,7 +265,7 @@ def archive_query(
         profile_error = _tool_profile_error("archive_query")
         if profile_error:
             return _log_tool_return_error("archive_query", profile_error)
-        store = resolve_store()
+        store = _delegated_store()
         result = query_cmd.query(
             type_filter=type_filter,
             source_filter=source_filter,
@@ -368,7 +374,7 @@ def archive_evidence(
         profile_error = _tool_profile_error("archive_evidence")
         if profile_error:
             return _log_tool_return_error("archive_evidence", profile_error)
-        store = resolve_store()
+        store = _delegated_store()
         result = evidence_cmd.evidence(
             query=query,
             type_filter=type_filter,

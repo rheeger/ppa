@@ -126,6 +126,36 @@ class IndexUidPathLookup:
         return None
 
 
+class EngineBurstBridge:
+    """Adapts the P01 burst algorithm to the P08 connector key port.
+
+    Algorithm stays in ``conversation_bursts``. This object only forwards.
+    """
+
+    def __init__(self) -> None:
+        from archive_cli.conversation_bursts import BurstAffectedResolver, burst_key_for
+
+        self._resolver = BurstAffectedResolver()
+        self._burst_key_for = burst_key_for
+
+    def resolve_affected(self, uid: str, revision: str):
+        return self._resolver.resolve_affected(uid, revision)
+
+    def resolve_burst_affected(self, thread_uid: str, **kwargs: Any):
+        return self._resolver.resolve_burst_affected(thread_uid, **kwargs)
+
+    def burst_keys_for(
+        self,
+        *,
+        thread_uid: str,
+        changed_message_ids: tuple[str, ...] | list[str],
+        content_hashes: tuple[str, ...] | list[str] = (),
+    ) -> tuple[str, ...]:
+        ids = tuple(str(item) for item in changed_message_ids if str(item))
+        hashes = tuple(str(item) for item in content_hashes if str(item)) or ids
+        return (self._burst_key_for(ids or (thread_uid,), hashes or (thread_uid,)),)
+
+
 def build_exact_read_service(
     *,
     vault: Path,
@@ -136,6 +166,7 @@ def build_exact_read_service(
     access: AccessContext | None = None,
     lookup: IndexUidPathLookup | None = None,
     reader: ContainedCanonicalReader | None = None,
+    affected_context: Any | None = None,
 ) -> ArchiveEngineService:
     binding = schema_binding or schema_binding_for("ppa")
     resolved_identity = identity or resolve_archive_identity(vault, schema_binding=binding)
@@ -145,6 +176,7 @@ def build_exact_read_service(
         access=resolved_access,
         lookup=lookup or IndexUidPathLookup(index, serving_factory=serving_factory),
         reader=reader or ContainedCanonicalReader(vault),
+        affected_context=affected_context,
     )
 
 
@@ -177,9 +209,11 @@ def build_runtime(
     provider_factory: Callable[..., Any] | None = None,
     policy_fields: Callable[[], dict[str, Any]] | None = None,
     authorize_rows: Callable[..., list[dict[str, Any]]] | None = None,
+    attach_bursts: bool = True,
 ) -> ArchiveRuntime:
     binding = schema_binding or schema_binding_for("ppa")
     resolved_identity = identity or resolve_archive_identity(vault, schema_binding=binding)
+    burst_bridge = EngineBurstBridge() if attach_bursts else None
     exact_read = build_exact_read_service(
         vault=vault,
         index=index,
@@ -187,6 +221,7 @@ def build_runtime(
         schema_binding=binding,
         identity=resolved_identity,
         access=access,
+        affected_context=burst_bridge,
     )
     from .serving_index import close_serving_handles
 
@@ -202,6 +237,14 @@ def build_runtime(
     from .embedding_provider import get_embedding_provider
 
     providers = EmbeddingProviderAdapter(provider_factory or get_embedding_provider, access=access)
+
+    def _drain() -> tuple[Any, ...]:
+        if burst_bridge is None:
+            return ()
+        from archive_sync.connectors.replay import attach_resolver
+
+        return tuple(attach_resolver(vault, burst_bridge))
+
     return ArchiveRuntime(
         identity=resolved_identity,
         access=access,
@@ -209,4 +252,5 @@ def build_runtime(
         retrieval=retrieval,
         warehouse=warehouse,
         providers=providers,
+        drain_pending=_drain if attach_bursts else None,
     )

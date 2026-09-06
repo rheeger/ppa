@@ -206,3 +206,42 @@ Package discovery includes `archive_engine*` (`pyproject.toml`). Clean installed
 | `archive_vault.identity_resolver` → `archive_cli.vault_cache` | Person resolution cache | After cache lives under vault/engine (P09) |
 
 A synthetic supported `person` card must still travel write → materialize → `runtime.read` / `runtime.query` with the registered `people` projection.
+
+## P06-D late-feature convergence
+
+Late search, connector, and installed-client features attach through the same `ArchiveRuntime`. Sibling algorithms stay in their owners; this slice only wires ports.
+
+```text
+connector persist
+    → ChangeRecord / OutputReceipt
+    → pending scopes (if BurstKeyResolver is absent)
+    → ArchiveRuntime.drain_pending_scopes()  → attach_resolver (P08)
+    → EngineBurstBridge (P01 burst_key_for / resolve_burst_affected)
+    → publication generation (serving handle)
+    → DefaultArchiveStore.search/query/evidence  → runtime.retrieval
+    → installed CLI / MCP via resolve_store()
+```
+
+### Feature-arrival matrix
+
+| Arrival order | Freshness before attach | After `drain_pending_scopes` |
+| --- | --- | --- |
+| Connector then bursts | `unknown`, pending scopes persist | scopes `scheduled`; burst keys invalidated |
+| Bursts then connector | resolver already on `execute_connector` | `invalidated` immediately; no pending wait |
+| Resolver capability actually unavailable (`attach_bursts=False`) | `unknown` | stays `unknown` |
+
+Unknown freshness is allowed only when the burst capability is missing. A late resolver cannot leave freshness unknown.
+
+### Facade path map (D)
+
+| Call | Seam | Must not restore |
+| --- | --- | --- |
+| `DefaultArchiveStore.search/query/evidence/graph/timeline` | `runtime.retrieval` | `index.search` / `serving.search` branches on the store |
+| `DefaultArchiveStore.read` | `runtime.read` | concrete warehouse lookup in commands |
+| MCP `archive_search` / `archive_read` / `archive_query` / `archive_evidence` | `_delegated_store()` → same facade | a second `ArchiveRuntime` |
+| Connector burst keys | `execute_connector(..., burst_resolver=)` | engine importing `archive_cli.conversation_bursts` |
+| Pending drain | `runtime.drain_pending_scopes` → injected `attach_resolver` | core engine importing connector replay |
+
+`EngineBurstBridge` lives in `archive_cli.engine_factory`. It forwards to P01; it does not reimplement segmentation.
+
+Installed CLI/MCP proof uses P09 `install_isolated` outside the checkout. Record `archive_crate` path and wheel hashes. `production_proven=false`.

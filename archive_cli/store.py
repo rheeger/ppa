@@ -162,12 +162,13 @@ class DefaultArchiveStore(ArchiveStore):
         return filtered[:limit]
 
     def _retrieval_generation(self) -> str:
-        serving = self._try_serving_query()
-        if serving is not None:
-            gid = str(getattr(serving, "generation_id", "") or "")
-            if gid:
-                return gid
-        return ""
+        return self.runtime.retrieval.generation()
+
+    def drain_pending_scopes(self):
+        return self.runtime.drain_pending_scopes()
+
+    def resolve_affected(self, uid: str, revision: str):
+        return self.runtime.resolve_affected(uid, revision)
 
     def _with_envelope(
         self,
@@ -316,29 +317,16 @@ class DefaultArchiveStore(ArchiveStore):
 
         cap = clamp_evidence_limit(limit)
         cleaned = query.strip()
-        serving = self._try_serving_query()
         if cleaned:
-            if serving is not None:
-                rows = serving.search(
-                    cleaned,
-                    limit=cap,
-                    type_filter=type_filter,
-                    source_filter=source_filter,
-                    people_filter=people_filter,
-                    start_date=start_date,
-                    end_date=end_date,
-                    **self._policy_kwargs(),
-                )
-            else:
-                rows = self.index.search(
-                    cleaned,
-                    limit=cap,
-                    type_filter=type_filter,
-                    source_filter=source_filter,
-                    people_filter=people_filter,
-                    start_date=start_date,
-                    end_date=end_date,
-                )
+            rows = self.runtime.retrieval.search(
+                cleaned,
+                limit=cap,
+                type_filter=type_filter,
+                source_filter=source_filter,
+                people_filter=people_filter,
+                start_date=start_date,
+                end_date=end_date,
+            )
         else:
             result = self.query(
                 type_filter=type_filter,
@@ -363,10 +351,7 @@ class DefaultArchiveStore(ArchiveStore):
 
     def graph(self, note_path: str, *, hops: int = 2) -> dict[str, Any]:
         rel_path = note_path if note_path.endswith(".md") else f"{note_path}.md"
-        serving = self._try_serving_query()
-        if serving is not None:
-            return {"graph": serving.graph(rel_path, hops=hops, **self._policy_kwargs()), "rel_path": rel_path}
-        graph = self.index.graph(rel_path, hops=hops)
+        graph = self.runtime.graph(rel_path, hops=hops)
         if is_restricted(self.access) and isinstance(graph, dict):
             graph = {
                 node: [
@@ -379,22 +364,13 @@ class DefaultArchiveStore(ArchiveStore):
         return {"graph": graph, "rel_path": rel_path}
 
     def timeline(self, *, start_date: str = "", end_date: str = "", limit: int = 20) -> dict[str, Any]:
-        serving = self._try_serving_query()
         fetch_limit = limit * 8 if is_restricted(self.access) else limit
-        if serving is not None:
-            return {
-                "rows": serving.timeline(
-                    start_date=start_date,
-                    end_date=end_date,
-                    limit=limit,
-                    **self._policy_kwargs(),
-                )
-            }
         return {
-            "rows": self._authorized_rows(
-                self.index.timeline(start_date=start_date, end_date=end_date, limit=fetch_limit),
-                limit=limit,
-            )
+            "rows": self.runtime.retrieval.timeline(
+                start_date=start_date,
+                end_date=end_date,
+                limit=fetch_limit,
+            )[:limit]
         }
 
     def temporal_neighbors(

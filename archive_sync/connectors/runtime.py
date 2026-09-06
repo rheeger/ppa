@@ -125,6 +125,7 @@ def execute_from_manifest(
         cursor=cursor,
         run_id=run_id,
         manifest=manifest,
+        burst_resolver=None,
     )
 
 
@@ -140,6 +141,7 @@ def execute_connector(
     context: Mapping[str, object] | None = None,
     pending_p02_wiring: str = "pending",
     pending_p03_wiring: str = "pending",
+    burst_resolver: object | None = None,
 ) -> ConnectorRunResult:
     require_access(identity=identity, access=access)
     factory = get_connector_factory(connector_id)
@@ -212,6 +214,16 @@ def execute_connector(
             parent = thread_ref[2:-1]
             if parent and parent not in dirty:
                 dirty.append(parent)
+    freshness = "unknown"
+    burst_keys: tuple[str, ...] = ()
+    if burst_resolver is not None:
+        from archive_sync.connectors.replay import burst_freshness_for
+
+        freshness, burst_keys = burst_freshness_for(
+            resolver=burst_resolver,
+            thread_uid=dirty[0] if dirty else "",
+            changed_message_ids=tuple(item.uid for item in persists if item.uid),
+        )
     return ConnectorRunResult(
         connector_id=resolved.connector_id,
         manifest=resolved,
@@ -225,6 +237,7 @@ def execute_connector(
         pending_p02_wiring=pending_p02_wiring,
         pending_p03_wiring=pending_p03_wiring,
         dirty_uids=tuple(dirty),
-        burst_freshness="unknown",
+        burst_freshness=freshness,
+        burst_keys=burst_keys,
         cursor_status="active",
     )

@@ -29,6 +29,10 @@ class RetrievalAdapter:
         self._on_close = on_close
         self._closed = False
 
+    def generation(self) -> str:
+        serving = self.serving_or_none()
+        return str(getattr(serving, "generation_id", "") or "")
+
     def serving_or_none(self) -> Any | None:
         if self._serving_factory is None:
             return None
