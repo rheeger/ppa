@@ -10,7 +10,13 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from archive_cli.ppa_engine import ppa_engine
-from archive_vault.paths import PathEscapeError, atomic_write_contained, normalize_vault_rel, resolve_contained_path
+from archive_vault.change_journal import (
+    OPERATION_CREATE,
+    OPERATION_DELETE,
+    OPERATION_UPDATE,
+    ChangeJournal,
+)
+from archive_vault.paths import PathEscapeError, normalize_vault_rel, resolve_contained_path
 from archive_vault.provenance import (
     ProvenanceEntry,
     read_provenance,
@@ -396,8 +402,23 @@ def write_card(
 
     rendered_body = write_provenance(body, provenance)
     content = render_card(frontmatter, rendered_body)
-    atomic_write_contained(vault, rel_path, content.encode("utf-8"))
-    return Path(vault) / normalize_vault_rel(rel_path)
+    rel = str(normalize_vault_rel(rel_path))
+    target = vault / rel
+    operation = OPERATION_UPDATE if target.is_file() else OPERATION_CREATE
+    raw_source = frontmatter.get("source")
+    if isinstance(raw_source, list) and raw_source:
+        source = str(raw_source[0])
+    else:
+        source = str(raw_source or "")
+    with ChangeJournal(vault) as journal:
+        journal.apply_mutation(
+            uid=str(frontmatter.get("uid") or card.uid),
+            rel_path=rel,
+            operation=operation,
+            content=content.encode("utf-8"),
+            source=source,
+        )
+    return Path(vault) / rel
 
 
 def update_frontmatter_fields(vault_root: Path | str, rel_path: str, updates: dict[str, Any]) -> None:
@@ -425,7 +446,40 @@ def update_frontmatter_fields(vault_root: Path | str, rel_path: str, updates: di
         frontmatter[key] = value
     sio = StringIO()
     yaml.dump(frontmatter, sio)
-    atomic_write_contained(vault_root, rel_path, f"---\n{sio.getvalue()}---{parts[2]}".encode("utf-8"))
+    payload = f"---\n{sio.getvalue()}---{parts[2]}".encode("utf-8")
+    uid = str(frontmatter.get("uid") or "").strip()
+    if not uid:
+        raise ValueError(f"Card uid missing in {rel_path}")
+    rel = str(normalize_vault_rel(rel_path))
+    with ChangeJournal(vault_root) as journal:
+        journal.apply_mutation(
+            uid=uid,
+            rel_path=rel,
+            operation=OPERATION_UPDATE,
+            content=payload,
+        )
+
+
+def delete_card(vault: str | Path, rel_path: str, *, uid: str | None = None) -> None:
+    """Journal a contained delete. The UID remains as a tombstone in the spine."""
+
+    vault = Path(vault)
+    rel = str(normalize_vault_rel(rel_path))
+    resolved_uid = str(uid or "").strip()
+    if not resolved_uid:
+        try:
+            note = read_note_file(resolve_contained_path(vault, rel, purpose="read"), vault_root=vault)
+            resolved_uid = str(note.frontmatter.get("uid") or "").strip()
+        except (FileNotFoundError, PathEscapeError):
+            resolved_uid = ""
+    if not resolved_uid:
+        raise ValueError(f"uid is required to delete {rel_path}")
+    with ChangeJournal(vault) as journal:
+        journal.apply_mutation(
+            uid=resolved_uid,
+            rel_path=rel,
+            operation=OPERATION_DELETE,
+        )
 
 
 def extract_wikilinks(content: str) -> list[str]:

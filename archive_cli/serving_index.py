@@ -571,13 +571,32 @@ def merge_jsonl_by_key(src: Path, dest: Path, *, key: str, replacements: list[di
 
 def mark_serving_index_dirty(vault: Path | str, reason: str, uids: list[str] | None = None) -> None:
     root = get_serving_index_path(Path(vault))
+    uid_list = list(uids or [])
     try:
-        _crate().serving_index_mark_dirty(str(root), reason, list(uids or []))
+        _crate().serving_index_mark_dirty(str(root), reason, uid_list)
     except ServingIndexUnavailableError:
         root.mkdir(parents=True, exist_ok=True)
-        line = json.dumps({"ts": str(int(time.time())), "reason": reason, "uids": list(uids or [])})
+        line = json.dumps({"ts": str(int(time.time())), "reason": reason, "uids": uid_list})
         with (root / "DIRTY").open("a", encoding="utf-8") as fh:
             fh.write(line + "\n")
+    _import_legacy_dirty(Path(vault), root, uid_list, reason)
+
+
+def _import_legacy_dirty(vault: Path, index_root: Path, uids: list[str], reason: str) -> None:
+    """Retain DIRTY writes and convert them into journal records when possible."""
+
+    try:
+        from archive_vault.change_journal import ChangeJournal
+
+        if not Path(vault).is_dir():
+            return
+        with ChangeJournal(vault) as journal:
+            journal.import_legacy_dirty(uids, reason=reason or "legacy_dirty")
+            dirty = index_root / "DIRTY"
+            if dirty.is_file() and not uids:
+                journal.import_dirty_file(dirty)
+    except Exception:
+        logger.debug("journal legacy DIRTY import failed reason=%s", reason, exc_info=True)
 
 
 def get_serving_handle(vault: Path) -> ServingIndexHandle:

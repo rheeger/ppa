@@ -73,7 +73,7 @@ __all__ = [
     "load_contract",
 ]
 
-_SIBLING_MODULES = frozenset({"recovery_manifest"})
+_SIBLING_MODULES = frozenset({"recovery_manifest", "changes"})
 
 
 def __getattr__(name: str) -> object:

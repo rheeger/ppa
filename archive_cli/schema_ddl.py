@@ -544,10 +544,16 @@ class SchemaDDLMixin:
             )
             """
         )
+        self._ensure_change_consumer_tables(conn)
         if ensure_indexes:
             self._ensure_embeddings_vector_index(conn)
         conn.commit()
         self._mark_all_migrations_applied(conn)
+
+    def _ensure_change_consumer_tables(self, conn) -> None:
+        from .change_consumers import ensure_change_consumer_tables
+
+        ensure_change_consumer_tables(conn, self.schema)
 
     def _ensure_cards_activity_columns(self, conn) -> None:
         """Repair pre-v2 cards.activity_at drift on already-created schemas."""

@@ -15,6 +15,7 @@ from time import perf_counter
 from typing import Any
 
 from archive_cli.vault_cache import VaultScanCache
+from archive_vault.change_journal import mutation_context
 from archive_vault.config import PPAConfig, load_config
 from archive_vault.identity import IdentityCache
 from archive_vault.identity_resolver import (
@@ -377,7 +378,23 @@ class BaseAdapter(ABC):
 
         merged_card = validate_card_strict(merged_data)
         merged_provenance = merge_provenance(existing_provenance, provenance)
-        write_card(vault_path, str(rel_path), merged_card, body=merged_body, provenance=merged_provenance)
+        self._write_canonical_card(vault_path, rel_path, merged_card, merged_body, merged_provenance)
+
+    def _write_canonical_card(
+        self,
+        vault_path: str | Path,
+        rel_path: Path | str,
+        card: BaseCard,
+        body: str,
+        provenance: dict[str, ProvenanceEntry],
+        *,
+        run_id: str = "",
+    ) -> None:
+        """Write-seam emission: journaled ``write_card`` with adapter source/account."""
+
+        account = str(getattr(card, "account_email", "") or getattr(card, "account", "") or "")
+        with mutation_context(source=str(self.source_id or ""), account=account, run_id=run_id):
+            write_card(vault_path, str(rel_path), card, body=body, provenance=provenance)
 
     def _replace_generic_card(
         self,
@@ -428,7 +445,7 @@ class BaseAdapter(ABC):
 
         merged_card = validate_card_strict(merged_data)
         merged_provenance = merge_provenance(existing_provenance, provenance)
-        write_card(vault_path, str(rel_path), merged_card, body=merged_body, provenance=merged_provenance)
+        self._write_canonical_card(vault_path, rel_path, merged_card, merged_body, merged_provenance)
 
     def merge_card(
         self,
@@ -669,7 +686,7 @@ class BaseAdapter(ABC):
 
             rel_path = self._card_rel_path(vault, card)
             if not dry_run:
-                write_card(vault, rel_path, card, body=prepared.body, provenance=prepared.provenance)
+                self._write_canonical_card(vault, rel_path, card, prepared.body, prepared.provenance)
                 self.after_card_write(
                     vault,
                     card,
@@ -773,7 +790,7 @@ class BaseAdapter(ABC):
 
             rel_path = self._person_rel_path(vault, card)
             if not dry_run:
-                write_card(vault, rel_path, card, body=prepared.body, provenance=prepared.provenance)
+                self._write_canonical_card(vault, rel_path, card, prepared.body, prepared.provenance)
                 wikilink = f"[[{Path(rel_path).stem}]]"
                 identity_cache.upsert(wikilink, self._person_identity_aliases(card))
                 people_index.upsert(wikilink, card.model_dump(mode="python"))
