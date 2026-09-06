@@ -159,13 +159,16 @@ Rules:
 - Compaction is an explicit full rebuild (`mode=compact`) when chain depth or
   delta/live-vector ratio exceeds `PPA_PUBLICATION_MAX_CHAIN_DEPTH` /
   `PPA_PUBLICATION_DELTA_RATIO`. Small mutations must not secretly full-export.
-- GC keeps ACTIVE, the parent chain, and process-local pinned generations.
-  Interprocess leases are P02-C.
+- GC keeps ACTIVE, the parent chain, and pinned generations (in-process and
+  live interprocess pin files). Dead-PID pin files are ignored and removed.
+- One publisher per archive via `PUBLISHER.lock` + `PUBLISHER.lease`. A dead
+  owner is stealable; a live owner raises `PublisherBusyError`.
+- Pre-promotion validation is fail-closed. `COMPLETE` is fsynced before the
+  `ACTIVE` rename. Publication acks only the captured `ChangeBatch`.
 
 `archive_engine.publication.publish_snapshot` is the publisher port P03 later
 calls as `publish(eligible_checkpoint, context) -> PublicationReceipt`.
 
 ## Out of scope (later slices)
 
-Publisher lease, crash/concurrency promotion, and embedder/loader emission
-are P02-C/D.
+Embedder/loader emission and writer coverage are P02-D.

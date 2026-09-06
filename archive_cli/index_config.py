@@ -360,6 +360,18 @@ def get_publication_delta_ratio() -> float:
     return max(_ppa_env_float("PPA_PUBLICATION_DELTA_RATIO", default=0.5), 0.01)
 
 
+def get_publication_disk_budget_mb() -> int:
+    """Hard ceiling for one publication candidate. ``0`` fails closed in tests."""
+    raw = _ppa_env("PPA_PUBLICATION_DISK_BUDGET_MB")
+    if raw == "0":
+        return 0
+    return max(_ppa_env_int("PPA_PUBLICATION_DISK_BUDGET_MB", default=1_000_000), 1)
+
+
+def get_publication_lease_stale_seconds() -> int:
+    return max(_ppa_env_int("PPA_PUBLICATION_LEASE_STALE_SECONDS", default=30), 1)
+
+
 def get_query_embed_cache_path(vault: Path | None = None) -> Path:
     raw = _ppa_env("PPA_QUERY_EMBED_CACHE_PATH")
     if raw:

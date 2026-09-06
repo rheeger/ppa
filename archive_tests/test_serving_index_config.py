@@ -23,6 +23,19 @@ from archive_cli.serving_index import (
 )
 
 
+def _stub_manifest(dest: str | Path) -> dict[str, object]:
+    path = Path(dest)
+    cards = 0
+    cards_path = path / "cards.jsonl"
+    if cards_path.exists():
+        cards = sum(1 for line in cards_path.read_text(encoding="utf-8").splitlines() if line.strip())
+    payload = {"serving_index_format_version": 2, "card_count": cards}
+    (path / "manifest.json").write_text(json.dumps(payload), encoding="utf-8")
+    if not (path / "ivf_meta.json").exists():
+        (path / "ivf_meta.json").write_text("{}", encoding="utf-8")
+    return payload
+
+
 def test_serving_index_defaults(tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("PPA_SERVING_INDEX_PATH", raising=False)
     monkeypatch.delenv("PPA_QUERY_EMBED_CACHE_PATH", raising=False)
@@ -218,8 +231,8 @@ def test_publish_serving_index_incremental_skips_full_export(tmp_path: Path, mon
 
     class _Crate:
         @staticmethod
-        def serving_index_build(*_a, **_k):
-            return {"ok": True, "cards": 1}
+        def serving_index_build(dest, *_a, **_k):
+            return _stub_manifest(dest)
 
         @staticmethod
         def serving_index_publish(*_a, **_k):
@@ -299,8 +312,8 @@ def test_publish_serving_index_incremental_does_not_fail_rss_cap(tmp_path: Path,
 
     class _Crate:
         @staticmethod
-        def serving_index_build(*_a, **_k):
-            return {"ok": True}
+        def serving_index_build(dest, *_a, **_k):
+            return _stub_manifest(dest)
 
         @staticmethod
         def serving_index_publish(_root, gid):

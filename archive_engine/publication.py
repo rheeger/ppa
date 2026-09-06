@@ -1,22 +1,28 @@
-"""P02-B publication: immutable base+delta generations with a live-key map.
+"""P02 publication: immutable generations, lease, validate, then ACTIVE.
 
 Incremental publish writes only dirty UIDs, tombstones, and new vectors.
-Readers resolve the parent chain. Compaction is an explicit full rebuild.
+Readers resolve the parent chain. One interprocess publisher at a time.
+COMPLETE+fsync happens before ACTIVE. Captured journal ack happens after.
 """
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
+import os
+import shutil
 import threading
 import time
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from archive_cli.index_config import (
     get_publication_delta_ratio,
+    get_publication_disk_budget_mb,
+    get_publication_lease_stale_seconds,
     get_publication_max_chain_depth,
     get_serving_candidate_budget,
     get_serving_nlist,
@@ -27,16 +33,44 @@ from archive_cli.index_config import (
     get_serving_train_seed,
     get_vector_dimension,
 )
-from archive_engine.contracts import EmbeddingSpec
-from archive_engine.errors import IncompatibleContractError
+from archive_engine.contracts import ChangeBatch, EmbeddingSpec
+from archive_engine.errors import IncompatibleContractError, IncompatibleStateError, PublisherBusyError
 
 logger = logging.getLogger("ppa.publication")
 
 LAYOUT_VERSION = 1
 LAYOUT_FILE = "layout.json"
+COMPLETE_FILE = "COMPLETE"
+LEASE_LOCK_NAME = "PUBLISHER.lock"
+LEASE_FILE_NAME = "PUBLISHER.lease"
+PINS_DIR_NAME = "pins"
+PUBLICATION_PHASES = ("lease", "write", "build", "validate", "complete", "promote", "ack")
 
 _PIN_LOCK = threading.Lock()
 _PINS: dict[tuple[str, str], int] = {}
+
+
+class PublicationFault(RuntimeError):
+    """Test-injected crash at a named publication boundary."""
+
+    def __init__(self, point: str):
+        self.point = point
+        super().__init__(f"publication_fault:{point}")
+
+
+@dataclass(frozen=True)
+class PublicationFaultHook:
+    fail_at: str | None = None
+    on_phase: Callable[[str], None] | None = None
+
+
+def _maybe_fault(hook: PublicationFaultHook | None, phase: str) -> None:
+    if hook is None:
+        return
+    if hook.on_phase is not None:
+        hook.on_phase(phase)
+    if hook.fail_at and hook.fail_at == phase:
+        raise PublicationFault(phase)
 
 
 @dataclass(frozen=True)
@@ -57,6 +91,8 @@ class PublicationReceipt:
     compacted: bool
     ok: bool = True
     validation_summary: str = ""
+    acked_watermark: int = 0
+    lease_pid: int = 0
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -74,6 +110,8 @@ class PublicationReceipt:
             "compacted": self.compacted,
             "ok": self.ok,
             "validation_summary": self.validation_summary,
+            "acked_watermark": self.acked_watermark,
+            "lease_pid": self.lease_pid,
         }
 
 
@@ -119,42 +157,105 @@ class UniverseDiff:
         return len(self.mismatches)
 
 
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _pin_path(index_root: Path, generation_id: str, pid: int | None = None) -> Path:
+    owner = pid if pid is not None else os.getpid()
+    return Path(index_root) / PINS_DIR_NAME / f"{owner}-{generation_id}.json"
+
+
 def pin_generation(index_root: Path | str, generation_id: str) -> None:
     gid = str(generation_id or "").strip()
     if not gid:
         return
-    key = (str(Path(index_root).resolve()), gid)
+    root = Path(index_root).resolve()
+    key = (str(root), gid)
     with _PIN_LOCK:
         _PINS[key] = _PINS.get(key, 0) + 1
+        path = _pin_path(root, gid)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps({"pid": os.getpid(), "generation_id": gid, "ts": time.time()}) + "\n",
+            encoding="utf-8",
+        )
 
 
 def unpin_generation(index_root: Path | str, generation_id: str) -> None:
     gid = str(generation_id or "").strip()
     if not gid:
         return
-    key = (str(Path(index_root).resolve()), gid)
+    root = Path(index_root).resolve()
+    key = (str(root), gid)
     with _PIN_LOCK:
         current = _PINS.get(key, 0)
         if current <= 1:
             _PINS.pop(key, None)
+            path = _pin_path(root, gid)
+            if path.exists():
+                path.unlink()
         else:
             _PINS[key] = current - 1
 
 
 def pinned_generations(index_root: Path | str) -> set[str]:
-    root = str(Path(index_root).resolve())
+    root = Path(index_root).resolve()
+    live: set[str] = set()
     with _PIN_LOCK:
-        return {gid for (path, gid), count in _PINS.items() if path == root and count > 0}
+        live.update(gid for (path, gid), count in _PINS.items() if path == str(root) and count > 0)
+    pins = root / PINS_DIR_NAME
+    if pins.is_dir():
+        for child in pins.iterdir():
+            if not child.is_file():
+                continue
+            try:
+                payload = json.loads(child.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            pid = int(payload.get("pid") or 0)
+            gid = str(payload.get("generation_id") or "").strip()
+            if gid and _pid_alive(pid):
+                live.add(gid)
+            elif gid and not _pid_alive(pid):
+                try:
+                    child.unlink()
+                except OSError:
+                    pass
+    return live
 
 
 def clear_publication_pins(index_root: Path | str | None = None) -> None:
+    pid = os.getpid()
     with _PIN_LOCK:
         if index_root is None:
+            roots = {Path(path) for path, _gid in _PINS}
             _PINS.clear()
-            return
-        root = str(Path(index_root).resolve())
-        for key in [k for k in _PINS if k[0] == root]:
-            _PINS.pop(key, None)
+        else:
+            root = Path(index_root).resolve()
+            for key in [k for k in _PINS if k[0] == str(root)]:
+                _PINS.pop(key, None)
+            roots = {root}
+    for root in roots:
+        pins = root / PINS_DIR_NAME
+        if not pins.is_dir():
+            continue
+        for child in pins.iterdir():
+            if child.name.startswith(f"{pid}-"):
+                try:
+                    child.unlink()
+                except OSError:
+                    pass
 
 
 def should_compact(
@@ -291,6 +392,243 @@ def referenced_generations(index_root: Path, active_gid: str) -> set[str]:
         except IncompatibleContractError:
             extra.add(pinned)
     return keep | extra
+
+
+def _fsync_file(path: Path) -> None:
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _fsync_dir(path: Path) -> None:
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def write_complete(generation_dir: Path, payload: Mapping[str, Any]) -> None:
+    dest = Path(generation_dir)
+    tmp = dest / "COMPLETE.tmp"
+    tmp.write_text(json.dumps(dict(payload), indent=2) + "\n", encoding="utf-8")
+    _fsync_file(tmp)
+    tmp.replace(dest / COMPLETE_FILE)
+    _fsync_file(dest / COMPLETE_FILE)
+    _fsync_dir(dest)
+
+
+def read_active_generation(index_root: Path) -> str:
+    path = Path(index_root) / "ACTIVE"
+    if not path.exists():
+        return ""
+    return path.read_text(encoding="utf-8").strip()
+
+
+def estimate_snapshot_bytes(snapshot: ServingSnapshot) -> int:
+    vectors = sum((len(vec) * 4) + 64 for _key, vec in snapshot.embeddings)
+    json_bytes = sum(len(json.dumps(dict(row))) + 1 for row in (*snapshot.cards, *snapshot.chunks, *snapshot.edges))
+    return vectors + json_bytes + 1_048_576
+
+
+def check_publication_budget(
+    index_root: Path,
+    estimated_bytes: int,
+    *,
+    budget_mb: int | None = None,
+) -> None:
+    cap = get_publication_disk_budget_mb() if budget_mb is None else int(budget_mb)
+    if cap <= 0 or estimated_bytes > cap * 1024 * 1024:
+        raise IncompatibleStateError("publication_disk_budget")
+    Path(index_root).mkdir(parents=True, exist_ok=True)
+    free = shutil.disk_usage(index_root).free
+    if estimated_bytes > int(free * 0.9):
+        raise IncompatibleStateError("publication_disk_budget")
+
+
+def validate_generation(generation_dir: Path, spec: EmbeddingSpec | None = None) -> dict[str, Any]:
+    dest = Path(generation_dir)
+    errors: list[str] = []
+    for name in ("manifest.json", "cards.jsonl", "chunks.jsonl", "edges.jsonl", "embedding_keys.txt"):
+        if not (dest / name).exists():
+            errors.append(f"missing:{name}")
+    if errors:
+        raise IncompatibleStateError("publication_validation_failed: " + ",".join(errors))
+    raw = (dest / "manifest.json").read_text(encoding="utf-8")
+    if not raw.strip():
+        raise IncompatibleStateError("publication_validation_failed: truncated:manifest.json")
+    try:
+        manifest = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise IncompatibleStateError(f"publication_validation_failed: manifest:{exc}") from exc
+    if int(manifest.get("serving_index_format_version") or 0) != 2:
+        errors.append("format")
+    cards = list(iter_jsonl(dest / "cards.jsonl"))
+    chunks = list(iter_jsonl(dest / "chunks.jsonl"))
+    if int(manifest.get("card_count") or 0) != len(cards):
+        errors.append("card_count")
+    keys: list[str] = []
+    with (dest / "embedding_keys.txt").open(encoding="utf-8") as fh:
+        keys = [line.strip() for line in fh if line.strip()]
+    bin_path = dest / "embeddings.bin"
+    bin_len = bin_path.stat().st_size if bin_path.exists() else 0
+    spec_payload = manifest.get("embedding_spec") if isinstance(manifest.get("embedding_spec"), Mapping) else {}
+    dim = int((spec_payload or {}).get("dimension") or (spec.dimension if spec else 0) or 0)
+    if keys and dim and bin_len != len(keys) * dim * 4:
+        errors.append("embeddings_truncated")
+    if keys and not (dest / "ivf_meta.json").exists():
+        errors.append("missing:ivf_meta.json")
+    if spec is not None and spec_payload:
+        if _spec_space(spec) != _spec_space(spec_payload):
+            errors.append("embedding_spec")
+    live_uids = {str(row.get("card_uid") or "") for row in cards}
+    layout = read_layout(dest)
+    for uid in layout.get("tombstone_uids") or []:
+        if str(uid) in live_uids:
+            errors.append(f"tombstone_live:{uid}")
+    chunk_keys = {str(row.get("chunk_key") or "") for row in chunks}
+    for key in keys:
+        if key not in chunk_keys:
+            errors.append(f"orphan_embedding:{key}")
+    if errors:
+        raise IncompatibleStateError("publication_validation_failed: " + ",".join(errors))
+    return {
+        "ok": True,
+        "cards": len(cards),
+        "chunks": len(chunks),
+        "embeddings": len(keys),
+        "format": 2,
+    }
+
+
+class PublisherLease:
+    """Interprocess exclusive publisher ownership with abandoned-owner recovery."""
+
+    def __init__(self, index_root: Path, *, stale_seconds: int | None = None):
+        self.index_root = Path(index_root)
+        self.lock_path = self.index_root / LEASE_LOCK_NAME
+        self.lease_path = self.index_root / LEASE_FILE_NAME
+        self.stale_seconds = stale_seconds if stale_seconds is not None else get_publication_lease_stale_seconds()
+        self.fd: int | None = None
+        self.token = f"{os.getpid()}-{time.time_ns()}"
+        self.pid = os.getpid()
+
+    def _read_lease(self) -> dict[str, Any]:
+        if not self.lease_path.exists():
+            return {}
+        try:
+            return json.loads(self.lease_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+    def _lease_abandoned(self) -> bool:
+        payload = self._read_lease()
+        pid = int(payload.get("pid") or 0)
+        heartbeat = float(payload.get("heartbeat_at") or 0)
+        if pid and not _pid_alive(pid):
+            return True
+        if heartbeat and (time.time() - heartbeat) > self.stale_seconds and not _pid_alive(pid):
+            return True
+        return False
+
+    def acquire(self) -> "PublisherLease":
+        self.index_root.mkdir(parents=True, exist_ok=True)
+        fd = os.open(self.lock_path, os.O_CREAT | os.O_RDWR, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(fd)
+            if self._lease_abandoned():
+                fd = os.open(self.lock_path, os.O_CREAT | os.O_RDWR, 0o644)
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    os.close(fd)
+                    raise PublisherBusyError("publication_lease_held")
+            else:
+                raise PublisherBusyError("publication_lease_held")
+        self.fd = fd
+        payload = {
+            "pid": self.pid,
+            "token": self.token,
+            "heartbeat_at": time.time(),
+            "started_at": time.time(),
+        }
+        self.lease_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        _fsync_file(self.lease_path)
+        return self
+
+    def release(self) -> None:
+        if self.fd is None:
+            return
+        try:
+            if self.lease_path.exists():
+                current = self._read_lease()
+                if current.get("token") == self.token:
+                    self.lease_path.unlink()
+            fcntl.flock(self.fd, fcntl.LOCK_UN)
+            os.close(self.fd)
+        finally:
+            self.fd = None
+
+    def __enter__(self) -> "PublisherLease":
+        return self.acquire()
+
+    def __exit__(self, *_exc: object) -> None:
+        self.release()
+
+
+def acknowledge_captured(vault: Path | None, batch: ChangeBatch | None) -> int:
+    """Ack only the captured publication batch. Later sequences stay pending."""
+
+    if vault is None or batch is None:
+        return 0
+    from archive_engine.changes import CONSUMER_PUBLICATION, acknowledge_batch
+    from archive_vault.change_journal import ChangeJournal
+
+    allowed = {record.sequence for record in batch.records}
+    if batch.high_watermark > 0 and not allowed:
+        return 0
+    with ChangeJournal(vault) as journal:
+        if batch.consumer_name != CONSUMER_PUBLICATION:
+            raise IncompatibleStateError("captured batch is not a publication consumer")
+        cursor = acknowledge_batch(
+            journal,
+            batch,
+            acked_sequences=sorted(allowed),
+        )
+        return int(cursor.high_watermark)
+
+
+def recover_publication(
+    index_root: Path,
+    *,
+    generation_id: str,
+    vault: Path | None = None,
+    captured_batch: ChangeBatch | None = None,
+    crate: Any | None = None,
+) -> dict[str, Any]:
+    """Replay a crash after COMPLETE or ACTIVE. Never acks beyond the captured batch."""
+
+    dest = Path(index_root) / "generations" / generation_id
+    active = read_active_generation(index_root)
+    complete = dest.is_dir() and (dest / COMPLETE_FILE).exists()
+    if not complete:
+        return {"ok": True, "promoted": False, "acked": False, "active": active, "reason": "incomplete"}
+    try:
+        validate_generation(dest)
+    except IncompatibleStateError as exc:
+        return {"ok": False, "promoted": False, "acked": False, "active": active, "reason": str(exc)}
+    native = crate
+    if native is None:
+        import archive_crate as native
+    if active != generation_id:
+        native.serving_index_publish(str(index_root), generation_id)
+        active = generation_id
+    acked = acknowledge_captured(vault, captured_batch)
+    return {"ok": True, "promoted": True, "acked": bool(captured_batch), "active": active, "acked_watermark": acked}
 
 
 def _edge_tuple(row: Mapping[str, Any]) -> tuple[Any, ...]:
@@ -469,124 +807,170 @@ def publish_snapshot(
     mode: str = "full",
     force_compact: bool = False,
     crate: Any | None = None,
+    vault: Path | None = None,
+    captured_batch: ChangeBatch | None = None,
+    fault: PublicationFaultHook | None = None,
+    disk_budget_mb: int | None = None,
+    acquire_lease: bool = True,
 ) -> PublicationReceipt:
-    """Write one immutable generation. Delta writes only this snapshot's rows."""
+    """Write one immutable generation, validate, COMPLETE+fsync, then swap ACTIVE."""
 
     root = Path(index_root)
     gid = str(generation_id or int(time.time() * 1000))
     dest = root / "generations" / gid
-    dest.mkdir(parents=True, exist_ok=True)
-    parent = str(parent_generation or "").strip()
-    chosen = "compact" if force_compact else str(mode or "full")
-    if chosen == "delta" and not parent:
-        chosen = "full"
+    lease: PublisherLease | None = None
+    if acquire_lease:
+        lease = PublisherLease(root)
+        lease.acquire()
+    try:
+        _maybe_fault(fault, "lease")
+        check_publication_budget(root, estimate_snapshot_bytes(snapshot), budget_mb=disk_budget_mb)
+        dest.mkdir(parents=True, exist_ok=True)
+        parent = str(parent_generation or "").strip()
+        chosen = "compact" if force_compact else str(mode or "full")
+        if chosen == "delta" and not parent:
+            chosen = "full"
 
-    parent_spec = _parent_spec(root, parent) if parent and chosen == "delta" else None
-    if parent_spec is not None:
-        if _spec_space(parent_spec) != _spec_space(snapshot.embedding_spec):
-            raise IncompatibleContractError("incompatible EmbeddingSpec for this serving generation")
+        parent_spec = _parent_spec(root, parent) if parent and chosen == "delta" else None
+        if parent_spec is not None:
+            if _spec_space(parent_spec) != _spec_space(snapshot.embedding_spec):
+                raise IncompatibleContractError("incompatible EmbeddingSpec for this serving generation")
 
-    if chosen == "delta" and parent and not force_compact:
-        try:
-            chain_depth = len(walk_generation_chain(root, parent)) + 1
-            live_vectors, _ = chain_vector_counts(root, parent)
-        except IncompatibleContractError:
-            chain_depth = 2
-            live_vectors = 0
-        if should_compact(chain_depth=chain_depth, delta_vectors=len(snapshot.embeddings), live_vectors=live_vectors):
-            if snapshot.dirty_uids:
-                logger.info(
-                    "serving_index_publish compact deferred; delta snapshot is not a full universe parent=%s",
-                    parent,
-                )
-            else:
-                logger.info("serving_index_publish mode=compact reason=chain_or_ratio parent=%s", parent)
-                chosen = "compact"
-                parent = ""
+        if chosen == "delta" and parent and not force_compact:
+            try:
+                chain_depth = len(walk_generation_chain(root, parent)) + 1
+                live_vectors, _ = chain_vector_counts(root, parent)
+            except IncompatibleContractError:
+                chain_depth = 2
+                live_vectors = 0
+            if should_compact(chain_depth=chain_depth, delta_vectors=len(snapshot.embeddings), live_vectors=live_vectors):
+                if snapshot.dirty_uids:
+                    logger.info(
+                        "serving_index_publish compact deferred; delta snapshot is not a full universe parent=%s",
+                        parent,
+                    )
+                else:
+                    logger.info("serving_index_publish mode=compact reason=chain_or_ratio parent=%s", parent)
+                    chosen = "compact"
+                    parent = ""
 
-    if chosen == "compact":
-        parent = ""
+        if chosen == "compact":
+            parent = ""
 
-    dirty = {str(uid).strip() for uid in snapshot.dirty_uids if str(uid).strip()}
-    present = {str(row.get("card_uid") or "").strip() for row in snapshot.cards if str(row.get("card_uid") or "").strip()}
-    deleted = tuple(sorted({str(uid).strip() for uid in snapshot.deleted_uids if str(uid).strip()} | (dirty - present)))
-    replaced = tuple(sorted(uid for uid in (dirty | present) if uid and uid not in deleted)) if chosen == "delta" else ()
-    if chosen != "delta":
-        deleted = ()
-        replaced = ()
+        dirty = {str(uid).strip() for uid in snapshot.dirty_uids if str(uid).strip()}
+        present = {
+            str(row.get("card_uid") or "").strip() for row in snapshot.cards if str(row.get("card_uid") or "").strip()
+        }
+        deleted = tuple(
+            sorted({str(uid).strip() for uid in snapshot.deleted_uids if str(uid).strip()} | (dirty - present))
+        )
+        replaced = (
+            tuple(sorted(uid for uid in (dirty | present) if uid and uid not in deleted)) if chosen == "delta" else ()
+        )
+        if chosen != "delta":
+            deleted = ()
+            replaced = ()
 
-    tombstone_chunk_keys: list[str] = []
-    if chosen == "delta" and parent:
-        old_keys = ancestor_chunk_keys_for_uids(root, parent, set(deleted) | set(replaced))
-        new_keys = {str(row.get("chunk_key") or "").strip() for row in snapshot.chunks if str(row.get("chunk_key") or "").strip()}
-        tombstone_chunk_keys = sorted(old_keys - new_keys)
+        tombstone_chunk_keys: list[str] = []
+        if chosen == "delta" and parent:
+            old_keys = ancestor_chunk_keys_for_uids(root, parent, set(deleted) | set(replaced))
+            new_keys = {
+                str(row.get("chunk_key") or "").strip()
+                for row in snapshot.chunks
+                if str(row.get("chunk_key") or "").strip()
+            }
+            tombstone_chunk_keys = sorted(old_keys - new_keys)
 
-    write_jsonl(dest / "cards.jsonl", snapshot.cards)
-    write_jsonl(dest / "chunks.jsonl", snapshot.chunks)
-    write_jsonl(dest / "edges.jsonl", snapshot.edges)
-    embed_count = write_embeddings(dest / "embedding_keys.txt", dest / "embeddings.bin", snapshot.embeddings)
-    base = parent
-    if parent:
-        try:
-            chain = walk_generation_chain(root, parent)
-            base = chain[0].name if chain else parent
-        except IncompatibleContractError:
-            base = parent
-    if chosen in {"full", "compact"}:
-        base = gid
-        parent = ""
+        write_jsonl(dest / "cards.jsonl", snapshot.cards)
+        write_jsonl(dest / "chunks.jsonl", snapshot.chunks)
+        write_jsonl(dest / "edges.jsonl", snapshot.edges)
+        embed_count = write_embeddings(dest / "embedding_keys.txt", dest / "embeddings.bin", snapshot.embeddings)
+        _maybe_fault(fault, "write")
+        base = parent
+        if parent:
+            try:
+                chain = walk_generation_chain(root, parent)
+                base = chain[0].name if chain else parent
+            except IncompatibleContractError:
+                base = parent
+        if chosen in {"full", "compact"}:
+            base = gid
+            parent = ""
 
-    write_layout(
-        dest,
-        {
-            "mode": chosen,
-            "parent_generation": parent,
-            "base_generation": base,
-            "snapshot_id": snapshot.snapshot_id,
-            "source_watermark": snapshot.source_watermark,
-            "tombstone_uids": list(deleted),
-            "tombstone_chunk_keys": tombstone_chunk_keys,
-            "replaced_uids": list(replaced),
-            "embedding_spec": snapshot.embedding_spec.to_payload(),
-        },
-    )
+        write_layout(
+            dest,
+            {
+                "mode": chosen,
+                "parent_generation": parent,
+                "base_generation": base,
+                "snapshot_id": snapshot.snapshot_id,
+                "source_watermark": snapshot.source_watermark,
+                "tombstone_uids": list(deleted),
+                "tombstone_chunk_keys": tombstone_chunk_keys,
+                "replaced_uids": list(replaced),
+                "embedding_spec": snapshot.embedding_spec.to_payload(),
+            },
+        )
 
-    native = crate
-    if native is None:
-        import archive_crate as native
-    native.serving_index_build(
-        str(dest),
-        str(dest / "cards.jsonl"),
-        str(dest / "chunks.jsonl"),
-        str(dest / "embedding_keys.txt"),
-        str(dest / "embeddings.bin"),
-        snapshot.embedding_spec.dimension or get_vector_dimension(),
-        str(dest / "edges.jsonl"),
-        json.dumps(_train_config(snapshot.embedding_spec)),
-    )
-    native.serving_index_publish(str(root), gid)
-    logger.info(
-        "serving_index_published mode=%s generation=%s parent=%s cards=%s chunks=%s embeddings=%s tombstones=%s",
-        chosen,
-        gid,
-        parent,
-        len(snapshot.cards),
-        len(snapshot.chunks),
-        embed_count,
-        len(deleted),
-    )
-    return PublicationReceipt(
-        generation_id=gid,
-        mode=chosen,
-        parent_generation=parent,
-        base_generation=base,
-        snapshot_id=snapshot.snapshot_id,
-        source_watermark=snapshot.source_watermark,
-        cards=len(snapshot.cards),
-        chunks=len(snapshot.chunks),
-        embeddings=embed_count,
-        tombstone_uids=deleted,
-        replaced_uids=replaced,
-        compacted=chosen == "compact",
-        validation_summary=f"layout={chosen} snapshot={snapshot.snapshot_id}",
-    )
+        native = crate
+        if native is None:
+            import archive_crate as native
+        native.serving_index_build(
+            str(dest),
+            str(dest / "cards.jsonl"),
+            str(dest / "chunks.jsonl"),
+            str(dest / "embedding_keys.txt"),
+            str(dest / "embeddings.bin"),
+            snapshot.embedding_spec.dimension or get_vector_dimension(),
+            str(dest / "edges.jsonl"),
+            json.dumps(_train_config(snapshot.embedding_spec)),
+        )
+        _maybe_fault(fault, "build")
+        check_publication_budget(root, estimate_snapshot_bytes(snapshot), budget_mb=disk_budget_mb)
+        report = validate_generation(dest, snapshot.embedding_spec)
+        _maybe_fault(fault, "validate")
+        write_complete(
+            dest,
+            {
+                "generation_id": gid,
+                "snapshot_id": snapshot.snapshot_id,
+                "source_watermark": snapshot.source_watermark,
+                "checks": report,
+            },
+        )
+        _maybe_fault(fault, "complete")
+        native.serving_index_publish(str(root), gid)
+        _maybe_fault(fault, "promote")
+        acked = acknowledge_captured(vault, captured_batch)
+        _maybe_fault(fault, "ack")
+        logger.info(
+            "serving_index_published mode=%s generation=%s parent=%s cards=%s chunks=%s embeddings=%s tombstones=%s acked=%s",
+            chosen,
+            gid,
+            parent,
+            len(snapshot.cards),
+            len(snapshot.chunks),
+            embed_count,
+            len(deleted),
+            acked,
+        )
+        return PublicationReceipt(
+            generation_id=gid,
+            mode=chosen,
+            parent_generation=parent,
+            base_generation=base,
+            snapshot_id=snapshot.snapshot_id,
+            source_watermark=snapshot.source_watermark,
+            cards=len(snapshot.cards),
+            chunks=len(snapshot.chunks),
+            embeddings=embed_count,
+            tombstone_uids=deleted,
+            replaced_uids=replaced,
+            compacted=chosen == "compact",
+            validation_summary=f"layout={chosen} snapshot={snapshot.snapshot_id} validated=1",
+            acked_watermark=acked,
+            lease_pid=lease.pid if lease else os.getpid(),
+        )
+    finally:
+        if lease is not None:
+            lease.release()

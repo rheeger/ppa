@@ -528,12 +528,13 @@ def prune_retired_serving_generations(
     vault: Path | None = None,
     *,
     keep: str | None = None,
+    index_root: Path | None = None,
     logger: logging.Logger | None = None,
 ) -> list[str]:
     """Delete generations that are not ACTIVE, not in the parent chain, and not pinned."""
 
     log = logger or logging.getLogger("ppa.serving_index")
-    root = get_serving_index_path(vault)
+    root = Path(index_root) if index_root is not None else get_serving_index_path(vault)
     gens = root / "generations"
     if keep is None:
         active_path = root / "ACTIVE"
@@ -833,6 +834,17 @@ def publish_serving_index(
             log.error("serving_index_refresh_failed reason=rss_cap estimated_mb=%.1f cap=%s", est_mb, rss_cap)
             return {"ok": False, "error": "serving_index_refresh_failed", "estimated_mb": est_mb}
     crate = _crate()
+    captured = None
+    try:
+        from archive_engine.changes import CONSUMER_PUBLICATION, consume_batch
+        from archive_vault.change_journal import ChangeJournal
+
+        if Path(store.vault).is_dir():
+            with ChangeJournal(store.vault) as journal:
+                captured = consume_batch(journal, CONSUMER_PUBLICATION)
+    except Exception:
+        logger.debug("publication captured batch unavailable", exc_info=True)
+        captured = None
     receipt = publish_snapshot(
         root,
         snapshot,
@@ -841,6 +853,8 @@ def publish_serving_index(
         mode=mode,
         force_compact=force_compact,
         crate=crate,
+        vault=vault,
+        captured_batch=captured,
     )
     crate.serving_index_truncate_dirty(str(root))
     pruned = prune_retired_serving_generations(vault, keep=receipt.generation_id, logger=log)

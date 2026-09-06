@@ -65,6 +65,11 @@ fn open_generation(index_root: &Path) -> PyResult<ServingIndex> {
             "serving_index_unavailable",
         ));
     }
+    if dir.join("INCOMPLETE").exists() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "serving_index_incomplete",
+        ));
+    }
     let format = read_format_version(&dir)?;
     if format != schema::SERVING_INDEX_FORMAT_VERSION {
         return Err(pyo3::exceptions::PyValueError::new_err(format!(
