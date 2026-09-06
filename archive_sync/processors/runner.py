@@ -10,12 +10,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from archive_engine.contracts import OutputReceipt
 from archive_sync.cli_logging import log_ratio_progress
 
 from .batch import ProcessorPlanItem, ProcessorRunReport
 from .constants import (
     BROAD_LLM_PROCESSOR_KEYS,
     EXPENSIVE_PROCESSOR_KEYS,
+    INPUT_STATUS_BLOCKED_DEPENDENCY,
     INPUT_STATUS_COMPLETE,
     INPUT_STATUS_FAILED,
     INPUT_STATUS_SKIPPED,
@@ -26,6 +28,7 @@ from .constants import (
     PROCESSOR_ENTITY_RESOLUTION,
     PROCESSOR_LINKERS,
     PROCESSOR_MATERIALIZATION,
+    RUN_STATUS_BLOCKED,
     RUN_STATUS_FAILED,
     RUN_STATUS_PARTIAL,
     RUN_STATUS_SKIPPED,
@@ -33,8 +36,9 @@ from .constants import (
     SECTION_E_COMPLETION_STATE,
     SECTION_E_EXECUTION_STATE,
     SKIP_PROVIDER,
+    SUCCESS_RECEIPT_STATUSES,
 )
-from .declarations import declaration_for_key, iter_processor_declarations, topological_order
+from .declarations import declaration_for_key, iter_processor_declarations
 from .dirty_io import dirty_uids_from_source_reports, load_dirty_inputs
 from .plan import build_processor_plan
 from .report import write_processor_report
@@ -75,6 +79,10 @@ class ItemExecuteResult:
     skip_reason: str = ""
     error: str = ""
     already_current: bool = False
+    input_revision: str = ""
+    receipt_status: str = ""
+    valid_no_output: bool = False
+    receipt: OutputReceipt | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -87,6 +95,10 @@ class ItemExecuteResult:
             "skip_reason": self.skip_reason,
             "error": self.error,
             "already_current": self.already_current,
+            "input_revision": self.input_revision,
+            "receipt_status": self.receipt_status,
+            "valid_no_output": self.valid_no_output,
+            "receipt": None if self.receipt is None else self.receipt.to_payload(),
         }
 
 
@@ -103,6 +115,7 @@ class ProcessorExecutionResult:
     item_results: list[ItemExecuteResult] = field(default_factory=list)
     executed: bool = False
     artifact_paths: dict[str, str] = field(default_factory=dict)
+    receipts: list[OutputReceipt] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -112,6 +125,7 @@ class ProcessorExecutionResult:
             "report": self.report.to_dict(),
             "item_results": [r.to_dict() for r in self.item_results],
             "artifact_paths": dict(self.artifact_paths),
+            "receipts": [receipt.to_payload() for receipt in self.receipts],
         }
 
 
@@ -119,15 +133,24 @@ def _is_already_current(
     prior: ProcessorInputStateRecord | None,
     item: ProcessorPlanItem,
     processor_version: str,
+    receipt: Any | None = None,
 ) -> bool:
-    if prior is None:
+    """Complete only when a revision receipt exists. Legacy input_state is unknown."""
+
+    del prior
+    stored = receipt
+    if stored is None:
         return False
-    return (
-        prior.status == INPUT_STATUS_COMPLETE
-        and prior.input_hash == item.current_input_hash
-        and prior.processor_version == processor_version
-        and bool(prior.output_identity)
-    )
+    payload = getattr(stored, "receipt", stored)
+    scheduler_status = str(getattr(stored, "scheduler_status", "") or "")
+    version = str(getattr(payload, "processor_version", "") or "")
+    revision = str(getattr(payload, "input_revision", "") or "")
+    item_revision = item.input_revision or item.current_input_hash
+    if version != processor_version or revision != item_revision:
+        return False
+    if scheduler_status:
+        return scheduler_status in SUCCESS_RECEIPT_STATUSES
+    return str(getattr(payload, "status", "")) == "completed"
 
 
 def _complete_items(items: list[ProcessorPlanItem]) -> list[ItemExecuteResult]:
@@ -643,6 +666,7 @@ def run_processors(
     corpus_by_uid = {snap.input_uid: snap.corpus_state for snap in enriched}
     classify_started = time.monotonic()
     log.info("processor execute classify start items=%s", len(plan.items))
+    receipts_by_uid = state_store.get_receipts_for_uids([snap.input_uid for snap in enriched])
 
     for item_i, item in enumerate(plan.items, start=1):
         log_ratio_progress(
@@ -669,7 +693,8 @@ def run_processors(
             continue
         version = decl_versions.get(item.processor_key, "")
         prior = (prior_by_uid.get(item.input_uid) or {}).get(item.processor_key)
-        if _is_already_current(prior, item, version):
+        prior_receipt = (receipts_by_uid.get(item.input_uid) or {}).get(item.processor_key)
+        if _is_already_current(prior, item, version, prior_receipt):
             item_results.append(
                 ItemExecuteResult(
                     processor_key=item.processor_key,
@@ -732,79 +757,84 @@ def run_processors(
         time.monotonic() - classify_started,
     )
 
+    from .scheduler import ProcessorScheduler
+
+    scheduler = ProcessorScheduler(state_store, lease_owner=report.run_id)
+    scheduled = scheduler.run_batches(
+        ctx=ctx,
+        by_key=by_key,
+        executor=executor,
+        run_id=report.run_id,
+        snapshots=enriched,
+        decl_versions=decl_versions,
+    )
+    item_results.extend(scheduled.item_results)
+    report.warnings.extend(scheduled.warnings)
+    report.errors.extend(scheduled.errors)
+    report.scheduler_events = [event.to_dict() for event in scheduled.events]
+    report.blocked_count = scheduled.blocked_count
+
     failed = 0
     completed = 0
-    for key in topological_order():
-        batch = by_key.get(key) or []
-        if not batch:
+    for result in scheduled.item_results:
+        version = decl_versions.get(result.processor_key, "")
+        if result.receipt is None and result.status == INPUT_STATUS_COMPLETE:
+            report.errors.append(
+                f"{result.processor_key}:{result.input_uid}: complete without receipt (ignored)"
+            )
             continue
-        log.info("processor execute batch start key=%s items=%s", key, len(batch))
-        try:
-            batch_result = executor(ctx, batch)
-        except Exception as exc:
-            # Isolate LLM-dependent failures from deterministic processors
-            decl_obj = declaration_for_key(key)
-            msg = f"{key}: {exc}"
-            report.errors.append(msg)
-            log.exception("processor_batch_failed key=%s", key)
-            for item in batch:
-                item_results.append(
-                    ItemExecuteResult(
-                        processor_key=item.processor_key,
-                        input_uid=item.input_uid,
-                        status=INPUT_STATUS_FAILED,
-                        output_identity=item.output_identity,
-                        input_hash=item.current_input_hash,
-                        error=str(exc),
-                    )
+        if result.status == INPUT_STATUS_COMPLETE or result.valid_no_output:
+            completed += 1
+            state_store.upsert_input_state(
+                ProcessorInputStateRecord(
+                    processor_key=result.processor_key,
+                    input_uid=result.input_uid,
+                    input_hash=result.input_hash,
+                    input_corpus_state=corpus_by_uid.get(result.input_uid, "active"),
+                    processor_version=version,
+                    output_identity=result.output_identity,
+                    output_uids=list(result.output_uids),
+                    status=INPUT_STATUS_COMPLETE,
+                    last_run_id=report.run_id,
                 )
-                failed += 1
-            if decl_obj and decl_obj.llm_dependent:
-                report.warnings.append(f"llm_dependent failure isolated: {key}")
-                continue
-            continue
-
-        report.warnings.extend(batch_result.warnings)
-        report.errors.extend(batch_result.errors)
-        for result in batch_result.results:
-            item_results.append(result)
-            version = decl_versions.get(result.processor_key, "")
-            if result.status == INPUT_STATUS_COMPLETE:
-                completed += 1
-                state_store.upsert_input_state(
-                    ProcessorInputStateRecord(
-                        processor_key=result.processor_key,
-                        input_uid=result.input_uid,
-                        input_hash=result.input_hash,
-                        input_corpus_state=corpus_by_uid.get(result.input_uid, "active"),
-                        processor_version=version,
-                        output_identity=result.output_identity,
-                        output_uids=list(result.output_uids),
-                        status=INPUT_STATUS_COMPLETE,
-                        last_run_id=report.run_id,
-                    )
+            )
+        elif result.status == INPUT_STATUS_FAILED:
+            failed += 1
+            state_store.upsert_input_state(
+                ProcessorInputStateRecord(
+                    processor_key=result.processor_key,
+                    input_uid=result.input_uid,
+                    input_hash=result.input_hash,
+                    processor_version=version,
+                    output_identity=result.output_identity,
+                    status=INPUT_STATUS_FAILED,
+                    error=result.error,
+                    last_run_id=report.run_id,
                 )
-            elif result.status == INPUT_STATUS_FAILED:
-                failed += 1
-                state_store.upsert_input_state(
-                    ProcessorInputStateRecord(
-                        processor_key=result.processor_key,
-                        input_uid=result.input_uid,
-                        input_hash=result.input_hash,
-                        processor_version=version,
-                        output_identity=result.output_identity,
-                        status=INPUT_STATUS_FAILED,
-                        error=result.error,
-                        last_run_id=report.run_id,
-                    )
+            )
+        elif result.status == INPUT_STATUS_BLOCKED_DEPENDENCY:
+            state_store.upsert_input_state(
+                ProcessorInputStateRecord(
+                    processor_key=result.processor_key,
+                    input_uid=result.input_uid,
+                    input_hash=result.input_hash,
+                    processor_version=version,
+                    output_identity=result.output_identity,
+                    status=INPUT_STATUS_BLOCKED_DEPENDENCY,
+                    skip_reason=result.skip_reason,
+                    error=result.error,
+                    last_run_id=report.run_id,
                 )
-            elif result.status == INPUT_STATUS_SKIPPED:
-                report.skipped_count += 1
-                if result.skip_reason:
-                    report.skip_reasons[result.skip_reason] = report.skip_reasons.get(result.skip_reason, 0) + 1
+            )
+        elif result.status == INPUT_STATUS_SKIPPED:
+            report.skipped_count += 1
+            if result.skip_reason:
+                report.skip_reasons[result.skip_reason] = report.skip_reasons.get(result.skip_reason, 0) + 1
 
     report.output_count = completed
-    if failed and completed:
+    if scheduled.blocked_count and not failed and not completed:
+        report.status = RUN_STATUS_BLOCKED
+    elif (failed or scheduled.blocked_count) and completed:
         report.status = RUN_STATUS_PARTIAL
     elif failed and not completed:
         report.status = RUN_STATUS_FAILED
@@ -820,4 +850,5 @@ def run_processors(
         item_results=item_results,
         executed=executed,
         artifact_paths=paths,
+        receipts=list(scheduled.receipts),
     )

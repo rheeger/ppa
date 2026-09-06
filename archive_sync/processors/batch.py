@@ -21,6 +21,9 @@ class ProcessorPlanItem:
     stale_reasons: list[str] = field(default_factory=list)
     current_input_hash: str = ""
     output_identity: str = ""
+    input_revision: str = ""
+    processor_version: str = ""
+    dependency_receipt_digest: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -32,6 +35,9 @@ class ProcessorPlanItem:
             "stale_reasons": list(self.stale_reasons),
             "current_input_hash": self.current_input_hash,
             "output_identity": self.output_identity,
+            "input_revision": self.input_revision or self.current_input_hash,
+            "processor_version": self.processor_version,
+            "dependency_receipt_digest": self.dependency_receipt_digest,
         }
 
 
@@ -84,6 +90,8 @@ class ProcessorRunReport:
     engine_mode: str = ""
     ladder_gate: str = ""
     decision_run_id: str = ""
+    blocked_count: int = 0
+    scheduler_events: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -97,6 +105,7 @@ class ProcessorRunReport:
             "stale_count": self.stale_count,
             "skipped_count": self.skipped_count,
             "output_count": self.output_count,
+            "blocked_count": self.blocked_count,
             "skip_reasons": dict(self.skip_reasons),
             "stale_reasons": dict(self.stale_reasons),
             "plan": self.plan.to_dict(),
@@ -108,4 +117,5 @@ class ProcessorRunReport:
             "engine_mode": self.engine_mode,
             "ladder_gate": self.ladder_gate,
             "decision_run_id": self.decision_run_id,
+            "scheduler_events": list(self.scheduler_events),
         }

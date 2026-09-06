@@ -54,3 +54,4 @@ def load_builtin_scenarios() -> None:
     """Import built-in scenario modules so they self-register."""
 
     from archive_tests.acceptance.scenarios import baseline as _baseline  # noqa: F401
+    from archive_tests.acceptance.scenarios import p03_dependencies as _p03  # noqa: F401
