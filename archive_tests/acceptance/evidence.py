@@ -95,10 +95,10 @@ def build_evidence(
     passed = sum(1 for case in cases if case.get("status") == "passed")
     failed = sum(1 for case in cases if case.get("status") in {"failed", "error"})
     skipped = sum(1 for case in cases if case.get("status") == "skipped")
-    ac_map = (extra or {}).get("acceptance_criteria") or _default_p04a_ac(cases, suite)
+    ac_map = (extra or {}).get("acceptance_criteria") or _default_ac(cases, suite)
     payload = {
         "plan_id": "p04",
-        "slice_id": "P04-A",
+        "slice_id": "P04-C" if suite == "p04" else "P04-A",
         "suite": suite,
         "seed": int(seed),
         "require_integration": bool(require_integration),
@@ -135,6 +135,35 @@ def build_evidence(
     return payload
 
 
+def _default_ac(cases: Sequence[Mapping[str, Any]], suite: str) -> dict[str, Any]:
+    if suite == "p04":
+        return _default_p04c_ac(cases)
+    return _default_p04a_ac(cases, suite)
+
+
+def _default_p04c_ac(cases: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    by_id = {str(case.get("id")): case for case in cases}
+    crash = by_id.get("p04.crash_matrix") or {}
+    restore = by_id.get("p04.privacy_restore") or {}
+    return {
+        "P04-C.process_interruption_real_paths": {
+            "status": crash.get("status") or "failed",
+            "scenario": "p04.crash_matrix",
+            "artifact": "crash-matrix.json",
+        },
+        "P04-C.no_lost_acknowledged_evidence": {"status": crash.get("status") or "failed"},
+        "P04-C.no_false_completion": {"status": crash.get("status") or "failed"},
+        "P04-C.denied_content_absent": {
+            "status": restore.get("status") or "failed",
+            "scenario": "p04.privacy_restore",
+        },
+        "P04-C.restore_canonical_ids_mcp": {
+            "status": restore.get("status") or "failed",
+            "artifact": "privacy-restore.json",
+        },
+    }
+
+
 def _default_p04a_ac(cases: Sequence[Mapping[str, Any]], suite: str) -> dict[str, Any]:
     by_id = {str(case.get("id")): case for case in cases}
     baseline = by_id.get("baseline.vault_pg_rust_mcp")
@@ -160,7 +189,7 @@ def _summary_markdown(payload: Mapping[str, Any]) -> str:
     tests = payload.get("tests") or {}
     proof = payload.get("proof") or {}
     lines = [
-        "# P04-A evidence",
+        f"# {payload.get('slice_id') or 'P04'} evidence",
         "",
         f"- suite: `{payload.get('suite')}`",
         f"- current SHA: `{((payload.get('shas') or {}).get('current'))}`",

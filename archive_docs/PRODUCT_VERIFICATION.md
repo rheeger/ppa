@@ -46,6 +46,15 @@ The exact-cosine oracle (`archive_tests.acceptance.oracle`) is a Python brute-fo
 | Scale | Later (P04-B/C profiles) |
 | Production | Never implied here. `production_proven=false` until R0/R1 |
 
+## Composed faults (P04-C)
+
+```bash
+python -m pytest -p no:cacheprovider archive_tests/test_release_failure_matrix.py --require-integration
+python -m archive_tests.acceptance.run --suite p04 --output logs/plans/p04/P04-C --require-integration
+```
+
+Scenarios `p04.crash_matrix` and `p04.privacy_restore` kill real child processes at publication/journal boundaries, deny leaked sources/egress, and restore an encrypted vault into a new root. `production_proven` stays false.
+
 ## Adding a child suite
 
 Register a `Scenario` from `archive_tests/acceptance/scenarios/pNN_*.py`. P04 does not implement sibling product features to force a green suite.
