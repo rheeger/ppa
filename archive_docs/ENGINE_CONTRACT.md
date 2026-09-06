@@ -147,3 +147,62 @@ Two `ArchiveRuntime` objects with the same UID and different canonical roots ret
 - **P05-C:** attach egress/provider hooks to `runtime.providers`. Do not read env inside retrieval adapters.
 - **P09-B:** `build_runtime` / `resolve_archive_identity` is the explicit-config factory. Saved scopes must bind `AccessContext` on the runtime, not a second store.
 - **P10-A:** typed query/analytics should call `runtime.retrieval` / `runtime.query` with the instance `AccessContext`. Do not add a second query path on `DefaultArchiveStore`.
+
+## P06-C architecture and registry
+
+Adding or changing a card type without updating every authority fails in tests. Bypassing engine layering (core `archive_engine` importing CLI commands or MCP) fails with `forbidden engine import`.
+
+### Dependency direction
+
+```text
+archive_vault          → schema / I/O / card contracts   (no archive_cli)
+archive_engine core    → vault + contracts/ports only    (no archive_cli)
+archive_engine.adapters→ may wrap index/serving objects  (no commands/server)
+archive_cli factory    → composes adapters + runtime
+CLI / MCP              → DefaultArchiveStore.runtime
+```
+
+`archive_tests/test_engine_boundaries.py` AST-walks these rules. A planted `from archive_cli.commands…` in a temp engine tree raises `EngineBoundaryError` naming the file and module.
+
+### Registry authority
+
+| Layer | Source |
+| --- | --- |
+| Schema / ownership | `archive_vault.schema.CARD_TYPES` + `DETERMINISTIC_ONLY` / `LLM_ELIGIBLE` |
+| Contract profiles | `archive_vault.card_contracts.CARD_TYPE_SPECS` |
+| Projection / edges | `archive_cli.card_registry.CARD_TYPE_REGISTRATIONS` |
+| Native materializer | `archive_crate/materializer_registry.json` via `archive_scripts/export_materializer_registry.py` |
+
+`materializer_registry_payload()` / `dump_registry_json()` are the only export shape. `validate_card_type_specs()` and `validate_card_type_registrations()` require coverage plus table-name alignment. Handwritten extras that are not Pydantic fields are listed in `CONTRACT_FIELDS_NOT_ON_MODEL` and `HANDWRITTEN_PROJECTION_SOURCES`. A new unexplained field or a stale checked-in JSON fails with `stale materializer registry` / `undocumented …`.
+
+Regenerate after a real registration change:
+
+```text
+python archive_scripts/export_materializer_registry.py
+```
+
+Do not hand-edit the JSON.
+
+### Public compatibility (kept)
+
+| Surface | Names that must keep working |
+| --- | --- |
+| `archive_engine` | `AccessContext`, `ArchiveIdentity`, `ArchiveRuntime`, `ArchiveEngineService`, `dump_contract`, `load_contract` |
+| `archive_cli.ppa_engine` | `ppa_engine` (re-export of `archive_engine.execution_mode`) |
+| CLI | `ppa read`, `ppa search`, `ppa query` |
+| MCP | `archive_read`, `archive_search`, `archive_query` |
+| Resolve | `resolve_store`, `resolve_runtime` |
+
+Package discovery includes `archive_engine*` (`pyproject.toml`). Clean installed-wheel execution is P06-D after P09.
+
+### Remaining compatibility adapters
+
+| Adapter | Why it stays | Removal |
+| --- | --- | --- |
+| `DefaultArchiveStore` | CLI/MCP facade over `ArchiveRuntime` | After callers use `resolve_runtime` (P06-D / P10) |
+| `archive_cli.ppa_engine` | Old import path | After vault/cache-only callers switch (P09) |
+| `store.index._connect` in maintain | Admin/warehouse private conn | Stays inside warehouse adapter snapshot |
+| `archive_engine.publication` → `archive_cli.index_config` / `serving_index` | P02 publish still builds the serving generation | After publish adapter owns the native write (P06-D) |
+| `archive_vault.identity_resolver` → `archive_cli.vault_cache` | Person resolution cache | After cache lives under vault/engine (P09) |
+
+A synthetic supported `person` card must still travel write → materialize → `runtime.read` / `runtime.query` with the registered `people` projection.

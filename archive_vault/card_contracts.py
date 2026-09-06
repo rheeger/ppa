@@ -363,6 +363,23 @@ def _build_specs() -> dict[str, CardTypeSpec]:
 
 CARD_TYPE_SPECS = _build_specs()
 
+# Declared contract fields that are not Pydantic model fields. New pairs must
+# be added here explicitly; otherwise validate_card_type_specs fails.
+CONTRACT_FIELDS_NOT_ON_MODEL: frozenset[tuple[str, str, str]] = frozenset(
+    {
+        ("calendar_event", "external_id", "event_id_hint"),
+        ("calendar_event", "external_id", "invite_event_id_hint"),
+        ("calendar_event", "external_id", "invite_ical_uid"),
+        ("email_message", "external_id", "gmail_history_id"),
+        ("finance", "relationship", "counterparties"),
+        ("git_repository", "external_id", "repository_id"),
+        ("git_repository", "external_id", "repository_name_with_owner"),
+        ("git_thread", "external_id", "associated_pr_numbers"),
+        ("imessage_message", "external_id", "linked_message_event_id"),
+        ("imessage_message", "external_id", "reply_to_event_id"),
+    }
+)
+
 
 def get_card_type_spec(card_type: str) -> CardTypeSpec:
     return CARD_TYPE_SPECS[card_type]
@@ -370,3 +387,34 @@ def get_card_type_spec(card_type: str) -> CardTypeSpec:
 
 def iter_card_type_specs() -> tuple[CardTypeSpec, ...]:
     return tuple(CARD_TYPE_SPECS[card_type] for card_type in CARD_TYPES)
+
+
+def validate_card_type_specs() -> None:
+    """Fail closed when a card type lacks a contract or grows an unexplained field."""
+
+    missing_specs = sorted(set(CARD_TYPES) - set(CARD_TYPE_SPECS))
+    extra_specs = sorted(set(CARD_TYPE_SPECS) - set(CARD_TYPES))
+    if missing_specs or extra_specs:
+        raise ValueError(f"card contract coverage drift missing={missing_specs} extra={extra_specs}")
+    found_divergences: set[tuple[str, str, str]] = set()
+    for card_type, model_cls in CARD_TYPES.items():
+        spec = CARD_TYPE_SPECS[card_type]
+        fields = set(model_cls.model_fields)
+        if not spec.rel_path_family or not spec.typed_projection or not spec.chunk_profile or not spec.edge_profile:
+            raise ValueError(f"incomplete card contract card_type={card_type}")
+        for name in spec.external_id_fields:
+            if name not in fields:
+                found_divergences.add((card_type, "external_id", name))
+        for name in spec.relationship_fields:
+            if name not in fields:
+                found_divergences.add((card_type, "relationship", name))
+        unknown_det = [name for name in spec.deterministic_fields if name not in fields]
+        unknown_llm = [name for name in spec.llm_eligible_fields if name not in fields]
+        if unknown_det or unknown_llm:
+            raise ValueError(
+                f"unknown ownership field card_type={card_type} deterministic={unknown_det} llm={unknown_llm}"
+            )
+    if found_divergences != set(CONTRACT_FIELDS_NOT_ON_MODEL):
+        added = sorted(found_divergences - set(CONTRACT_FIELDS_NOT_ON_MODEL))
+        removed = sorted(set(CONTRACT_FIELDS_NOT_ON_MODEL) - found_divergences)
+        raise ValueError(f"undocumented card contract field added={added} removed={removed}")

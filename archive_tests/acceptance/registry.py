@@ -65,6 +65,7 @@ def load_builtin_scenarios() -> None:
     from archive_tests.acceptance.scenarios import p03_maintain as _p03d  # noqa: F401
     from archive_tests.acceptance.scenarios import p03_outputs as _p03c  # noqa: F401
     from archive_tests.acceptance.scenarios import p05_access as _p05_access  # noqa: F401
+    from archive_tests.acceptance.scenarios import p06_contracts as _p06_contracts  # noqa: F401
     from archive_tests.acceptance.scenarios import p06_runtime as _p06_runtime  # noqa: F401
     from archive_tests.acceptance.scenarios import p07_corrections as _p07_corrections  # noqa: F401
     from archive_tests.acceptance.scenarios import p07_identity as _p07_identity  # noqa: F401
