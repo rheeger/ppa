@@ -181,6 +181,10 @@ def _convert_local_then_hosted(
             log.debug("anydoc extract-cache hit-before-hosted sha=%s", sha[:12])
             return hit.markdown, hit.text_source
 
+    from archive_engine.egress import FIRECRAWL_CANONICAL_URL, authorize_request
+
+    authorize_request(destination="firecrawl", url=FIRECRAWL_CANONICAL_URL)
+
     hosted = anydoc_hosted_ocr_kwargs()
     if hosted is None:
         assert local_exc is not None

@@ -206,7 +206,7 @@ def build_runtime(
     warehouse = WarehouseAdapter(index, after_rebuild=_after_rebuild(vault) if serving_factory is not None else None)
     from .embedding_provider import get_embedding_provider
 
-    providers = EmbeddingProviderAdapter(provider_factory or get_embedding_provider)
+    providers = EmbeddingProviderAdapter(provider_factory or get_embedding_provider, access=access)
     return ArchiveRuntime(
         identity=resolved_identity,
         access=access,

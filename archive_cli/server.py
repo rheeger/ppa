@@ -25,6 +25,7 @@ except ImportError:  # pragma: no cover
             raise RuntimeError("mcp package is required to run ppa")
 
 
+from archive_engine.redaction import redact_text
 from archive_engine.access import (
     PROFILE_LABELS,
     TOOL_PROFILES,
@@ -71,8 +72,9 @@ def _log_tool_done(tool_name: str, t0: float, **extra: object) -> None:
 
 
 def _log_tool_return_error(tool_name: str, message: str) -> str:
-    _log.error("tool=%s error=%s", tool_name, message)
-    return message
+    safe = redact_text(message)
+    _log.error("tool=%s error=%s", tool_name, safe)
+    return safe
 
 
 _server_instructions = build_server_instructions()
@@ -137,10 +139,11 @@ def _tool_profile_error(tool_name: str) -> str | None:
 
 
 def _ppa_err(tool: str, exc: BaseException) -> str:
-    _log.error("tool=%s ppa_error=%s", tool, str(exc))
+    safe = redact_text(str(exc))
+    _log.error("tool=%s ppa_error=%s", tool, safe)
     if isinstance(exc, ServingIndexUnavailableError):
         return json.dumps({"error": "serving_index_unavailable", "tool": tool})
-    return str(exc)
+    return safe
 
 
 @_tool("archive_search")

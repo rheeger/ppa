@@ -113,22 +113,30 @@ def _resolve_openai_api_key() -> str:
 
 
 def _post_json(url: str, headers: dict[str, str], payload: dict[str, object]) -> dict[str, object] | None:
+    from archive_engine.egress import EgressDeniedError, authorize_request, guarded_urlopen
+    from archive_engine.redaction import redact_text
+
     data = json.dumps(payload).encode("utf-8")
     req = request.Request(url, data=data, headers=headers, method="POST")
     from .index_config import _ppa_env
 
     timeout_seconds = float(_ppa_env("PPA_OPENAI_TIMEOUT_SECONDS", default=str(DEFAULT_OPENAI_TIMEOUT_SECONDS)))
     max_retries = int(_ppa_env("PPA_OPENAI_MAX_RETRIES", default=str(DEFAULT_OPENAI_MAX_RETRIES)))
+    authorize_request(destination="openai", url=url)
     for attempt in range(max_retries + 1):
         try:
-            with request.urlopen(req, timeout=timeout_seconds) as response:
+            with guarded_urlopen(req, timeout=timeout_seconds, destination="openai") as response:
                 return json.loads(response.read().decode("utf-8"))
+        except EgressDeniedError:
+            raise
         except error.HTTPError as exc:
             should_retry = exc.code in {408, 409, 429, 500, 502, 503, 504}
             if attempt >= max_retries or not should_retry:
+                logger.warning("openai http failed status=%s", getattr(exc, "code", "?"))
                 return None
-        except (error.URLError, TimeoutError, json.JSONDecodeError):
+        except (error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             if attempt >= max_retries:
+                logger.warning("openai request failed: %s", redact_text(str(exc)))
                 return None
         time.sleep(min(0.5 * (2**attempt), 4.0))
     return None

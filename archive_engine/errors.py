@@ -25,6 +25,13 @@ class AccessDeniedError(EngineError):
     """
 
 
+class EgressDeniedError(AccessDeniedError):
+    """Provider destination or payload is not permitted for the current policy.
+
+    Raised before transport. Callers must not fall back to another destination.
+    """
+
+
 class IncompatibleStateError(EngineError):
     """Schema, contract version, or identity binding does not match."""
 

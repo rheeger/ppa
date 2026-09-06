@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from archive_engine.redaction import redact_text
 from archive_sync.adapters.gmail_http_errors import (
     GmailDailyQuotaExceeded,
     GmailPermissionDenied,
@@ -318,9 +319,9 @@ def extract_jobs(
             try:
                 by_uid[job.uid] = future.result()
             except Exception as exc:
-                log.warning("attachment job failed uid=%s err=%s", job.uid, exc)
+                log.warning("attachment job failed uid=%s err=%s", job.uid, redact_text(str(exc)))
                 by_uid[job.uid] = AttachmentExtraction(
-                    status=STATUS_FAILED, filename=job.filename, uid=job.uid, reason=str(exc)
+                    status=STATUS_FAILED, filename=job.filename, uid=job.uid, reason=redact_text(str(exc))
                 )
             done += 1
             if done == 1 or done % 25 == 0 or done == len(jobs):
@@ -464,7 +465,7 @@ def _write_attachment_extraction(
 
             register_ingested_file(vault, uid=uid, rel_path=rel_path, sha256=sha)
         except Exception as exc:
-            log.warning("file-identity extract link skipped uid=%s err=%s", uid, exc)
+            log.warning("file-identity extract link skipped uid=%s err=%s", uid, redact_text(str(exc)))
     return {
         "rel_path": rel_path,
         "status": result.status,
@@ -826,7 +827,7 @@ def run_attachment_text_extraction(
                 try:
                     results_by_uid[job.uid] = future.result()
                 except Exception as exc:
-                    log.warning("attachment extract+write failed uid=%s err=%s", job.uid, exc)
+                    log.warning("attachment extract+write failed uid=%s err=%s", job.uid, redact_text(str(exc)))
                     results_by_uid[job.uid] = {
                         "uid": job.uid,
                         "status": STATUS_FAILED,

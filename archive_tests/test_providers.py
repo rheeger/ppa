@@ -10,6 +10,12 @@ from archive_cli.providers import OllamaModelProvider, OpenAIModelProvider, reso
 from archive_cli.providers.openclaw import OpenClawModelProvider
 
 
+@pytest.fixture(autouse=True)
+def _clear_egress_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PPA_EGRESS_MODE", raising=False)
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+
+
 def test_resolve_provider_openai(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PPA_ENRICHMENT_MODEL", "openai:gpt-4o-mini")
     p = resolve_provider(refresh=True)

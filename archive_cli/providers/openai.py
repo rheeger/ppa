@@ -28,8 +28,11 @@ class OpenAIModelProvider:
         return 0.001
 
     def generate(self, prompt: str, max_tokens: int = 1024) -> str:
+        from archive_engine.egress import authorize_request
+
         api_key = _resolve_openai_api_key()
         url = "https://api.openai.com/v1/chat/completions"
+        authorize_request(destination="openai", url=url)
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         payload: dict[str, Any] = {
             "model": self.model,
