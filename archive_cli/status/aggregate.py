@@ -17,6 +17,7 @@ from archive_sync.source_updaters.snapshot import status_payload_for_declaration
 from archive_sync.source_updaters.state_store import SourceUpdaterStateStore
 
 from .corpus_summary import query_corpus_summary, query_email_hygiene_summary
+from .instance_policy import current_instance_policy
 from .readiness import V3ReadinessResult, evaluate_v3_readiness
 
 
@@ -107,9 +108,27 @@ def _flatten_source_entries(sources_payload: dict[str, Any]) -> list[dict[str, A
                 "quarantined_last_run": batch.get("quarantined", 0),
                 "deleted_last_run": batch.get("deleted_or_tombstoned", 0),
                 "last_error": state.get("last_error") or "",
+                "capability": _source_capability(state, decl),
             }
         )
     return entries
+
+
+def _source_capability(state: dict[str, Any], decl: dict[str, Any]) -> dict[str, Any]:
+    """Per-source capability: stale/down stay visible; missing stays pending/unavailable."""
+
+    staleness = str(state.get("staleness_state") or "never_synced")
+    last_error = str(state.get("last_error") or "")
+    enabled = bool(state.get("enabled", decl.get("enabled", True)))
+    if not enabled:
+        return {"status": "unavailable", "reason": "source disabled"}
+    if staleness in ("failed", "blocked"):
+        return {"status": "unavailable", "reason": last_error or staleness}
+    if staleness in ("stale", "never_synced"):
+        return {"status": "pending" if staleness == "never_synced" else "stale", "reason": last_error or staleness}
+    if staleness == "fresh":
+        return {"status": "available", "reason": ""}
+    return {"status": "pending", "reason": staleness or "unknown"}
 
 
 def _overall_archive_status(
@@ -205,6 +224,7 @@ def build_production_status(
             sources_payload=sources_payload,
             processors_payload=processors_payload,
             require_production_soak=require_production_soak,
+            vault_path=vault_path,
         )
     else:
         warnings.append(
@@ -278,6 +298,13 @@ def build_production_status(
             warnings.append({"category": "archive", "message": str(exc)})
 
     ready = bool(v3_readiness.ready) if v3_readiness is not None else False
+    policy = (v3_readiness.instance_policy if v3_readiness is not None else None) or current_instance_policy(
+        vault_path=vault_path,
+        archive_instance=archive_instance,
+    )
+    from archive_cli.commands.setup import detect_capabilities
+
+    capabilities = detect_capabilities(vault=Path(vault_path) if vault_path else None)
     payload = {
         "completion_state": SECTION_F_COMPLETION_STATE,
         "archive": {
@@ -297,6 +324,9 @@ def build_production_status(
             "materialized_watermark": maintenance.get("materialized_watermark"),
             "published_watermark": maintenance.get("published_watermark"),
             "index_status": index_status,
+            "fresh": False,
+            "freshness_reason": policy.get("freshness_reason"),
+            "production_proven": False,
         },
         "sources": _flatten_source_entries(sources_payload),
         "corpus": corpus,
@@ -309,7 +339,17 @@ def build_production_status(
         "validation_gates": validation_gates,
         "v3_readiness": v3_readiness.to_dict()
         if v3_readiness
-        else {"ready": False, "failed_checks": ["index_unavailable"]},
+        else {"ready": False, "failed_checks": ["index_unavailable"], "instance_policy": policy},
+        "instance_policy": policy,
+        "capabilities": capabilities,
+        "analytics": {
+            "cli": "pending",
+            "mcp": "pending",
+            "owner": "P10",
+            "closes_on": "P04-D",
+        },
+        "fresh": False,
+        "production_proven": False,
         "errors": errors,
         "warnings": warnings,
     }
@@ -344,6 +384,14 @@ def build_blocked_status(
         "maintenance": {},
         "validation_gates": {},
         "v3_readiness": {"ready": False, "failed_checks": ["blocked"], "blocking_reasons": [reason]},
+        "instance_policy": current_instance_policy(
+            vault_path=vault_path,
+            archive_instance=archive_instance,
+        ),
+        "capabilities": {},
+        "analytics": {"cli": "pending", "mcp": "pending", "owner": "P10", "closes_on": "P04-D"},
+        "fresh": False,
+        "production_proven": False,
         "errors": [{"category": "blocked", "reason": reason, "message": message}],
         "warnings": [],
     }

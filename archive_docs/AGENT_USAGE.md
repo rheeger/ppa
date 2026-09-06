@@ -18,8 +18,9 @@ do's, don'ts, type filters, or routing into skill docs.
 ## CLI parity (no MCP)
 
 `ppa search`, `ppa query`, `ppa hybrid-search`, `ppa read`, `ppa graph`, `ppa health`,
-`ppa status` — same semantics as the MCP tools. `ppa health` is the shell equivalent
-of `archive_stats` / `archive_status_json`.
+`ppa status` — same retrieval family as the MCP tools. They are **not** one command:
+`ppa health` is structural/behavioral checks; `ppa status` / `archive_status_json`
+are current-instance production status; `archive_stats` is corpus counts.
 
 ## Ops tools (not retrieval)
 

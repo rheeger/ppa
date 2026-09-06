@@ -13,6 +13,8 @@ def format_status_text(payload: dict[str, Any]) -> str:
             "PPA status: BLOCKED",
             f"  reason: {payload.get('reason')}",
             f"  message: {payload.get('message')}",
+            "  fresh: false (manifest is not freshness)",
+            "  production_proven: false",
         ]
         return "\n".join(lines)
 
@@ -27,6 +29,18 @@ def format_status_text(payload: dict[str, Any]) -> str:
 
     v3 = payload.get("v3_readiness") or {}
     lines.append(f"v3 readiness: {'READY' if v3.get('ready') else 'NOT READY'}")
+    policy = payload.get("instance_policy") or v3.get("instance_policy") or {}
+    if policy:
+        lines.append("instance policy: current-instance")
+        if policy.get("accepted_local_exception"):
+            lines.append(f"  historical exception: {policy.get('accepted_local_exception')} (bound, does not transfer)")
+        else:
+            lines.append("  historical exception: none (local_seed_living_corpus does not inherit)")
+        lines.append("  production_proven: false")
+        lines.append("  fresh: false (manifest is not freshness)")
+    analytics = payload.get("analytics") or {}
+    if analytics:
+        lines.append(f"analytics: cli={analytics.get('cli', 'pending')} mcp={analytics.get('mcp', 'pending')}")
     failed = v3.get("failed_checks") or []
     if failed:
         lines.append("  failed:")
