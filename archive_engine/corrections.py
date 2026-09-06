@@ -14,9 +14,9 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Literal
 
+from archive_engine.contracts import OutputReceipt, OutputRevision
 from archive_engine.errors import IncompatibleStateError
 from archive_vault.change_journal import ChangeJournal, FaultHook, file_revision
-from archive_engine.contracts import OutputReceipt, OutputRevision
 from archive_vault.decisions import (
     KIND_CLEAR_OVERRIDE,
     KIND_FIELD_OVERRIDE,
@@ -33,8 +33,8 @@ from archive_vault.decisions import (
     append_decision,
     append_decision_payload,
     build_field_override,
-    list_decisions,
     latest_identity_merge,
+    list_decisions,
     list_identity_decisions,
     new_decision_id,
     open_conflicts_for,
@@ -42,11 +42,6 @@ from archive_vault.decisions import (
     update_decision_payload,
     value_hash,
     values_equivalent,
-)
-from archive_vault.provenance import (
-    PROVENANCE_METHOD_HUMAN,
-    ProvenanceEntry,
-    merge_provenance,
 )
 from archive_vault.identity import (
     REDIRECT_UID_PREFIX,
@@ -57,6 +52,11 @@ from archive_vault.identity import (
     person_alias_pairs,
     revert_alias_moves,
     save_identity_map,
+)
+from archive_vault.provenance import (
+    PROVENANCE_METHOD_HUMAN,
+    ProvenanceEntry,
+    merge_provenance,
 )
 from archive_vault.schema import validate_card_strict
 from archive_vault.vault import iter_note_paths, read_note, read_note_by_uid, write_card

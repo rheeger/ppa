@@ -13,10 +13,11 @@ from collections.abc import Awaitable, Callable, MutableMapping
 from pathlib import Path
 from typing import Any
 
-from archive_engine.access import is_restricted, policy_identity, resolve_access_context
-from archive_engine.contracts import AccessContext
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.responses import JSONResponse
+
+from archive_engine.access import is_restricted, policy_identity, resolve_access_context
+from archive_engine.contracts import AccessContext
 
 _log = logging.getLogger("ppa.http")
 

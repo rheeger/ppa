@@ -6,7 +6,6 @@ import logging
 from pathlib import Path
 
 import pytest
-from archive_tests.test_server import FakeIndex, _seed_vault
 
 import archive_cli.commands._resolve as resolve_mod
 from archive_cli.commands import graph as graph_cmd
@@ -15,6 +14,7 @@ from archive_cli.commands import read as read_cmd
 from archive_cli.commands import search as search_cmd
 from archive_cli.server import _server_instructions
 from archive_cli.store import DefaultArchiveStore
+from archive_tests.test_server import FakeIndex, _seed_vault
 
 
 @pytest.fixture

@@ -13,16 +13,16 @@ from archive_sync.connectors.legacy import GMAIL_CONNECTOR_ID, run_legacy_connec
 from archive_sync.connectors.replay import (
     BURST_FRESHNESS_UNKNOWN,
     CURSOR_EXPIRED,
+    RETENTION_PROVIDER_TOMBSTONE,
     FixtureBurstResolver,
     LifecycleRunner,
-    RETENTION_PROVIDER_TOMBSTONE,
+    PendingScope,
     ThreadEvent,
     apply_provider_tombstone,
     attach_resolver,
     inspect_cursor,
     migrate_cursor,
     persist_pending_scope,
-    PendingScope,
     select_latest_events,
 )
 from archive_sync.connectors.runtime import ContainedVaultWriter

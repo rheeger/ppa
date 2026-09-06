@@ -21,6 +21,7 @@ from .benchmark import (
     benchmark_seed_links,
     build_benchmark_sample,
 )
+from .command_registry import dispatch_product_command, register_product_commands
 from .commands import admin as admin_cmd
 from .commands import attachments as attachments_cmd
 from .commands import batch_embed as batch_embed_cmd
@@ -32,7 +33,6 @@ from .commands import read as read_cmd
 from .commands import search as search_cmd
 from .commands import seed_links as seed_cmd
 from .commands import status as status_cmd
-from .command_registry import dispatch_product_command, register_product_commands
 from .commands._resolve import resolve_index, resolve_store
 from .errors import PpaError, VaultNotFoundError
 from .index_config import get_seed_links_enabled

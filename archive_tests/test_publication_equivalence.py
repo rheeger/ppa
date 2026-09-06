@@ -9,11 +9,11 @@ import pytest
 
 from archive_engine.contracts import (
     CHUNK_EVIDENCE_REF_VERSION,
+    UNKNOWN,
     ChunkEvidenceRef,
     EmbeddingSpec,
     MessageEvidenceRef,
     SourceSpan,
-    UNKNOWN,
 )
 from archive_engine.errors import IncompatibleContractError
 from archive_engine.publication import (
@@ -195,7 +195,6 @@ def _mutated_full() -> dict[str, object]:
 
 
 def _delta_from_base() -> ServingSnapshot:
-    mutated = _mutated_full()
     return _snapshot(
         cards=[
             _card("hfa-email-msg00000001", "New Message"),

@@ -17,6 +17,12 @@ from typing import Any
 from archive_cli.vault_cache import VaultScanCache
 from archive_vault.change_journal import mutation_context
 from archive_vault.config import PPAConfig, load_config
+from archive_vault.decisions import (
+    active_overrides_for,
+    note_source_conflicts,
+    overlay_overrides,
+    protected_field_names,
+)
 from archive_vault.identity import IdentityCache
 from archive_vault.identity_resolver import (
     PersonIndex,
@@ -26,12 +32,6 @@ from archive_vault.identity_resolver import (
     merge_into_existing,
     resolve_person,
     resolve_person_snapshot,
-)
-from archive_vault.decisions import (
-    active_overrides_for,
-    note_source_conflicts,
-    overlay_overrides,
-    protected_field_names,
 )
 from archive_vault.provenance import PROVENANCE_EXEMPT_FIELDS, ProvenanceEntry, merge_provenance
 from archive_vault.schema import (

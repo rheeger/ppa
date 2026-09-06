@@ -21,11 +21,12 @@ from archive_sync.connectors.replay import (
     CURSOR_VERSION_V1,
     CURSOR_VERSION_V2,
     FIXTURE_CATCH_UP_BUDGET,
+    RETENTION_ARCHIVE_FORGET,
+    RETENTION_PROVIDER_TOMBSTONE,
+    ConnectorCheckpoint,
     FixtureBurstResolver,
     LifecycleRunner,
     PendingScope,
-    RETENTION_ARCHIVE_FORGET,
-    RETENTION_PROVIDER_TOMBSTONE,
     ThreadEvent,
     apply_provider_tombstone,
     archive_forget_requires_intent,
@@ -38,7 +39,6 @@ from archive_sync.connectors.replay import (
     persist_pending_scope,
     select_latest_events,
     store_checkpoint,
-    ConnectorCheckpoint,
 )
 from archive_sync.connectors.runtime import ContainedVaultWriter
 from archive_sync.connectors.sample import SAMPLE_CONNECTOR_ID
@@ -185,7 +185,7 @@ def test_sample_replay_and_interrupt_resume(vault: Path) -> None:
     assert replay.run.uids == first.run.uids
     assert replay.run.created_count == 0
 
-    other = tmp_writer = ContainedVaultWriter(vault)
+    tmp_writer = ContainedVaultWriter(vault)
     interrupted = LifecycleRunner(
         SAMPLE_CONNECTOR_ID,
         vault=vault,

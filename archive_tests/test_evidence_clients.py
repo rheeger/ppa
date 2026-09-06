@@ -22,7 +22,6 @@ from archive_engine.errors import ConfigError, QueryValidationError
 from archive_engine.scopes import SavedScope
 from archive_tests.acceptance.corpus import build_cards, build_queries
 
-
 REPLY = "hfa-email-message-p04breply01"
 REQUEST = "hfa-email-message-p04breq0001"
 STALE = "hfa-email-message-p04bstale01"
@@ -175,7 +174,7 @@ def test_cli_mcp_typed_query_agree() -> None:
         limit=50,
         cards=build_cards(),
     )
-    mcp = _mcp("query", type_filter="person", limit=50, cards_json=cards_json)
+    _mcp("query", type_filter="person", limit=50, cards_json=cards_json)
     expected = next(item for item in build_queries() if item["query_id"] == "q-p04b-person-namesake")
     uids = {row["uid"] for row in cli["rows"]}
     assert {PERSON_A, PERSON_B} <= uids

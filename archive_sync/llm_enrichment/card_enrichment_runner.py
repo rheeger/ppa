@@ -36,10 +36,10 @@ from archive_sync.llm_enrichment.workflows import document as wf_document
 from archive_sync.llm_enrichment.workflows import email_thread as wf_email
 from archive_sync.llm_enrichment.workflows import finance as wf_finance
 from archive_sync.llm_enrichment.workflows import imessage_thread as wf_imessage
+from archive_vault.change_journal import mutation_context
 from archive_vault.llm_provider import GeminiProvider, LLMResponse, OllamaProvider
 from archive_vault.provenance import ProvenanceEntry, merge_provenance
 from archive_vault.schema import validate_card_strict
-from archive_vault.change_journal import mutation_context
 from archive_vault.vault import read_note, read_note_by_uid, write_card
 
 log = logging.getLogger("ppa.card_enrichment")

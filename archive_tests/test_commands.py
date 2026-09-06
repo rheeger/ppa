@@ -15,7 +15,6 @@ import logging
 from pathlib import Path
 
 import pytest
-from archive_tests.test_server import FakeIndex, _seed_vault
 
 import archive_cli.commands._resolve as resolve_mod
 from archive_cli.commands import read as read_cmd
@@ -29,6 +28,7 @@ from archive_cli.errors import (
 )
 from archive_cli.health import run_health_checks
 from archive_cli.store import DefaultArchiveStore
+from archive_tests.test_server import FakeIndex, _seed_vault
 
 
 @pytest.fixture

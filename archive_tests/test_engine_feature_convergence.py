@@ -27,10 +27,10 @@ from archive_sync.connectors.sample import SAMPLE_CONNECTOR_ID
 from archive_tests.test_conversation_bursts import (
     ANSWER,
     ANSWER_MESSAGE_ID,
+    _msg,
     burst_chunks,
     long_thread_messages,
     thread_frontmatter,
-    _msg,
 )
 from archive_tests.test_engine_boundaries import assert_engine_import_boundaries
 from archive_vault.provenance import ProvenanceEntry

@@ -12,9 +12,9 @@ from archive_engine.publication import (
     COMPLETE_FILE,
     PublicationFault,
     PublicationFaultHook,
+    publish_snapshot,
     read_active_generation,
     recover_publication,
-    publish_snapshot,
 )
 from archive_tests.test_publication_equivalence import (
     _base_state,

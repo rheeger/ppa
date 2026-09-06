@@ -14,7 +14,6 @@ fixture sets; ``archive_tests/test_merchant_normalizer.py`` enforces the
 from __future__ import annotations
 
 import re
-from difflib import SequenceMatcher
 
 # Bank-feed processor prefixes that carry the real merchant name AFTER them.
 # Example: "SQ *BLUE BOTTLE" -> "BLUE BOTTLE". We strip the prefix + any

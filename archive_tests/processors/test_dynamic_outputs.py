@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from archive_engine.contracts import OutputRevision
+from archive_sync.adapters.base import deterministic_provenance
 from archive_sync.extractors.amazon import AmazonExtractor
 from archive_sync.extractors.base import EmailExtractor, TemplateVersion
 from archive_sync.extractors.registry import ExtractorRegistry
@@ -39,7 +40,6 @@ from archive_sync.processors.runner import (
 from archive_sync.processors.staleness import ProcessorInputSnapshot
 from archive_sync.processors.state_store import ProcessorStateStore
 from archive_tests.archive_sync.extractors.conftest import write_email_to_vault
-from archive_sync.adapters.base import deterministic_provenance
 from archive_tests.archive_sync.extractors.test_amazon import AMAZON_ORDER_BODY
 from archive_vault.schema import PurchaseCard
 from archive_vault.vault import read_note_by_uid, write_card

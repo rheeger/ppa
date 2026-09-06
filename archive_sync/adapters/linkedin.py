@@ -6,7 +6,7 @@ import csv
 import os
 import re
 from collections import Counter
-from datetime import date, datetime
+from datetime import date
 from io import StringIO
 from pathlib import Path
 from typing import Any

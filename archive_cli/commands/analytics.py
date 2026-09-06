@@ -20,10 +20,15 @@ from archive_engine.analytics.subscriptions import subscription_lifecycle
 from archive_engine.analytics.trip_costs import assemble_trip, currency_totals, reconcile_trip_costs
 from archive_engine.context import expand_neighbors, neighbor_units_from_cards
 from archive_engine.contracts import AccessContext, ChangeRecord
-from archive_engine.errors import ConfigError, QueryValidationError
+from archive_engine.errors import QueryValidationError
 from archive_engine.query import execute_typed_query, request_from_simple_filters
-from archive_engine.scopes import SavedScope, empty_scope_result, parse_saved_scopes, resolve_effective_scope
-from archive_engine.scopes import RequestFilters
+from archive_engine.scopes import (
+    RequestFilters,
+    SavedScope,
+    empty_scope_result,
+    parse_saved_scopes,
+    resolve_effective_scope,
+)
 
 from ..store import DefaultArchiveStore
 

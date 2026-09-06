@@ -13,8 +13,8 @@ from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 from urllib import error, request
 
-from archive_engine.errors import EgressDeniedError
 from archive_engine.egress import authorize_request, destination_from_url, guarded_urlopen
+from archive_engine.errors import EgressDeniedError
 from archive_engine.redaction import redact_text
 from archive_vault.provenance import compute_input_hash
 

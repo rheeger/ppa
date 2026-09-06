@@ -9,7 +9,6 @@ import sys
 from pathlib import Path
 
 import pytest
-from archive_tests.test_server import FakeIndex, _seed_vault
 
 import archive_cli.commands._resolve as resolve_mod
 from archive_cli.card_traversal import (
@@ -25,6 +24,7 @@ from archive_cli.commands import read as read_cmd
 from archive_cli.mcp_instructions import CARD_STACK_PLAYBOOK_HELP, TOOL_DESCRIPTIONS
 from archive_cli.server import archive_evidence, archive_read
 from archive_cli.store import DefaultArchiveStore
+from archive_tests.test_server import FakeIndex, _seed_vault
 
 PPA_ROOT = Path(__file__).resolve().parents[1]
 

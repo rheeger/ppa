@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from archive_cli.query_embed_cache import query_embed_cache_key
 from archive_engine.access import (
     DOMAIN_TAXONOMY_VERSION,
     card_permitted,
@@ -15,7 +16,6 @@ from archive_engine.access import (
     tool_permitted,
 )
 from archive_engine.contracts import AccessContext
-from archive_cli.query_embed_cache import query_embed_cache_key
 
 
 def _ctx(**kwargs) -> AccessContext:

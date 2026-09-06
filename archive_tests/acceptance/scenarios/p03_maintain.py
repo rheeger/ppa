@@ -86,8 +86,8 @@ def run_p03_maintain(runtime: IsolatedRuntime) -> dict[str, Any]:
     _write_amazon_email(runtime.vault)
 
     from archive_cli.commands.maintain import run_maintenance
-    from archive_cli.serving_index import get_serving_handle, mark_serving_index_dirty
     from archive_cli.server import archive_search
+    from archive_cli.serving_index import get_serving_handle, mark_serving_index_dirty
     from archive_cli.store import DefaultArchiveStore
     from archive_sync.processors.constants import PROCESSOR_EMAIL_TYPED_EXTRACTION
     from archive_vault.change_journal import ChangeJournal

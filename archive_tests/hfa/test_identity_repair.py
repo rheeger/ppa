@@ -14,7 +14,6 @@ from archive_vault.canon import place
 from archive_vault.canon.wikilink import parse as parse_wikilink
 from archive_vault.vault import read_note
 
-
 FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "identity-repair"
 
 

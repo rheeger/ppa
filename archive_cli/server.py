@@ -25,7 +25,6 @@ except ImportError:  # pragma: no cover
             raise RuntimeError("mcp package is required to run ppa")
 
 
-from archive_engine.redaction import redact_text
 from archive_engine.access import (
     PROFILE_LABELS,
     TOOL_PROFILES,
@@ -34,6 +33,7 @@ from archive_engine.access import (
     resolve_access_context,
     tool_permitted,
 )
+from archive_engine.redaction import redact_text
 
 from .commands import admin, attachments, explain
 from .commands import analytics as analytics_cmd

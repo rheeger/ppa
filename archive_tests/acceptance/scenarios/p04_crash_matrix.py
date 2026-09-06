@@ -15,7 +15,11 @@ from typing import Any
 
 from archive_engine.changes import CONSUMER_PUBLICATION, consume_batch
 from archive_engine.contracts import UNKNOWN, EvidenceEnvelope
-from archive_engine.corrections import CorrectionCommandRequest, execute_correction_command, reconcile_pending_corrections
+from archive_engine.corrections import (
+    CorrectionCommandRequest,
+    execute_correction_command,
+    reconcile_pending_corrections,
+)
 from archive_engine.egress import capture_egress, egress_scope
 from archive_engine.errors import EgressDeniedError, PublisherBusyError
 from archive_engine.publication import (

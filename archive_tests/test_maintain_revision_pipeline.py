@@ -370,8 +370,8 @@ def test_maintain_create_update_restart_queryable(
     import uuid
 
     from archive_cli.index_store import PostgresArchiveIndex
-    from archive_cli.store import DefaultArchiveStore
     from archive_cli.serving_index import mark_serving_index_dirty
+    from archive_cli.store import DefaultArchiveStore
     from archive_tests.acceptance.environment import inspect_warehouse_card, reset_serving_handle
     from archive_vault.provenance import ProvenanceEntry
     from archive_vault.schema import PersonCard

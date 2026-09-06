@@ -5,7 +5,8 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from archive_engine.publication import diff_universes, resolve_live_universe
+from archive_cli.serving_index import get_serving_handle
+from archive_engine.publication import diff_universes, publish_snapshot, resolve_live_universe
 from archive_tests.acceptance.environment import IsolatedRuntime, reset_serving_handle
 from archive_tests.acceptance.registry import Scenario, register
 from archive_tests.test_publication_equivalence import (
@@ -16,8 +17,6 @@ from archive_tests.test_publication_equivalence import (
     _snapshot,
     _vec,
 )
-from archive_engine.publication import publish_snapshot
-from archive_cli.serving_index import get_serving_handle
 
 
 def run_p02_deltas(runtime: IsolatedRuntime) -> dict[str, Any]:

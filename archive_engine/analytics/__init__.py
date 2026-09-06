@@ -18,7 +18,7 @@ from archive_engine.analytics.warehouse import (
     compile_typed_aggregate,
     execute_typed_aggregate,
 )
-from archive_engine.contracts import AccessContext, UNKNOWN
+from archive_engine.contracts import UNKNOWN, AccessContext
 from archive_engine.errors import QueryValidationError
 
 WORKFLOW_CONTRACT_VERSION = "p10c.1"
