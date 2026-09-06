@@ -1,26 +1,20 @@
-# Connector SDK (P08-A / P08-B)
+# Connector SDK (P08-A through P08-D)
 
 A contributor adds a connector by registering a factory. The runtime looks the
 factory up by `connector_id`. Do not add a source-specific `if` / `elif` in
-core dispatch.
+core dispatch. Do not edit `archive_sync/handler.py`.
 
 Query quality here means a machine can tell which account a source object
 belongs to. The same provider ID in two accounts is two cards.
 
 ## Status
 
-P08-A is the SDK + sample tracer. P08-B runs the existing Gmail and calendar
-adapters through that runtime with synthetic provider responses.
+P08-A is the SDK + sample tracer. P08-B runs Gmail and calendar through that
+runtime with synthetic provider responses. P08-C owns cursor lifecycle and
+thread freshness. P08-D is the contributor template and quality/replay command.
 
-Gmail/calendar parsing stays in the adapters (`fetch_batches` / `to_card`).
-The SDK validates the manifest, wraps batches, persists through the adapter
-write/merge seam (so P07 overrides survive), then emits P02 `ChangeRecord`s
-and P03 `OutputReceipt`s. The cursor candidate becomes `committed_cursor`
-only after that persist.
-
-The sample connector still uses the skip-rewrite contained writer and labels
-warehouse publication as pending. Do not claim a sample card is
-warehouse-searchable from this slice.
+`python -m archive_sync.connectors.cli` is the SDK test command. P09 will
+register it on the product CLI. It is not wired into handler dispatch here.
 
 Locally installed Python connector code is trusted executable code. Manifest
 validation is a compatibility gate, not a sandbox. Remote untrusted packages
@@ -31,9 +25,8 @@ are out of scope until the signed-update design.
 Identity is `(archive_id, source, account_scope, provider_object_id)`.
 
 - `source_id` on the card is `account_scope:provider_object_id`
-- Sample UID material includes `archive_id`; existing Gmail/calendar UIDs keep
-  their prior recipe (`source + account_scope + provider_object_id`) so cards
-  do not move
+- Sample and contributor UIDs include `archive_id`; Gmail/calendar keep their
+  prior recipe so existing cards do not move
 - Two accounts with the same provider object ID stay distinct
 
 Connectors emit sourced facts and provenance. They do not write inferred
@@ -42,23 +35,28 @@ tombstone is not an archive-forget.
 
 ## Add a connector
 
-1. Create a module that implements `fetch` and `normalize`.
-2. Return a `ConnectorManifest` with owned fields, identity recipe, cursor
-   schema, delete/retention policy, freshness capability, and fixture metadata.
-3. Call `register_connector(connector_id, factory)`.
-4. Exercise the connector through `execute_connector` with an injected
-   `CanonicalWriter`.
+1. Copy `archive_docs/examples/connector-template/`.
+2. Fill `manifest.json`, `connector.py` (`fetch` + `normalize`), and
+   `fixtures.json` (include a negative that must not emit).
+3. Call `register_connector(connector_id, factory)` in the package.
+4. Run the check command:
 
-Existing Gmail/calendar adapters set `uses_connector_sdk = True` and resolve
-through `archive_sync.connectors.legacy.adapter_for_source`. Handler and
-source-updater dispatch for those two IDs go through that helper.
+```bash
+unset PPA_TEST_PG_DSN
+.venv/bin/python -m archive_sync.connectors.cli check \
+  --package archive_docs/examples/connector-template \
+  --vault /tmp/ppa-connector-check \
+  --output /tmp/ppa-connector-check/verdict.json
+```
+
+The command validates the manifest **before** importing `connector.py`,
+replays the fixture page, checks account-scoped identity, owned-field
+coverage, and false-promotion negatives, then writes a JSON verdict.
+
+Incompatible `sdk_version` or engine/card range fails before any write.
 
 ```python
-from archive_engine.contracts import AccessContext, ArchiveIdentity
-from archive_sync.connectors import (
-    execute_connector,
-    register_connector,
-)
+from archive_sync.connectors import execute_connector, register_connector
 from archive_sync.connectors.runtime import ContainedVaultWriter
 
 writer = ContainedVaultWriter(vault)
@@ -90,60 +88,48 @@ are forbidden on the manifest. `freshness_capability` is one of `polling`,
 
 ## Fetch / normalize / batch
 
-`fetch` returns an ordered `FetchedBatch`: batch id, source/account, cursor
-before, cursor-after **candidate**, raw record refs, and event identities.
-
-`normalize` returns typed canonical proposals with provenance and supporting
-source IDs. The runtime checks field ownership and the identity recipe, then
-calls the injected writer.
-
-The cursor candidate becomes `committed_cursor` only after every proposal in
-the batch has been persisted (create or idempotent replay). A connector cannot
-self-report a committed cursor.
-
-Replaying the same page yields the same UID and does not create a second file.
-Manual corrections applied through P07 survive that replay.
+`fetch` returns an ordered `FetchedBatch`. `normalize` returns typed
+canonical proposals. The cursor candidate becomes `committed_cursor` only
+after persist. Replay of the same page yields the same UID and does not
+create a second file.
 
 ## Engine contracts
 
-Import these; do not copy them:
+Import these; do not copy them: `ArchiveIdentity`, `AccessContext`,
+`ChangeRecord`, `OutputReceipt`. The writer is a protocol. No warehouse SQL.
 
-- `ArchiveIdentity`
-- `AccessContext`
-- `ChangeRecord` (emitted after a durable create or non-duplicate update)
-- `OutputReceipt` (emitted for the same persist)
+## Sample and template
 
-The writer is a protocol. No new `isinstance` checks against
-`DefaultArchiveStore` or other store types. Connectors do not run warehouse
-SQL.
+- `sample.fixture` — SDK-native tracer in `archive_sync/connectors/sample.py`
+- `example.contributor` — copyable package under
+  `archive_docs/examples/connector-template/`
 
-## Sample
+Neither talks to live Gmail.
 
-`sample.fixture` is fixture-backed. It emits `email_message` cards for two
-accounts that share `sample-msg-001`. There is no live Gmail (or any live
-provider) path.
+## Migrated vs remaining adapters
 
-## Existing connectors (P08-B)
+Through the adapter bridge today:
 
-`gmail-messages` and `calendar-events` register in `connectors/legacy.py`.
-Tests and acceptance use synthetic `to_card` items only — no live Google
-credentials, no seed vault.
+- `gmail-messages`
+- `calendar-events`
+
+SDK-native (not a vault adapter): `sample.fixture`
+
+**Still legacy** (pre-SDK ingest). Do not claim these migrated.
+
+Executable: `imessage`, `otter-transcripts`, `file-libraries`, `photos`,
+`beeper`, `contacts`, `github-history`, `gmail-correspondents`.
+
+Export-only: `copilot-finance`, `linkedin`, `notion-people`, `notion-staff`,
+`apple-health`, `medical-records`, `seed-people`.
+
+Stable seam for the next migration: `register_connector` plus
+`archive_sync.connectors.legacy.adapter_for_source`. Print the live list with
+`python -m archive_sync.connectors.cli legacy-list`.
 
 ## Lifecycle (P08-C)
 
 `archive_sync.connectors.replay` owns cursor migration, expired-cursor state,
 duplicate/out-of-order events, scoped thread dirty-UIDs, provider tombstone
-versus archive-forget, and pending context scopes.
-
-- Cursor v1 → v2 keeps `history_id` / `page_token`. Expired tokens are
-  `expired`, not a silent mailbox reset. Bounded replay is opt-in and capped.
-- A reply dirties the thread UID plus changed message UIDs. Unrelated threads
-  stay clean.
-- Burst keys use P01-B1 identity (`p01b1-burst-1`) when a resolver is
-  attached. Without one, burst freshness is `unknown` and pending scopes wait.
-- Incompatible connector versions restore the last safe cursor and never
-  delete canonical cards.
-
-## Later slices
-
-- **P08-D** — contributor template and quality gate; P09 registers the CLI
+versus archive-forget, and pending context scopes. Burst freshness is
+`unknown` until a P01 resolver is attached.
