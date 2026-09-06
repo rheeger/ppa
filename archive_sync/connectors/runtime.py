@@ -203,6 +203,15 @@ def execute_connector(
                 persist.uid,
                 proposal.identity.account_scope,
             )
+    dirty: list[str] = []
+    for persist, proposal in zip(persists, proposals):
+        if persist.uid and persist.uid not in dirty:
+            dirty.append(persist.uid)
+        thread_ref = str(proposal.card.get("thread") or "")
+        if thread_ref.startswith("[[") and thread_ref.endswith("]]"):
+            parent = thread_ref[2:-1]
+            if parent and parent not in dirty:
+                dirty.append(parent)
     return ConnectorRunResult(
         connector_id=resolved.connector_id,
         manifest=resolved,
@@ -215,4 +224,7 @@ def execute_connector(
         receipts=tuple(receipts),
         pending_p02_wiring=pending_p02_wiring,
         pending_p03_wiring=pending_p03_wiring,
+        dirty_uids=tuple(dirty),
+        burst_freshness="unknown",
+        cursor_status="active",
     )

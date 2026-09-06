@@ -129,7 +129,21 @@ provider) path.
 Tests and acceptance use synthetic `to_card` items only — no live Google
 credentials, no seed vault.
 
+## Lifecycle (P08-C)
+
+`archive_sync.connectors.replay` owns cursor migration, expired-cursor state,
+duplicate/out-of-order events, scoped thread dirty-UIDs, provider tombstone
+versus archive-forget, and pending context scopes.
+
+- Cursor v1 → v2 keeps `history_id` / `page_token`. Expired tokens are
+  `expired`, not a silent mailbox reset. Bounded replay is opt-in and capped.
+- A reply dirties the thread UID plus changed message UIDs. Unrelated threads
+  stay clean.
+- Burst keys use P01-B1 identity (`p01b1-burst-1`) when a resolver is
+  attached. Without one, burst freshness is `unknown` and pending scopes wait.
+- Incompatible connector versions restore the last safe cursor and never
+  delete canonical cards.
+
 ## Later slices
 
-- **P08-C** — cursor migration, thread freshness, upgrade/rollback
 - **P08-D** — contributor template and quality gate; P09 registers the CLI

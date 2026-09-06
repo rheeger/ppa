@@ -253,6 +253,11 @@ class ConnectorRunResult:
     receipts: tuple[OutputReceipt, ...] = ()
     pending_p02_wiring: str = "pending"
     pending_p03_wiring: str = "pending"
+    dirty_uids: tuple[str, ...] = ()
+    burst_freshness: str = "unknown"
+    burst_keys: tuple[str, ...] = ()
+    pending_scopes: tuple[Mapping[str, object], ...] = ()
+    cursor_status: str = "active"
 
     @property
     def uids(self) -> tuple[str, ...]:

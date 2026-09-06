@@ -90,6 +90,17 @@ def _thread_uid(account_email: str, thread_id: str) -> str:
     return generate_uid("email-thread", THREAD_SOURCE, _thread_identity(account_email, thread_id))
 
 
+def thread_event_uids(account_email: str, thread_id: str, message_ids: list[str] | tuple[str, ...]) -> tuple[str, ...]:
+    """Scoped thread + message UIDs for a reply/edit. Not a mailbox walk."""
+
+    uids = [_thread_uid(account_email, thread_id)]
+    for message_id in message_ids:
+        uid = _message_uid(account_email, message_id)
+        if uid not in uids:
+            uids.append(uid)
+    return tuple(uids)
+
+
 GMAIL_PAGE_CURSOR_FIELDS = ("page_token", "page_index", "page_thread_ids", "page_next_token")
 
 
