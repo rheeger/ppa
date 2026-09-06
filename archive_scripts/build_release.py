@@ -42,7 +42,9 @@ def _run(argv: list[str], *, cwd: Path | None = None, env: dict[str, str] | None
 def build_release(*, output: Path, python: str | None = None) -> dict[str, Any]:
     output = Path(output).resolve()
     output.mkdir(parents=True, exist_ok=True)
-    py = python or ("/opt/homebrew/bin/python3.12" if Path("/opt/homebrew/bin/python3.12").is_file() else sys.executable)
+    py = python or (
+        "/opt/homebrew/bin/python3.12" if Path("/opt/homebrew/bin/python3.12").is_file() else sys.executable
+    )
     env = dict(os.environ)
     toolchain = _toolchain_bin()
     if toolchain is not None:
@@ -96,7 +98,9 @@ def build_release(*, output: Path, python: str | None = None) -> dict[str, Any]:
         "production_proven": False,
         "maturin_log_tail": native_out[-500:],
     }
-    (output / "release-manifest.json").write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (output / "release-manifest.json").write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     return payload
 
 

@@ -449,9 +449,7 @@ def _execute_entity_resolution(ctx: ExecuteContext, items: list[ProcessorPlanIte
     errors = list(er_result.get("errors") or [])
     for item in items:
         if errors:
-            out.results.append(
-                _result_with_outputs(item, status=INPUT_STATUS_FAILED, error="; ".join(errors[:3]))
-            )
+            out.results.append(_result_with_outputs(item, status=INPUT_STATUS_FAILED, error="; ".join(errors[:3])))
             continue
         if not outputs:
             out.results.append(_result_with_outputs(item, status=INPUT_STATUS_COMPLETE, valid_no_output=True))
@@ -647,7 +645,9 @@ def _execute_linkers(ctx: ExecuteContext, items: list[ProcessorPlanItem]) -> Bat
                 apply_promotions=True,
             )
         jobs = result.get("jobs_completed", result) if isinstance(result, dict) else result
-        out.warnings.append(f"linkers jobs_completed={jobs} dirty_uids={len(uids)} deterministic_only={not include_llm}")
+        out.warnings.append(
+            f"linkers jobs_completed={jobs} dirty_uids={len(uids)} deterministic_only={not include_llm}"
+        )
         if not include_llm:
             out.warnings.append("provider_links_pending")
     except Exception as exc:
@@ -880,9 +880,7 @@ def _record_item_states(
     for result in results:
         version = decl_versions.get(result.processor_key, "")
         if result.receipt is None and result.status == INPUT_STATUS_COMPLETE:
-            report.errors.append(
-                f"{result.processor_key}:{result.input_uid}: complete without receipt (ignored)"
-            )
+            report.errors.append(f"{result.processor_key}:{result.input_uid}: complete without receipt (ignored)")
             continue
         if result.status == INPUT_STATUS_COMPLETE or result.valid_no_output:
             completed += 1
@@ -1413,9 +1411,7 @@ def run_processors(
     report.feedback_generations = max(generation, 0)
     report.capability_markers = list(capability_markers)
     if capability_markers:
-        report.warnings.append(
-            f"context_reconciliation_pending capability={CONTEXT_RECONCILIATION_CAPABILITY}"
-        )
+        report.warnings.append(f"context_reconciliation_pending capability={CONTEXT_RECONCILIATION_CAPABILITY}")
 
     report.output_count = completed
     if scheduled.blocked_count and not failed and not completed:

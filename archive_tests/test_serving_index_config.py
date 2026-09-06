@@ -314,9 +314,7 @@ def test_publish_serving_index_incremental_skips_full_export(tmp_path: Path, mon
         assert "c.card_uid = ANY(%s)" in joined
     dest = root / "generations" / "gen-new"
     cards = [
-        json.loads(line)
-        for line in (dest / "cards.jsonl").read_text(encoding="utf-8").splitlines()
-        if line.strip()
+        json.loads(line) for line in (dest / "cards.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()
     ]
     assert {row["card_uid"] for row in cards} == set()
     assert "old" not in {row.get("card_uid") for row in cards}

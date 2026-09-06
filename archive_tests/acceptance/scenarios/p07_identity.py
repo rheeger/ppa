@@ -42,7 +42,9 @@ def _write(vault, rel: str, card: PersonCard, people: list[str] | None = None) -
         data["people"] = people
         card = PersonCard.model_validate(data)
     write_card(vault, rel, card, body=card.summary, provenance=deterministic_provenance(card, "acceptance.p07c"))
-    upsert_identity_map(vault, f"[[{rel.split('/')[-1].removesuffix('.md')}]]", {"name": card.summary, "emails": card.emails})
+    upsert_identity_map(
+        vault, f"[[{rel.split('/')[-1].removesuffix('.md')}]]", {"name": card.summary, "emails": card.emails}
+    )
 
 
 def run_p07_identity(runtime: IsolatedRuntime) -> dict[str, Any]:
@@ -108,7 +110,17 @@ def run_p07_identity(runtime: IsolatedRuntime) -> dict[str, Any]:
     if read_note(runtime.vault, "People/casey-other.md")[0].get("people") != ["[[blake-loser]]"]:
         raise AssertionError("reference rewrite was not inverted")
 
-    receipts = identity_receipts(runtime.vault, {"winner_uid": WINNER_UID, "loser_uid": LOSER_UID, "winner_rel_path": "People/alex-winner.md", "loser_rel_path": "People/blake-loser.md", "winner_revision": undone.after_revision, "references": [{"uid": OTHER_UID, "rel_path": "People/casey-other.md"}]})
+    receipts = identity_receipts(
+        runtime.vault,
+        {
+            "winner_uid": WINNER_UID,
+            "loser_uid": LOSER_UID,
+            "winner_rel_path": "People/alex-winner.md",
+            "loser_rel_path": "People/blake-loser.md",
+            "winner_revision": undone.after_revision,
+            "references": [{"uid": OTHER_UID, "rel_path": "People/casey-other.md"}],
+        },
+    )
     maintain_payload: dict[str, Any] = {}
     try:
         from archive_cli.commands.maintain import run_maintenance
@@ -134,7 +146,10 @@ def run_p07_identity(runtime: IsolatedRuntime) -> dict[str, Any]:
         if WINNER_UID in (report.failed_revision_uids or []) or LOSER_UID in (report.failed_revision_uids or []):
             raise AssertionError(f"maintain failed identity UIDs: {report.failed_revision_uids}")
     except Exception as exc:
-        maintain_payload = {"error": f"{type(exc).__name__}: {exc}", "receipts": [item.to_payload() for item in receipts]}
+        maintain_payload = {
+            "error": f"{type(exc).__name__}: {exc}",
+            "receipts": [item.to_payload() for item in receipts],
+        }
 
     after_graph = {
         "blake_email": resolve_any(runtime.vault, "email", "blake@p07c.test"),

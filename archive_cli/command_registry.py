@@ -58,7 +58,9 @@ def register_product_commands(subparsers: argparse._SubParsersAction) -> None:
     )
     setup.add_argument("--from", dest="spec_path", default="", help="Fixture-only JSON SPEC")
     setup.add_argument("--apply", action="store_true", help="Write the reviewed plan (required with --non-interactive)")
-    setup.add_argument("--non-interactive", action="store_true", help="Require --from SPEC; never treat silence as apply")
+    setup.add_argument(
+        "--non-interactive", action="store_true", help="Require --from SPEC; never treat silence as apply"
+    )
 
     config = subparsers.add_parser(
         "config",
@@ -71,7 +73,9 @@ def register_product_commands(subparsers: argparse._SubParsersAction) -> None:
     explain = config_sub.add_parser("explain", help="Print redacted effective config (read-only; secrets omitted)")
     explain.add_argument("--instance-dir", default="", help="Explicit instance directory")
     explain.add_argument("--config", dest="config_path", default="", help="Explicit config path")
-    migrate = config_sub.add_parser("migrate", help="Write a versioned candidate; keeps the old file (writes candidate only)")
+    migrate = config_sub.add_parser(
+        "migrate", help="Write a versioned candidate; keeps the old file (writes candidate only)"
+    )
     migrate.add_argument("vault", help="Vault root containing _meta/ppa-config.json")
     rollback = config_sub.add_parser("rollback", help="Remove the instance candidate; keep the legacy file")
     rollback.add_argument("vault", help="Vault root")
@@ -161,7 +165,9 @@ def register_product_commands(subparsers: argparse._SubParsersAction) -> None:
     context.add_argument("--hit-uid", default="hfa-email-message-p04breply01")
     context.add_argument("--saved-scope", dest="saved_scope_name", default="")
     context.add_argument("--scopes-json", default="")
-    subscriptions = analytics_sub.add_parser("subscriptions", help="Subscription lifecycle (last-observed, not current)")
+    subscriptions = analytics_sub.add_parser(
+        "subscriptions", help="Subscription lifecycle (last-observed, not current)"
+    )
     subscriptions.add_argument("--cards-json", default="", help="Isolated fixture cards JSON")
     subscriptions.add_argument("--saved-scope", dest="saved_scope_name", default="")
     subscriptions.add_argument("--scopes-json", default="")

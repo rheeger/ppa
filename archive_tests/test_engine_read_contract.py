@@ -104,7 +104,9 @@ def _spec() -> EmbeddingSpec:
 
 
 def test_frozen_records_round_trip() -> None:
-    identity = ArchiveIdentity(archive_id="aid-1", canonical_root="/tmp/vault-a", schema_binding="warehouse:ppa+index_schema_v9")
+    identity = ArchiveIdentity(
+        archive_id="aid-1", canonical_root="/tmp/vault-a", schema_binding="warehouse:ppa+index_schema_v9"
+    )
     spec = _spec()
     change = ChangeRecord(
         archive_id="aid-1",
@@ -314,7 +316,9 @@ def test_store_read_delegates_to_engine(isolated: dict[str, Path], monkeypatch: 
         return original(self, path_or_uid, access=access)
 
     monkeypatch.setattr(ArchiveEngineService, "read", wrapped)
-    store = DefaultArchiveStore(vault=isolated["vault"], index=_UidIndex({"hfa-person-engine01": "People/engine-fixture.md"}))
+    store = DefaultArchiveStore(
+        vault=isolated["vault"], index=_UidIndex({"hfa-person-engine01": "People/engine-fixture.md"})
+    )
     path_hit = store.read("People/engine-fixture.md")
     uid_hit = store.read("hfa-person-engine01")
     assert path_hit["found"] is True
@@ -439,7 +443,11 @@ def test_core_engine_does_not_import_cli_or_mcp() -> None:
             else:
                 continue
             for name in names:
-                if name in forbidden or name.startswith("archive_cli.commands") or name.startswith("archive_cli.server"):
+                if (
+                    name in forbidden
+                    or name.startswith("archive_cli.commands")
+                    or name.startswith("archive_cli.server")
+                ):
                     found.append(f"{path.name}:{name}")
     assert found == []
 

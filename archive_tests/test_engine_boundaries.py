@@ -131,7 +131,9 @@ def test_package_discovery_includes_engine() -> None:
 def test_public_engine_imports_remain() -> None:
     assert ArchiveRuntime is not None
     assert ArchiveEngineService is not None
-    identity = ArchiveIdentity(archive_id="a" * 64, canonical_root="/tmp/x", schema_binding="warehouse:ppa+index_schema_v1")
+    identity = ArchiveIdentity(
+        archive_id="a" * 64, canonical_root="/tmp/x", schema_binding="warehouse:ppa+index_schema_v1"
+    )
     dumped = dump_contract(identity)
     loaded = load_contract(dumped)
     assert isinstance(loaded, ArchiveIdentity)

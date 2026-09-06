@@ -141,7 +141,9 @@ def test_expired_cursor_is_explicit_not_silent_reset() -> None:
 
 
 def test_expired_bounded_replay_stays_inside_budget() -> None:
-    bounded = migrate_cursor({"expired": True, "history_id": "h-old", "catch_up_estimate": 4}, strategy="bounded_replay")
+    bounded = migrate_cursor(
+        {"expired": True, "history_id": "h-old", "catch_up_estimate": 4}, strategy="bounded_replay"
+    )
     assert bounded.status == "pending_catch_up"
     assert bounded.catch_up_estimate == 4
     with pytest.raises(IncompatibleStateError, match="fixture budget"):

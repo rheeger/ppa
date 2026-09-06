@@ -227,7 +227,9 @@ def resolve_effective_scope(
     origins: dict[str, str] = {}
     inferred = tuple(dim for dim in req.inferred_dimensions if dim in FILTER_DIMENSIONS)
 
-    def _dimension(name: str, scope_value: tuple[str, ...] | str, request_value: tuple[str, ...] | str) -> tuple[str, ...] | str:
+    def _dimension(
+        name: str, scope_value: tuple[str, ...] | str, request_value: tuple[str, ...] | str
+    ) -> tuple[str, ...] | str:
         if name in inferred:
             origins[name] = "inferred_ignored"
             if isinstance(scope_value, str):

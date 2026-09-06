@@ -119,7 +119,14 @@ def run_census(vault: Path) -> dict[str, Any]:
                 val = str(fm.get(field) or "")
                 if "http" in val.lower() or "/" in val:
                     handle_urlish += 1
-        if card_type in {"imessage_thread", "imessage_message", "email_thread", "email_message", "beeper_thread", "beeper_message"}:
+        if card_type in {
+            "imessage_thread",
+            "imessage_message",
+            "email_thread",
+            "email_message",
+            "beeper_thread",
+            "beeper_message",
+        }:
             comms += 1
             people = fm.get("people") or []
             if not people:
@@ -251,7 +258,14 @@ def resolve_people_fields(vault: Path, *, apply: bool) -> dict[str, Any]:
     updated = 0
     rows = _frontmatter_rows(
         vault,
-        types=["imessage_thread", "imessage_message", "email_thread", "email_message", "beeper_thread", "beeper_message"],
+        types=[
+            "imessage_thread",
+            "imessage_message",
+            "email_thread",
+            "email_message",
+            "beeper_thread",
+            "beeper_message",
+        ],
     )
     for row in rows:
         rel = str(row.get("rel_path") or "")
@@ -317,7 +331,11 @@ def rollup_imessage_threads(vault: Path, *, apply: bool) -> dict[str, Any]:
         msgs = children.get(uid) or []
         if not msgs:
             continue
-        times = [str(m.get("sent_at") or m.get("created") or "") for m in msgs if str(m.get("sent_at") or m.get("created") or "")]
+        times = [
+            str(m.get("sent_at") or m.get("created") or "")
+            for m in msgs
+            if str(m.get("sent_at") or m.get("created") or "")
+        ]
         if not times:
             continue
         first_at, last_at = min(times), max(times)
@@ -404,13 +422,11 @@ def merge_people(vault: Path, *, apply: bool) -> dict[str, Any]:
                 seen_pairs.add(pair)
                 same_email = bool(
                     {canon_email(x) for x in left["frontmatter"].get("emails") or []}
-                    & {canon_email(x) for x in right["frontmatter"].get("emails") or []}
-                    - {""}
+                    & {canon_email(x) for x in right["frontmatter"].get("emails") or []} - {""}
                 )
                 same_phone = bool(
                     {canon_phone.canonical(x) for x in left["frontmatter"].get("phones") or []}
-                    & {canon_phone.canonical(x) for x in right["frontmatter"].get("phones") or []}
-                    - {""}
+                    & {canon_phone.canonical(x) for x in right["frontmatter"].get("phones") or []} - {""}
                 )
                 names_ok = _compatible_name(left["frontmatter"], right["frontmatter"], nicknames)
                 if same_email or (same_phone and names_ok):

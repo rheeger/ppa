@@ -134,9 +134,7 @@ def apply_deterministic_derived_enrichment(
             metrics.failed_card_uids.append(uid)
             continue
         tags = [str(tag) for tag in (card.tags or []) if str(tag).strip()]
-        revision = compute_output_revision(
-            uid=uid, payload={"type": card_type, "tags": tags, "rel_path": str(rel)}
-        )
+        revision = compute_output_revision(uid=uid, payload={"type": card_type, "tags": tags, "rel_path": str(rel)})
         if DERIVED_ENRICHMENT_TAG in tags:
             metrics.skipped_populated += 1
             metrics.unchanged_card_uids.append(uid)
@@ -144,9 +142,7 @@ def apply_deterministic_derived_enrichment(
             continue
         new_tags = [*tags, DERIVED_ENRICHMENT_TAG]
         updated = card.model_copy(update={"tags": new_tags, "updated": today})
-        revision = compute_output_revision(
-            uid=uid, payload={"type": card_type, "tags": new_tags, "rel_path": str(rel)}
-        )
+        revision = compute_output_revision(uid=uid, payload={"type": card_type, "tags": new_tags, "rel_path": str(rel)})
         if dry_run:
             metrics.dry_run_writes += 1
             metrics.enriched += 1
@@ -1211,9 +1207,7 @@ class CardEnrichmentRunner:
             uid_filter: set[str] = set()
             if self.uid_filter_file is not None:
                 uid_filter = _load_uid_filter_file(Path(self.uid_filter_file))
-            self.metrics = apply_deterministic_derived_enrichment(
-                self.vault_path, uid_filter, dry_run=self.dry_run
-            )
+            self.metrics = apply_deterministic_derived_enrichment(self.vault_path, uid_filter, dry_run=self.dry_run)
             return self.metrics
         raise ValueError(
             f"unsupported workflow: {self.workflow!r} (expected email_thread, imessage_thread, "

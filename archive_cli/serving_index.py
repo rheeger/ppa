@@ -208,11 +208,17 @@ def load_serving_export_maps(conn: Any, schema: str, uids: list[str] | None = No
 
     people_clause, people_params = _uid_clause("card_uid", uids)
     map_params = people_params or None
-    for row in _optional_rows(conn, f"SELECT card_uid, person FROM {schema}.card_people WHERE TRUE{people_clause}", map_params):
+    for row in _optional_rows(
+        conn, f"SELECT card_uid, person FROM {schema}.card_people WHERE TRUE{people_clause}", map_params
+    ):
         people.setdefault(str(row["card_uid"]), []).append(str(row["person"]))
-    for row in _optional_rows(conn, f"SELECT card_uid, source FROM {schema}.card_sources WHERE TRUE{people_clause}", map_params):
+    for row in _optional_rows(
+        conn, f"SELECT card_uid, source FROM {schema}.card_sources WHERE TRUE{people_clause}", map_params
+    ):
         sources.setdefault(str(row["card_uid"]), []).append(str(row["source"]))
-    for row in _optional_rows(conn, f"SELECT card_uid, org FROM {schema}.card_orgs WHERE TRUE{people_clause}", map_params):
+    for row in _optional_rows(
+        conn, f"SELECT card_uid, org FROM {schema}.card_orgs WHERE TRUE{people_clause}", map_params
+    ):
         orgs.setdefault(str(row["card_uid"]), []).append(str(row["org"]))
     for row in _optional_rows(
         conn,
@@ -407,6 +413,7 @@ def load_serving_edges(conn: Any, schema: str, uids: list[str] | None = None) ->
         if rec["source_uid"] and rec["target_uid"]:
             edges.append(rec)
     return edges
+
 
 _LOCK = threading.RLock()
 _HANDLES: dict[str, ServingIndexHandle] = {}
@@ -755,11 +762,7 @@ def get_serving_handle(vault: Path) -> ServingIndexHandle:
             existing = None
         else:
             existing = _HANDLES.get(key)
-        if (
-            existing is not None
-            and existing.index_root.resolve() == root.resolve()
-            and existing.generation_id == gid
-        ):
+        if existing is not None and existing.index_root.resolve() == root.resolve() and existing.generation_id == gid:
             _HANDLE = existing
             return existing
         if existing is not None:
@@ -1105,7 +1108,9 @@ def _export_warehouse_snapshot(
             _log_export_progress(log, "cards", len(cards), card_total, t_cards, every=every)
         _log_export_progress(log, "cards", len(cards), card_total or len(cards), t_cards, every=every, force=True)
         if incremental:
-            chunk_sql = f"SELECT chunk_key, card_uid, chunk_type, chunk_index FROM {schema}.chunks WHERE card_uid = ANY(%s)"
+            chunk_sql = (
+                f"SELECT chunk_key, card_uid, chunk_type, chunk_index FROM {schema}.chunks WHERE card_uid = ANY(%s)"
+            )
             chunk_params: tuple[Any, ...] | None = (dirty_uids,)
             chunk_total = _query_count(
                 conn,

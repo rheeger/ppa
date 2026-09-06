@@ -500,7 +500,9 @@ class EmbedderMixin:
             conn.commit()
             result.embedded = len(batch)
             result.embedded_keys = list(claimed_keys)
-            result.card_uids = [str(row.get("card_uid") or "").strip() for row in batch if str(row.get("card_uid") or "").strip()]
+            result.card_uids = [
+                str(row.get("card_uid") or "").strip() for row in batch if str(row.get("card_uid") or "").strip()
+            ]
             return result
 
     def copy_embeddings_from_schema(

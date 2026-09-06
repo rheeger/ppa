@@ -191,6 +191,7 @@ def legacy_input_status(scheduler_status: str) -> str:
         return scheduler_status
     return INPUT_STATUS_PENDING
 
+
 CORPUS_ACTIVE = "active"
 CORPUS_SUPPRESSED = "suppressed"
 CORPUS_QUARANTINE = "quarantine"

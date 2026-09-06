@@ -50,7 +50,9 @@ def _status(fn: Callable[[IsolatedRuntime], dict[str, Any]], runtime: IsolatedRu
         }
 
 
-def _run_destination(runtime: IsolatedRuntime, suite: str, fn: Callable[[IsolatedRuntime], dict[str, Any]]) -> dict[str, Any]:
+def _run_destination(
+    runtime: IsolatedRuntime, suite: str, fn: Callable[[IsolatedRuntime], dict[str, Any]]
+) -> dict[str, Any]:
     """Each destination owns a vault/serving tree so sibling proofs cannot collide."""
 
     orig_vault = runtime.vault
@@ -158,7 +160,9 @@ def evaluate_relations_and_held_out() -> dict[str, Any]:
     )
     if "hfa-email-message-p04breq0001" not in context.get("context_uids", []):
         raise AssertionError("reply-is-authorization missed the preceding request")
-    _assert_no_authorized({"relations": relations, "trip": trip.rows, "costs": costs.rows, "subs": subs.rows, "context": context})
+    _assert_no_authorized(
+        {"relations": relations, "trip": trip.rows, "costs": costs.rows, "subs": subs.rows, "context": context}
+    )
 
     held = []
     failures = []
@@ -170,7 +174,11 @@ def evaluate_relations_and_held_out() -> dict[str, Any]:
         excluded = set(query.get("excluded_uids") or [])
         observed: set[str] = set()
         if qid == "q-p04b-exact-flight-out":
-            observed = {"hfa-flight-p04bout0001"} if any(card.get("uid") == "hfa-flight-p04bout0001" for card in cards) else set()
+            observed = (
+                {"hfa-flight-p04bout0001"}
+                if any(card.get("uid") == "hfa-flight-p04bout0001" for card in cards)
+                else set()
+            )
         elif qid == "q-p04b-lex-auth-reply":
             observed = set(context.get("context_uids") or []) | {"hfa-email-message-p04breply01"}
         elif qid == "q-p04b-agg-same-charge":
@@ -192,7 +200,15 @@ def evaluate_relations_and_held_out() -> dict[str, Any]:
         ok = not missing and not leaked
         if not ok:
             failures.append(f"{qid}: missing={sorted(missing)} leaked={sorted(leaked)}")
-        held.append({"query_id": qid, "ok": ok, "missing": sorted(missing), "leaked": sorted(leaked), "owner_slice": query.get("owner_slice")})
+        held.append(
+            {
+                "query_id": qid,
+                "ok": ok,
+                "missing": sorted(missing),
+                "leaked": sorted(leaked),
+                "owner_slice": query.get("owner_slice"),
+            }
+        )
 
     return {
         "relations": {
@@ -320,7 +336,9 @@ def run_release_gate(runtime: IsolatedRuntime) -> dict[str, Any]:
         "production_proven": False,
         "child_suites": inventory,
         "destinations": {
-            suite: [{"id": row["id"], "status": row["status"], "elapsed_seconds": row["elapsed_seconds"]} for row in rows]
+            suite: [
+                {"id": row["id"], "status": row["status"], "elapsed_seconds": row["elapsed_seconds"]} for row in rows
+            ]
             for suite, rows in destination_results.items()
         },
         "relations": relations["relations"],

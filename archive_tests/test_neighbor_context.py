@@ -83,7 +83,11 @@ def test_authorization_support_set_spans_and_revisions() -> None:
         assert span.end_byte > span.start_byte
         assert unit.revision.startswith("sha256:")
         assert span.source_revision == unit.revision
-        quoted = quote_canonical_span(unit.quoted_text if unit.uid == REPLY else _by_uid(units)[unit.uid].text, span, actual_revision=unit.revision)
+        quoted = quote_canonical_span(
+            unit.quoted_text if unit.uid == REPLY else _by_uid(units)[unit.uid].text,
+            span,
+            actual_revision=unit.revision,
+        )
         assert quoted == unit.quoted_text
     payload = expanded.to_payload()
     assert "authorized" not in payload
@@ -217,7 +221,9 @@ def test_overlap_dedupe_and_token_budget_keep_citations() -> None:
         thread_id="note-1",
         boundary_key="body",
     )
-    expanded = expand_neighbors(hit, [hit, overlap, nxt], preceding=0, following=2, max_tokens_per_hit=10, max_tokens_total=10)
+    expanded = expand_neighbors(
+        hit, [hit, overlap, nxt], preceding=0, following=2, max_tokens_per_hit=10, max_tokens_total=10
+    )
     assert [item.uid for item in expanded.matched] == ["hfa-note-hit"]
     assert expanded.matched[0].citation.card_uid == "hfa-note-hit"
     assert expanded.matched[0].citation.source_spans

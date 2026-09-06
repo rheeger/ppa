@@ -128,7 +128,9 @@ def test_invalid_query_is_rejected(tmp_path: Path) -> None:
 def test_old_format_refuses_to_open(tmp_path: Path) -> None:
     dest = tmp_path / "generations" / "gen-old"
     dest.mkdir(parents=True)
-    (dest / "manifest.json").write_text(json.dumps({"serving_index_format_version": 1, "vector_impl": "ivf_mmap_v1"}), encoding="utf-8")
+    (dest / "manifest.json").write_text(
+        json.dumps({"serving_index_format_version": 1, "vector_impl": "ivf_mmap_v1"}), encoding="utf-8"
+    )
     (dest / "embedding_keys.txt").write_text("ck-1\n", encoding="utf-8")
     (dest / "embeddings.bin").write_bytes(b"\x00" * 16)
     with pytest.raises(ValueError, match="serving_index_format_unsupported|ivf_centroids"):

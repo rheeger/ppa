@@ -251,9 +251,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         ladder_gate=args.ladder_gate or GATE_SYNTHETIC_FIXTURES,
         decision_run_id=getattr(args, "decision_run_id", "") or "",
         repo_root=_repo_root(),
-        default_processor_decision=getattr(args, "processor_decision", None) or (
-            "typed_extraction" if processor_key == PROCESSOR_EMAIL_TYPED_EXTRACTION else ""
-        ),
+        default_processor_decision=getattr(args, "processor_decision", None)
+        or ("typed_extraction" if processor_key == PROCESSOR_EMAIL_TYPED_EXTRACTION else ""),
     )
     payload = {
         "completion_state": SECTION_E_COMPLETION_STATE,

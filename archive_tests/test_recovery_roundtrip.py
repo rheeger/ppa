@@ -114,8 +114,20 @@ def _write_people(vault: Path) -> None:
         last_name="Name",
         emails=["p07dname@example.test"],
     )
-    write_card(vault, "People/alex-winner.md", winner, body="alex", provenance=deterministic_provenance(winner, "contacts.apple"))
-    write_card(vault, "People/blake-loser.md", loser, body="blake", provenance=deterministic_provenance(loser, "contacts.apple"))
+    write_card(
+        vault,
+        "People/alex-winner.md",
+        winner,
+        body="alex",
+        provenance=deterministic_provenance(winner, "contacts.apple"),
+    )
+    write_card(
+        vault,
+        "People/blake-loser.md",
+        loser,
+        body="blake",
+        provenance=deterministic_provenance(loser, "contacts.apple"),
+    )
     write_card(vault, PERSON_REL, named, body="casey", provenance=deterministic_provenance(named, "contacts.apple"))
 
 
@@ -235,7 +247,9 @@ def test_wrong_key_fails(tmp_path: Path) -> None:
     backup = tmp_path / "backups"
     create_encrypted_bundle(vault, backup, passphrase=PASSPHRASE)
     with pytest.raises(WrongKeyError):
-        restore_encrypted_bundle(dest=tmp_path / "wrong", passphrase="not-the-key", backup_base=backup, active_root=vault)
+        restore_encrypted_bundle(
+            dest=tmp_path / "wrong", passphrase="not-the-key", backup_base=backup, active_root=vault
+        )
 
 
 def test_tamper_fails(tmp_path: Path) -> None:
@@ -273,7 +287,9 @@ def test_path_escape_rejected(tmp_path: Path) -> None:
     (enc.parent / "ppa-backup.tar.enc.sha256").write_text(f"{digest}  {enc}\n", encoding="utf-8")
     dest = tmp_path / "escaped"
     with pytest.raises(PathEscapeError):
-        restore_encrypted_bundle(dest=dest, passphrase=PASSPHRASE, archive_file=enc, active_root=tmp_path / "active-other")
+        restore_encrypted_bundle(
+            dest=dest, passphrase=PASSPHRASE, archive_file=enc, active_root=tmp_path / "active-other"
+        )
     assert not (tmp_path / "outside.md").exists()
     if dest.exists():
         assert not (dest / "People" / "leak.md").exists()

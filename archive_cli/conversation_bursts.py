@@ -18,9 +18,7 @@ from .index_config import (
     get_burst_token_limit,
 )
 
-CONVERSATION_CARD_TYPES = frozenset(
-    {"email_thread", "imessage_thread", "beeper_thread"}
-)
+CONVERSATION_CARD_TYPES = frozenset({"email_thread", "imessage_thread", "beeper_thread"})
 BURST_CHUNK_TYPE = "conversation_burst"
 TRANSCRIPT_MARKER = "## burst-transcript"
 
@@ -369,9 +367,7 @@ def resolve_burst_affected(
     previous = [str(item) for item in previous_burst_keys if str(item)]
     retired = tuple(key for key in previous if key not in current_keys)
     changed = {str(item) for item in changed_message_ids if str(item)}
-    replacement = tuple(
-        item.burst_key for item in current if changed.intersection(item.message_ids)
-    )
+    replacement = tuple(item.burst_key for item in current if changed.intersection(item.message_ids))
     affected = [thread_uid]
     for item in current:
         for uid, message_id in zip(item.source_uids, item.message_ids, strict=False):

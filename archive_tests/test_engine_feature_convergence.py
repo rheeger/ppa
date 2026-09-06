@@ -60,11 +60,7 @@ class MemoryIndex:
 
     def search(self, query: str, limit: int = 20, **_kwargs):
         needle = (query or "").casefold()
-        hits = [
-            dict(row)
-            for row in self.rows
-            if not needle or needle in json.dumps(row).casefold()
-        ]
+        hits = [dict(row) for row in self.rows if not needle or needle in json.dumps(row).casefold()]
         return hits[:limit]
 
     def query_cards(self, **kwargs):
@@ -192,7 +188,13 @@ def _thread_rows() -> list[dict]:
     ]
 
 
-def _store(vault: Path, *, serving: MemoryServing | None = None, access: AccessContext | None = None, attach_bursts: bool = True):
+def _store(
+    vault: Path,
+    *,
+    serving: MemoryServing | None = None,
+    access: AccessContext | None = None,
+    attach_bursts: bool = True,
+):
     rows = list(serving.rows) if serving is not None else _thread_rows()
     index = MemoryIndex(rows)
     store = DefaultArchiveStore(vault=vault, index=index, access=access)

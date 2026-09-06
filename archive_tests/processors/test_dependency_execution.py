@@ -185,7 +185,11 @@ def test_failed_prerequisite_blocks_only_its_descendants(tmp_path: Path) -> None
     assert ("linkers", "card-fail") not in called
     assert ("materialization", "card-ok") in called
     assert ("embedding", "card-ok") in called
-    blocked = [item for item in result.item_results if item.input_uid == "card-fail" and item.processor_key != PROCESSOR_MATERIALIZATION]
+    blocked = [
+        item
+        for item in result.item_results
+        if item.input_uid == "card-fail" and item.processor_key != PROCESSOR_MATERIALIZATION
+    ]
     assert blocked
     assert all(item.status == INPUT_STATUS_BLOCKED_DEPENDENCY for item in blocked)
     ok_mat = next(
@@ -525,7 +529,10 @@ def test_old_revision_cannot_overwrite_newer_head(tmp_path: Path) -> None:
         status="completed",
         outputs=(OutputRevision(uid="cas-uid", revision="rev-old"),),
     )
-    assert store.commit_receipt(old, scheduler_status="complete", digest="", run_id="old", lease_owner="worker-old") is False
+    assert (
+        store.commit_receipt(old, scheduler_status="complete", digest="", run_id="old", lease_owner="worker-old")
+        is False
+    )
     head = store.get_head_receipt(PROCESSOR_MATERIALIZATION, "cas-uid")
     assert head is not None
     assert head.receipt.input_revision == "rev-new"

@@ -91,8 +91,12 @@ def test_policy_identity_changes_with_allow_list() -> None:
     a = _ctx(allowed_sources=("gmail",))
     b = _ctx(allowed_sources=("gmail", "medical"))
     assert policy_identity(a) != policy_identity(b)
-    key_a = query_embed_cache_key("hello", model="m", version=1, provider="p", dimension=8, policy_identity=policy_identity(a))
-    key_b = query_embed_cache_key("hello", model="m", version=1, provider="p", dimension=8, policy_identity=policy_identity(b))
+    key_a = query_embed_cache_key(
+        "hello", model="m", version=1, provider="p", dimension=8, policy_identity=policy_identity(a)
+    )
+    key_b = query_embed_cache_key(
+        "hello", model="m", version=1, provider="p", dimension=8, policy_identity=policy_identity(b)
+    )
     assert key_a != key_b
 
 

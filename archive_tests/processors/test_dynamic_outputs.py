@@ -211,12 +211,8 @@ def test_extraction_rerun_is_noop(tmp_path: Path) -> None:
     from archive_sync.extractors.registry import build_default_registry
 
     registry = build_default_registry()
-    first = ExtractionRunner(
-        str(vault), registry=registry, dry_run=False, workers=1, uid_allowlist={EMAIL_UID}
-    ).run()
-    second = ExtractionRunner(
-        str(vault), registry=registry, dry_run=False, workers=1, uid_allowlist={EMAIL_UID}
-    ).run()
+    first = ExtractionRunner(str(vault), registry=registry, dry_run=False, workers=1, uid_allowlist={EMAIL_UID}).run()
+    second = ExtractionRunner(str(vault), registry=registry, dry_run=False, workers=1, uid_allowlist={EMAIL_UID}).run()
     assert first.extracted_cards == 1
     assert second.extracted_cards == 0
     assert second.unchanged
@@ -338,7 +334,9 @@ def test_unaffected_card_not_enqueued(tmp_path: Path) -> None:
                 _result_with_outputs(
                     item,
                     status=INPUT_STATUS_COMPLETE,
-                    outputs=(OutputRevision(uid=purchase, revision="r1"),) if item.processor_key == PROCESSOR_EMAIL_TYPED_EXTRACTION else (OutputRevision(uid=item.input_uid, revision="r1"),),
+                    outputs=(OutputRevision(uid=purchase, revision="r1"),)
+                    if item.processor_key == PROCESSOR_EMAIL_TYPED_EXTRACTION
+                    else (OutputRevision(uid=item.input_uid, revision="r1"),),
                 )
                 for item in items
             ]

@@ -186,7 +186,15 @@ def main() -> None:
     )
     identity_repair_parser.add_argument(
         "identity_action",
-        choices=["census", "preflight", "canonicalize", "resolve-people", "rollup-threads", "merge", "same-conversation"],
+        choices=[
+            "census",
+            "preflight",
+            "canonicalize",
+            "resolve-people",
+            "rollup-threads",
+            "merge",
+            "same-conversation",
+        ],
     )
     identity_repair_parser.add_argument("--apply", action="store_true", help="Write vault changes (default dry-run)")
     identity_repair_parser.add_argument("--output", default="", help="Write JSON report to this path")

@@ -98,9 +98,10 @@ def test_export_matches_checked_in_artifact() -> None:
     unknown = unknown_registry_fields(generated)
     assert unknown == []
     compare_registry_export(generated, checked)
-    assert hashlib.sha256(dump_registry_json(generated).encode()).hexdigest() == hashlib.sha256(
-        dump_registry_json(checked).encode()
-    ).hexdigest()
+    assert (
+        hashlib.sha256(dump_registry_json(generated).encode()).hexdigest()
+        == hashlib.sha256(dump_registry_json(checked).encode()).hexdigest()
+    )
 
 
 def test_stale_export_fails_with_named_diagnostic() -> None:

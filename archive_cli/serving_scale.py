@@ -82,13 +82,11 @@ def probe_million_vector_scale(*, root: Path | None = None) -> dict[str, Any]:
     reasons: list[str] = []
     if envelope["train_rss_bytes"] > train_cap:
         reasons.append(
-            f"train_rss_bytes={envelope['train_rss_bytes']} exceeds "
-            f"PPA_SERVING_TRAIN_MEMORY_MB={train_cap_mb}"
+            f"train_rss_bytes={envelope['train_rss_bytes']} exceeds PPA_SERVING_TRAIN_MEMORY_MB={train_cap_mb}"
         )
     if envelope["query_rss_bytes"] > rss_cap:
         reasons.append(
-            f"query_rss_bytes={envelope['query_rss_bytes']} exceeds "
-            f"PPA_SERVING_INDEX_MAX_RSS_MB={rss_cap_mb}"
+            f"query_rss_bytes={envelope['query_rss_bytes']} exceeds PPA_SERVING_INDEX_MAX_RSS_MB={rss_cap_mb}"
         )
     if phys and envelope["train_rss_bytes"] > phys:
         reasons.append(f"train_rss_bytes={envelope['train_rss_bytes']} exceeds physical_memory_bytes={phys}")

@@ -216,7 +216,10 @@ def assemble_trip(
             )
 
     scored = sorted(trip_rows, key=lambda trip: (-len(trip["member_uids"]), trip["trip_key"]))
-    primary = next((trip for trip in scored if len(trip["member_uids"]) >= 2), scored[0] if scored else {"member_uids": [], "booking_keys": []})
+    primary = next(
+        (trip for trip in scored if len(trip["member_uids"]) >= 2),
+        scored[0] if scored else {"member_uids": [], "booking_keys": []},
+    )
     primary_members = set(primary.get("member_uids") or [])
     lookalikes = [
         row["uid"]
@@ -279,7 +282,8 @@ def reconcile_trip_costs(
                 + [
                     row["uid"]
                     for row in rows
-                    if row.get("type") == "email_attachment" and "receipt" in str(row.get("filename") or row.get("rel_path") or "").casefold()
+                    if row.get("type") == "email_attachment"
+                    and "receipt" in str(row.get("filename") or row.get("rel_path") or "").casefold()
                 ],
             }
         )
@@ -333,9 +337,7 @@ def reconcile_trip_costs(
         )
 
     excluded = [
-        row["uid"]
-        for row in rows
-        if row.get("type") in {"finance", "purchase"} and row["uid"] not in member_uids
+        row["uid"] for row in rows if row.get("type") in {"finance", "purchase"} and row["uid"] not in member_uids
     ]
     for uid in excluded:
         evidence.append(

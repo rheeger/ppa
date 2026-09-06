@@ -44,7 +44,9 @@ def run_p02_deltas(runtime: IsolatedRuntime) -> dict[str, Any]:
     right = resolve_live_universe(delta_root)
     diff = diff_universes(left, right)
     if diff.unexplained:
-        raise AssertionError(f"full vs incremental mismatch {diff.mismatches} left={diff.left_only} right={diff.right_only}")
+        raise AssertionError(
+            f"full vs incremental mismatch {diff.mismatches} left={diff.left_only} right={diff.right_only}"
+        )
     handle = get_serving_handle(runtime.vault)
     listed = {row.get("card_uid") for row in handle.query(limit=20)}
     if "hfa-person-gone000001" in listed:

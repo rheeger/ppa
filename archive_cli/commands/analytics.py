@@ -87,7 +87,9 @@ def load_json(raw: str | Path | None) -> Any:
     return json.loads(text)
 
 
-def load_scopes(scopes: Sequence[SavedScope] | Sequence[Mapping[str, object]] | str | Path | None) -> tuple[SavedScope, ...]:
+def load_scopes(
+    scopes: Sequence[SavedScope] | Sequence[Mapping[str, object]] | str | Path | None,
+) -> tuple[SavedScope, ...]:
     if scopes is None or scopes == "":
         return ()
     if isinstance(scopes, (str, Path)):
@@ -121,7 +123,9 @@ def rows_from_cards(cards: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
                     "summary": fields.get("summary") or card.get("summary") or "",
                     "source": list(fields.get("source") or card.get("source") or card.get("sources") or []),
                     "sources": list(fields.get("source") or card.get("sources") or card.get("source") or []),
-                    "required_sources": list(card.get("required_sources") or fields.get("source") or card.get("sources") or []),
+                    "required_sources": list(
+                        card.get("required_sources") or fields.get("source") or card.get("sources") or []
+                    ),
                     "people": list(fields.get("people") or card.get("people") or []),
                     "orgs": list(card.get("orgs") or []),
                     "activity_at": str(fields.get("created") or card.get("activity_at") or ""),
@@ -166,15 +170,15 @@ def load_records(records: Sequence[Mapping[str, Any] | ChangeRecord] | str | Pat
         if isinstance(item, ChangeRecord):
             out.append(item)
         else:
-            out.append(ChangeRecord.from_payload(item) if hasattr(ChangeRecord, "from_payload") else ChangeRecord(**dict(item)))
+            out.append(
+                ChangeRecord.from_payload(item) if hasattr(ChangeRecord, "from_payload") else ChangeRecord(**dict(item))
+            )
     return out
 
 
 def _checkpoint_fields(payload: Mapping[str, Any]) -> dict[str, Any]:
     served = str(payload.get("served_checkpoint") or payload.get("snapshot") or "")
-    materialized = str(
-        payload.get("materialized_checkpoint") or payload.get("warehouse_checkpoint") or ""
-    )
+    materialized = str(payload.get("materialized_checkpoint") or payload.get("warehouse_checkpoint") or "")
     if served and materialized and served != materialized:
         agreement = "diverged"
         stale = True
@@ -370,7 +374,10 @@ def run_context(
         "stale": expanded.stale,
         "freshness": "stale" if expanded.stale else "source_revision",
         "coverage": "eligible_stored",
-        "citations": [item.citation.to_payload() if hasattr(item.citation, "to_payload") else {} for item in (*expanded.matched, *expanded.context)],
+        "citations": [
+            item.citation.to_payload() if hasattr(item.citation, "to_payload") else {}
+            for item in (*expanded.matched, *expanded.context)
+        ],
         "expanded": expanded.to_payload(),
         "matched_total": len(matched_uids),
         "total_status": "exact",
@@ -604,11 +611,15 @@ def scoped_cards(
     for card in loaded:
         fields = dict(card.get("fields") or {})
         card_type = str(card.get("type") or "").casefold()
-        sources = [str(item).casefold() for item in (fields.get("source") or card.get("sources") or card.get("source") or [])]
+        sources = [
+            str(item).casefold() for item in (fields.get("source") or card.get("sources") or card.get("source") or [])
+        ]
         people = [str(item).casefold() for item in (fields.get("people") or card.get("people") or [])]
         if wanted_types and card_type not in wanted_types:
             continue
-        if wanted_sources and not any(item in wanted_sources or wanted_sources.intersection({item}) for item in sources):
+        if wanted_sources and not any(
+            item in wanted_sources or wanted_sources.intersection({item}) for item in sources
+        ):
             if not any(src in wanted_sources for src in sources):
                 continue
         if wanted_people and not any(person in wanted_people for person in people):

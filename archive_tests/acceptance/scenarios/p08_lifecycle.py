@@ -197,7 +197,9 @@ def run_p08_lifecycle(runtime: IsolatedRuntime) -> dict[str, Any]:
     scheduled = attach_resolver(runtime.vault, FixtureBurstResolver())
     pending = next((item for item in scheduled if item.event_identity == "evt-pending"), None)
     if pending is None or not pending.scheduled:
-        raise ScenarioAssertionError(f"pending scope was not scheduled once: {[item.to_payload() for item in scheduled]!r}")
+        raise ScenarioAssertionError(
+            f"pending scope was not scheduled once: {[item.to_payload() for item in scheduled]!r}"
+        )
 
     return {
         "id": "p08.lifecycle_replay",

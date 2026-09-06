@@ -169,9 +169,7 @@ def test_denied_neighbors_absent_and_relation_filter(tmp_path: Path, monkeypatch
         max_elapsed_ms=0,
         allowed_relation_types=["mentions"],
     )
-    mention_paths = [
-        edge.get("path") for edges in filtered["graph"].values() for edge in edges
-    ]
+    mention_paths = [edge.get("path") for edges in filtered["graph"].values() for edge in edges]
     assert "Notes/multi.md" in mention_paths
     assert "People/ok-a.md" not in mention_paths
 

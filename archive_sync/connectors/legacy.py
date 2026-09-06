@@ -158,7 +158,13 @@ def adapter_spec_for(source_id: str) -> AdapterSpec:
                 "calendar_events",
             ),
             identity_keys=("source_id", "gmail_thread_id", "gmail_message_id", "attachment_id"),
-            external_id_fields=("source_id", "gmail_thread_id", "gmail_message_id", "message_id_header", "attachment_id"),
+            external_id_fields=(
+                "source_id",
+                "gmail_thread_id",
+                "gmail_message_id",
+                "message_id_header",
+                "attachment_id",
+            ),
             relationship_fields=("thread", "messages", "attachments", "calendar_events", "people", "orgs"),
             supports_incremental_cursor=True,
         )
@@ -323,7 +329,9 @@ class LegacyAdapterConnector:
                         for field, entry in provenance.items()
                     },
                     supporting_source_ids=(source_id,),
-                    provider_revision=str(getattr(card, "message_body_sha", "") or getattr(card, "event_body_sha", "") or ""),
+                    provider_revision=str(
+                        getattr(card, "message_body_sha", "") or getattr(card, "event_body_sha", "") or ""
+                    ),
                 )
             )
         return tuple(proposals)

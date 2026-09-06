@@ -111,7 +111,9 @@ def detect_capabilities(*, vault: Path | None = None, environ: Mapping[str, str]
         "status": "pending",
         "reason": "fixture setup does not connect live accounts; use connect verify after credentials exist",
     }
-    manifest_exists = bool(vault and ((vault / "ppa.json").exists() or (vault / "_meta" / "ppa-instance.json").exists()))
+    manifest_exists = bool(
+        vault and ((vault / "ppa.json").exists() or (vault / "_meta" / "ppa-instance.json").exists())
+    )
     return {
         "native": native,
         "warehouse": warehouse,

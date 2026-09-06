@@ -68,9 +68,7 @@ CHILD_FINALS: dict[str, dict[str, str]] = {
 }
 
 REQUIRED_SUITES = tuple(CHILD_FINALS)
-QUALITY_VERDICTS = frozenset(
-    {"accept_defaults", "retain_baseline_for_optional_feature", "needs_revision"}
-)
+QUALITY_VERDICTS = frozenset({"accept_defaults", "retain_baseline_for_optional_feature", "needs_revision"})
 RELATION_CASE_IDS = (
     "rel-p04b-same-trip",
     "rel-p04b-same-charge",

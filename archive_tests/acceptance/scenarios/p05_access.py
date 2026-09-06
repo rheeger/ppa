@@ -24,8 +24,14 @@ from archive_tests.test_retrieval_privacy import (
 
 PRINCIPALS = (
     ("unrestricted", AccessContext(archive_id="p05b", principal="local-operator", profile="trusted-local")),
-    ("alice-gmail", AccessContext(archive_id="p05b", principal="alice", profile="read-only", allowed_sources=("gmail",))),
-    ("bob-medical", AccessContext(archive_id="p05b", principal="bob", profile="read-only", allowed_sources=("medical",))),
+    (
+        "alice-gmail",
+        AccessContext(archive_id="p05b", principal="alice", profile="read-only", allowed_sources=("gmail",)),
+    ),
+    (
+        "bob-medical",
+        AccessContext(archive_id="p05b", principal="bob", profile="read-only", allowed_sources=("medical",)),
+    ),
 )
 
 

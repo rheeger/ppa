@@ -161,7 +161,9 @@ def test_append_during_build_is_not_acked(tmp_path: Path) -> None:
     vault = tmp_path / "vault"
     vault.mkdir()
     (vault / "People").mkdir()
-    write_card(vault, "People/first.md", _person("hfa-person-p02c000002", "First Card"), body="first", provenance=_prov())
+    write_card(
+        vault, "People/first.md", _person("hfa-person-p02c000002", "First Card"), body="first", provenance=_prov()
+    )
     _publish_full(root, _base_state(), "gen-base")
 
     def append(phase: str) -> None:
@@ -205,7 +207,9 @@ def test_replay_does_not_ack_beyond_captured(tmp_path: Path) -> None:
     vault = tmp_path / "vault"
     vault.mkdir()
     (vault / "People").mkdir()
-    write_card(vault, "People/first.md", _person("hfa-person-p02c000004", "First Card"), body="first", provenance=_prov())
+    write_card(
+        vault, "People/first.md", _person("hfa-person-p02c000004", "First Card"), body="first", provenance=_prov()
+    )
     _publish_full(root, _base_state(), "gen-base")
     with ChangeJournal(vault) as journal:
         captured = consume_batch(journal, CONSUMER_PUBLICATION)
@@ -221,7 +225,9 @@ def test_replay_does_not_ack_beyond_captured(tmp_path: Path) -> None:
         )
     except PublicationFault:
         pass
-    write_card(vault, "People/extra.md", _person("hfa-person-p02c000005", "Extra Card"), body="extra", provenance=_prov())
+    write_card(
+        vault, "People/extra.md", _person("hfa-person-p02c000005", "Extra Card"), body="extra", provenance=_prov()
+    )
     recover_publication(root, generation_id="gen-replay", vault=vault, captured_batch=captured)
     with ChangeJournal(vault) as journal:
         pending = consume_batch(journal, CONSUMER_PUBLICATION)

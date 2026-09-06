@@ -6,12 +6,8 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-PATTERN = re.compile(
-    r"def _normalize_(phone|email|handle|account_email|slug|contact_handle)\b"
-)
-ALLOWED_PREFIXES = (
-    "archive_vault/canon/",
-)
+PATTERN = re.compile(r"def _normalize_(phone|email|handle|account_email|slug|contact_handle)\b")
+ALLOWED_PREFIXES = ("archive_vault/canon/",)
 
 
 def test_no_stray_join_key_normalizer_definitions() -> None:

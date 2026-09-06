@@ -53,9 +53,7 @@ def _page(access: AccessContext, **kwargs):
 
 def _finance_expected() -> list[str]:
     return sorted(
-        card["uid"]
-        for card in build_cards()
-        if card["type"] == "finance" and card["corpus_state"] != "suppressed"
+        card["uid"] for card in build_cards() if card["type"] == "finance" and card["corpus_state"] != "suppressed"
     )
 
 

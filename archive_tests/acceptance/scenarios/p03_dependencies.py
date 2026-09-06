@@ -143,9 +143,7 @@ def run_p03_dependencies(runtime: IsolatedRuntime) -> dict[str, Any]:
     if (PROCESSOR_LINKERS, OK_UID) not in executed:
         raise ScenarioAssertionError("independent card did not run linkers")
     blocked = [
-        item
-        for item in result.item_results
-        if item.input_uid == FAIL_UID and item.processor_key == PROCESSOR_LINKERS
+        item for item in result.item_results if item.input_uid == FAIL_UID and item.processor_key == PROCESSOR_LINKERS
     ]
     if not blocked or blocked[0].status != INPUT_STATUS_BLOCKED_DEPENDENCY:
         raise ScenarioAssertionError(f"expected blocked linkers for failed card, got {blocked}")

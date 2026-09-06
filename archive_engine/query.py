@@ -602,13 +602,9 @@ def row_matches_predicate(
     if predicate is None:
         return True
     if predicate.op == "and":
-        return all(
-            row_matches_predicate(row, child, ignore_fields=ignore_fields) for child in predicate.predicates
-        )
+        return all(row_matches_predicate(row, child, ignore_fields=ignore_fields) for child in predicate.predicates)
     if predicate.op == "or":
-        return any(
-            row_matches_predicate(row, child, ignore_fields=ignore_fields) for child in predicate.predicates
-        )
+        return any(row_matches_predicate(row, child, ignore_fields=ignore_fields) for child in predicate.predicates)
     if predicate.field in ignore_fields:
         return True
     spec = field_spec(predicate.field)
@@ -752,7 +748,9 @@ def _sort_eligible(
     return rows
 
 
-def _collect_from_runtime(runtime: ArchiveRuntime, request: StructuredQueryRequest) -> tuple[list[dict[str, Any]], bool]:
+def _collect_from_runtime(
+    runtime: ArchiveRuntime, request: StructuredQueryRequest
+) -> tuple[list[dict[str, Any]], bool]:
     serving = runtime.retrieval.serving_or_none()
     if serving is not None and hasattr(serving, "typed_query"):
         collected: list[dict[str, Any]] = []

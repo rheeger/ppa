@@ -220,7 +220,11 @@ def run_p03_outputs(runtime: IsolatedRuntime) -> dict[str, Any]:
     created_again = [
         item
         for item in rerun_extraction
-        if item.status == INPUT_STATUS_COMPLETE and item.receipt and item.receipt.outputs and not item.valid_no_output and not item.already_current
+        if item.status == INPUT_STATUS_COMPLETE
+        and item.receipt
+        and item.receipt.outputs
+        and not item.valid_no_output
+        and not item.already_current
     ]
     if created_again:
         raise ScenarioAssertionError(f"rerun created outputs again: {created_again}")

@@ -23,9 +23,7 @@ RunResult = Literal["pass", "fail", "skip"]
 OutputStatus = Literal["completed", "pending", "failed", "skipped", "blocked", "dependency_unmet"]
 SpanRepresentation = Literal["canonical_body_utf8"]
 
-EVIDENCE_KINDS: frozenset[str] = frozenset(
-    {"source_reported", "derived", "proposed_link", "unknown"}
-)
+EVIDENCE_KINDS: frozenset[str] = frozenset({"source_reported", "derived", "proposed_link", "unknown"})
 RUN_RESULTS: frozenset[str] = frozenset({"pass", "fail", "skip"})
 OUTPUT_STATUSES: frozenset[str] = frozenset(
     {"completed", "pending", "failed", "skipped", "blocked", "dependency_unmet"}
@@ -280,7 +278,9 @@ class ChangeRecord:
         return cls(
             archive_id=_require_nonempty(_as_str(payload.get("archive_id"), field="archive_id"), field="archive_id"),
             sequence=sequence,
-            mutation_id=_require_nonempty(_as_str(payload.get("mutation_id"), field="mutation_id"), field="mutation_id"),
+            mutation_id=_require_nonempty(
+                _as_str(payload.get("mutation_id"), field="mutation_id"), field="mutation_id"
+            ),
             uid=_require_nonempty(_as_str(payload.get("uid"), field="uid"), field="uid"),
             operation=_require_nonempty(_as_str(payload.get("operation"), field="operation"), field="operation"),
             before_revision=_as_str(payload.get("before_revision"), field="before_revision"),
@@ -475,7 +475,11 @@ class ServingManifest:
         else:
             raise IncompatibleContractError("logical_counts must be an object")
         edge_raw = payload.get("edge_defaults")
-        edge = ServingEdge() if edge_raw is None else ServingEdge.from_payload(_as_mapping(edge_raw, field="edge_defaults"))
+        edge = (
+            ServingEdge()
+            if edge_raw is None
+            else ServingEdge.from_payload(_as_mapping(edge_raw, field="edge_defaults"))
+        )
         return cls(
             format_version=_require_nonempty(
                 _as_str(payload.get("format_version"), field="format_version"),
@@ -696,7 +700,8 @@ class ChunkEvidenceRef:
             parent_thread=_as_str(payload.get("parent_thread"), field="parent_thread"),
             source_revisions=_as_str_tuple(payload.get("source_revisions"), field="source_revisions"),
             source_spans=tuple(
-                SourceSpan.from_payload(item) for item in _as_object_list(payload.get("source_spans"), field="source_spans")
+                SourceSpan.from_payload(item)
+                for item in _as_object_list(payload.get("source_spans"), field="source_spans")
             ),
             span_unavailable=span_unavailable,
             message_refs=tuple(
@@ -834,7 +839,9 @@ class RunEvidence:
             versions=versions,
             commands=_as_str_tuple(payload.get("commands"), field="commands"),
             started_at=_require_nonempty(_as_str(payload.get("started_at"), field="started_at"), field="started_at"),
-            finished_at=_require_nonempty(_as_str(payload.get("finished_at"), field="finished_at"), field="finished_at"),
+            finished_at=_require_nonempty(
+                _as_str(payload.get("finished_at"), field="finished_at"), field="finished_at"
+            ),
             result=result,  # type: ignore[arg-type]
             artifacts=tuple(
                 ArtifactHash.from_payload(item) for item in _as_object_list(payload.get("artifacts"), field="artifacts")

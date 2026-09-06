@@ -536,7 +536,9 @@ def resolve_person(
     if result.wikilink:
         from archive_vault.identity import canonicalize_wikilink, load_identity_map
 
-        canonical = canonicalize_wikilink(load_identity_map(vault_path) if cache is None else cache.entries, result.wikilink)
+        canonical = canonicalize_wikilink(
+            load_identity_map(vault_path) if cache is None else cache.entries, result.wikilink
+        )
         if canonical and canonical != result.wikilink:
             return ResolveResult(result.action, canonical, result.confidence, [*result.reasons, "identity_redirect"])
     return result
@@ -779,9 +781,7 @@ def merge_into_existing(
             merged_prov["aliases"] = _clone_provenance(merged_prov["summary"])
         elif "summary" in new_provenance:
             merged_prov["aliases"] = _clone_provenance(new_provenance["summary"])
-    write_card(
-        vault_root, str(target.relative_to(vault_root)), merged_card, body=merged_body, provenance=merged_prov
-    )
+    write_card(vault_root, str(target.relative_to(vault_root)), merged_card, body=merged_body, provenance=merged_prov)
     aliases = {
         "name": merged_card.summary,
         "emails": getattr(merged_card, "emails", []),

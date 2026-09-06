@@ -96,8 +96,16 @@ def test_sample_writes_typed_card_and_engine_can_read(vault: Path) -> None:
     )
     assert result.created_count == 2
     assert len({item.uid for item in result.persists}) == 2
-    alpha = next(item for item, proposal in zip(result.persists, result.proposals) if proposal.identity.account_scope == SAMPLE_ACCOUNT_ALPHA)
-    beta = next(item for item, proposal in zip(result.persists, result.proposals) if proposal.identity.account_scope == SAMPLE_ACCOUNT_BETA)
+    alpha = next(
+        item
+        for item, proposal in zip(result.persists, result.proposals)
+        if proposal.identity.account_scope == SAMPLE_ACCOUNT_ALPHA
+    )
+    beta = next(
+        item
+        for item, proposal in zip(result.persists, result.proposals)
+        if proposal.identity.account_scope == SAMPLE_ACCOUNT_BETA
+    )
     assert alpha.uid != beta.uid
     assert alpha.created and beta.created
     assert all(change.committed for change in result.changes)
@@ -233,7 +241,11 @@ def test_runtime_has_no_store_type_checks_or_dispatch() -> None:
             else:
                 continue
             for name in names:
-                if name in forbidden_imports or name.startswith("archive_cli.commands") or name.startswith("archive_cli.server"):
+                if (
+                    name in forbidden_imports
+                    or name.startswith("archive_cli.commands")
+                    or name.startswith("archive_cli.server")
+                ):
                     found_imports.append(f"{path.name}:{name}")
     assert found_store == []
     assert found_dispatch == []

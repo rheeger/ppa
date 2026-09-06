@@ -154,11 +154,7 @@ def receipt_from_item_result(
     if prior is not None and prior.outputs:
         outputs = prior.outputs
     else:
-        outputs = tuple(
-            OutputRevision(uid=uid, revision=input_revision)
-            for uid in result.output_uids
-            if uid
-        )
+        outputs = tuple(OutputRevision(uid=uid, revision=input_revision) for uid in result.output_uids if uid)
     if scheduler_status == RECEIPT_STATUS_VALID_NO_OUTPUT:
         outputs = ()
     return OutputReceipt(
@@ -567,12 +563,7 @@ class ProcessorScheduler:
         lease_owner: str,
         input_revision: str = "",
     ) -> ItemExecuteResult:
-        revision = (
-            input_revision
-            or result.input_revision
-            or (item.input_revision if item else "")
-            or result.input_hash
-        )
+        revision = input_revision or result.input_revision or (item.input_revision if item else "") or result.input_hash
         scheduler_status = scheduler_status_from_result(result)
         receipt = receipt_from_item_result(
             result,

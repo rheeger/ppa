@@ -25,8 +25,7 @@ REPO = Path(__file__).resolve().parents[3]
 def run_p01_bursts(_runtime: object) -> dict[str, Any]:
     started = time.monotonic()
     reports = {
-        card_type: measure_burst_recall(card_type)
-        for card_type in ("email_thread", "imessage_thread", "beeper_thread")
+        card_type: measure_burst_recall(card_type) for card_type in ("email_thread", "imessage_thread", "beeper_thread")
     }
     for report in reports.values():
         if report["before_recall_at_1"] != 0.0:
