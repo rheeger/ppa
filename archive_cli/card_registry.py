@@ -247,7 +247,14 @@ CARD_TYPE_REGISTRATIONS: tuple[CardTypeRegistration, ...] = (
             DeclEdgeRule("participants", "thread_has_person", "person", ("account_email", "participants")),
         ),
         chunk_builder_name="email_thread",
-        chunk_types=("thread_subject", "thread_context", "thread_summary", "thread_window", "thread_recent_window"),
+        chunk_types=(
+            "thread_subject",
+            "thread_context",
+            "thread_summary",
+            "thread_window",
+            "thread_recent_window",
+            "conversation_burst",
+        ),
     ),
     # ── email_message ───────────────────────────────────────────────────
     CardTypeRegistration(
@@ -340,6 +347,7 @@ CARD_TYPE_REGISTRATIONS: tuple[CardTypeRegistration, ...] = (
             "imessage_thread_summary",
             "imessage_thread_window",
             "imessage_thread_recent_window",
+            "conversation_burst",
         ),
     ),
     # ── imessage_message ────────────────────────────────────────────────
@@ -418,7 +426,7 @@ CARD_TYPE_REGISTRATIONS: tuple[CardTypeRegistration, ...] = (
         person_edge_type="mentions_person",
         edge_rules=(),
         chunk_builder_name=None,
-        chunk_types=(),
+        chunk_types=("conversation_burst",),
     ),
     # ── beeper_message ──────────────────────────────────────────────────
     CardTypeRegistration(

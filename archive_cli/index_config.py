@@ -37,6 +37,9 @@ SCAN_MANIFEST_VERSION = 1
 DEFAULT_POSTGRES_SCHEMA = "ppa"
 DEFAULT_VECTOR_DIMENSION = 1536
 DEFAULT_CHUNK_CHAR_LIMIT = 1200
+DEFAULT_BURST_TOKEN_LIMIT = 800
+DEFAULT_BURST_CHAT_GAP_SECONDS = 300
+BURST_ALGORITHM_VERSION = "p01b1-burst-1"
 DEFAULT_EMBEDDING_MODEL = "default-embedding-model"
 DEFAULT_EMBEDDING_VERSION = 1
 DEFAULT_EMBED_BATCH_SIZE = 32
@@ -149,6 +152,16 @@ def get_connect_timeout() -> int:
 def get_chunk_char_limit() -> int:
     v = _ppa_env_int("PPA_CHUNK_CHAR_LIMIT", default=DEFAULT_CHUNK_CHAR_LIMIT)
     return v if v > 0 else DEFAULT_CHUNK_CHAR_LIMIT
+
+
+def get_burst_token_limit() -> int:
+    v = _ppa_env_int("PPA_BURST_TOKEN_LIMIT", default=DEFAULT_BURST_TOKEN_LIMIT)
+    return v if v > 0 else DEFAULT_BURST_TOKEN_LIMIT
+
+
+def get_burst_chat_gap_seconds() -> int:
+    v = _ppa_env_int("PPA_BURST_CHAT_GAP_SECONDS", default=DEFAULT_BURST_CHAT_GAP_SECONDS)
+    return v if v > 0 else DEFAULT_BURST_CHAT_GAP_SECONDS
 
 
 def get_default_embedding_model() -> str:
