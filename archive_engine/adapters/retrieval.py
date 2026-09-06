@@ -53,8 +53,10 @@ class RetrievalAdapter:
         return self._authorize_rows(listed, limit=limit)
 
     def search(self, query: str, *, limit: int = 20, **kwargs: Any) -> list[dict[str, Any]]:
-        serving = self.serving_or_none()
-        if serving is not None:
+        # Warehouse stores bind a serving factory at construction. Match main:
+        # missing ACTIVE fails closed instead of falling through to Postgres.
+        if self._serving_factory is not None:
+            serving = self._serving_factory()
             return list(serving.search(query, limit=limit, **kwargs, **self._policy()) or [])
         fetch_limit = kwargs.pop("fetch_limit", limit)
         return self._rows(self._index.search(query, limit=fetch_limit, **kwargs), limit=limit)

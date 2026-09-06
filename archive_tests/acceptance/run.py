@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -113,6 +114,8 @@ def run_suite(
     if not scenarios:
         raise RunnerError(f"suite {suite!r} has zero scenarios")
 
+    # CI integration sets a job-level shared DSN; the suite still owns its own.
+    os.environ.pop("PPA_TEST_PG_DSN", None)
     validate_no_production_config()
     output.mkdir(parents=True, exist_ok=True)
     runtime_root = output / "runtime"

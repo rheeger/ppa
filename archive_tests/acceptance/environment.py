@@ -194,6 +194,8 @@ def provision_isolated_runtime(
 ) -> IsolatedRuntime:
     """Create a unique owned vault + ephemeral Postgres (unique container)."""
 
+    # CI integration sets a job-level shared DSN; this runtime still owns its own.
+    os.environ.pop("PPA_TEST_PG_DSN", None)
     validate_no_production_config()
     engine = require_rust_engine(require_integration=require_integration)
     if not docker_available():
