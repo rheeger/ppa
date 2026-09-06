@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Collection
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from threading import Lock
 from typing import Any
+
+from archive_engine.contracts import EmbeddingSpec
 
 from .features import build_context_prefix_for_embed_row
 from .index_config import (
@@ -23,6 +26,70 @@ from .index_config import (
 from .loader import _chunked, _log_rebuild_step, _RebuildProgressReporter
 
 logger = logging.getLogger("ppa.embedder")
+
+
+def normalize_embed_allowlist(values: Collection[str] | None) -> tuple[str, ...] | None:
+    """Normalize an allowlist. ``None`` means no predicate; empty means match nothing."""
+
+    if values is None:
+        return None
+    return tuple(sorted({str(value).strip() for value in values if str(value).strip()}))
+
+
+def require_embed_selection(
+    *,
+    uid_allowlist: Collection[str] | None,
+    chunk_key_allowlist: Collection[str] | None,
+    unscoped: bool,
+) -> None:
+    """Dirty embed must name UIDs or chunk keys. Unscoped is the admin route only."""
+
+    if uid_allowlist is None and chunk_key_allowlist is None and not unscoped:
+        raise ValueError(
+            "embed_pending requires uid_allowlist or chunk_key_allowlist; "
+            "unscoped=True is reserved for the admin embed-pending route"
+        )
+
+
+def embed_selection_sql(
+    *,
+    uid_allowlist: tuple[str, ...] | None,
+    chunk_key_allowlist: tuple[str, ...] | None,
+) -> tuple[str, list[Any]]:
+    """SQL predicate applied before LIMIT. Empty allowlists match nothing."""
+
+    clauses: list[str] = []
+    params: list[Any] = []
+    if uid_allowlist is not None:
+        clauses.append("c.card_uid = ANY(%s)")
+        params.append(list(uid_allowlist))
+    if chunk_key_allowlist is not None:
+        clauses.append("c.chunk_key = ANY(%s)")
+        params.append(list(chunk_key_allowlist))
+    if not clauses:
+        return "", params
+    return " AND " + " AND ".join(clauses), params
+
+
+def current_chunk_schema_id() -> str:
+    return f"chunk_schema_v{CHUNK_SCHEMA_VERSION}"
+
+
+def embedding_spec_matches_index(
+    spec: EmbeddingSpec,
+    *,
+    model: str,
+    version: int,
+    dimension: int,
+) -> bool:
+    """True when ``spec`` names the same cache identity the index will write."""
+
+    return (
+        spec.model == model
+        and spec.model_revision == str(version)
+        and spec.dimension == dimension
+        and spec.chunk_schema == current_chunk_schema_id()
+    )
 
 
 def _calculate_embed_progress(
@@ -185,10 +252,53 @@ class EmbedderMixin:
         conn.commit()
         return count
 
-    def _materialize_embed_queue(self, conn, *, embedding_model: str, embedding_version: int) -> int:
+    def _list_selected_embed_chunks(
+        self,
+        conn,
+        *,
+        embedding_model: str,
+        embedding_version: int,
+        uid_allowlist: tuple[str, ...] | None,
+        chunk_key_allowlist: tuple[str, ...] | None,
+    ) -> list[dict[str, Any]]:
+        extra_sql, extra_params = embed_selection_sql(
+            uid_allowlist=uid_allowlist,
+            chunk_key_allowlist=chunk_key_allowlist,
+        )
+        rows = conn.execute(
+            f"""
+            SELECT c.chunk_key, c.card_uid,
+                   (e.chunk_key IS NOT NULL) AS has_compatible
+            FROM {self.schema}.chunks c
+            LEFT JOIN {self.schema}.embeddings e
+                ON e.chunk_key = c.chunk_key
+                AND e.embedding_model = %s
+                AND e.embedding_version = %s
+            WHERE 1=1{extra_sql}
+            ORDER BY c.rel_path, c.chunk_type, c.chunk_index
+            """,
+            (embedding_model, embedding_version, *extra_params),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def _materialize_embed_queue(
+        self,
+        conn,
+        *,
+        embedding_model: str,
+        embedding_version: int,
+        uid_allowlist: tuple[str, ...] | None = None,
+        chunk_key_allowlist: tuple[str, ...] | None = None,
+    ) -> int:
         """Build a work queue of chunk_keys that need embedding. Workers pop from this
         queue instead of scanning the full chunks table with LEFT JOIN on every batch.
+
+        Allowlists are applied in SQL before any worker budget (LIMIT) is claimed.
         """
+        extra_sql, extra_params = embed_selection_sql(
+            uid_allowlist=uid_allowlist,
+            chunk_key_allowlist=chunk_key_allowlist,
+        )
         conn.execute(f"DROP TABLE IF EXISTS {self.schema}.embed_queue")
         conn.execute(
             f"""
@@ -207,10 +317,10 @@ class EmbedderMixin:
                 ON e.chunk_key = c.chunk_key
                 AND e.embedding_model = %s
                 AND e.embedding_version = %s
-            WHERE e.chunk_key IS NULL
+            WHERE e.chunk_key IS NULL{extra_sql}
             ORDER BY c.rel_path, c.chunk_type, c.chunk_index
             """,
-            (embedding_model, embedding_version),
+            (embedding_model, embedding_version, *extra_params),
         )
         row = conn.execute(f"SELECT count(*) AS cnt FROM {self.schema}.embed_queue").fetchone()
         count = int(row["cnt"]) if row else 0
@@ -251,7 +361,7 @@ class EmbedderMixin:
         if include_context_prefix:
             rows = conn.execute(
                 f"""
-                SELECT c.chunk_key, c.rel_path, c.chunk_type, c.chunk_index, c.content, c.token_count,
+                SELECT c.chunk_key, c.card_uid, c.rel_path, c.chunk_type, c.chunk_index, c.content, c.token_count,
                        ctx.card_type AS ctype,
                        ctx.summary,
                        ctx.activity_at,
@@ -267,7 +377,7 @@ class EmbedderMixin:
         else:
             rows = conn.execute(
                 f"""
-                SELECT c.chunk_key, c.rel_path, c.chunk_type, c.chunk_index, c.content, c.token_count
+                SELECT c.chunk_key, c.card_uid, c.rel_path, c.chunk_type, c.chunk_index, c.content, c.token_count
                 FROM {self.schema}.chunks c
                 WHERE c.chunk_key IN ({placeholders})
                 """,
@@ -340,7 +450,9 @@ class EmbedderMixin:
             if not batch:
                 conn.rollback()
                 return result
+            claimed_keys = [str(row["chunk_key"]) for row in batch]
             result.claimed = len(batch)
+            result.claimed_keys = list(claimed_keys)
             texts: list[str] = []
             for row in batch:
                 body = str(row["content"])
@@ -355,11 +467,13 @@ class EmbedderMixin:
             if vectors is None:
                 conn.rollback()
                 result.failed = len(batch)
+                result.failed_keys = list(claimed_keys)
                 result.last_error = last_error
                 return result
             if len(vectors) != len(batch):
                 conn.rollback()
                 result.failed = len(batch)
+                result.failed_keys = list(claimed_keys)
                 result.last_error = "Embedding provider returned mismatched vector count"
                 return result
 
@@ -368,6 +482,7 @@ class EmbedderMixin:
                 if len(vector) != self.vector_dimension:
                     conn.rollback()
                     result.failed = len(batch)
+                    result.failed_keys = list(claimed_keys)
                     result.last_error = (
                         f"Embedding dimension mismatch for {row['chunk_key']}: "
                         f"got={len(vector)} expected={self.vector_dimension}"
@@ -384,6 +499,8 @@ class EmbedderMixin:
                 )
             conn.commit()
             result.embedded = len(batch)
+            result.embedded_keys = list(claimed_keys)
+            result.card_uids = [str(row.get("card_uid") or "").strip() for row in batch if str(row.get("card_uid") or "").strip()]
             return result
 
     def copy_embeddings_from_schema(
@@ -617,7 +734,19 @@ class EmbedderMixin:
         embedding_version: int,
         limit: int = 20,
         include_context_prefix: bool = False,
-    ) -> dict[str, int | str]:
+        uid_allowlist: Collection[str] | None = None,
+        chunk_key_allowlist: Collection[str] | None = None,
+        embedding_spec: EmbeddingSpec | None = None,
+        unscoped: bool = False,
+    ) -> dict[str, Any]:
+        uid_allowlist = normalize_embed_allowlist(uid_allowlist)
+        chunk_key_allowlist = normalize_embed_allowlist(chunk_key_allowlist)
+        require_embed_selection(
+            uid_allowlist=uid_allowlist,
+            chunk_key_allowlist=chunk_key_allowlist,
+            unscoped=unscoped,
+        )
+        scoped = uid_allowlist is not None or chunk_key_allowlist is not None
         with self._embed_pending_lock:
             total_steps = 6
             provider_name = str(getattr(provider, "name", "unknown"))
@@ -629,6 +758,18 @@ class EmbedderMixin:
                 f"provider={provider_name} model={embedding_model} version={embedding_version}",
             )
             self.ensure_ready()
+            if embedding_spec is not None and not embedding_spec_matches_index(
+                embedding_spec,
+                model=embedding_model,
+                version=embedding_version,
+                dimension=self.vector_dimension,
+            ):
+                raise ValueError(
+                    "EmbeddingSpec is incompatible with the requested model/version/dimension/"
+                    f"chunk_schema: spec={embedding_spec.to_payload()} "
+                    f"model={embedding_model} version={embedding_version} "
+                    f"dimension={self.vector_dimension} chunk_schema={current_chunk_schema_id()}"
+                )
             provider_model = str(getattr(provider, "model", "") or "").strip()
             if provider_model and provider_model != embedding_model:
                 raise RuntimeError(
@@ -652,19 +793,47 @@ class EmbedderMixin:
             )
 
             _log_rebuild_step(2, total_steps, "count embedding backlog")
-            backlog_status = self.embedding_status(embedding_model=embedding_model, embedding_version=embedding_version)
-            pending_chunks = int(backlog_status["pending_chunk_count"])
-            total_chunks = int(backlog_status["chunk_count"])
-            already_embedded = int(backlog_status["embedded_chunk_count"])
+            selected_keys: list[str] = []
+            reused_keys: list[str] = []
+            pending_keys: list[str] = []
+            chunk_keys_by_uid: dict[str, list[str]] = {}
+            if scoped:
+                with self._connect() as conn:
+                    selected_rows = self._list_selected_embed_chunks(
+                        conn,
+                        embedding_model=embedding_model,
+                        embedding_version=embedding_version,
+                        uid_allowlist=uid_allowlist,
+                        chunk_key_allowlist=chunk_key_allowlist,
+                    )
+                for row in selected_rows:
+                    key = str(row["chunk_key"])
+                    uid = str(row["card_uid"])
+                    selected_keys.append(key)
+                    chunk_keys_by_uid.setdefault(uid, []).append(key)
+                    if row["has_compatible"]:
+                        reused_keys.append(key)
+                    else:
+                        pending_keys.append(key)
+                pending_chunks = len(pending_keys)
+                total_chunks = len(selected_keys)
+                already_embedded = len(reused_keys)
+            else:
+                backlog_status = self.embedding_status(
+                    embedding_model=embedding_model, embedding_version=embedding_version
+                )
+                pending_chunks = int(backlog_status["pending_chunk_count"])
+                total_chunks = int(backlog_status["chunk_count"])
+                already_embedded = int(backlog_status["embedded_chunk_count"])
             _log_rebuild_step(
                 2,
                 total_steps,
                 "count embedding backlog complete",
-                f"total_chunks={total_chunks} already_embedded={already_embedded} pending={pending_chunks}",
+                f"total_chunks={total_chunks} already_embedded={already_embedded} pending={pending_chunks} scoped={scoped}",
             )
-            if pending_chunks <= 0:
-                _log_rebuild_step(6, total_steps, "nothing to embed")
-                return {
+
+            def _empty_result(*, last_error: str = "") -> dict[str, Any]:
+                payload: dict[str, Any] = {
                     "provider": provider_name,
                     "embedding_model": embedding_model,
                     "embedding_version": embedding_version,
@@ -674,13 +843,37 @@ class EmbedderMixin:
                     "failed": 0,
                     "chunk_schema_version": CHUNK_SCHEMA_VERSION,
                     "embedded": 0,
+                    "reused": len(reused_keys),
+                    "selected": len(selected_keys) if scoped else total_chunks,
+                    "unscoped": not scoped,
+                    "selected_chunk_keys": list(selected_keys),
+                    "reused_chunk_keys": list(reused_keys),
+                    "submitted_chunk_keys": [],
+                    "completed_chunk_keys": list(reused_keys),
+                    "failed_chunk_keys": [],
+                    "pending_chunk_keys": list(pending_keys) if scoped else [],
+                    "chunk_keys_by_uid": {uid: list(keys) for uid, keys in chunk_keys_by_uid.items()},
+                    "card_uids": [],
                 }
+                if embedding_spec is not None:
+                    payload["embedding_spec"] = embedding_spec.to_payload()
+                if last_error:
+                    payload["last_error"] = last_error
+                return payload
+
+            if pending_chunks <= 0:
+                _log_rebuild_step(6, total_steps, "nothing to embed")
+                return _empty_result()
 
             remaining_limit = pending_chunks if limit <= 0 else min(limit, pending_chunks)
             target_total = remaining_limit
             embedded = 0
             failed = 0
             last_error = ""
+            submitted_keys: list[str] = []
+            completed_new_keys: list[str] = []
+            failed_keys: list[str] = []
+            embedded_uids: set[str] = set()
             reserve_lock = Lock()
             progress_lock = Lock()
             should_rebuild_vector_index = embed_defer_vector_index()
@@ -717,6 +910,8 @@ class EmbedderMixin:
                     conn,
                     embedding_model=embedding_model,
                     embedding_version=embedding_version,
+                    uid_allowlist=uid_allowlist,
+                    chunk_key_allowlist=chunk_key_allowlist,
                 )
                 logger.info(
                     "step 4/%d materialize embed work queue complete pending_chunks=%d elapsed=%.1fs",
@@ -782,11 +977,19 @@ class EmbedderMixin:
                     worker_result.claimed += batch_result.claimed
                     worker_result.embedded += batch_result.embedded
                     worker_result.failed += batch_result.failed
+                    worker_result.claimed_keys.extend(batch_result.claimed_keys)
+                    worker_result.embedded_keys.extend(batch_result.embedded_keys)
+                    worker_result.failed_keys.extend(batch_result.failed_keys)
+                    worker_result.card_uids.extend(batch_result.card_uids)
                     if batch_result.last_error:
                         worker_result.last_error = batch_result.last_error
                     with progress_lock:
                         embedded += batch_result.embedded
                         failed += batch_result.failed
+                        submitted_keys.extend(batch_result.claimed_keys)
+                        completed_new_keys.extend(batch_result.embedded_keys)
+                        failed_keys.extend(batch_result.failed_keys)
+                        embedded_uids.update(batch_result.card_uids)
                         if batch_result.last_error:
                             last_error = batch_result.last_error
                         fail_suffix = f" failed={failed}" if failed else ""
@@ -836,7 +1039,15 @@ class EmbedderMixin:
                     _log_rebuild_step(6, total_steps, "rebuild vector index complete")
                 else:
                     _log_rebuild_step(6, total_steps, "skip vector index rebuild (incremental mode)")
-            result: dict[str, int | str] = {
+            completed_keys = list(dict.fromkeys([*reused_keys, *completed_new_keys]))
+            failed_unique = list(dict.fromkeys(failed_keys))
+            submitted_unique = list(dict.fromkeys(submitted_keys))
+            if scoped:
+                done_or_failed = set(completed_keys) | set(failed_unique)
+                still_pending = [key for key in pending_keys if key not in done_or_failed]
+            else:
+                still_pending = []
+            result: dict[str, Any] = {
                 "provider": provider_name,
                 "embedding_model": embedding_model,
                 "embedding_version": embedding_version,
@@ -846,7 +1057,20 @@ class EmbedderMixin:
                 "concurrency": concurrency,
                 "embedded": embedded,
                 "failed": failed,
+                "reused": len(reused_keys),
+                "selected": len(selected_keys) if scoped else total_chunks,
+                "unscoped": not scoped,
+                "selected_chunk_keys": list(selected_keys),
+                "reused_chunk_keys": list(reused_keys),
+                "submitted_chunk_keys": submitted_unique,
+                "completed_chunk_keys": completed_keys,
+                "failed_chunk_keys": failed_unique,
+                "pending_chunk_keys": still_pending,
+                "chunk_keys_by_uid": {uid: list(keys) for uid, keys in chunk_keys_by_uid.items()},
+                "card_uids": sorted(embedded_uids),
             }
+            if embedding_spec is not None:
+                result["embedding_spec"] = embedding_spec.to_payload()
             if last_error:
                 result["last_error"] = last_error
             return result

@@ -14,6 +14,12 @@ INPUT_STATUS_COMPLETE = "complete"
 INPUT_STATUS_SKIPPED = "skipped"
 INPUT_STATUS_FAILED = "failed"
 INPUT_STATUS_STALE = "stale"
+INPUT_STATUS_VALID_NO_OUTPUT = "valid_no_output"
+INPUT_STATUS_BLOCKED_DEPENDENCY = "blocked_dependency"
+INPUT_STATUS_BLOCKED_PROVIDER = "blocked_provider"
+INPUT_STATUS_RETRYABLE_FAILURE = "retryable_failure"
+INPUT_STATUS_PERMANENT_FAILURE = "permanent_failure"
+INPUT_STATUS_SUPERSEDED = "superseded"
 
 INPUT_STATUSES = frozenset(
     {
@@ -23,8 +29,71 @@ INPUT_STATUSES = frozenset(
         INPUT_STATUS_SKIPPED,
         INPUT_STATUS_FAILED,
         INPUT_STATUS_STALE,
+        INPUT_STATUS_VALID_NO_OUTPUT,
+        INPUT_STATUS_BLOCKED_DEPENDENCY,
+        INPUT_STATUS_BLOCKED_PROVIDER,
+        INPUT_STATUS_RETRYABLE_FAILURE,
+        INPUT_STATUS_PERMANENT_FAILURE,
+        INPUT_STATUS_SUPERSEDED,
     }
 )
+
+# Scheduler state machine (persisted on receipts). Public CLI strings map through
+# ``legacy_input_status`` / ``output_receipt_status``.
+RECEIPT_STATUS_PENDING = INPUT_STATUS_PENDING
+RECEIPT_STATUS_RUNNING = INPUT_STATUS_RUNNING
+RECEIPT_STATUS_COMPLETE = INPUT_STATUS_COMPLETE
+RECEIPT_STATUS_VALID_NO_OUTPUT = INPUT_STATUS_VALID_NO_OUTPUT
+RECEIPT_STATUS_BLOCKED_DEPENDENCY = INPUT_STATUS_BLOCKED_DEPENDENCY
+RECEIPT_STATUS_BLOCKED_PROVIDER = INPUT_STATUS_BLOCKED_PROVIDER
+RECEIPT_STATUS_RETRYABLE_FAILURE = INPUT_STATUS_RETRYABLE_FAILURE
+RECEIPT_STATUS_PERMANENT_FAILURE = INPUT_STATUS_PERMANENT_FAILURE
+RECEIPT_STATUS_SUPERSEDED = INPUT_STATUS_SUPERSEDED
+
+RECEIPT_STATUSES = frozenset(
+    {
+        RECEIPT_STATUS_PENDING,
+        RECEIPT_STATUS_RUNNING,
+        RECEIPT_STATUS_COMPLETE,
+        RECEIPT_STATUS_VALID_NO_OUTPUT,
+        RECEIPT_STATUS_BLOCKED_DEPENDENCY,
+        RECEIPT_STATUS_BLOCKED_PROVIDER,
+        RECEIPT_STATUS_RETRYABLE_FAILURE,
+        RECEIPT_STATUS_PERMANENT_FAILURE,
+        RECEIPT_STATUS_SUPERSEDED,
+    }
+)
+
+SUCCESS_RECEIPT_STATUSES = frozenset({RECEIPT_STATUS_COMPLETE, RECEIPT_STATUS_VALID_NO_OUTPUT})
+FAILED_RECEIPT_STATUSES = frozenset(
+    {
+        RECEIPT_STATUS_RETRYABLE_FAILURE,
+        RECEIPT_STATUS_PERMANENT_FAILURE,
+        INPUT_STATUS_FAILED,
+    }
+)
+BLOCKING_RECEIPT_STATUSES = frozenset(
+    {
+        RECEIPT_STATUS_BLOCKED_DEPENDENCY,
+        RECEIPT_STATUS_BLOCKED_PROVIDER,
+        RECEIPT_STATUS_RETRYABLE_FAILURE,
+        RECEIPT_STATUS_PERMANENT_FAILURE,
+        INPUT_STATUS_FAILED,
+    }
+)
+
+DEP_REQUIRED = "required"
+DEP_OPTIONAL = "optional"
+DEP_CONDITIONAL = "conditional"
+DEPENDENCY_KINDS = frozenset({DEP_REQUIRED, DEP_OPTIONAL, DEP_CONDITIONAL})
+
+LEASE_SECONDS_DEFAULT = 300
+LEGACY_UNKNOWN = "legacy_unknown"
+
+SKIP_BLOCKED_DEPENDENCY = "blocked_dependency"
+SKIP_BLOCKED_PROVIDER = "blocked_provider"
+SKIP_SUPERSEDED = "superseded"
+SKIP_VALID_NO_OUTPUT = "valid_no_output"
 
 # Aggregate run status
 RUN_STATUS_SUCCESS = "success"
@@ -65,6 +134,10 @@ SKIP_ACTIVE_ONLY = "active_only_processor"
 SKIP_UPSTREAM = "upstream_not_complete"
 SKIP_PROVIDER = "llm_provider_unavailable"
 SKIP_NOT_APPLICABLE = "input_filter_mismatch"
+SKIP_NONCONVERGENT = "nonconvergent_feedback"
+CONTEXT_RECONCILIATION_CAPABILITY = "affected_context_resolver/v0"
+MAX_OUTPUT_FEEDBACK_GENERATIONS = 4
+MAX_SELF_INVALIDATING_REVISIONS = 2
 
 SKIP_REASONS = frozenset(
     {
@@ -74,8 +147,49 @@ SKIP_REASONS = frozenset(
         SKIP_UPSTREAM,
         SKIP_PROVIDER,
         SKIP_NOT_APPLICABLE,
+        SKIP_BLOCKED_DEPENDENCY,
+        SKIP_BLOCKED_PROVIDER,
+        SKIP_SUPERSEDED,
+        SKIP_VALID_NO_OUTPUT,
+        SKIP_NONCONVERGENT,
     }
 )
+
+
+def output_receipt_status(scheduler_status: str) -> str:
+    """Map scheduler state-machine status onto ``OutputReceipt.status``."""
+
+    if scheduler_status in SUCCESS_RECEIPT_STATUSES:
+        return "completed"
+    if scheduler_status in {RECEIPT_STATUS_PENDING, RECEIPT_STATUS_RUNNING}:
+        return "pending"
+    if scheduler_status == RECEIPT_STATUS_BLOCKED_DEPENDENCY:
+        return "dependency_unmet"
+    if scheduler_status in {RECEIPT_STATUS_BLOCKED_PROVIDER, INPUT_STATUS_SKIPPED}:
+        return "blocked" if scheduler_status == RECEIPT_STATUS_BLOCKED_PROVIDER else "skipped"
+    if scheduler_status == RECEIPT_STATUS_SUPERSEDED:
+        return "skipped"
+    if scheduler_status in FAILED_RECEIPT_STATUSES:
+        return "failed"
+    return "pending"
+
+
+def legacy_input_status(scheduler_status: str) -> str:
+    """Map scheduler status onto the pre-P03 public input-state strings."""
+
+    if scheduler_status == RECEIPT_STATUS_VALID_NO_OUTPUT:
+        return INPUT_STATUS_COMPLETE
+    if scheduler_status in FAILED_RECEIPT_STATUSES:
+        return INPUT_STATUS_FAILED
+    if scheduler_status in {
+        RECEIPT_STATUS_BLOCKED_DEPENDENCY,
+        RECEIPT_STATUS_BLOCKED_PROVIDER,
+        RECEIPT_STATUS_SUPERSEDED,
+    }:
+        return INPUT_STATUS_SKIPPED
+    if scheduler_status in INPUT_STATUSES:
+        return scheduler_status
+    return INPUT_STATUS_PENDING
 
 CORPUS_ACTIVE = "active"
 CORPUS_SUPPRESSED = "suppressed"

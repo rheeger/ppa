@@ -8,26 +8,26 @@ use serde::Deserialize;
 
 use super::schema::UNKNOWN;
 
-#[derive(Debug, Deserialize)]
-struct EdgeRow {
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct EdgeRow {
     #[serde(default)]
-    source_uid: String,
+    pub source_uid: String,
     #[serde(default)]
-    target_uid: String,
+    pub target_uid: String,
     #[serde(default)]
-    edge_type: String,
+    pub edge_type: String,
     #[serde(default)]
-    field_name: String,
+    pub field_name: String,
     #[serde(default)]
-    trust: Option<f64>,
+    pub trust: Option<f64>,
     #[serde(default)]
-    confidence: Option<f64>,
+    pub confidence: Option<f64>,
     #[serde(default)]
-    method: String,
+    pub method: String,
     #[serde(default)]
-    evidence_uids: Vec<String>,
+    pub evidence_uids: Vec<String>,
     #[serde(default)]
-    direction: String,
+    pub direction: String,
 }
 
 #[derive(Debug, Clone)]
@@ -87,6 +87,52 @@ pub struct GraphStore {
 }
 
 impl GraphStore {
+    pub fn push_edge(&mut self, edge: EdgeRow) {
+        if edge.source_uid.is_empty() || edge.target_uid.is_empty() {
+            return;
+        }
+        let trust = effective_trust(&edge);
+        let method = edge_method(&edge);
+        let direction = if edge.direction.trim().is_empty() {
+            "forward".to_string()
+        } else {
+            edge.direction.clone()
+        };
+        let evidence = edge.evidence_uids.clone();
+        self.adj.entry(edge.source_uid.clone()).or_default().push(StoredEdge {
+            neighbor_uid: edge.target_uid.clone(),
+            edge_type: edge.edge_type.clone(),
+            field_name: edge.field_name.clone(),
+            method: method.clone(),
+            confidence: edge.confidence.or(trust),
+            evidence_uids: evidence.clone(),
+            trust,
+            direction: direction.clone(),
+            source_uid: edge.source_uid.clone(),
+            target_uid: edge.target_uid.clone(),
+        });
+        self.adj.entry(edge.target_uid.clone()).or_default().push(StoredEdge {
+            neighbor_uid: edge.source_uid.clone(),
+            edge_type: edge.edge_type.clone(),
+            field_name: edge.field_name.clone(),
+            method,
+            confidence: edge.confidence.or(trust),
+            evidence_uids: evidence,
+            trust,
+            direction,
+            source_uid: edge.source_uid,
+            target_uid: edge.target_uid,
+        });
+    }
+
+    pub fn from_edges(edges: impl IntoIterator<Item = EdgeRow>) -> Self {
+        let mut store = GraphStore::default();
+        for edge in edges {
+            store.push_edge(edge);
+        }
+        store
+    }
+
     pub fn load(dir: &Path) -> PyResult<Self> {
         let path = dir.join("edges.jsonl");
         let mut store = GraphStore::default();
@@ -102,41 +148,7 @@ impl GraphStore {
             }
             let edge: EdgeRow = serde_json::from_str(&line)
                 .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-            if edge.source_uid.is_empty() || edge.target_uid.is_empty() {
-                continue;
-            }
-            let trust = effective_trust(&edge);
-            let method = edge_method(&edge);
-            let direction = if edge.direction.trim().is_empty() {
-                "forward".to_string()
-            } else {
-                edge.direction.clone()
-            };
-            let evidence = edge.evidence_uids.clone();
-            store.adj.entry(edge.source_uid.clone()).or_default().push(StoredEdge {
-                neighbor_uid: edge.target_uid.clone(),
-                edge_type: edge.edge_type.clone(),
-                field_name: edge.field_name.clone(),
-                method: method.clone(),
-                confidence: edge.confidence.or(trust),
-                evidence_uids: evidence.clone(),
-                trust,
-                direction: direction.clone(),
-                source_uid: edge.source_uid.clone(),
-                target_uid: edge.target_uid.clone(),
-            });
-            store.adj.entry(edge.target_uid.clone()).or_default().push(StoredEdge {
-                neighbor_uid: edge.source_uid.clone(),
-                edge_type: edge.edge_type.clone(),
-                field_name: edge.field_name.clone(),
-                method,
-                confidence: edge.confidence.or(trust),
-                evidence_uids: evidence,
-                trust,
-                direction,
-                source_uid: edge.source_uid,
-                target_uid: edge.target_uid,
-            });
+            store.push_edge(edge);
         }
         Ok(store)
     }

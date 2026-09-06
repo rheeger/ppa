@@ -434,6 +434,9 @@ class SeedLinkRunSummary:
     canonical_applied: int = 0
     derived_promotions_applied: int = 0
     module_metrics: dict[str, dict[str, float]] = field(default_factory=dict)
+    created_candidate_ids: list[str] = field(default_factory=list)
+    output_uids: list[str] = field(default_factory=list)
+    deterministic_only: bool = False
 
 
 def _clean_text(value: str) -> str:
@@ -3099,7 +3102,13 @@ def run_seed_link_workers(
                                 candidate.features["llm_disabled"] = 1
                         for candidate in candidates:
                             decision = evaluate_seed_link_candidate(index.vault, catalog, candidate)
-                            _persist_candidate(conn, index, int(job["job_id"]), candidate, decision, commit=False)
+                            candidate_id, _status = _persist_candidate(
+                                conn, index, int(job["job_id"]), candidate, decision, commit=False
+                            )
+                            worker_summary.created_candidate_ids.append(str(candidate_id))
+                            target_uid = str(candidate.target_card_uid or "").strip()
+                            if target_uid and target_uid not in worker_summary.output_uids:
+                                worker_summary.output_uids.append(target_uid)
                             worker_summary.candidates += 1
                             if decision.decision == DECISION_REVIEW:
                                 worker_summary.needs_review += 1
@@ -3134,6 +3143,10 @@ def run_seed_link_workers(
             summary.auto_promoted += worker_result.auto_promoted
             summary.canonical_safe += worker_result.canonical_safe
             summary.llm_judged += worker_result.llm_judged
+            summary.created_candidate_ids.extend(worker_result.created_candidate_ids)
+            for uid in worker_result.output_uids:
+                if uid not in summary.output_uids:
+                    summary.output_uids.append(uid)
             for module_name, metrics in worker_result.module_metrics.items():
                 _merge_module_metric(
                     summary.module_metrics,
@@ -3155,6 +3168,7 @@ def run_seed_link_workers(
             },
         )
         conn.commit()
+    summary.deterministic_only = not include_llm
     return {
         "workers": workers,
         "jobs_completed": summary.jobs_completed,
@@ -3164,6 +3178,9 @@ def run_seed_link_workers(
         "auto_promoted": summary.auto_promoted,
         "canonical_safe": summary.canonical_safe,
         "llm_judged": summary.llm_judged,
+        "created_candidate_ids": list(summary.created_candidate_ids),
+        "output_uids": list(summary.output_uids),
+        "deterministic_only": summary.deterministic_only,
         "module_metrics": {
             module_name: {
                 "elapsed_seconds": round(float(metrics["elapsed_seconds"]), 6),
@@ -3359,6 +3376,9 @@ def run_seed_link_backfill(
         "job_type": job_type,
         "module_metrics": worker_result["module_metrics"],
         "rebuilt": bool(gate.get("rebuilt")),
+        "created_candidate_ids": list(worker_result.get("created_candidate_ids") or []),
+        "output_uids": list(worker_result.get("output_uids") or []),
+        "deterministic_only": bool(worker_result.get("deterministic_only")),
     }
 
 

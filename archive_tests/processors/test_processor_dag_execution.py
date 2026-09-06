@@ -423,7 +423,20 @@ class _MockStore:
 
     def embed_pending(self, **kwargs):
         self.embed_calls.append(dict(kwargs))
-        return {"embedded": 1, "failed": 0}
+        allow = {str(uid) for uid in (kwargs.get("uid_allowlist") or set())}
+        uid = next(iter(allow), "uid-emb-1")
+        key = f"ck-{uid}"
+        return {
+            "embedded": 1,
+            "failed": 0,
+            "selected": 1,
+            "selected_chunk_keys": [key],
+            "completed_chunk_keys": [key],
+            "reused_chunk_keys": [],
+            "failed_chunk_keys": [],
+            "pending_chunk_keys": [],
+            "chunk_keys_by_uid": {uid: [key]},
+        }
 
 
 def _active_snap(uid: str, *, processor_decision: str = "typed_extraction") -> ProcessorInputSnapshot:
@@ -517,14 +530,19 @@ def test_apply_materialization_calls_incremental_rebuild(tmp_path: Path) -> None
     assert all(r.status == "complete" for r in result.item_results)
 
 
-def test_apply_embedding_calls_embed_pending_dirty_limit(tmp_path: Path) -> None:
+def test_apply_embedding_calls_embed_pending_dirty_allowlist(tmp_path: Path) -> None:
     vault = _minimal_vault(tmp_path)
     store = _MockStore(vault)
     result = _apply_default(tmp_path, processor_key=PROCESSOR_EMBEDDING, uid="uid-emb-1", store=store)
     assert result.executed is True
     assert store.embed_calls
-    assert store.embed_calls[0]["limit"] == 1
-    assert store.embed_calls[0]["limit"] != 0
+    call = store.embed_calls[0]
+    assert call["uid_allowlist"] == {"uid-emb-1"}
+    assert call["limit"] == 0
+    assert not call.get("unscoped")
+    assert result.item_results[0].status == "complete"
+    assert result.item_results[0].receipt is not None
+    assert result.item_results[0].receipt.chunk_keys == ("ck-uid-emb-1",)
 
 
 def test_apply_embedding_full_backlog_requires_opt_in(tmp_path: Path) -> None:
@@ -539,6 +557,8 @@ def test_apply_embedding_full_backlog_requires_opt_in(tmp_path: Path) -> None:
     )
     assert store.embed_calls
     assert store.embed_calls[0]["limit"] == 0
+    assert store.embed_calls[0]["unscoped"] is True
+    assert "uid_allowlist" not in store.embed_calls[0]
     assert result.executed is True
 
 

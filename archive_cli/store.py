@@ -121,10 +121,13 @@ class DefaultArchiveStore(ArchiveStore):
             counts = self.index.rebuild()
         if self._is_warehouse_index():
             try:
+                from archive_engine.changes import acknowledge_materialized
+
                 from .serving_index import mark_serving_index_dirty
 
                 allowlist = filtered.get("uid_allowlist") or []
                 dirty = [str(uid).strip() for uid in allowlist if str(uid).strip()]
+                acknowledge_materialized(self.vault, uids=dirty or None)
                 mark_serving_index_dirty(self.vault, "rebuild", dirty)
             except Exception:
                 pass
@@ -559,9 +562,43 @@ class DefaultArchiveStore(ArchiveStore):
         embedding_model: str = "",
         embedding_version: int = 0,
         copy_from_schema: str = "",
+        uid_allowlist: set[str] | list[str] | tuple[str, ...] | None = None,
+        chunk_key_allowlist: set[str] | list[str] | tuple[str, ...] | None = None,
+        embedding_spec: Any | None = None,
+        unscoped: bool = False,
     ) -> dict[str, Any]:
-        model = embedding_model or get_default_embedding_model()
-        version = embedding_version or get_default_embedding_version()
+        from archive_engine.contracts import EmbeddingSpec
+
+        from .embedder import current_chunk_schema_id, normalize_embed_allowlist, require_embed_selection
+
+        uid_allowlist = normalize_embed_allowlist(uid_allowlist)
+        chunk_key_allowlist = normalize_embed_allowlist(chunk_key_allowlist)
+        require_embed_selection(
+            uid_allowlist=uid_allowlist,
+            chunk_key_allowlist=chunk_key_allowlist,
+            unscoped=unscoped,
+        )
+        spec = embedding_spec
+        if spec is not None and not isinstance(spec, EmbeddingSpec):
+            spec = EmbeddingSpec.from_payload(spec)
+        if spec is not None:
+            model = spec.model
+            try:
+                version = int(spec.model_revision)
+            except ValueError:
+                version = embedding_version or get_default_embedding_version()
+        else:
+            model = embedding_model or get_default_embedding_model()
+            version = embedding_version or get_default_embedding_version()
+            spec = EmbeddingSpec(
+                provider_namespace=str(getattr(self.provider_factory, "name", "") or "hash"),
+                model=model,
+                model_revision=str(version),
+                dimension=get_vector_dimension(),
+                metric="cosine",
+                normalization="none",
+                chunk_schema=current_chunk_schema_id(),
+            )
         copy_result: dict[str, Any] | None = None
         if copy_from_schema:
             copy_result = dict(
@@ -581,15 +618,26 @@ class DefaultArchiveStore(ArchiveStore):
                 embedding_version=version,
                 limit=limit,
                 include_context_prefix=include_ctx,
+                uid_allowlist=uid_allowlist,
+                chunk_key_allowlist=chunk_key_allowlist,
+                embedding_spec=spec,
+                unscoped=unscoped,
             )
         )
         if copy_result is not None:
             embed_result["copy_from_schema"] = copy_result
         if self._is_warehouse_index():
             try:
+                from archive_engine.changes import emit_embed_completion, request_reconciliation
+
                 from .serving_index import mark_serving_index_dirty
 
-                mark_serving_index_dirty(self.vault, "embed_pending")
+                card_uids = [str(uid).strip() for uid in (embed_result.get("card_uids") or []) if str(uid).strip()]
+                if card_uids:
+                    emit_embed_completion(self.vault, card_uids, source="embed_pending")
+                else:
+                    request_reconciliation(self.vault, reason="embed_pending")
+                mark_serving_index_dirty(self.vault, "embed_pending", card_uids)
             except Exception:
                 pass
         return embed_result

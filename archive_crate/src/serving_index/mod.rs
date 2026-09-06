@@ -6,6 +6,7 @@ mod lexical;
 mod metadata;
 mod rank;
 mod schema;
+mod segments;
 mod vector;
 mod vector_train;
 
@@ -22,7 +23,6 @@ use serde::Serialize;
 use crate::serving_index::graph::GraphStore;
 use crate::serving_index::lexical::LexicalIndex;
 use crate::serving_index::metadata::{CardMeta, MetadataStore};
-use crate::serving_index::evidence::ChunkEvidenceRef;
 use crate::serving_index::vector::IvfMmapAnn;
 use crate::serving_index::vector_train::TrainConfig;
 
@@ -34,64 +34,16 @@ pub struct ServingIndex {
     dir: PathBuf,
     meta: MetadataStore,
     graph: GraphStore,
-    lexical: Option<LexicalIndex>,
-    vectors: Option<IvfMmapAnn>,
+    lexical: Vec<LexicalIndex>,
+    vectors: Vec<IvfMmapAnn>,
     chunk_to_card: HashMap<String, (String, String, i32)>,
     chunk_evidence: HashMap<String, serde_json::Value>,
+    live_chunk_keys: HashSet<String>,
+    chain_depth: usize,
+    embedding_spec: Option<serde_json::Value>,
 }
 
 static OPEN_LOCK: Mutex<()> = Mutex::new(());
-
-fn chunk_map_path(dir: &Path) -> PathBuf {
-    dir.join("chunks.jsonl")
-}
-
-fn load_chunk_map(
-    dir: &Path,
-) -> PyResult<(
-    HashMap<String, (String, String, i32)>,
-    HashMap<String, serde_json::Value>,
-)> {
-    let path = chunk_map_path(dir);
-    let mut out = HashMap::new();
-    let mut evidence = HashMap::new();
-    if !path.exists() {
-        return Ok((out, evidence));
-    }
-    let f = fs::File::open(&path).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
-    for line in BufReader::new(f).lines() {
-        let line = line.map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        let v: serde_json::Value = serde_json::from_str(&line)
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-        let key = v.get("chunk_key").and_then(|x| x.as_str()).unwrap_or("").to_string();
-        let card = v.get("card_uid").and_then(|x| x.as_str()).unwrap_or("").to_string();
-        let ctype = v.get("chunk_type").and_then(|x| x.as_str()).unwrap_or("").to_string();
-        let idx = v.get("chunk_index").and_then(|x| x.as_i64()).unwrap_or(0) as i32;
-        if !key.is_empty() {
-            if let Some(raw) = v.get("evidence") {
-                let parsed: Result<ChunkEvidenceRef, _> = serde_json::from_value(raw.clone());
-                match parsed {
-                    Ok(refer) => {
-                        if let Err(msg) = refer.validate() {
-                            return Err(pyo3::exceptions::PyValueError::new_err(msg));
-                        }
-                        evidence.insert(key.clone(), refer.to_json());
-                    }
-                    Err(err) => {
-                        return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                            "unsupported ChunkEvidenceRef: {err}"
-                        )));
-                    }
-                }
-            }
-            out.insert(key, (card, ctype, idx));
-        }
-    }
-    Ok((out, evidence))
-}
 
 #[pymethods]
 impl ServingIndex {
@@ -113,6 +65,11 @@ fn open_generation(index_root: &Path) -> PyResult<ServingIndex> {
             "serving_index_unavailable",
         ));
     }
+    if dir.join("INCOMPLETE").exists() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "serving_index_incomplete",
+        ));
+    }
     let format = read_format_version(&dir)?;
     if format != schema::SERVING_INDEX_FORMAT_VERSION {
         return Err(pyo3::exceptions::PyValueError::new_err(format!(
@@ -121,15 +78,24 @@ fn open_generation(index_root: &Path) -> PyResult<ServingIndex> {
             schema::VECTOR_IMPL
         )));
     }
-    let meta = MetadataStore::load(&dir)?;
-    let graph = GraphStore::load(&dir)?;
-    let lexical = LexicalIndex::open(&dir.join("tantivy")).ok();
-    let vectors = if dir.join("embedding_keys.txt").exists() {
-        Some(IvfMmapAnn::open(&dir)?)
-    } else {
-        None
-    };
-    let (chunk_to_card, chunk_evidence) = load_chunk_map(&dir)?;
+    let resolved = segments::resolve_live(index_root, &gid)?;
+    let meta = MetadataStore::from_cards(resolved.cards.values().cloned());
+    let graph = GraphStore::from_edges(resolved.edges.values().cloned());
+    let mut lexical = Vec::new();
+    let mut vectors = Vec::new();
+    let mut embedding_spec = resolved.embedding_spec.clone();
+    for seg in &resolved.chain {
+        if seg.join("tantivy").exists() {
+            if let Ok(lex) = LexicalIndex::open(&seg.join("tantivy")) {
+                lexical.push(lex);
+            }
+        }
+        if seg.join("embedding_keys.txt").exists() || seg.join("embeddings.bin").exists() {
+            let ann = IvfMmapAnn::open(seg)?;
+            embedding_spec = segments::check_spec_compat(embedding_spec.as_ref(), ann.embedding_spec())?;
+            vectors.push(ann);
+        }
+    }
     Ok(ServingIndex {
         generation_id: gid,
         dir,
@@ -137,8 +103,11 @@ fn open_generation(index_root: &Path) -> PyResult<ServingIndex> {
         graph,
         lexical,
         vectors,
-        chunk_to_card,
-        chunk_evidence,
+        chunk_to_card: resolved.chunk_to_card(),
+        chunk_evidence: resolved.chunk_evidence(),
+        live_chunk_keys: resolved.live_chunk_keys,
+        chain_depth: resolved.chain.len().max(1),
+        embedding_spec,
     })
 }
 
@@ -270,11 +239,20 @@ pub fn serving_index_search(
             seen.insert(card.card_uid.clone());
         }
     }
-    let hits = if let Some(lex) = &idx.lexical {
-        lex.search(&query, limit * 4, &type_filter)?
-    } else {
-        Vec::new()
-    };
+    let mut merged: HashMap<String, f32> = HashMap::new();
+    for lex in &idx.lexical {
+        for (uid, score) in lex.search(&query, limit * 4, &type_filter)? {
+            if !idx.meta.by_uid.contains_key(&uid) {
+                continue;
+            }
+            let entry = merged.entry(uid).or_insert(score);
+            if score > *entry {
+                *entry = score;
+            }
+        }
+    }
+    let mut hits: Vec<(String, f32)> = merged.into_iter().collect();
+    hits.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     for (uid, score) in hits {
         if !seen.insert(uid.clone()) {
             continue;
@@ -371,7 +349,7 @@ pub fn serving_index_vector(
     let people_filter = req_str(&req, "people_filter");
     let start_date = req_str(&req, "start_date");
     let end_date = req_str(&req, "end_date");
-    let Some(ann) = &idx.vectors else {
+    if idx.vectors.is_empty() {
         return json_to_py(py, serde_json::Value::Array(vec![]));
     };
     if !query_vector.iter().all(|v| v.is_finite()) {
@@ -379,57 +357,109 @@ pub fn serving_index_vector(
             "query embedding contains non-finite values",
         ));
     }
-    if !query_vector.is_empty() && query_vector.len() != ann.dim() && ann.dim() != 0 {
+    let dim = idx
+        .vectors
+        .iter()
+        .map(|ann| ann.dim())
+        .find(|d| *d != 0)
+        .unwrap_or(0);
+    if !query_vector.is_empty() && dim != 0 && query_vector.len() != dim {
         return Err(pyo3::exceptions::PyValueError::new_err(format!(
             "query dimension {} != serving dimension {}",
             query_vector.len(),
-            ann.dim()
+            dim
         )));
     }
-    if let Some(expected) = ann.embedding_spec() {
+    if let Some(expected) = &idx.embedding_spec {
         if let Some(raw) = req.get_item("embedding_spec").ok().flatten() {
             if let Ok(got) = raw.extract::<String>() {
                 let got_v: serde_json::Value = serde_json::from_str(&got)
                     .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-                if &got_v != expected {
-                    return Err(pyo3::exceptions::PyValueError::new_err(
-                        "incompatible EmbeddingSpec for this serving generation",
-                    ));
-                }
+                segments::check_spec_compat(Some(expected), Some(&got_v))?;
             }
         }
     }
-    let nprobe = req_i64(&req, "nprobe", ann.nprobe() as i64).max(1) as usize;
-    let budget = req_i64(&req, "candidate_budget", ann.candidate_budget() as i64).max(1) as usize;
+    let default_nprobe = idx.vectors.first().map(|a| a.nprobe() as i64).unwrap_or(32);
+    let default_budget = idx
+        .vectors
+        .first()
+        .map(|a| a.candidate_budget() as i64)
+        .unwrap_or(4096);
+    let nprobe = req_i64(&req, "nprobe", default_nprobe).max(1) as usize;
+    let budget = req_i64(&req, "candidate_budget", default_budget).max(1) as usize;
     let has_filter = !type_filter.is_empty()
         || !source_filter.is_empty()
         || !people_filter.is_empty()
         || !start_date.is_empty()
         || !end_date.is_empty();
-    let eligible = if has_filter {
-        let mut set = HashSet::new();
-        for (i, key) in ann.keys().iter().enumerate() {
-            if let Some((uid, _, _)) = idx.chunk_to_card.get(key) {
-                if let Some(card) = idx.meta.by_uid.get(uid) {
-                    if idx.meta.matches_filters(
-                        card,
-                        &type_filter,
-                        &source_filter,
-                        &people_filter,
-                        "",
-                        &start_date,
-                        &end_date,
-                    ) {
-                        set.insert(i);
+    let per_k = (limit * 8).max(budget).max(limit * idx.chain_depth);
+    let mut report = crate::serving_index::vector::KnnReport {
+        hits: Vec::new(),
+        nlist: 0,
+        nprobe,
+        lists_probed: 0,
+        candidates_scored: 0,
+        scanned_all: false,
+        skipped_invalid: 0,
+        skipped_zero: 0,
+        truncated: false,
+    };
+    let mut best_key: HashMap<String, f32> = HashMap::new();
+    for ann in &idx.vectors {
+        let eligible = if has_filter {
+            let mut set = HashSet::new();
+            for (i, key) in ann.keys().iter().enumerate() {
+                if !idx.live_chunk_keys.contains(key) {
+                    continue;
+                }
+                if let Some((uid, _, _)) = idx.chunk_to_card.get(key) {
+                    if let Some(card) = idx.meta.by_uid.get(uid) {
+                        if idx.meta.matches_filters(
+                            card,
+                            &type_filter,
+                            &source_filter,
+                            &people_filter,
+                            "",
+                            &start_date,
+                            &end_date,
+                        ) {
+                            set.insert(i);
+                        }
                     }
                 }
             }
+            Some(set)
+        } else {
+            None
+        };
+        let part = ann.knn_live(
+            &query_vector,
+            per_k,
+            &idx.live_chunk_keys,
+            nprobe,
+            budget.max(per_k),
+            eligible.as_ref(),
+        );
+        report.nlist = report.nlist.max(part.nlist);
+        report.lists_probed += part.lists_probed;
+        report.candidates_scored += part.candidates_scored;
+        report.scanned_all |= part.scanned_all;
+        report.skipped_invalid += part.skipped_invalid;
+        report.skipped_zero += part.skipped_zero;
+        report.truncated |= part.truncated;
+        for hit in part.hits {
+            let e = best_key.entry(hit.key.clone()).or_insert(hit.score);
+            if hit.score > *e {
+                *e = hit.score;
+            }
         }
-        Some(set)
-    } else {
-        None
-    };
-    let report = ann.knn_report(&query_vector, limit * 8, eligible.as_ref(), nprobe, budget);
+    }
+    let mut union_hits: Vec<(String, f32)> = best_key.into_iter().collect();
+    union_hits.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    report.hits = union_hits
+        .into_iter()
+        .map(|(key, score)| crate::serving_index::vector::KnnHit { key, score })
+        .collect();
     let mut best: HashMap<String, (f32, String, i32, usize, String)> = HashMap::new();
     for hit in &report.hits {
         if let Some((card_uid, ctype, cidx)) = idx.chunk_to_card.get(&hit.key) {
@@ -522,16 +552,25 @@ pub fn serving_index_hybrid(
     let people_filter = req_str(&req, "people_filter");
     let start_date = req_str(&req, "start_date");
     let end_date = req_str(&req, "end_date");
-    let cap = (limit * 8).max(limit);
+    let cap = (limit * 8).max(limit).max(limit * idx.chain_depth);
     let mut lexical = HashMap::new();
-    if let Some(lex) = &idx.lexical {
+    for lex in &idx.lexical {
         for (uid, score) in lex.search(query, cap, &type_filter)? {
-            lexical.insert(uid, score);
+            if !idx.meta.by_uid.contains_key(&uid) {
+                continue;
+            }
+            let e = lexical.entry(uid).or_insert(score);
+            if score > *e {
+                *e = score;
+            }
         }
     }
     let mut vector = HashMap::new();
-    if let Some(ann) = &idx.vectors {
+    for ann in &idx.vectors {
         for (chunk_key, sim) in ann.knn(&query_vector, cap) {
+            if !idx.live_chunk_keys.contains(&chunk_key) {
+                continue;
+            }
             if let Some((card_uid, ctype, cidx)) = idx.chunk_to_card.get(&chunk_key) {
                 let e = vector
                     .entry(card_uid.clone())
@@ -1020,6 +1059,18 @@ pub fn serving_index_ann_knn(
 }
 
 #[pyfunction]
+pub fn serving_index_resolve_layout(py: Python<'_>, index_root: &str) -> PyResult<PyObject> {
+    let root = Path::new(index_root);
+    let Some(gid) = generation::read_active(root)? else {
+        return Err(pyo3::exceptions::PyFileNotFoundError::new_err(
+            "serving_index_unavailable",
+        ));
+    };
+    let resolved = segments::resolve_live(root, &gid)?;
+    json_to_py(py, resolved.to_json())
+}
+
+#[pyfunction]
 pub fn serving_index_chunk_evidence(
     py: Python<'_>,
     handle: &Bound<'_, ServingIndex>,
@@ -1056,5 +1107,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(serving_index_read_path, m)?)?;
     m.add_function(wrap_pyfunction!(serving_index_ann_knn, m)?)?;
     m.add_function(wrap_pyfunction!(serving_index_chunk_evidence, m)?)?;
+    m.add_function(wrap_pyfunction!(serving_index_resolve_layout, m)?)?;
     Ok(())
 }

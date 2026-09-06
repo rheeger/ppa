@@ -56,5 +56,12 @@ def load_builtin_scenarios() -> None:
     from archive_tests.acceptance.scenarios import baseline as _baseline  # noqa: F401
     from archive_tests.acceptance.scenarios import p01_ann as _p01_ann  # noqa: F401
     from archive_tests.acceptance.scenarios import p01_fidelity as _p01_fidelity  # noqa: F401
+    from archive_tests.acceptance.scenarios import p02_deltas as _p02_deltas  # noqa: F401
+    from archive_tests.acceptance.scenarios import p02_failures as _p02_failures  # noqa: F401
     from archive_tests.acceptance.scenarios import p02_journal as _p02_journal  # noqa: F401
+    from archive_tests.acceptance.scenarios import p02_writers as _p02_writers  # noqa: F401
+    from archive_tests.acceptance.scenarios import p03_dependencies as _p03  # noqa: F401
+    from archive_tests.acceptance.scenarios import p03_embedding as _p03b  # noqa: F401
+    from archive_tests.acceptance.scenarios import p03_outputs as _p03c  # noqa: F401
+    from archive_tests.acceptance.scenarios import p03_maintain as _p03d  # noqa: F401
     from archive_tests.acceptance.scenarios import p07_corrections as _p07_corrections  # noqa: F401

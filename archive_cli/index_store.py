@@ -260,7 +260,11 @@ class BaseArchiveIndex:
         embedding_version: int,
         limit: int = 20,
         include_context_prefix: bool = False,
-    ) -> dict[str, int | str]:
+        uid_allowlist: set[str] | list[str] | tuple[str, ...] | None = None,
+        chunk_key_allowlist: set[str] | list[str] | tuple[str, ...] | None = None,
+        embedding_spec: Any | None = None,
+        unscoped: bool = False,
+    ) -> dict[str, Any]:
         raise NotImplementedError
 
     def vector_search(

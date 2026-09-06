@@ -14,6 +14,7 @@ from typing import Any
 
 from archive_cli.ppa_engine import ppa_engine
 from archive_sync.adapters.base import deterministic_provenance
+from archive_sync.processors.input_hash import compute_output_revision
 from archive_vault.identity import IdentityCache
 from archive_vault.identity_resolver import PersonIndex, ResolveResult
 from archive_vault.identity_resolver import resolve_person_batch as resolve_person_batch_python
@@ -105,27 +106,63 @@ def iter_derived_card_dicts(
                     types=list(types_set),
                 )
                 out: list[dict[str, Any]] = []
+                found: set[str] = set()
                 for row in rows:
                     fm = dict(row["frontmatter"])
                     uid = str(fm.get("uid") or "")
                     if allowed is not None and uid not in allowed:
                         continue
+                    if uid:
+                        found.add(uid)
                     fm["_rel_path"] = row["rel_path"]
                     out.append(fm)
+                if allowed is not None:
+                    missing = [uid for uid in allowed if uid not in found]
+                    if missing:
+                        from archive_vault.vault import read_note_by_uid
+
+                        for uid in missing:
+                            note = read_note_by_uid(vault_path, uid)
+                            if note is None:
+                                continue
+                            rel, fm, _body, _prov = note
+                            if str(fm.get("type") or "") not in types_set:
+                                continue
+                            payload = dict(fm)
+                            payload["_rel_path"] = str(rel)
+                            out.append(payload)
                 return out
             except Exception:
                 pass
 
     out = []
+    found: set[str] = set()
     for note in iter_parsed_notes(vault_path):
         t = note.frontmatter.get("type")
         if t in types_set:
             uid = str(note.frontmatter.get("uid") or "")
             if allowed is not None and uid not in allowed:
                 continue
+            if uid:
+                found.add(uid)
             fm = dict(note.frontmatter)
             fm["_rel_path"] = note.rel_path.as_posix()
             out.append(fm)
+    if allowed is not None:
+        from archive_vault.vault import read_note_by_uid
+
+        for uid in allowed:
+            if uid in found:
+                continue
+            note = read_note_by_uid(vault_path, uid)
+            if note is None:
+                continue
+            rel, fm, _body, _prov = note
+            if str(fm.get("type") or "") not in types_set:
+                continue
+            payload = dict(fm)
+            payload["_rel_path"] = str(rel)
+            out.append(payload)
     return out
 
 
@@ -442,6 +479,9 @@ def run_entity_resolution(
         )
         merged.places_created += pr.places_created
         merged.places_merged += pr.places_merged
+        merged.created_uids.extend(pr.created_uids)
+        merged.changed_uids.extend(pr.changed_uids)
+        merged.output_revisions.update(pr.output_revisions)
         merged.errors.extend(pr.errors)
     if entity_filter in ("org", "all"):
         or_ = OrgResolver(vault_path).resolve(
@@ -452,10 +492,14 @@ def run_entity_resolution(
         )
         merged.orgs_created += or_.orgs_created
         merged.orgs_merged += or_.orgs_merged
+        merged.created_uids.extend(or_.created_uids)
+        merged.changed_uids.extend(or_.changed_uids)
+        merged.output_revisions.update(or_.output_revisions)
         merged.errors.extend(or_.errors)
     if entity_filter in ("person", "all"):
         pl = PersonLinker(vault_path).link(cards, dry_run=False)
         merged.persons_linked += pl.persons_linked
+        merged.changed_uids.extend(pl.changed_uids)
         merged.errors.extend(pl.errors)
 
     validation_errors: list[str] = []
@@ -477,6 +521,9 @@ def run_entity_resolution(
         "errors": merged.errors,
         "validation_errors": validation_errors,
         "cards_considered": len(cards),
+        "created_uids": list(dict.fromkeys(merged.created_uids)),
+        "changed_uids": list(dict.fromkeys(merged.changed_uids)),
+        "output_revisions": dict(merged.output_revisions),
     }
     if uid_allowlist is not None:
         result["uid_allowlist_count"] = len(uid_allowlist)
@@ -579,6 +626,9 @@ class EntityResolutionResult:
     person_conflicts: int = 0
     person_no_match: int = 0
     errors: list[str] = field(default_factory=list)
+    created_uids: list[str] = field(default_factory=list)
+    changed_uids: list[str] = field(default_factory=list)
+    output_revisions: dict[str, str] = field(default_factory=dict)
 
 
 class PlaceResolver:
@@ -633,6 +683,9 @@ class PlaceResolver:
                 log.warning("place resolution: missing city for %r — creating with empty city", display_name)
             if (nk, ck) in existing:
                 result.places_merged += 1
+                existing_uid = str(existing[(nk, ck)][1].get("uid") or "")
+                if existing_uid and existing_uid not in result.changed_uids:
+                    result.changed_uids.append(existing_uid)
                 continue
             uid = generate_uid("place", "entity-resolution", f"{nk}:{ck}")
             place = PlaceCard(
@@ -657,6 +710,10 @@ class PlaceResolver:
                     result.errors.append(str(exc))
                     continue
             result.places_created += 1
+            result.created_uids.append(uid)
+            result.output_revisions[uid] = compute_output_revision(
+                uid=uid, payload={"type": "place", "rel_path": rel, "name": nk}
+            )
             existing[(nk, ck)] = (rel, place.model_dump(mode="python"))
 
         return result
@@ -728,6 +785,9 @@ class OrgResolver:
         for dom in sorted(domains):
             if dom in existing:
                 result.orgs_merged += 1
+                existing_uid = str(existing[dom][1].get("uid") or "")
+                if existing_uid and existing_uid not in result.changed_uids:
+                    result.changed_uids.append(existing_uid)
                 continue
             uid = generate_uid("organization", "entity-resolution", dom)
             ct = card_types_by_domain.get(dom, "")
@@ -755,6 +815,10 @@ class OrgResolver:
                     result.errors.append(str(exc))
                     continue
             result.orgs_created += 1
+            result.created_uids.append(uid)
+            result.output_revisions[uid] = compute_output_revision(
+                uid=uid, payload={"type": "organization", "domain": dom, "rel_path": rel}
+            )
 
         return result
 
@@ -809,6 +873,9 @@ class PersonLinker:
                 result.person_merges += 1
                 if rr.wikilink:
                     result.persons_linked += 1
+                    linked = str(rr.wikilink).strip("[]")
+                    if linked and linked not in result.changed_uids:
+                        result.changed_uids.append(linked)
             elif rr.action == "conflict":
                 result.person_conflicts += 1
             else:

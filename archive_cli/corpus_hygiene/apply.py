@@ -213,10 +213,27 @@ def restore_rollback_kit(vault_path: Path, decision_run_id: str) -> int:
     return restored
 
 
+def _uid_from_markdown(path: Path) -> str:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    if not text.startswith("---"):
+        return ""
+    parts = text.split("---", 2)
+    if len(parts) < 3:
+        return ""
+    for line in parts[1].splitlines():
+        if line.startswith("uid:"):
+            return line.split(":", 1)[1].strip().strip("'\"")
+    return ""
+
+
 def delete_vault_markdown(
     vault_path: Path,
     rel_paths: list[str],
     *,
+    uids_by_rel: dict[str, str] | None = None,
     progress_every: int = DEFAULT_DELETE_PROGRESS_EVERY,
 ) -> int:
     """Delete indexed markdown notes. Logs i/n, pct, elapsed — no silent loop."""
@@ -236,11 +253,19 @@ def delete_vault_markdown(
         return 0
     t0 = time.perf_counter()
     deleted = 0
+    missing_uid = False
     for i, (rel, path) in enumerate(targets, start=1):
+        uid = str((uids_by_rel or {}).get(rel) or _uid_from_markdown(path) or "").strip()
         try:
-            path.unlink()
+            if uid:
+                from archive_vault.vault import delete_card
+
+                delete_card(vault_path, rel, uid=uid)
+            else:
+                path.unlink()
+                missing_uid = True
             deleted += 1
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             logger.warning("hygiene vault-remove failed rel_path=%s error=%s", rel, exc)
         should_log = progress_every > 0 and (i % progress_every == 0 or i == n)
         if should_log:
@@ -257,6 +282,13 @@ def delete_vault_markdown(
                 _format_mins_secs(remaining),
                 rate,
             )
+    if missing_uid:
+        try:
+            from archive_engine.changes import request_reconciliation
+
+            request_reconciliation(vault_path, reason="hygiene_unlink_without_uid")
+        except Exception:
+            logger.debug("hygiene unlink requested reconciliation failed", exc_info=True)
     return deleted
 
 
@@ -312,7 +344,12 @@ def apply_vault_remove(
             limit=kit_limit,
         )
         counts.rollback_kit_files = len(kit_files)
-        counts.files_deleted = delete_vault_markdown(vault, rel_paths, progress_every=progress_every)
+        counts.files_deleted = delete_vault_markdown(
+            vault,
+            rel_paths,
+            uids_by_rel={rel: uid for uid, rel in rel_by_uid.items()},
+            progress_every=progress_every,
+        )
         counts.ledger_records_appended = append_promotion_ledger(vault, records)
 
     if conn is not None and schema and remove_uids:

@@ -34,3 +34,10 @@ def format_output_identity(template: str, **values: str) -> str:
         return template.format(**merged)
     except KeyError:
         return template
+
+
+def compute_output_revision(*, uid: str, payload: dict[str, Any]) -> str:
+    """Stable revision for a created/changed/deleted compiler output."""
+
+    canonical = json.dumps({"uid": uid, "payload": payload}, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

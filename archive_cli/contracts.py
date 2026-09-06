@@ -148,7 +148,17 @@ class ArchiveStore(Protocol):
         self, *, limit: int = 20, embedding_model: str = "", embedding_version: int = 0
     ) -> JsonDict: ...
 
-    def embed_pending(self, *, limit: int = 0, embedding_model: str = "", embedding_version: int = 0) -> JsonDict: ...
+    def embed_pending(
+        self,
+        *,
+        limit: int = 0,
+        embedding_model: str = "",
+        embedding_version: int = 0,
+        uid_allowlist: set[str] | list[str] | tuple[str, ...] | None = None,
+        chunk_key_allowlist: set[str] | list[str] | tuple[str, ...] | None = None,
+        embedding_spec: object | None = None,
+        unscoped: bool = False,
+    ) -> JsonDict: ...
 
     def projection_inventory(self) -> JsonDict: ...
 

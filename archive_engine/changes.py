@@ -6,6 +6,7 @@ This module does not redefine those records.
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,9 @@ from archive_vault.change_journal import (
     CONSUMER_WAREHOUSE,
     JOURNAL_SCHEMA_VERSION,
     NAMED_CONSUMERS,
+    OPERATION_DELETE,
+    OPERATION_EMBED,
+    OPERATION_UPDATE,
     ChangeJournal,
     ConsumerCursor,
     FaultHook,
@@ -48,10 +52,13 @@ __all__ = [
     "JournalFault",
     "RevisionConflict",
     "acknowledge_batch",
+    "acknowledge_materialized",
     "consume_batch",
+    "emit_embed_completion",
     "named_consumers",
     "open_change_journal",
     "recovery_checkpoint_binding",
+    "request_reconciliation",
 ]
 
 
@@ -99,3 +106,102 @@ def recovery_checkpoint_binding(vault: str | Path, *, archive_id: str | None = N
             "archive_id": journal.archive_identity_binding(),
             "checkpoint": journal.checkpoint(),
         }
+
+
+def emit_embed_completion(
+    vault: str | Path,
+    uids: list[str] | None,
+    *,
+    rel_paths: dict[str, str] | None = None,
+    source: str = "embedder",
+) -> list[ChangeRecord]:
+    """Journal embedding-only completion. Does not rewrite card files."""
+
+    records: list[ChangeRecord] = []
+    paths = rel_paths or {}
+    with ChangeJournal(vault) as journal:
+        for raw in uids or []:
+            uid = str(raw or "").strip()
+            if not uid:
+                continue
+            records.append(
+                journal.apply_mutation(
+                    uid=uid,
+                    rel_path=str(paths.get(uid) or ""),
+                    operation=OPERATION_EMBED,
+                    content=None,
+                    source=source,
+                )
+            )
+    return records
+
+
+def acknowledge_materialized(
+    vault: str | Path,
+    *,
+    uids: list[str] | None = None,
+    limit: int = 10_000,
+) -> ConsumerCursor:
+    """Ack warehouse sequences for a completed materialization. Other consumers stay put."""
+
+    wanted = {str(uid).strip() for uid in (uids or []) if str(uid).strip()}
+    with ChangeJournal(vault) as journal:
+        batch = journal.consume(CONSUMER_WAREHOUSE, limit=max(1, int(limit)))
+        if wanted:
+            acked = [record.sequence for record in batch.records if record.uid in wanted]
+            gaps = [record.sequence for record in batch.records if record.uid not in wanted]
+            return journal.acknowledge(
+                CONSUMER_WAREHOUSE,
+                batch,
+                acked_sequences=acked,
+                gap_sequences=gaps,
+                gap_reason="not_in_allowlist",
+            )
+        return journal.acknowledge(CONSUMER_WAREHOUSE, batch)
+
+
+def request_reconciliation(
+    vault: str | Path,
+    *,
+    uid_to_rel: dict[str, str] | None = None,
+    reason: str = "external_edit",
+) -> dict[str, Any]:
+    """Replay prepared rows and journal provided external edits. Never walks the vault."""
+
+    imported: list[ChangeRecord] = []
+    with ChangeJournal(vault) as journal:
+        prepared = [asdict(item) for item in journal.reconcile()]
+        edits = journal.detect_external_edits(uid_to_rel or {})
+        root = Path(vault)
+        for edit in edits:
+            rel = str(edit.get("rel_path") or "")
+            uid = str(edit.get("uid") or "")
+            if not uid:
+                continue
+            path = root / rel if rel else None
+            if path is not None and path.is_file():
+                imported.append(
+                    journal.apply_mutation(
+                        uid=uid,
+                        rel_path=rel,
+                        operation=OPERATION_UPDATE,
+                        content=path.read_bytes(),
+                        source=reason,
+                    )
+                )
+            else:
+                imported.append(
+                    journal.apply_mutation(
+                        uid=uid,
+                        rel_path=rel,
+                        operation=OPERATION_DELETE,
+                        source=reason,
+                    )
+                )
+    return {
+        "reason": reason,
+        "reconcile": prepared,
+        "external_edits": edits,
+        "imported": [record.sequence for record in imported],
+        "bounded": True,
+    }

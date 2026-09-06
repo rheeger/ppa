@@ -1,4 +1,6 @@
 pub const SERVING_INDEX_FORMAT_VERSION: u32 = 2;
+pub const LAYOUT_VERSION: u32 = 1;
+pub const LAYOUT_FILE: &str = "layout.json";
 pub const ANALYZER_ID: &str = "tantivy-en-v1";
 pub const VECTOR_IMPL: &str = "ivf_centroids_v2";
 pub const RANKING_VERSION: &str = "p01a-trust-1";

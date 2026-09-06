@@ -89,6 +89,41 @@ fn is_date_only(raw: &str) -> bool {
 }
 
 impl MetadataStore {
+    fn index_card(&mut self, card: CardMeta) {
+        if !card.slug.is_empty() {
+            self.by_slug.insert(card.slug.to_lowercase(), card.card_uid.clone());
+        }
+        if !card.rel_path.is_empty() {
+            self.by_path.insert(card.rel_path.clone(), card.card_uid.clone());
+        }
+        for alias in &card.aliases {
+            self.by_slug.insert(alias.to_lowercase(), card.card_uid.clone());
+        }
+        for email in &card.emails {
+            let key = email.to_lowercase();
+            if !key.is_empty() {
+                self.by_email.insert(key, card.card_uid.clone());
+            }
+        }
+        for ext in &card.external_ids {
+            let key = ext.trim().to_string();
+            if !key.is_empty() {
+                self.by_external_id.insert(key.clone(), card.card_uid.clone());
+                self.by_external_id.insert(key.to_lowercase(), card.card_uid.clone());
+            }
+        }
+        self.by_uid.insert(card.card_uid.clone(), card);
+    }
+
+    pub fn from_cards(cards: impl IntoIterator<Item = CardMeta>) -> Self {
+        let mut store = MetadataStore::default();
+        for card in cards {
+            store.index_card(card);
+        }
+        store.rebuild_activity_index();
+        store
+    }
+
     pub fn load(dir: &Path) -> PyResult<Self> {
         let path = dir.join("cards.jsonl");
         let mut store = MetadataStore::default();
@@ -104,29 +139,7 @@ impl MetadataStore {
             }
             let card: CardMeta = serde_json::from_str(&line)
                 .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-            if !card.slug.is_empty() {
-                store.by_slug.insert(card.slug.to_lowercase(), card.card_uid.clone());
-            }
-            if !card.rel_path.is_empty() {
-                store.by_path.insert(card.rel_path.clone(), card.card_uid.clone());
-            }
-            for alias in &card.aliases {
-                store.by_slug.insert(alias.to_lowercase(), card.card_uid.clone());
-            }
-            for email in &card.emails {
-                let key = email.to_lowercase();
-                if !key.is_empty() {
-                    store.by_email.insert(key, card.card_uid.clone());
-                }
-            }
-            for ext in &card.external_ids {
-                let key = ext.trim().to_string();
-                if !key.is_empty() {
-                    store.by_external_id.insert(key.clone(), card.card_uid.clone());
-                    store.by_external_id.insert(key.to_lowercase(), card.card_uid.clone());
-                }
-            }
-            store.by_uid.insert(card.card_uid.clone(), card);
+            store.index_card(card);
         }
         store.rebuild_activity_index();
         Ok(store)

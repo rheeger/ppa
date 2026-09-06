@@ -149,6 +149,15 @@ class MaintenanceReport:
     nothing_to_do: bool = False
     serving_index: dict[str, Any] = field(default_factory=dict)
     publish_uids: list[str] = field(default_factory=list)
+    journal_watermark: int = 0
+    materialized_watermark: int = 0
+    published_watermark: int = 0
+    eligible_checkpoint: int = 0
+    source_cursors: dict[str, Any] = field(default_factory=dict)
+    pending_gaps: list[int] = field(default_factory=list)
+    failed_revision_uids: list[str] = field(default_factory=list)
+    publication: dict[str, Any] = field(default_factory=dict)
+    maintenance_run_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {k: v for k, v in self.__dict__.items()}
@@ -198,38 +207,255 @@ def _extend_publish_uids(report: MaintenanceReport, uids: Iterable[Any]) -> None
     report.publish_uids = _normalize_uids(list(report.publish_uids) + list(uids))
 
 
-def _maybe_embed_pending(store: Any, report: MaintenanceReport, logger: logging.Logger, *, dry_run: bool) -> None:
-    if dry_run or not getattr(store, "embed_pending", None):
-        return
-    from archive_cli.index_store import PostgresArchiveIndex
+_FAILED_ITEM_STATUSES = frozenset(
+    {
+        "failed",
+        "retryable_failure",
+        "permanent_failure",
+    }
+)
+_PENDING_ITEM_STATUSES = frozenset(
+    {
+        "pending",
+        "blocked_dependency",
+        "blocked_provider",
+        "stale",
+    }
+)
 
-    if not isinstance(getattr(store, "index", None), PostgresArchiveIndex):
-        return
-    if int(report.cards_rebuilt or 0) <= 0 and report.nothing_to_do:
-        return
+
+def read_freshness_watermarks(vault: Any) -> dict[str, Any]:
+    """Journal / materialized / published watermarks. Source cursors are not served freshness."""
+
+    from pathlib import Path
+
+    from archive_engine.changes import CONSUMER_PUBLICATION, CONSUMER_WAREHOUSE
+    from archive_vault.change_journal import ChangeJournal
+
+    empty = {
+        "journal_watermark": 0,
+        "materialized_watermark": 0,
+        "published_watermark": 0,
+        "pending_gaps": [],
+        "checkpoint": {},
+    }
+    if vault is None:
+        return empty
     try:
-        report.serving_index.setdefault("embed_pending", store.embed_pending(limit=0))
-    except Exception as exc:
-        logger.exception("maintain_embed_pending_failed")
-        report.errors.append({"step": "embed_pending", "error": str(exc)})
+        from archive_vault.change_journal import JOURNAL_REL_PATH
+
+        root = Path(vault)
+        if not root.is_dir() or not (root / JOURNAL_REL_PATH).is_file():
+            return empty
+        with ChangeJournal(vault) as journal:
+            checkpoint = journal.checkpoint()
+            value = checkpoint.get("value") if isinstance(checkpoint, dict) else {}
+            if not isinstance(value, dict):
+                value = {}
+            warehouse = journal.consumer_cursor(CONSUMER_WAREHOUSE)
+            publication = journal.consumer_cursor(CONSUMER_PUBLICATION)
+            journal_hw = int(value.get("high_watermark") or 0)
+            gaps = sorted({int(item) for item in (*warehouse.gaps, *publication.gaps)})
+            return {
+                "journal_watermark": journal_hw,
+                "materialized_watermark": int(warehouse.high_watermark or 0),
+                "published_watermark": int(publication.high_watermark or 0),
+                "pending_gaps": gaps,
+                "checkpoint": checkpoint if isinstance(checkpoint, dict) else {},
+            }
+    except Exception:
+        return empty
+
+
+def source_cursor_progress(source_reports: list[dict[str, Any]] | None) -> dict[str, Any]:
+    """Per-source cursor after persist. Never treat this as globally served freshness."""
+
+    out: dict[str, Any] = {}
+    for report in source_reports or []:
+        key = str(report.get("source_key") or "").strip()
+        if not key:
+            continue
+        out[key] = {
+            "cursor_before": report.get("cursor_before") or {},
+            "cursor_after": report.get("cursor_after") or {},
+            "status": report.get("status") or "",
+            "dirty_card_uids": list(report.get("dirty_card_uids") or []),
+        }
+    return out
+
+
+def _iter_processor_items(reports: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for report in reports:
+        inner = report.get("report") or report
+        items.extend(report.get("item_results") or inner.get("item_results") or [])
+    return items
+
+
+_SERVE_BLOCKING_PROCESSORS = frozenset(
+    {
+        "materialization",
+        "email_typed_extraction",
+    }
+)
+
+
+def failed_required_uids(reports: list[dict[str, Any]]) -> list[str]:
+    """UIDs whose required processor work failed. Must not be claimed served.
+
+    Linker / embedding failures stay pending gaps. They do not hide a
+    materialized card from publish.
+    """
+
+    failed: list[str] = []
+    for item in _iter_processor_items(reports):
+        if str(item.get("processor_key") or "") not in _SERVE_BLOCKING_PROCESSORS:
+            continue
+        status = str(item.get("status") or item.get("receipt_status") or "")
+        if status not in _FAILED_ITEM_STATUSES:
+            continue
+        if item.get("input_uid"):
+            failed.append(item["input_uid"])
+        for uid in item.get("output_uids") or []:
+            failed.append(uid)
+    return _normalize_uids(failed)
+
+
+def pending_revision_uids(reports: list[dict[str, Any]]) -> list[str]:
+    pending: list[str] = []
+    for item in _iter_processor_items(reports):
+        if str(item.get("processor_key") or "") not in _SERVE_BLOCKING_PROCESSORS:
+            continue
+        status = str(item.get("status") or item.get("receipt_status") or "")
+        if status not in _PENDING_ITEM_STATUSES:
+            continue
+        if item.get("input_uid"):
+            pending.append(item["input_uid"])
+        for uid in item.get("output_uids") or []:
+            pending.append(uid)
+    return _normalize_uids(pending)
+
+
+def counts_from_processor_reports(reports: list[dict[str, Any]]) -> dict[str, int]:
+    """Count summaries from real receipts, not invented totals."""
+
+    from archive_sync.processors.constants import (
+        INPUT_STATUS_COMPLETE,
+        PROCESSOR_EMAIL_TYPED_EXTRACTION,
+        PROCESSOR_ENTITY_RESOLUTION,
+        PROCESSOR_MATERIALIZATION,
+    )
+
+    extracted = 0
+    resolved = 0
+    rebuilt = 0
+    outputs = 0
+    for item in _iter_processor_items(reports):
+        status = str(item.get("status") or "")
+        key = str(item.get("processor_key") or "")
+        output_uids = [uid for uid in (item.get("output_uids") or []) if uid]
+        receipt = item.get("receipt") or {}
+        receipt_outputs = receipt.get("outputs") if isinstance(receipt, dict) else None
+        if receipt_outputs:
+            output_uids = _normalize_uids(
+                list(output_uids)
+                + [str(row.get("uid") or "") for row in receipt_outputs if isinstance(row, dict)]
+            )
+        if status == INPUT_STATUS_COMPLETE and not item.get("valid_no_output"):
+            outputs += len(output_uids)
+            if key == PROCESSOR_EMAIL_TYPED_EXTRACTION:
+                extracted += len(output_uids) or (0 if item.get("already_current") else 1)
+            elif key == PROCESSOR_ENTITY_RESOLUTION:
+                resolved += len(output_uids) or (0 if item.get("already_current") else 1)
+            elif key == PROCESSOR_MATERIALIZATION:
+                rebuilt += 1
+    rebuilt = max(rebuilt, _cards_rebuilt_from_processor_reports(reports))
+    return {
+        "cards_extracted": extracted,
+        "entities_resolved": resolved,
+        "cards_rebuilt": rebuilt,
+        "processor_output_count": outputs,
+    }
+
+
+def apply_processor_counts(report: MaintenanceReport) -> None:
+    counts = counts_from_processor_reports(report.processor_reports or [])
+    report.cards_extracted = int(counts["cards_extracted"])
+    report.entities_resolved = int(counts["entities_resolved"])
+    report.cards_rebuilt = int(counts["cards_rebuilt"])
+    if not report.processor_output_count:
+        report.processor_output_count = int(counts["processor_output_count"])
+
+
+def apply_freshness_watermarks(report: MaintenanceReport, vault: Any) -> dict[str, Any]:
+    marks = read_freshness_watermarks(vault)
+    report.journal_watermark = int(marks.get("journal_watermark") or 0)
+    report.materialized_watermark = int(marks.get("materialized_watermark") or 0)
+    report.published_watermark = int(marks.get("published_watermark") or 0)
+    report.pending_gaps = list(marks.get("pending_gaps") or [])
+    report.source_cursors = source_cursor_progress(report.source_updater_reports)
+    return marks
+
+
+def eligible_checkpoint_for_report(store: Any, report: MaintenanceReport) -> dict[str, Any]:
+    """Eligible contiguous checkpoint. Failed required work is not claimed served."""
+
+    marks = apply_freshness_watermarks(report, getattr(store, "vault", None))
+    failed = failed_required_uids(report.processor_reports or [])
+    pending = pending_revision_uids(report.processor_reports or [])
+    report.failed_revision_uids = failed
+    journal_hw = int(marks.get("journal_watermark") or 0)
+    materialized = int(marks.get("materialized_watermark") or 0)
+    published = int(marks.get("published_watermark") or 0)
+    gaps = [int(item) for item in (marks.get("pending_gaps") or [])]
+    prefix = materialized if materialized > 0 else journal_hw
+    if gaps:
+        prefix = min(prefix, min(gaps) - 1) if min(gaps) > 0 else prefix
+    prefix = max(prefix, 0)
+    if failed:
+        eligible = min(prefix, published) if published > 0 else 0
+    else:
+        eligible = prefix
+    report.eligible_checkpoint = int(eligible)
+    concrete = collect_maintain_publish_uids(report, getattr(store, "vault", None))
+    blocked = set(failed) | set(pending)
+    eligible_uids = [uid for uid in concrete if uid not in blocked]
+    return {
+        "high_watermark": int(eligible),
+        "journal_watermark": journal_hw,
+        "materialized_watermark": materialized,
+        "published_watermark": published,
+        "dirty_uids": eligible_uids,
+        "failed_uids": failed,
+        "pending_uids": pending,
+        "pending_gaps": gaps,
+        "checkpoint": marks.get("checkpoint") or {},
+    }
 
 
 def _finish_maintain(
     store: Any, report: MaintenanceReport, logger: logging.Logger, *, dry_run: bool
 ) -> MaintenanceReport:
-    _maybe_embed_pending(store, report, logger, dry_run=dry_run)
+    apply_processor_counts(report)
     _publish_serving_index(store, report, logger, dry_run=dry_run)
     report.completed_at = datetime.now(timezone.utc).isoformat()
     return report
 
 
 def _publish_serving_index(store: Any, report: MaintenanceReport, logger: logging.Logger, *, dry_run: bool) -> None:
-    """Sole publisher of ACTIVE. Failure leaves the last good generation in place."""
+    """Publish only the eligible checkpoint through ``archive_engine.publication.publish``."""
+
+    plan = eligible_checkpoint_for_report(store, report)
     if dry_run:
         report.skipped_steps.append("serving_index_publish (dry-run)")
+        report.publication = {
+            "ok": False,
+            "dry_run": True,
+            "eligible_checkpoint": plan["high_watermark"],
+        }
         return
     from archive_cli.index_store import PostgresArchiveIndex
-    from archive_cli.serving_index import publish_serving_index, serving_index_status
+    from archive_cli.serving_index import serving_index_status
 
     if not isinstance(getattr(store, "index", None), PostgresArchiveIndex):
         report.skipped_steps.append("serving_index_publish (no warehouse)")
@@ -237,7 +463,7 @@ def _publish_serving_index(store: Any, report: MaintenanceReport, logger: loggin
     status = serving_index_status(store.vault)
     ready = bool(status.get("serving_index_ready"))
     active_gid = str(status.get("serving_index_generation") or "")
-    concrete = collect_maintain_publish_uids(report, store.vault)
+    concrete = list(plan["dirty_uids"])
     cards_rebuilt = int(report.cards_rebuilt or 0)
     ingested = int(report.new_cards_ingested or 0)
     publish_required = bool(concrete) or cards_rebuilt > 0 or ingested > 0
@@ -245,6 +471,7 @@ def _publish_serving_index(store: Any, report: MaintenanceReport, logger: loggin
         logger.info("serving_index_publish skip-only-when-clean keep_generation=%s", active_gid)
         report.skipped_steps.append("serving_index_publish (clean)")
         report.serving_index = status
+        report.publication = {"ok": True, "skipped": "clean", **status}
         return
     if not concrete and publish_required:
         error = "publish_required_without_uids"
@@ -256,34 +483,72 @@ def _publish_serving_index(store: Any, report: MaintenanceReport, logger: loggin
         )
         report.errors.append({"step": "serving_index_publish", "error": error})
         report.serving_index = {"ok": False, "error": error, **status}
+        report.publication = {"ok": False, "error": error}
+        return
+    if report.failed_revision_uids and plan["high_watermark"] > int(plan["published_watermark"] or 0):
+        error = "eligible_checkpoint_past_failed_revision"
+        logger.error(
+            "serving_index_publish refused error=%s failed=%s eligible=%s published=%s",
+            error,
+            report.failed_revision_uids,
+            plan["high_watermark"],
+            plan["published_watermark"],
+        )
+        report.errors.append({"step": "serving_index_publish", "error": error})
+        report.publication = {"ok": False, "error": error, "eligible_checkpoint": plan["high_watermark"]}
+        report.serving_index = {"ok": False, "error": error, **status}
         return
     try:
-        logger.info("serving_index_publish incremental uids=%s", len(concrete))
-        result = publish_serving_index(store, logger=logger, dirty_uids=concrete)
-        report.serving_index = result
-        if result.get("skipped"):
-            error = f"serving_index_publish_skipped:{result.get('skipped')}"
-            logger.error("serving_index_publish failed error=%s uids=%s", error, len(concrete))
-            report.errors.append({"step": "serving_index_publish", "error": error})
-            return
-        if not result.get("ok"):
-            logger.error("serving_index_refresh_failed")
+        from archive_engine.publication import publish
+
+        logger.info(
+            "serving_index_publish incremental uids=%s eligible_checkpoint=%s",
+            len(concrete),
+            plan["high_watermark"],
+        )
+        receipt = publish(
+            {"high_watermark": plan["high_watermark"], "checkpoint": plan.get("checkpoint")},
+            {
+                "vault": store.vault,
+                "store": store,
+                "dirty_uids": concrete,
+                "mode": "incremental",
+            },
+        )
+        payload = receipt.to_payload()
+        report.publication = payload
+        report.serving_index = {
+            "ok": receipt.ok,
+            "generation": receipt.generation_id,
+            "generation_id": receipt.generation_id,
+            "acked_watermark": receipt.acked_watermark,
+            "eligible_checkpoint": receipt.eligible_checkpoint,
+            "unresolved_gaps": list(receipt.unresolved_gaps),
+            "error": receipt.error,
+            **payload,
+        }
+        if not receipt.ok:
+            logger.error("serving_index_refresh_failed error=%s", receipt.error)
             report.errors.append(
                 {
                     "step": "serving_index_publish",
-                    "error": str(result.get("error") or "serving_index_refresh_failed"),
+                    "error": str(receipt.error or "serving_index_refresh_failed"),
                 }
             )
             return
+        report.published_watermark = int(receipt.acked_watermark or report.published_watermark)
+        report.eligible_checkpoint = int(receipt.eligible_checkpoint or plan["high_watermark"])
         logger.info(
-            "serving_index_publish incremental uids=%s generation=%s",
+            "serving_index_publish incremental uids=%s generation=%s acked=%s",
             len(concrete),
-            result.get("generation"),
+            receipt.generation_id,
+            receipt.acked_watermark,
         )
     except Exception as exc:
         logger.exception("serving_index_refresh_failed")
         report.errors.append({"step": "serving_index_publish", "error": str(exc)})
         report.serving_index = {"ok": False, "error": str(exc)}
+        report.publication = {"ok": False, "error": str(exc)}
 
 
 def _record_source_updater_snapshots(store: DefaultArchiveStore, schema: str) -> int:
@@ -521,7 +786,10 @@ def _run_processors(
     )
 
     try:
-        with store.index._connect() as conn:
+        conn = store.index._connect()
+        try:
+            if hasattr(conn, "autocommit"):
+                conn.autocommit = True
             state_store = ProcessorStateStore(conn, schema, meta_path=meta_path)
             state_store.ensure_tables()
             keys = list(processor_keys or [])
@@ -538,12 +806,14 @@ def _run_processors(
                 allow_full_embedding=allow_full_embedding,
                 allow_all_linkers=allow_all_linkers,
                 allow_broad_llm=allow_broad_llm,
+                default_processor_decision="typed_extraction",
                 archive_instance=archive_instance,
                 engine_mode=ppa_engine(),
                 ladder_gate=GATE_SYNTHETIC_FIXTURES,
                 repo_root=repo_root,
             )
-            conn.commit()
+        finally:
+            conn.close()
     except Exception:
         state_store = ProcessorStateStore(None, meta_path=meta_path)
         keys = list(processor_keys or [])
@@ -560,6 +830,7 @@ def _run_processors(
             allow_full_embedding=allow_full_embedding,
             allow_all_linkers=allow_all_linkers,
             allow_broad_llm=allow_broad_llm,
+            default_processor_decision="typed_extraction",
             archive_instance=archive_instance,
             engine_mode=ppa_engine(),
             ladder_gate=GATE_SYNTHETIC_FIXTURES,
@@ -625,6 +896,7 @@ def run_maintenance(
 ) -> MaintenanceReport:
     report = MaintenanceReport()
     report.started_at = datetime.now(timezone.utc).isoformat()
+    report.maintenance_run_id = datetime.now(timezone.utc).strftime("maintain-%Y%m%dT%H%M%S%fZ")
     if not os.environ.get("PYTEST_CURRENT_TEST"):
         try:
             from archive_cli.vault_cache_runtime import install_process_reuse
@@ -725,44 +997,17 @@ def run_maintenance(
             report.errors.append({"step": "file_hygiene", "error": str(exc)})
 
     leftover_dirty: list[str] = []
-    if run_processors:
-        try:
-            from pathlib import Path
+    try:
+        from pathlib import Path
 
-            from archive_cli.serving_index import read_dirty_uids
+        from archive_cli.serving_index import read_dirty_uids
 
-            leftover_dirty = read_dirty_uids(Path(store.vault))
-            if leftover_dirty:
-                logger.info("maintain leftover serving-index dirty uids=%s", len(leftover_dirty))
-                _extend_publish_uids(report, leftover_dirty)
-        except Exception:
-            logger.debug("maintain read leftover dirty uids failed", exc_info=True)
-
-    if run_processors:
-        try:
-            apply = bool(apply_processors) and not dry_run
-            count, payloads, outputs = _run_processors(
-                store,
-                schema,
-                apply=apply,
-                dirty_uids_path=dirty_uids_path,
-                extra_dirty_uids=_normalize_uids(list(hygiene_dirty) + leftover_dirty),
-                source_updater_reports=report.source_updater_reports or None,
-                processor_keys=processor_keys,
-                allow_full_embedding=allow_full_embedding,
-                allow_all_linkers=allow_all_linkers,
-                allow_broad_llm=allow_broad_llm,
-                logger=logger,
-            )
-            report.processor_runs = count
-            report.processor_reports = payloads
-            report.processor_output_count = outputs
-            _extend_publish_uids(report, _uids_from_processor_reports(payloads))
-            if not apply:
-                report.skipped_steps.append("processor_execution (dry-run)")
-        except Exception as exc:
-            logger.exception("maintain_run_processors_failed")
-            report.errors.append({"step": "run_processors", "error": str(exc)})
+        leftover_dirty = read_dirty_uids(Path(store.vault))
+        if leftover_dirty:
+            logger.info("maintain leftover serving-index dirty uids=%s", len(leftover_dirty))
+            _extend_publish_uids(report, leftover_dirty)
+    except Exception:
+        logger.debug("maintain read leftover dirty uids failed", exc_info=True)
 
     from ..providers import resolve_provider
 
@@ -794,111 +1039,76 @@ def run_maintenance(
             except Exception as exc:
                 if _table_missing(exc):
                     report.skipped_steps.append("ingestion_log missing")
-                    return _finish_maintain(store, report, logger, dry_run=dry_run)
-                raise
+                    new_rows = []
+                else:
+                    raise
     except Exception as exc:
         logger.exception("maintain_tail_failed")
         report.errors.append({"step": "tail_ingestion_log", "error": str(exc)})
-        return _finish_maintain(store, report, logger, dry_run=dry_run)
+        new_rows = []
 
-    if not new_rows:
-        processors_applied = bool(run_processors) and bool(apply_processors) and not dry_run
-        if hygiene_dirty and not dry_run and not processors_applied:
-            try:
-                counts = store.rebuild(force_full=False, uid_allowlist=set(hygiene_dirty))
-                report.cards_rebuilt = int(counts.get("cards_materialized") or counts.get("cards") or 0)
-                _extend_publish_uids(report, hygiene_dirty)
-            except Exception as exc:
-                logger.exception("maintain_rebuild_failed")
-                report.errors.append({"step": "incremental_rebuild", "error": str(exc)})
-        report.nothing_to_do = (
-            not hygiene_dirty
-            and not report.source_updater_runs
-            and not report.processor_runs
-            and report.junk_attachments_purged == 0
-            and report.file_duplicates_linked == 0
-        )
-        return _finish_maintain(store, report, logger, dry_run=dry_run)
+    tailed_uids = _normalize_uids(row.get("card_uid") for row in new_rows)
+    if new_rows:
+        report.new_cards_ingested = len(new_rows)
+        _extend_publish_uids(report, tailed_uids)
+        report.skipped_steps.append("auto_extract (routed through processor DAG)")
+        report.skipped_steps.append("entity_resolution (routed through processor DAG)")
+        report.skipped_steps.append("incremental_rebuild (routed through processor DAG)")
 
-    report.new_cards_ingested = len(new_rows)
-    created_n = sum(1 for r in new_rows if r.get("action") == "created")
-    tailed_uids = {str(row.get("card_uid") or "").strip() for row in new_rows if str(row.get("card_uid") or "").strip()}
-    _extend_publish_uids(report, tailed_uids)
-    created_uids = {
-        str(row.get("card_uid") or "").strip()
-        for row in new_rows
-        if row.get("action") == "created" and str(row.get("card_uid") or "").strip()
-    }
+    scheduler_uids = _normalize_uids(list(hygiene_dirty) + leftover_dirty + tailed_uids)
+    should_run_processors = bool(run_processors) or bool(scheduler_uids) or bool(dirty_uids_path)
+    # Explicit --run-processors honours --apply-processors. Legacy ingestion-log
+    # maintain (no processor flags) still applies unless this is a dry-run.
+    apply_scheduler = (bool(apply_processors) or (not run_processors and bool(scheduler_uids))) and not dry_run
 
-    reg_mod = _try_import("archive_sync.extractors.registry")
-    if reg_mod is None:
-        report.skipped_steps.append("auto_extract (extractor registry import failed)")
-    elif created_n <= 0:
-        report.skipped_steps.append("auto_extract (no created entries)")
-    else:
+    if should_run_processors:
         try:
-            from archive_sync.extractors.runner import ExtractionRunner
-
-            runner = ExtractionRunner(
-                str(store.vault),
-                registry=reg_mod.build_default_registry(),
-                dry_run=dry_run,
-                limit=min(created_n, 10_000),
-                uid_allowlist=created_uids,
+            count, payloads, outputs = _run_processors(
+                store,
+                schema,
+                apply=apply_scheduler,
+                dirty_uids_path=dirty_uids_path,
+                extra_dirty_uids=scheduler_uids,
+                source_updater_reports=report.source_updater_reports or None,
+                processor_keys=processor_keys,
+                allow_full_embedding=allow_full_embedding,
+                allow_all_linkers=allow_all_linkers,
+                allow_broad_llm=allow_broad_llm,
+                logger=logger,
             )
-            metrics = runner.run()
-            report.cards_extracted = int(getattr(metrics, "extracted_cards", 0) or 0)
-        except Exception as exc:
-            logger.exception("maintain_extract_failed")
-            report.errors.append({"step": "auto_extract", "error": str(exc)})
+            report.processor_runs = count
+            report.processor_reports = payloads
+            report.processor_output_count = outputs
+            _extend_publish_uids(report, _uids_from_processor_reports(payloads))
+            apply_processor_counts(report)
+            if apply_scheduler:
+                try:
+                    from archive_cli.vault_cache_runtime import (
+                        mark_vault_written,
+                        rebuild_vault_cache_after_writes,
+                    )
 
-    er_mod = _try_import("archive_sync.extractors.entity_resolution")
-    if er_mod is None:
-        report.skipped_steps.append("entity_resolution (module import failed)")
+                    written = _uids_from_processor_reports(payloads)
+                    mark_vault_written(store.vault, uids=written)
+                    rebuild_vault_cache_after_writes(store.vault, tier=2)
+                except Exception:
+                    logger.debug("maintain vault-cache refresh after processors failed", exc_info=True)
+            if not apply_scheduler:
+                report.skipped_steps.append("processor_execution (dry-run)")
+        except Exception as exc:
+            logger.exception("maintain_run_processors_failed")
+            report.errors.append({"step": "run_processors", "error": str(exc)})
     else:
-        try:
-            res = er_mod.run_entity_resolution(
-                str(store.vault),
-                dry_run=dry_run,
-                uid_allowlist=tailed_uids,
-            )
-            report.entities_resolved = int(
-                (res.get("places_created") or 0)
-                + (res.get("places_merged") or 0)
-                + (res.get("orgs_created") or 0)
-                + (res.get("orgs_merged") or 0)
-                + (res.get("persons_linked") or 0)
-            )
-        except Exception as exc:
-            logger.exception("maintain_entity_resolution_failed")
-            report.errors.append({"step": "entity_resolution", "error": str(exc)})
+        report.skipped_steps.append("processor_execution (no dirty work)")
 
-    if dry_run:
-        report.skipped_steps.append("incremental_rebuild (dry-run)")
-        report.skipped_steps.append("watermark_update (dry-run)")
-    else:
-        try:
-            processors_applied = bool(run_processors) and bool(apply_processors)
-            rebuild_uids = set(tailed_uids)
-            if hygiene_dirty and not processors_applied:
-                rebuild_uids.update(hygiene_dirty)
-            already = _cards_rebuilt_from_processor_reports(report.processor_reports)
-            if processors_applied and not _processor_materialization_failed(report.processor_reports):
-                logger.info(
-                    "maintain skip second rematerialize processors_already_rebuilt cards=%s tailed_uids=%s",
-                    already,
-                    len(rebuild_uids),
-                )
-                report.cards_rebuilt = already or len(rebuild_uids)
-                _extend_publish_uids(report, rebuild_uids)
-                report.skipped_steps.append("incremental_rebuild (processors already rematerialized allowlist)")
-            else:
-                counts = store.rebuild(force_full=False, uid_allowlist=rebuild_uids)
-                report.cards_rebuilt = int(counts.get("cards_materialized") or counts.get("cards") or 0)
-                _extend_publish_uids(report, rebuild_uids)
-        except Exception as exc:
-            logger.exception("maintain_rebuild_failed")
-            report.errors.append({"step": "incremental_rebuild", "error": str(exc)})
+    report.nothing_to_do = (
+        not scheduler_uids
+        and not report.source_updater_runs
+        and not report.processor_runs
+        and report.junk_attachments_purged == 0
+        and report.file_duplicates_linked == 0
+        and report.new_cards_ingested == 0
+    )
 
     try:
         with idx._connect() as conn:
@@ -916,7 +1126,9 @@ def run_maintenance(
                     report.skipped_steps.append("retrieval_gaps (table missing)")
                 else:
                     raise
-            if not dry_run:
+            if dry_run:
+                report.skipped_steps.append("watermark_update (dry-run)")
+            else:
                 try:
                     _update_watermark(conn, schema)
                 except Exception as exc:

@@ -544,6 +544,9 @@ class SchemaDDLMixin:
             )
             """
         )
+        from archive_sync.processors.state_store import ensure_processor_receipt_tables
+
+        ensure_processor_receipt_tables(conn, self.schema)
         self._ensure_change_consumer_tables(conn)
         if ensure_indexes:
             self._ensure_embeddings_vector_index(conn)

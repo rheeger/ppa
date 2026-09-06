@@ -256,9 +256,17 @@ def build_production_status(
     if conn is not None:
         linkers = _linker_health(conn, schema)
 
+    from archive_cli.commands.maintain import read_freshness_watermarks
+
+    served = read_freshness_watermarks(vault_path)
     maintenance = {
         "last_maintenance_at": _meta_value(conn, schema, "last_maintenance_at") if conn else "",
         "report_root": "logs/maintenance",
+        "journal_watermark": served.get("journal_watermark") or 0,
+        "materialized_watermark": served.get("materialized_watermark") or 0,
+        "published_watermark": served.get("published_watermark") or 0,
+        "pending_gaps": list(served.get("pending_gaps") or []),
+        "served_freshness": served,
     }
 
     cfg = load_archive_config()
@@ -285,6 +293,9 @@ def build_production_status(
             ),
             "index_dsn_configured": bool(cfg.index_dsn),
             "last_maintenance_at": maintenance.get("last_maintenance_at"),
+            "journal_watermark": maintenance.get("journal_watermark"),
+            "materialized_watermark": maintenance.get("materialized_watermark"),
+            "published_watermark": maintenance.get("published_watermark"),
             "index_status": index_status,
         },
         "sources": _flatten_source_entries(sources_payload),

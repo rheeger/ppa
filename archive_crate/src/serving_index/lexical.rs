@@ -10,6 +10,7 @@ use tantivy::{doc, Index, IndexReader, ReloadPolicy, TantivyDocument, Term};
 
 use super::metadata::CardMeta;
 
+/// One Tantivy segment. A generation chain may open several of these.
 pub struct LexicalIndex {
     inner: Index,
     reader: IndexReader,

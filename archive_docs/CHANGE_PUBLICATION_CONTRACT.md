@@ -94,29 +94,28 @@ snapshot references.
 `legacy_dirty` records when the UID is not already in the journal. DIRTY is
 not truncated here.
 
-## Writer inventory (P02-A / blocked until P02-D)
+## Writer inventory (P02-D)
 
-Covered in this slice:
+Covered:
 
-- `archive_vault.vault.write_card`
-- `archive_vault.vault.update_frontmatter_fields`
-- `archive_vault.vault.delete_card`
+- `archive_vault.vault.write_card` / `update_frontmatter_fields` / `delete_card`
 - `archive_sync.adapters.base` write seam (`_write_canonical_card`)
 - `mark_vault_written` reconcile hook
-- `mark_serving_index_dirty` DIRTY intake
+- `mark_serving_index_dirty` DIRTY intake (`legacy_dirty`)
+- `archive_cli/loader.py` warehouse materialization → `acknowledge_materialized`
+- `archive_cli/embedder.py` + `store.embed_pending` → `OPERATION_EMBED`
+- `archive_cli/batch_embedder.py` ingest → bounded `request_reconciliation`
+- `archive_cli/store.py` rebuild → warehouse ack + DIRTY
+- `archive_cli/corpus_hygiene/apply.py` vault-remove → `delete_card`
+- Enrichment vault writes (`card_enrichment_runner`) via `mutation_context`
+- Manual file edits via `request_reconciliation(uid_to_rel=...)` (no vault walk)
 
-Blocked adoption until P02-D (may change files or searchability without a
-first-class journaled operation):
+Adapter subclasses and extractors that call `write_card` still journal
+create/update. Direct `path.write_text` callers must call
+`request_reconciliation` with a cache-built UID map.
 
-- `archive_cli/loader.py` warehouse-only materialization
-- `archive_cli/embedder.py` / `batch_embedder.py` embedding-only completion
-- `archive_cli/store.py` rebuild dirty emission
-- `archive_cli/corpus_hygiene/apply.py` vault-remove
-- Adapter subclasses that call `write_card` outside the base write seam
-  (they still inherit journaling from `write_card`, but do not set
-  adapter `source`/`account` via `mutation_context`)
-- Enrichment / extractor / seed-link writers that bypass `write_card`
-- Direct `atomic_write_contained` / `path.write_text` callers
+P03 publisher port: `archive_engine.publication.publish(eligible_checkpoint, context)
+-> PublicationReceipt`.
 
 ## Rollback
 
@@ -124,7 +123,47 @@ The journal is additive under `_meta`. Removing `009` drops only the
 warehouse cursor table. Legacy DIRTY remains readable. Do not delete
 committed mutation rows to “undo” a card; write a new delete/update.
 
-## Out of scope (later slices)
+## Generation layout (P02-B)
 
-Generation layout, incremental/full equivalence, publisher lease, and
-embedder/loader emission are P02-B/C/D.
+Each generation is an immutable segment. Incremental publish writes only the
+dirty UID set, replacement chunks/edges, new vectors, and explicit tombstones.
+The reader walks `layout.json` oldest→newest, newest wins, tombstones hide.
+
+```json
+{
+  "layout_version": 1,
+  "mode": "full | delta | compact",
+  "parent_generation": "",
+  "base_generation": "",
+  "snapshot_id": "",
+  "source_watermark": 0,
+  "tombstone_uids": [],
+  "tombstone_chunk_keys": [],
+  "replaced_uids": [],
+  "embedding_spec": {}
+}
+```
+
+Rules:
+
+- Deleted UID = dirty UID with no warehouse row. Absence from a limited query
+  is not a tombstone.
+- Replacement-by-UID retires all prior chunk keys and incident edges for that
+  UID, then writes the new set.
+- New vectors carry a full `EmbeddingSpec`. Mixed model/dim/metric/normalization
+  vs the parent fails closed. Mixed `chunk_schema` on different live UIDs is
+  allowed.
+- Vector search unions IVF hits across segments, filters to live keys, then
+  ranks. Per-segment candidate budget is `max(k * chain_depth, candidate_budget)`.
+- Compaction is an explicit full rebuild (`mode=compact`) when chain depth or
+  delta/live-vector ratio exceeds `PPA_PUBLICATION_MAX_CHAIN_DEPTH` /
+  `PPA_PUBLICATION_DELTA_RATIO`. Small mutations must not secretly full-export.
+- GC keeps ACTIVE, the parent chain, and pinned generations (in-process and
+  live interprocess pin files). Dead-PID pin files are ignored and removed.
+- One publisher per archive via `PUBLISHER.lock` + `PUBLISHER.lease`. A dead
+  owner is stealable; a live owner raises `PublisherBusyError`.
+- Pre-promotion validation is fail-closed. `COMPLETE` is fsynced before the
+  `ACTIVE` rename. Publication acks only the captured `ChangeBatch`.
+
+`archive_engine.publication.publish(eligible_checkpoint, context)` is the
+publisher port P03-D calls. `publish_snapshot` remains the generation writer.

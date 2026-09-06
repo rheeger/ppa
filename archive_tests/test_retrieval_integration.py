@@ -829,6 +829,7 @@ def test_live_postgres_embed_pending_supports_concurrent_claims(live_archive, mo
                 embedding_model=slow_provider.model,
                 embedding_version=1,
                 limit=total_chunks,
+                unscoped=True,
             )
             for _ in range(2)
         ]
@@ -847,7 +848,13 @@ def test_live_postgres_hybrid_search_prefers_exact_anchor_and_boosts_graph_neigh
 ):
     _vault, index, provider = live_archive
     index.rebuild()
-    index.embed_pending(provider=provider, embedding_model=provider.model, embedding_version=1, limit=50)
+    index.embed_pending(
+        provider=provider,
+        embedding_model=provider.model,
+        embedding_version=1,
+        limit=50,
+        unscoped=True,
+    )
     from archive_cli import serving_index as si
     from archive_cli.serving_index import publish_serving_index
     from archive_cli.store import DefaultArchiveStore

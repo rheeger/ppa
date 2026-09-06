@@ -45,6 +45,17 @@ def status_payload(
         totals["failed"] += entry["failed_count"]
         processors.append(entry)
 
+    served: dict[str, Any] = {}
+    meta_path = getattr(state_store, "_meta_path", None)
+    if meta_path is not None:
+        from pathlib import Path
+
+        from archive_cli.commands.maintain import read_freshness_watermarks
+
+        path = Path(meta_path)
+        vault = path.parent.parent if path.name == "processors.json" else path
+        served = read_freshness_watermarks(vault)
+
     return {
         "completion_state": SECTION_E_COMPLETION_STATE,
         "archive_instance": archive_instance,
@@ -53,4 +64,5 @@ def status_payload(
         "declarations": declarations,
         "processors": processors,
         "totals": totals,
+        "served_freshness": served,
     }

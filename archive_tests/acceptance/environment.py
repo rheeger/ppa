@@ -209,6 +209,11 @@ def provision_isolated_runtime(
     vault = root / "vault"
     serving = root / "rust-search-index"
     embed_cache = root / "query-embed-cache.sqlite3"
+    for leftover in (vault, serving, embed_cache):
+        if leftover.is_dir():
+            shutil.rmtree(leftover)
+        elif leftover.is_file():
+            leftover.unlink()
     schema = f"plan_p04_{run_id}"
     container_name = f"ppa-p04-{run_id}"
     port = _pick_port()
@@ -276,8 +281,12 @@ def provision_isolated_runtime(
 
 def reset_serving_handle() -> None:
     from archive_cli import serving_index as si
+    from archive_engine.publication import clear_publication_pins
 
+    if si._HANDLE is not None:
+        si._HANDLE.close()
     si._HANDLE = None
+    clear_publication_pins()
 
 
 def inspect_warehouse_card(dsn: str, schema: str, uid: str) -> dict[str, Any] | None:
