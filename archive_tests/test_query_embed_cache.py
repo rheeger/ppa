@@ -76,6 +76,16 @@ def test_embedding_spec_identity_does_not_reuse_incompatible_space(tmp_path) -> 
     cache.close()
 
 
+def test_policy_identity_scopes_cache_key(tmp_path) -> None:
+    cache = QueryEmbedCache(tmp_path / "q.sqlite", ram_entries=4)
+    a = QueryEmbedSpec(model="m", version=1, provider="p", dimension=4, policy_identity="alice")
+    b = QueryEmbedSpec(model="m", version=1, provider="p", dimension=4, policy_identity="bob")
+    cache.put("q", a, [1.0, 0.0, 0.0, 0.0])
+    assert cache.get("q", a) == [1.0, 0.0, 0.0, 0.0]
+    assert cache.get("q", b) is None
+    cache.close()
+
+
 def test_from_embedding_spec_rejects_incomplete() -> None:
     with pytest.raises(IncompatibleContractError):
         EmbeddingSpec.from_payload({"model": "x"})

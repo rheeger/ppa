@@ -153,13 +153,22 @@ impl GraphStore {
         Ok(store)
     }
 
-    pub fn neighbor_trust(&self, anchors: &[String]) -> HashMap<String, f64> {
+    pub fn neighbor_trust<F>(&self, anchors: &[String], allow: F) -> HashMap<String, f64>
+    where
+        F: Fn(&str) -> bool,
+    {
         let anchor_set: HashSet<&str> = anchors.iter().map(|s| s.as_str()).collect();
         let mut out: HashMap<String, f64> = HashMap::new();
         for a in anchors {
+            if !allow(a) {
+                continue;
+            }
             if let Some(nbrs) = self.adj.get(a) {
                 for edge in nbrs {
                     if anchor_set.contains(edge.neighbor_uid.as_str()) {
+                        continue;
+                    }
+                    if !allow(&edge.neighbor_uid) {
                         continue;
                     }
                     let Some(trust) = edge.trust.or(edge.confidence) else {
@@ -176,7 +185,17 @@ impl GraphStore {
     }
 
     pub fn hops(&self, start: &str, hops: usize) -> HashMap<String, Vec<StoredEdge>> {
+        self.hops_where(start, hops, |_| true)
+    }
+
+    pub fn hops_where<F>(&self, start: &str, hops: usize, allow: F) -> HashMap<String, Vec<StoredEdge>>
+    where
+        F: Fn(&str) -> bool,
+    {
         let mut graph: HashMap<String, Vec<StoredEdge>> = HashMap::new();
+        if !allow(start) {
+            return graph;
+        }
         let mut seen = HashSet::new();
         let mut q = VecDeque::new();
         q.push_back((start.to_string(), 0usize));
@@ -188,6 +207,9 @@ impl GraphStore {
             let mut targets = Vec::new();
             if let Some(nbrs) = self.adj.get(&node) {
                 for edge in nbrs {
+                    if !allow(&edge.neighbor_uid) {
+                        continue;
+                    }
                     targets.push(edge.clone());
                     if seen.insert(edge.neighbor_uid.clone()) {
                         q.push_back((edge.neighbor_uid.clone(), depth + 1));
@@ -241,12 +263,26 @@ mod tests {
             r#"{"source_uid":"a","target_uid":"b","edge_type":"possible_same_person","field_name":"","method":"inferred"}
 "#,
         );
-        assert_eq!(store.neighbor_trust(&["a".into()]), HashMap::new());
+        assert_eq!(store.neighbor_trust(&["a".into()], |_| true), HashMap::new());
         let hops = store.hops("a", 1);
         let edge = &hops["a"][0];
         assert_eq!(edge.method, "inferred");
         assert!(edge.trust.is_none());
         assert!(edge.confidence.is_none());
+    }
+
+    #[test]
+    fn hops_where_does_not_traverse_denied() {
+        let (_dir, store) = write_edges(
+            "deny-hop",
+            r#"{"source_uid":"a","target_uid":"b","edge_type":"wikilink","field_name":"body"}
+{"source_uid":"b","target_uid":"c","edge_type":"wikilink","field_name":"body"}
+"#,
+        );
+        let hops = store.hops_where("a", 2, |uid| uid != "b");
+        assert!(!hops.contains_key("b"));
+        assert!(!hops.contains_key("c"));
+        assert!(hops.get("a").map(|edges| edges.is_empty()).unwrap_or(true));
     }
 
     #[test]
@@ -256,7 +292,7 @@ mod tests {
             r#"{"source_uid":"a","target_uid":"b","edge_type":"wikilink","field_name":"body","confidence":1.0,"method":"unknown"}
 "#,
         );
-        assert_eq!(store.neighbor_trust(&["a".into()]).get("b").copied(), Some(1.0));
+        assert_eq!(store.neighbor_trust(&["a".into()], |_| true).get("b").copied(), Some(1.0));
     }
 
     fn write_edges(name: &str, contents: &str) -> (std::path::PathBuf, GraphStore) {

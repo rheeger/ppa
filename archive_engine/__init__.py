@@ -42,6 +42,7 @@ from archive_engine.errors import (
     IncompatibleStateError,
     RetryableEngineError,
 )
+from archive_engine.runtime import ArchiveRuntime
 from archive_engine.service import ArchiveEngineService
 
 __all__ = [
@@ -50,6 +51,7 @@ __all__ = [
     "AffectedContext",
     "ArchiveEngineService",
     "ArchiveIdentity",
+    "ArchiveRuntime",
     "ArtifactHash",
     "CapabilityUnavailableError",
     "ChangeBatch",
@@ -73,7 +75,9 @@ __all__ = [
     "load_contract",
 ]
 
-_SIBLING_MODULES = frozenset({"recovery_manifest", "changes", "corrections", "publication"})
+_SIBLING_MODULES = frozenset(
+    {"access", "changes", "corrections", "execution_mode", "publication", "recovery_manifest", "runtime"}
+)
 
 
 def __getattr__(name: str) -> object:

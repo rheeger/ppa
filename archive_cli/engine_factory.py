@@ -1,4 +1,4 @@
-"""CLI composition root for the exact-read engine.
+"""CLI composition root for the instance-scoped engine.
 
 Legacy construction stays here so ``archive_engine`` does not import CLI
 commands or MCP transport. Adapters reuse ``resolve_contained_path`` — they
@@ -13,7 +13,11 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from archive_engine.adapters.providers import EmbeddingProviderAdapter
+from archive_engine.adapters.retrieval import RetrievalAdapter
+from archive_engine.adapters.warehouse import WarehouseAdapter
 from archive_engine.contracts import AccessContext, ArchiveIdentity, EmbeddingSpec
+from archive_engine.runtime import ArchiveRuntime
 from archive_engine.service import ArchiveEngineService
 from archive_vault.paths import PathEscapeError, resolve_contained_path
 
@@ -146,4 +150,68 @@ def build_exact_read_service(
         access=resolved_access,
         lookup=lookup or IndexUidPathLookup(index, serving_factory=serving_factory),
         reader=reader or ContainedCanonicalReader(vault),
+    )
+
+
+def _after_rebuild(vault: Path) -> Callable[[dict[str, Any], dict[str, Any]], None]:
+    def _hook(filtered: dict[str, Any], _counts: dict[str, Any]) -> None:
+        try:
+            from archive_engine.changes import acknowledge_materialized
+
+            from .serving_index import close_serving_handles, mark_serving_index_dirty
+
+            allowlist = filtered.get("uid_allowlist") or []
+            dirty = [str(uid).strip() for uid in allowlist if str(uid).strip()]
+            acknowledge_materialized(vault, uids=dirty or None)
+            mark_serving_index_dirty(vault, "rebuild", dirty)
+            close_serving_handles(vault=vault)
+        except Exception:
+            pass
+
+    return _hook
+
+
+def build_runtime(
+    *,
+    vault: Path,
+    index: Any,
+    access: AccessContext,
+    identity: ArchiveIdentity | None = None,
+    serving_factory: Callable[[], Any] | None = None,
+    schema_binding: str | None = None,
+    provider_factory: Callable[..., Any] | None = None,
+    policy_fields: Callable[[], dict[str, Any]] | None = None,
+    authorize_rows: Callable[..., list[dict[str, Any]]] | None = None,
+) -> ArchiveRuntime:
+    binding = schema_binding or schema_binding_for("ppa")
+    resolved_identity = identity or resolve_archive_identity(vault, schema_binding=binding)
+    exact_read = build_exact_read_service(
+        vault=vault,
+        index=index,
+        serving_factory=serving_factory,
+        schema_binding=binding,
+        identity=resolved_identity,
+        access=access,
+    )
+    from .serving_index import close_serving_handles
+
+    retrieval = RetrievalAdapter(
+        index=index,
+        access=access,
+        serving_factory=serving_factory,
+        policy_fields=policy_fields,
+        authorize_rows=authorize_rows,
+        on_close=lambda: close_serving_handles(vault=vault),
+    )
+    warehouse = WarehouseAdapter(index, after_rebuild=_after_rebuild(vault) if serving_factory is not None else None)
+    from .embedding_provider import get_embedding_provider
+
+    providers = EmbeddingProviderAdapter(provider_factory or get_embedding_provider)
+    return ArchiveRuntime(
+        identity=resolved_identity,
+        access=access,
+        exact_read=exact_read,
+        retrieval=retrieval,
+        warehouse=warehouse,
+        providers=providers,
     )

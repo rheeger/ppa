@@ -55,9 +55,8 @@ There is one contained-path helper. Denied or escaping paths stay a stable
 not-found envelope (`found=false`, empty content), matching P05-A.
 
 `AccessContext` is always present on the service. Legacy CLI/MCP construct the
-configured trusted-local context (`principal=local-operator`,
-`profile=trusted-local`, `deny=false`). MCP tool-profile gating remains a
-transport check in `archive_cli/server.py` until P05-B.
+configured context via `archive_engine.access.resolve_access_context`. P05-B
+applies that context before ranking on every retrieval surface.
 
 ## Identity
 
@@ -114,5 +113,37 @@ offsets fail closed.
 - P08 may add connector adapters without importing CLI/MCP transports.
 - Do not start consumer work against a local copy of these dataclasses.
 
-P06-B will publish the facade→service path map in this file after
-correctness/privacy slices land.
+## P06-B instance-scoped runtime
+
+CLI and MCP share one `ArchiveRuntime` per store:
+
+```text
+resolve_store() / resolve_runtime()
+    → DefaultArchiveStore  (compatibility facade)
+    → ArchiveRuntime
+         exact_read   ArchiveEngineService
+         retrieval    archive_engine.adapters.retrieval.RetrievalAdapter
+         warehouse    archive_engine.adapters.warehouse.WarehouseAdapter
+         providers    archive_engine.adapters.providers.EmbeddingProviderAdapter
+```
+
+### Facade → service path map
+
+| Old call | New seam | Removal condition |
+| --- | --- | --- |
+| `DefaultArchiveStore.read` | `runtime.read` → `ArchiveEngineService` | After P06-C import guards; owner P06 |
+| `DefaultArchiveStore.search/query/graph` | `runtime.retrieval` | After P10 filtered query lands; owner P06-D |
+| `DefaultArchiveStore.rebuild/bootstrap` | `runtime.warehouse` | After maintain no longer needs the store facade; owner P03/P06 |
+| `store.index._connect` from commands | **not migrated** — stays in maintain/admin | Warehouse adapter may open a snapshot internally; public API has no `_connect` |
+| `archive_cli.ppa_engine.ppa_engine` | `archive_engine.execution_mode.ppa_engine` | CLI re-export remains; remove after vault/cache callers switch (P09) |
+| `get_serving_handle` process singleton | vault-keyed `_HANDLES` + `close_serving_handles` | Keep facade; runtime.close unpins this vault |
+
+Serving vs index is selected **once** in `engine_factory.build_runtime` (serving factory present or not). Retrieval adapters do not `isinstance` a warehouse type. Query ranking, publication, corrections, and access predicates are unchanged sibling behavior.
+
+Two `ArchiveRuntime` objects with the same UID and different canonical roots return their own cards. Native serving handles are keyed by vault and closed on `runtime.close()` / exception exit.
+
+### Notes for P05-C / P09-B / P10-A
+
+- **P05-C:** attach egress/provider hooks to `runtime.providers`. Do not read env inside retrieval adapters.
+- **P09-B:** `build_runtime` / `resolve_archive_identity` is the explicit-config factory. Saved scopes must bind `AccessContext` on the runtime, not a second store.
+- **P10-A:** typed query/analytics should call `runtime.retrieval` / `runtime.query` with the instance `AccessContext`. Do not add a second query path on `DefaultArchiveStore`.

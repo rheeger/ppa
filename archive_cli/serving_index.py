@@ -22,7 +22,6 @@ from archive_engine.contracts import (
     EmbeddingSpec,
     ServingEdge,
 )
-from archive_engine.errors import IncompatibleContractError
 from archive_engine.publication import (
     ServingSnapshot,
     pin_generation,
@@ -397,7 +396,12 @@ def load_serving_edges(conn: Any, schema: str, uids: list[str] | None = None) ->
     return edges
 
 _LOCK = threading.RLock()
+_HANDLES: dict[str, ServingIndexHandle] = {}
 _HANDLE: ServingIndexHandle | None = None
+
+
+def _vault_handle_key(vault: Path) -> str:
+    return str(Path(vault).resolve())
 
 
 def _crate():
@@ -406,6 +410,20 @@ def _crate():
     except ImportError as exc:
         raise ServingIndexUnavailableError("serving_index_unavailable") from exc
     return archive_crate
+
+
+def _access_req(kwargs: dict[str, Any]) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+    for key in (
+        "access_deny",
+        "access_restricted",
+        "access_policy_identity",
+        "access_sources",
+        "access_domains",
+    ):
+        if key in kwargs:
+            fields[key] = kwargs[key]
+    return fields
 
 
 class ServingIndexHandle:
@@ -433,10 +451,13 @@ class ServingIndexHandle:
             "start_date": str(kwargs.get("start_date", "") or ""),
             "end_date": str(kwargs.get("end_date", "") or ""),
         }
+        req.update(_access_req(kwargs))
         return list(_crate().serving_index_search(self._native, req) or [])
 
     def query(self, **kwargs: Any) -> list[dict[str, Any]]:
-        return list(_crate().serving_index_query(self._native, dict(kwargs)) or [])
+        req = dict(kwargs)
+        req.update(_access_req(kwargs))
+        return list(_crate().serving_index_query(self._native, req) or [])
 
     def vector(self, query_vector: list[float], **kwargs: Any) -> list[dict[str, Any]]:
         req = {
@@ -453,6 +474,7 @@ class ServingIndexHandle:
             req.pop("nprobe")
         if req["candidate_budget"] <= 0:
             req.pop("candidate_budget")
+        req.update(_access_req(kwargs))
         rows = list(_crate().serving_index_vector(self._native, query_vector, req) or [])
         for row in rows:
             if row.get("score") is None:
@@ -468,25 +490,32 @@ class ServingIndexHandle:
             "start_date": str(kwargs.get("start_date", "") or ""),
             "end_date": str(kwargs.get("end_date", "") or ""),
         }
+        req.update(_access_req(kwargs))
         return list(_crate().serving_index_hybrid(self._native, query, query_vector, req) or [])
 
-    def graph(self, note_path: str, hops: int = 2) -> dict[str, Any]:
-        return dict(_crate().serving_index_graph(self._native, note_path, int(hops) or 1) or {})
+    def graph(self, note_path: str, hops: int = 2, **kwargs: Any) -> dict[str, Any]:
+        return dict(_crate().serving_index_graph(self._native, note_path, int(hops) or 1, _access_req(kwargs)) or {})
 
-    def person(self, name: str) -> dict[str, Any]:
-        return dict(_crate().serving_index_person(self._native, name) or {})
+    def person(self, name: str, **kwargs: Any) -> dict[str, Any]:
+        return dict(_crate().serving_index_person(self._native, name, _access_req(kwargs)) or {})
 
-    def pointers(self, uids: list[str]) -> dict[str, dict[str, Any]]:
-        return dict(_crate().serving_index_pointers(self._native, list(uids)) or {})
+    def pointers(self, uids: list[str], **kwargs: Any) -> dict[str, dict[str, Any]]:
+        return dict(_crate().serving_index_pointers(self._native, list(uids), _access_req(kwargs)) or {})
 
-    def neighbor_uids(self, uids: list[str], hops: int = 1) -> list[str]:
-        return list(_crate().serving_index_neighbor_uids(self._native, list(uids), int(hops) or 1) or [])
+    def neighbor_uids(self, uids: list[str], hops: int = 1, **kwargs: Any) -> list[str]:
+        return list(
+            _crate().serving_index_neighbor_uids(self._native, list(uids), int(hops) or 1, _access_req(kwargs)) or []
+        )
 
     def timeline(self, **kwargs: Any) -> list[dict[str, Any]]:
-        return list(_crate().serving_index_timeline(self._native, dict(kwargs)) or [])
+        req = dict(kwargs)
+        req.update(_access_req(kwargs))
+        return list(_crate().serving_index_timeline(self._native, req) or [])
 
     def temporal_neighbors(self, timestamp: str, **kwargs: Any) -> dict[str, Any]:
-        return dict(_crate().serving_index_temporal_neighbors(self._native, timestamp, dict(kwargs)) or {})
+        req = dict(kwargs)
+        req.update(_access_req(kwargs))
+        return dict(_crate().serving_index_temporal_neighbors(self._native, timestamp, req) or {})
 
     def read_path(self, uid: str) -> str | None:
         return _crate().serving_index_read_path(self._native, uid)
@@ -629,6 +658,25 @@ def _import_legacy_dirty(vault: Path, index_root: Path, uids: list[str], reason:
         logger.debug("journal legacy DIRTY import failed reason=%s", reason, exc_info=True)
 
 
+def close_serving_handles(*, vault: Path | None = None) -> None:
+    """Close pinned native handles. ``vault=None`` closes every instance."""
+
+    global _HANDLE
+    with _LOCK:
+        if vault is None:
+            for handle in list(_HANDLES.values()):
+                handle.close()
+            _HANDLES.clear()
+            _HANDLE = None
+            return
+        key = _vault_handle_key(vault)
+        handle = _HANDLES.pop(key, None)
+        if handle is not None:
+            handle.close()
+        if _HANDLE is handle:
+            _HANDLE = None
+
+
 def get_serving_handle(vault: Path) -> ServingIndexHandle:
     global _HANDLE
     root = get_serving_index_path(vault)
@@ -637,20 +685,30 @@ def get_serving_handle(vault: Path) -> ServingIndexHandle:
     gid = str(status.get("serving_index_generation") or "")
     if not gid or not status.get("serving_index_ready"):
         raise ServingIndexUnavailableError("serving_index_unavailable")
+    key = _vault_handle_key(vault)
     with _LOCK:
+        if _HANDLE is None:
+            stale = _HANDLES.pop(key, None)
+            if stale is not None:
+                stale.close()
+            existing = None
+        else:
+            existing = _HANDLES.get(key)
         if (
-            _HANDLE is not None
-            and _HANDLE.vault.resolve() == Path(vault).resolve()
-            and _HANDLE.index_root.resolve() == root.resolve()
-            and _HANDLE.generation_id == gid
+            existing is not None
+            and existing.index_root.resolve() == root.resolve()
+            and existing.generation_id == gid
         ):
-            return _HANDLE
-        if _HANDLE is not None:
-            _HANDLE.close()
-            _HANDLE = None
+            _HANDLE = existing
+            return existing
+        if existing is not None:
+            existing.close()
+            _HANDLES.pop(key, None)
         native = crate.serving_index_open(str(root))
-        _HANDLE = ServingIndexHandle(Path(vault), root, gid, native)
-        return _HANDLE
+        handle = ServingIndexHandle(Path(vault), root, gid, native)
+        _HANDLES[key] = handle
+        _HANDLE = handle
+        return handle
 
 
 def _snapshot_binding(vault: Path, gid: str) -> tuple[str, int]:
@@ -872,11 +930,7 @@ def publish_serving_index(
     cache = QueryEmbedCache(get_query_embed_cache_path(vault), ram_entries=get_query_embed_cache_ram_entries())
     cache.evict(max_rows=get_query_embed_cache_max_rows(), max_age_days=get_query_embed_cache_max_age_days())
     cache.close()
-    global _HANDLE
-    with _LOCK:
-        if _HANDLE is not None:
-            _HANDLE.close()
-        _HANDLE = None
+    close_serving_handles(vault=vault)
     return {
         "ok": True,
         "generation": receipt.generation_id,

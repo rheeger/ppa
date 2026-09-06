@@ -106,6 +106,8 @@ class ArchiveConfig:
 
 
 class ArchiveStore(Protocol):
+    """Compatibility facade. Live instances expose ``runtime`` (``ArchiveRuntime``)."""
+
     def bootstrap(self) -> JsonDict: ...
 
     def rebuild(

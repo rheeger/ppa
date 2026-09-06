@@ -280,12 +280,10 @@ def provision_isolated_runtime(
 
 
 def reset_serving_handle() -> None:
-    from archive_cli import serving_index as si
+    from archive_cli.serving_index import close_serving_handles
     from archive_engine.publication import clear_publication_pins
 
-    if si._HANDLE is not None:
-        si._HANDLE.close()
-    si._HANDLE = None
+    close_serving_handles()
     clear_publication_pins()
 
 

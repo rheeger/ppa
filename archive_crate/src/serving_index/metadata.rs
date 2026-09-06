@@ -58,6 +58,128 @@ pub struct CardMeta {
     pub retrieval_weight: Option<f64>,
     #[serde(default)]
     pub provenance_summary: String,
+    #[serde(default)]
+    pub domains: Vec<String>,
+    #[serde(default)]
+    pub required_sources: Vec<String>,
+    #[serde(default)]
+    pub accounts: Vec<String>,
+    #[serde(default)]
+    pub lineage_complete: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct AccessPolicy {
+    pub deny: bool,
+    pub restricted: bool,
+    pub allowed_sources: Vec<String>,
+    pub allowed_domains: Vec<String>,
+}
+
+fn norm_label(value: &str) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+}
+
+fn source_allowed(allowed: &[String], source: &str) -> bool {
+    let needle = norm_label(source);
+    if needle.is_empty() {
+        return false;
+    }
+    allowed.iter().any(|item| {
+        let allow = norm_label(item);
+        !allow.is_empty()
+            && (needle == allow || needle.starts_with(&format!("{allow}:")) || allow.starts_with(&format!("{needle}:")))
+    })
+}
+
+fn classify_domain(card: &CardMeta) -> String {
+    if !card.domains.is_empty() {
+        return norm_label(&card.domains[0]);
+    }
+    let kind = card.r#type.replace('-', "_").to_ascii_lowercase();
+    match kind.as_str() {
+        "medical_record" | "vaccination" | "health_metric" => "medical".into(),
+        "finance" | "purchase" | "meal_order" | "grocery_order" | "ride" | "flight" | "subscription"
+        | "invoice" | "receipt" | "bank_transaction" | "tax_document" => "finance".into(),
+        "email_message" | "email_thread" | "email_attachment" | "imessage_message" | "imessage_thread"
+        | "imessage_attachment" | "beeper_message" | "beeper_thread" | "beeper_attachment" | "sms" => {
+            "communication".into()
+        }
+        "calendar_event" | "meeting_transcript" => "calendar".into(),
+        "person" | "organization" | "place" => "identity".into(),
+        "git_repository" | "git_commit" | "git_thread" | "git_message" => "code".into(),
+        "media_asset" | "document" => "media".into(),
+        _ => {
+            let joined = card
+                .sources
+                .iter()
+                .map(|s| norm_label(s))
+                .collect::<Vec<_>>()
+                .join(" ");
+            if ["medical", "health", "hospital", "clinic", "ehr"]
+                .iter()
+                .any(|m| joined.contains(m))
+            {
+                "medical".into()
+            } else if ["bank", "finance", "stripe", "plaid", "tax", "payroll"]
+                .iter()
+                .any(|m| joined.contains(m))
+            {
+                "finance".into()
+            } else if kind.is_empty() {
+                "unknown".into()
+            } else {
+                "general".into()
+            }
+        }
+    }
+}
+
+impl AccessPolicy {
+    pub fn unrestricted() -> Self {
+        Self::default()
+    }
+
+    pub fn permits(&self, card: &CardMeta) -> bool {
+        if self.deny {
+            return false;
+        }
+        if !self.restricted {
+            return true;
+        }
+        let required: &[String] = if !card.required_sources.is_empty() {
+            &card.required_sources
+        } else {
+            &card.sources
+        };
+        if required.is_empty() {
+            return false;
+        }
+        if !self.allowed_sources.is_empty() {
+            for source in required {
+                if !source_allowed(&self.allowed_sources, source) {
+                    return false;
+                }
+            }
+        }
+        if card.lineage_complete == Some(false) {
+            return false;
+        }
+        if !self.allowed_domains.is_empty() {
+            let domain = classify_domain(card);
+            if domain.is_empty() || domain == "unknown" {
+                return false;
+            }
+            if !self.allowed_domains.iter().any(|d| norm_label(d) == domain) {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 #[derive(Debug, Default)]
@@ -199,6 +321,31 @@ impl MetadataStore {
         self.by_activity = entries;
     }
 
+    pub fn eligible(
+        &self,
+        card: &CardMeta,
+        policy: &AccessPolicy,
+        type_filter: &str,
+        source_filter: &str,
+        people_filter: &str,
+        org_filter: &str,
+        start_date: &str,
+        end_date: &str,
+    ) -> bool {
+        if !policy.permits(card) {
+            return false;
+        }
+        self.matches_filters(
+            card,
+            type_filter,
+            source_filter,
+            people_filter,
+            org_filter,
+            start_date,
+            end_date,
+        )
+    }
+
     pub fn matches_filters(
         &self,
         card: &CardMeta,
@@ -279,6 +426,7 @@ impl MetadataStore {
         type_filter: &str,
         source_filter: &str,
         people_filter: &str,
+        policy: &AccessPolicy,
     ) -> Vec<&CardMeta> {
         let start_key = start_date.get(..10).unwrap_or(start_date);
         let end_key = end_date.get(..10).unwrap_or(end_date);
@@ -296,7 +444,7 @@ impl MetadataStore {
                 if !end_key.is_empty() && act > end_key {
                     break;
                 }
-                if self.matches_neighbor_filters(card, type_filter, source_filter, people_filter)
+                if self.eligible(card, policy, type_filter, source_filter, people_filter, "", "", "")
                     && (start_key.is_empty() || act >= start_key)
                 {
                     out.push(card);
@@ -318,6 +466,7 @@ impl MetadataStore {
         type_filter: &str,
         source_filter: &str,
         people_filter: &str,
+        policy: &AccessPolicy,
     ) -> Option<Vec<NeighborHit<'_>>> {
         let ts_ms = activity_ms(timestamp)?;
         let (window_start, window_end) = if is_date_only(timestamp) {
@@ -344,6 +493,7 @@ impl MetadataStore {
                 type_filter,
                 source_filter,
                 people_filter,
+                policy,
                 &mut seen,
                 &mut out,
             );
@@ -356,6 +506,7 @@ impl MetadataStore {
                 type_filter,
                 source_filter,
                 people_filter,
+                policy,
                 &mut seen,
                 &mut out,
             );
@@ -367,6 +518,7 @@ impl MetadataStore {
                 type_filter,
                 source_filter,
                 people_filter,
+                policy,
                 &mut seen,
                 &mut out,
             );
@@ -384,6 +536,7 @@ impl MetadataStore {
         type_filter: &str,
         source_filter: &str,
         people_filter: &str,
+        policy: &AccessPolicy,
         seen: &mut HashSet<String>,
         out: &mut Vec<NeighborHit<'a>>,
     ) {
@@ -398,7 +551,7 @@ impl MetadataStore {
                 continue;
             }
             if let Some(card) = self.by_uid.get(&entry.uid) {
-                if self.matches_neighbor_filters(card, type_filter, source_filter, people_filter) {
+                if self.eligible(card, policy, type_filter, source_filter, people_filter, "", "", "") {
                     out.push(NeighborHit { card, leg: "during" });
                     added += 1;
                 }
@@ -424,7 +577,7 @@ impl MetadataStore {
                 continue;
             }
             if let Some(card) = self.by_uid.get(&entry.uid) {
-                if self.matches_neighbor_filters(card, type_filter, source_filter, people_filter) {
+                if self.eligible(card, policy, type_filter, source_filter, people_filter, "", "", "") {
                     out.push(NeighborHit { card, leg: "during" });
                     added += 1;
                 }
@@ -439,6 +592,7 @@ impl MetadataStore {
         type_filter: &str,
         source_filter: &str,
         people_filter: &str,
+        policy: &AccessPolicy,
         seen: &mut HashSet<String>,
         out: &mut Vec<NeighborHit<'a>>,
     ) {
@@ -452,7 +606,7 @@ impl MetadataStore {
                 continue;
             }
             if let Some(card) = self.by_uid.get(&entry.uid) {
-                if self.matches_neighbor_filters(card, type_filter, source_filter, people_filter) {
+                if self.eligible(card, policy, type_filter, source_filter, people_filter, "", "", "") {
                     out.push(NeighborHit {
                         card,
                         leg: "forward",
@@ -470,6 +624,7 @@ impl MetadataStore {
         type_filter: &str,
         source_filter: &str,
         people_filter: &str,
+        policy: &AccessPolicy,
         seen: &mut HashSet<String>,
         out: &mut Vec<NeighborHit<'a>>,
     ) {
@@ -483,7 +638,7 @@ impl MetadataStore {
                 continue;
             }
             if let Some(card) = self.by_uid.get(&entry.uid) {
-                if self.matches_neighbor_filters(card, type_filter, source_filter, people_filter) {
+                if self.eligible(card, policy, type_filter, source_filter, people_filter, "", "", "") {
                     out.push(NeighborHit {
                         card,
                         leg: "backward",
@@ -492,5 +647,50 @@ impl MetadataStore {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod access_tests {
+    use super::*;
+
+    fn card(uid: &str, sources: &[&str], kind: &str) -> CardMeta {
+        CardMeta {
+            card_uid: uid.into(),
+            r#type: kind.into(),
+            sources: sources.iter().map(|s| (*s).to_string()).collect(),
+            corpus_state: "active".into(),
+            ..CardMeta::default()
+        }
+    }
+
+    #[test]
+    fn unrestricted_permits_unknown_lineage() {
+        let policy = AccessPolicy::unrestricted();
+        assert!(policy.permits(&card("u1", &[], "person")));
+    }
+
+    #[test]
+    fn restricted_denies_unknown_and_mixed_source() {
+        let policy = AccessPolicy {
+            restricted: true,
+            allowed_sources: vec!["gmail".into()],
+            ..AccessPolicy::default()
+        };
+        assert!(!policy.permits(&card("u1", &[], "person")));
+        assert!(policy.permits(&card("u2", &["gmail"], "email_message")));
+        assert!(!policy.permits(&card("u3", &["gmail", "medical"], "purchase")));
+    }
+
+    #[test]
+    fn missing_lineage_is_deny_when_restricted() {
+        let policy = AccessPolicy {
+            restricted: true,
+            allowed_sources: vec!["gmail".into()],
+            ..AccessPolicy::default()
+        };
+        let mut derived = card("u4", &["gmail"], "purchase");
+        derived.lineage_complete = Some(false);
+        assert!(!policy.permits(&derived));
     }
 }

@@ -16,6 +16,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from archive_engine.runtime import ArchiveRuntime
+
 from ..embedding_provider import get_embedding_provider
 from ..errors import IndexUnavailableError, VaultNotFoundError
 from ..index_store import BaseArchiveIndex, get_archive_index
@@ -56,6 +58,12 @@ def resolve_store(vault: Path | None = None) -> DefaultArchiveStore:
         return get_store(v)
     except RuntimeError as exc:
         raise IndexUnavailableError(str(exc)) from exc
+
+
+def resolve_runtime(vault: Path | None = None) -> ArchiveRuntime:
+    """Instance-scoped engine for the current vault/store."""
+
+    return resolve_store(vault).runtime
 
 
 def resolve_index(vault: Path | None = None) -> BaseArchiveIndex:

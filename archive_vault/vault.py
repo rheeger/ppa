@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
 
-from archive_cli.ppa_engine import ppa_engine
+from archive_engine.execution_mode import ppa_engine
 from archive_vault.change_journal import (
     OPERATION_CREATE,
     OPERATION_DELETE,
