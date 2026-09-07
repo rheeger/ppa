@@ -946,26 +946,46 @@ class EmbedderMixin:
                 )
                 """
             )
+            conn.execute(
+                f"""
+                CREATE UNLOGGED TABLE IF NOT EXISTS {self.schema}.embedding_live_hashes (
+                    content_hash TEXT PRIMARY KEY
+                )
+                """
+            )
+            conn.commit()
             conn.execute(f"TRUNCATE {self.schema}.embedding_dup_gc")
+            conn.execute(f"TRUNCATE {self.schema}.embedding_live_hashes")
+            live = conn.execute(
+                f"""
+                INSERT INTO {self.schema}.embedding_live_hashes (content_hash)
+                SELECT DISTINCT c.content_hash
+                FROM {self.schema}.chunks c
+                JOIN {self.schema}.embeddings have
+                  ON have.chunk_key = c.chunk_key
+                 AND have.embedding_model = %s
+                 AND have.embedding_version = %s
+                WHERE c.content_hash <> ''
+                ON CONFLICT DO NOTHING
+                """,
+                (embedding_model, embedding_version),
+            )
+            conn.commit()
+            logger.info(
+                "embeddings_duplicate_gc_live_hashes rows=%s",
+                int(live.rowcount or 0),
+            )
             loaded = conn.execute(
                 f"""
                 INSERT INTO {self.schema}.embedding_dup_gc (chunk_key)
                 SELECT e.chunk_key
                 FROM {self.schema}.embeddings e
-                WHERE e.content_hash <> ''
-                  AND e.embedding_model = %s
+                JOIN {self.schema}.embedding_live_hashes h
+                  ON h.content_hash = e.content_hash
+                WHERE e.embedding_model = %s
                   AND e.embedding_version = %s
                   AND NOT EXISTS (
                     SELECT 1 FROM {self.schema}.chunks c WHERE c.chunk_key = e.chunk_key
-                  )
-                  AND EXISTS (
-                    SELECT 1
-                    FROM {self.schema}.chunks live
-                    JOIN {self.schema}.embeddings have
-                      ON have.chunk_key = live.chunk_key
-                     AND have.embedding_model = e.embedding_model
-                     AND have.embedding_version = e.embedding_version
-                    WHERE live.content_hash = e.content_hash
                   )
                 ON CONFLICT DO NOTHING
                 """,
