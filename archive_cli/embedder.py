@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from collections.abc import Collection
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from pathlib import Path
 from threading import Lock
 from typing import Any
 
@@ -408,6 +410,23 @@ class EmbedderMixin:
             """,
             params,
         )
+        keys = [chunk_key for chunk_key, _vector in rows]
+        conn.execute(
+            f"""
+            UPDATE {self.schema}.embeddings e
+            SET
+                content_hash = c.content_hash,
+                card_uid = c.card_uid,
+                chunk_type = c.chunk_type,
+                chunk_index = c.chunk_index
+            FROM {self.schema}.chunks c
+            WHERE e.chunk_key = c.chunk_key
+              AND e.embedding_model = %s
+              AND e.embedding_version = %s
+              AND e.chunk_key = ANY(%s)
+            """,
+            (embedding_model, embedding_version, keys),
+        )
 
     def _embed_batch_with_retry(
         self,
@@ -530,6 +549,9 @@ class EmbedderMixin:
             # Bulk INSERT of ~500k rows can exceed the default statement_timeout
             # (often set to 60s by the operator). Disable for this connection.
             conn.execute("SET statement_timeout = 0")
+            ensure_cols = getattr(self, "_ensure_embeddings_reuse_columns", None)
+            if callable(ensure_cols):
+                ensure_cols(conn)
             # Sanity check both schemas exist + have the expected tables.
             for schema in (source_schema, self.schema):
                 row = conn.execute(
@@ -560,21 +582,60 @@ class EmbedderMixin:
                 ).fetchone()
             )
             t0 = time.time()
-            inserted_row = conn.execute(
+            by_key = conn.execute(
                 f"""
-                INSERT INTO {self.schema}.embeddings
-                    (chunk_key, embedding_model, embedding_version, embedding)
-                SELECT e.chunk_key, e.embedding_model, e.embedding_version, e.embedding
+                INSERT INTO {self.schema}.embeddings (
+                    chunk_key, embedding_model, embedding_version, embedding,
+                    content_hash, card_uid, chunk_type, chunk_index
+                )
+                SELECT
+                    e.chunk_key, e.embedding_model, e.embedding_version, e.embedding,
+                    c.content_hash, c.card_uid, c.chunk_type, c.chunk_index
                 FROM {source_schema}.embeddings e
                 JOIN {self.schema}.chunks c ON c.chunk_key = e.chunk_key
                 WHERE e.embedding_model = %s
                   AND e.embedding_version = %s
                 ON CONFLICT (chunk_key, embedding_model, embedding_version) DO NOTHING
-                RETURNING 1
                 """,
                 (embedding_model, embedding_version),
-            ).fetchall()
-            inserted = len(inserted_row)
+            )
+            source_has_hash = conn.execute(
+                """
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = %s AND table_name = 'embeddings' AND column_name = 'content_hash'
+                """,
+                (source_schema,),
+            ).fetchone()
+            copied_by_hash = 0
+            if source_has_hash is not None:
+                by_hash = conn.execute(
+                    f"""
+                    INSERT INTO {self.schema}.embeddings (
+                        chunk_key, embedding_model, embedding_version, embedding,
+                        content_hash, card_uid, chunk_type, chunk_index
+                    )
+                    SELECT DISTINCT ON (c.chunk_key)
+                        c.chunk_key, e.embedding_model, e.embedding_version, e.embedding,
+                        c.content_hash, c.card_uid, c.chunk_type, c.chunk_index
+                    FROM {self.schema}.chunks c
+                    JOIN {source_schema}.embeddings e
+                        ON e.content_hash = c.content_hash
+                        AND e.embedding_model = %s
+                        AND e.embedding_version = %s
+                        AND e.content_hash <> ''
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM {self.schema}.embeddings have
+                        WHERE have.chunk_key = c.chunk_key
+                          AND have.embedding_model = e.embedding_model
+                          AND have.embedding_version = e.embedding_version
+                    )
+                    ORDER BY c.chunk_key, e.created_at DESC
+                    ON CONFLICT (chunk_key, embedding_model, embedding_version) DO NOTHING
+                    """,
+                    (embedding_model, embedding_version),
+                )
+                copied_by_hash = int(by_hash.rowcount or 0)
+            inserted = int(by_key.rowcount or 0) + copied_by_hash
             conn.commit()
             after = _scalar(
                 conn.execute(
@@ -728,6 +789,433 @@ class EmbedderMixin:
             "index_size": size,
         }
 
+    def backfill_embedding_content_identity(self) -> int:
+        """Copy current chunk identity onto embeddings that already share a key."""
+
+        self.ensure_ready()
+        with self._connect() as conn:
+            cur = conn.execute(
+                f"""
+                UPDATE {self.schema}.embeddings e
+                SET
+                    content_hash = c.content_hash,
+                    card_uid = c.card_uid,
+                    chunk_type = c.chunk_type,
+                    chunk_index = c.chunk_index
+                FROM {self.schema}.chunks c
+                WHERE e.chunk_key = c.chunk_key
+                  AND (e.content_hash = '' OR e.card_uid = '')
+                """
+            )
+            updated = int(cur.rowcount or 0)
+            conn.commit()
+        logger.info("embeddings_identity_backfill updated=%s", updated)
+        return updated
+
+    def reuse_embeddings_by_content(
+        self,
+        *,
+        embedding_model: str,
+        embedding_version: int,
+    ) -> dict[str, int]:
+        """Attach existing vectors to new chunk_keys that share ``content_hash``.
+
+        No provider call. Orphan rows stay until ``embed-gc`` after their hash
+        is unused by every live chunk.
+        """
+
+        self.ensure_ready()
+        started = time.monotonic()
+        with self._connect() as conn:
+            conn.execute("SET statement_timeout = 0")
+            pending_before = conn.execute(
+                f"""
+                SELECT COUNT(*) AS n
+                FROM {self.schema}.chunks c
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM {self.schema}.embeddings e
+                    WHERE e.chunk_key = c.chunk_key
+                      AND e.embedding_model = %s
+                      AND e.embedding_version = %s
+                )
+                """,
+                (embedding_model, embedding_version),
+            ).fetchone()
+            inserted = conn.execute(
+                f"""
+                INSERT INTO {self.schema}.embeddings (
+                    chunk_key, embedding_model, embedding_version, embedding,
+                    content_hash, card_uid, chunk_type, chunk_index
+                )
+                SELECT DISTINCT ON (c.chunk_key)
+                    c.chunk_key,
+                    e.embedding_model,
+                    e.embedding_version,
+                    e.embedding,
+                    c.content_hash,
+                    c.card_uid,
+                    c.chunk_type,
+                    c.chunk_index
+                FROM {self.schema}.chunks c
+                JOIN {self.schema}.embeddings e
+                    ON e.content_hash = c.content_hash
+                    AND e.embedding_model = %s
+                    AND e.embedding_version = %s
+                    AND e.content_hash <> ''
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM {self.schema}.embeddings have
+                    WHERE have.chunk_key = c.chunk_key
+                      AND have.embedding_model = e.embedding_model
+                      AND have.embedding_version = e.embedding_version
+                )
+                ORDER BY c.chunk_key, e.created_at DESC
+                ON CONFLICT (chunk_key, embedding_model, embedding_version) DO NOTHING
+                """,
+                (embedding_model, embedding_version),
+            )
+            conn.commit()
+            pending_after = conn.execute(
+                f"""
+                SELECT COUNT(*) AS n
+                FROM {self.schema}.chunks c
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM {self.schema}.embeddings e
+                    WHERE e.chunk_key = c.chunk_key
+                      AND e.embedding_model = %s
+                      AND e.embedding_version = %s
+                )
+                """,
+                (embedding_model, embedding_version),
+            ).fetchone()
+        copied = int(inserted.rowcount or 0)
+        pending_before_n = int(pending_before["n"] if isinstance(pending_before, dict) else pending_before[0])
+        pending_after_n = int(pending_after["n"] if isinstance(pending_after, dict) else pending_after[0])
+        logger.info(
+            "embeddings_reuse_by_content copied=%s pending_before=%s pending_after=%s elapsed=%.1fs",
+            copied,
+            pending_before_n,
+            pending_after_n,
+            time.monotonic() - started,
+        )
+        return {
+            "copied": copied,
+            "pending_before": pending_before_n,
+            "pending_after": pending_after_n,
+        }
+
+    def load_slot_map_from_chunks_jsonl(self, path: str | Path, *, progress_every: int = 100_000) -> int:
+        """COPY ``(old_chunk_key, card_uid, chunk_type, chunk_index)`` from a serving chunks.jsonl."""
+
+        src = Path(path)
+        self.ensure_ready()
+        loaded = 0
+        with self._connect() as conn, src.open(encoding="utf-8") as fh:
+            conn.execute("SET statement_timeout = 0")
+            conn.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS {self.schema}.embedding_slot_map (
+                    old_chunk_key TEXT NOT NULL,
+                    card_uid TEXT NOT NULL,
+                    chunk_type TEXT NOT NULL,
+                    chunk_index INTEGER NOT NULL
+                )
+                """
+            )
+            conn.execute(f"TRUNCATE {self.schema}.embedding_slot_map")
+            with conn.cursor() as cur:
+                with cur.copy(
+                    f"COPY {self.schema}.embedding_slot_map "
+                    "(old_chunk_key, card_uid, chunk_type, chunk_index) FROM STDIN"
+                ) as copy:
+                    for line in fh:
+                        if not line.strip():
+                            continue
+                        row = json.loads(line)
+                        key = str(row.get("chunk_key") or "").strip()
+                        uid = str(row.get("card_uid") or "").strip()
+                        chunk_type = str(row.get("chunk_type") or "").strip()
+                        if not key or not uid or not chunk_type:
+                            continue
+                        copy.write_row((key, uid, chunk_type, int(row.get("chunk_index") or 0)))
+                        loaded += 1
+                        if progress_every and loaded % progress_every == 0:
+                            logger.info(
+                                "embedding_slot_map_load rows=%s path=%s",
+                                loaded,
+                                src,
+                            )
+            conn.execute(
+                f"""
+                CREATE INDEX IF NOT EXISTS idx_embedding_slot_map_old
+                ON {self.schema}.embedding_slot_map (old_chunk_key)
+                """
+            )
+            conn.execute(
+                f"""
+                CREATE INDEX IF NOT EXISTS idx_embedding_slot_map_slot
+                ON {self.schema}.embedding_slot_map (card_uid, chunk_type, chunk_index)
+                """
+            )
+            conn.commit()
+        logger.info("embedding_slot_map_load done rows=%s path=%s", loaded, src)
+        return loaded
+
+    def remap_embeddings_by_slot(
+        self,
+        *,
+        embedding_model: str,
+        embedding_version: int,
+    ) -> dict[str, int]:
+        """Copy orphan vectors onto current keys that share card/type/index.
+
+        One-time recovery when rematerialize changed ``content_hash`` (and
+        therefore ``chunk_key``) but not the chunk layout. Requires
+        ``embedding_slot_map``.
+        """
+
+        self.ensure_ready()
+        started = time.monotonic()
+        with self._connect() as conn:
+            conn.execute("SET statement_timeout = 0")
+            exists = conn.execute(
+                """
+                SELECT 1 FROM information_schema.tables
+                WHERE table_schema = %s AND table_name = 'embedding_slot_map'
+                """,
+                (self.schema,),
+            ).fetchone()
+            if exists is None:
+                raise RuntimeError("embedding_slot_map is missing; load a chunks.jsonl first")
+            inserted = conn.execute(
+                f"""
+                INSERT INTO {self.schema}.embeddings (
+                    chunk_key, embedding_model, embedding_version, embedding,
+                    content_hash, card_uid, chunk_type, chunk_index
+                )
+                SELECT DISTINCT ON (c.chunk_key)
+                    c.chunk_key,
+                    e.embedding_model,
+                    e.embedding_version,
+                    e.embedding,
+                    c.content_hash,
+                    c.card_uid,
+                    c.chunk_type,
+                    c.chunk_index
+                FROM {self.schema}.embedding_slot_map m
+                JOIN {self.schema}.chunks c
+                    ON c.card_uid = m.card_uid
+                    AND c.chunk_type = m.chunk_type
+                    AND c.chunk_index = m.chunk_index
+                JOIN {self.schema}.embeddings e
+                    ON e.chunk_key = m.old_chunk_key
+                    AND e.embedding_model = %s
+                    AND e.embedding_version = %s
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM {self.schema}.embeddings have
+                    WHERE have.chunk_key = c.chunk_key
+                      AND have.embedding_model = e.embedding_model
+                      AND have.embedding_version = e.embedding_version
+                )
+                ORDER BY c.chunk_key, e.created_at DESC
+                ON CONFLICT (chunk_key, embedding_model, embedding_version) DO NOTHING
+                """,
+                (embedding_model, embedding_version),
+            )
+            identity = conn.execute(
+                f"""
+                UPDATE {self.schema}.embeddings e
+                SET
+                    content_hash = c.content_hash,
+                    card_uid = c.card_uid,
+                    chunk_type = c.chunk_type,
+                    chunk_index = c.chunk_index
+                FROM {self.schema}.embedding_slot_map m
+                JOIN {self.schema}.chunks c
+                    ON c.card_uid = m.card_uid
+                    AND c.chunk_type = m.chunk_type
+                    AND c.chunk_index = m.chunk_index
+                WHERE e.chunk_key = m.old_chunk_key
+                  AND e.embedding_model = %s
+                  AND e.embedding_version = %s
+                  AND (e.content_hash = '' OR e.card_uid = '')
+                """,
+                (embedding_model, embedding_version),
+            )
+            conn.commit()
+        copied = int(inserted.rowcount or 0)
+        identified = int(identity.rowcount or 0)
+        logger.info(
+            "embeddings_remap_by_slot copied=%s identified=%s elapsed=%.1fs",
+            copied,
+            identified,
+            time.monotonic() - started,
+        )
+        return {"copied": copied, "identified": identified}
+
+    def remap_embeddings_by_prior_schema(
+        self,
+        *,
+        embedding_model: str,
+        embedding_version: int,
+        schema_versions: tuple[int, ...] = (5, 4),
+        progress_every: int = 100_000,
+    ) -> dict[str, int]:
+        """Rebuild pre-bump ``chunk_key``s from live content and copy those vectors.
+
+        ``chunk_key`` includes ``content_hash``, and ``content_hash`` includes
+        ``chunk_schema_version``. A rematerialize that only bumped the schema
+        leaves paid vectors on the previous keys. No provider call.
+        """
+
+        from archive_cli.chunk_builders import _chunk_hash_for_schema
+        from archive_cli.materializer import _chunk_key
+
+        versions = tuple(int(v) for v in schema_versions if int(v) > 0)
+        if not versions:
+            raise ValueError("schema_versions must contain at least one positive version")
+        self.ensure_ready()
+        started = time.monotonic()
+        loaded = 0
+        with self._connect() as write_conn, self._connect() as read_conn:
+            write_conn.execute("SET statement_timeout = 0")
+            read_conn.execute("SET statement_timeout = 0")
+            write_conn.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS {self.schema}.embedding_schema_remap (
+                    old_chunk_key TEXT NOT NULL,
+                    new_chunk_key TEXT NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    card_uid TEXT NOT NULL,
+                    chunk_type TEXT NOT NULL,
+                    chunk_index INTEGER NOT NULL
+                )
+                """
+            )
+            write_conn.execute(f"TRUNCATE {self.schema}.embedding_schema_remap")
+            with read_conn.cursor(name="ppa_prior_schema_chunks") as rcur:
+                rcur.itersize = 10_000
+                rcur.execute(
+                    f"""
+                    SELECT c.chunk_key, c.card_uid, c.chunk_type, c.chunk_index,
+                           c.content, c.source_fields, c.content_hash
+                    FROM {self.schema}.chunks c
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM {self.schema}.embeddings e
+                        WHERE e.chunk_key = c.chunk_key
+                          AND e.embedding_model = %s
+                          AND e.embedding_version = %s
+                    )
+                    """,
+                    (embedding_model, embedding_version),
+                )
+                with write_conn.cursor() as wcur:
+                    with wcur.copy(
+                        f"COPY {self.schema}.embedding_schema_remap "
+                        "(old_chunk_key, new_chunk_key, content_hash, card_uid, chunk_type, chunk_index) "
+                        "FROM STDIN"
+                    ) as copy:
+                        for row in rcur:
+                            payload = dict(row)
+                            fields = payload.get("source_fields") or []
+                            if not isinstance(fields, list):
+                                fields = list(fields)
+                            fields = [str(item) for item in fields]
+                            uid = str(payload.get("card_uid") or "")
+                            chunk_type = str(payload.get("chunk_type") or "")
+                            index = int(payload.get("chunk_index") or 0)
+                            new_key = str(payload.get("chunk_key") or "")
+                            content = str(payload.get("content") or "")
+                            live_hash = str(payload.get("content_hash") or "")
+                            if not uid or not chunk_type or not new_key:
+                                continue
+                            for version in versions:
+                                old_hash = _chunk_hash_for_schema(version, chunk_type, content, fields)
+                                old_key = _chunk_key(uid, chunk_type, index, old_hash)
+                                if old_key == new_key:
+                                    continue
+                                copy.write_row((old_key, new_key, live_hash, uid, chunk_type, index))
+                                loaded += 1
+                            if progress_every and loaded and loaded % progress_every == 0:
+                                logger.info(
+                                    "embedding_schema_remap_load rows=%s versions=%s",
+                                    loaded,
+                                    versions,
+                                )
+            logger.info("embedding_schema_remap_load done rows=%s versions=%s", loaded, versions)
+            write_conn.execute(
+                f"""
+                CREATE INDEX IF NOT EXISTS idx_embedding_schema_remap_old
+                ON {self.schema}.embedding_schema_remap (old_chunk_key)
+                """
+            )
+            write_conn.execute(
+                f"""
+                CREATE INDEX IF NOT EXISTS idx_embedding_schema_remap_new
+                ON {self.schema}.embedding_schema_remap (new_chunk_key)
+                """
+            )
+            write_conn.commit()
+            logger.info("embeddings_remap_by_prior_schema insert_start map_rows=%s", loaded)
+            inserted = write_conn.execute(
+                f"""
+                INSERT INTO {self.schema}.embeddings (
+                    chunk_key, embedding_model, embedding_version, embedding,
+                    content_hash, card_uid, chunk_type, chunk_index
+                )
+                SELECT DISTINCT ON (m.new_chunk_key)
+                    m.new_chunk_key,
+                    e.embedding_model,
+                    e.embedding_version,
+                    e.embedding,
+                    m.content_hash,
+                    m.card_uid,
+                    m.chunk_type,
+                    m.chunk_index
+                FROM {self.schema}.embedding_schema_remap m
+                JOIN {self.schema}.embeddings e
+                    ON e.chunk_key = m.old_chunk_key
+                    AND e.embedding_model = %s
+                    AND e.embedding_version = %s
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM {self.schema}.embeddings have
+                    WHERE have.chunk_key = m.new_chunk_key
+                      AND have.embedding_model = e.embedding_model
+                      AND have.embedding_version = e.embedding_version
+                )
+                ORDER BY m.new_chunk_key, e.created_at DESC
+                ON CONFLICT (chunk_key, embedding_model, embedding_version) DO NOTHING
+                """,
+                (embedding_model, embedding_version),
+            )
+            identity = write_conn.execute(
+                f"""
+                UPDATE {self.schema}.embeddings e
+                SET
+                    content_hash = m.content_hash,
+                    card_uid = m.card_uid,
+                    chunk_type = m.chunk_type,
+                    chunk_index = m.chunk_index
+                FROM {self.schema}.embedding_schema_remap m
+                WHERE e.chunk_key = m.old_chunk_key
+                  AND e.embedding_model = %s
+                  AND e.embedding_version = %s
+                  AND (e.content_hash = '' OR e.card_uid = '')
+                """,
+                (embedding_model, embedding_version),
+            )
+            write_conn.commit()
+        copied = int(inserted.rowcount or 0)
+        identified = int(identity.rowcount or 0)
+        logger.info(
+            "embeddings_remap_by_prior_schema copied=%s identified=%s map_rows=%s versions=%s elapsed=%.1fs",
+            copied,
+            identified,
+            loaded,
+            versions,
+            time.monotonic() - started,
+        )
+        return {"copied": copied, "identified": identified, "map_rows": loaded, "schema_versions": list(versions)}
+
     def embed_pending(
         self,
         *,
@@ -793,6 +1281,17 @@ class EmbedderMixin:
                 "validate embedding provider complete",
                 f"dimension={provider_dimension} batch_size={batch_size} concurrency={concurrency} context_prefix={include_context_prefix}",
             )
+            if not scoped:
+                self.backfill_embedding_content_identity()
+                reuse = self.reuse_embeddings_by_content(
+                    embedding_model=embedding_model,
+                    embedding_version=embedding_version,
+                )
+                logger.info(
+                    "embed_pending reuse_copied=%s pending_after=%s",
+                    reuse.get("copied"),
+                    reuse.get("pending_after"),
+                )
 
             _log_rebuild_step(2, total_steps, "count embedding backlog")
             selected_keys: list[str] = []

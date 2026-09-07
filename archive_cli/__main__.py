@@ -244,13 +244,41 @@ def main() -> None:
     embed_estimate_parser.add_argument("--embedding-version", type=int, default=0)
     embed_gc_parser = subparsers.add_parser(
         "embed-gc",
-        help="GC orphaned embeddings (chunk_key no longer in chunks). Idempotent.",
+        help="GC unused-hash orphans only. Keeps rematerialize reuse corpus.",
     )
     embed_gc_parser.add_argument(
         "--apply",
         action="store_true",
-        help="Actually delete orphans. Without --apply, prints counts only (dry-run).",
+        help="Actually delete unused-hash orphans. Without --apply, prints counts only (dry-run).",
     )
+    embed_reuse_parser = subparsers.add_parser(
+        "embed-reuse",
+        help="Copy existing vectors onto new chunk_keys that share content_hash.",
+    )
+    embed_reuse_parser.add_argument("--embedding-model", default="")
+    embed_reuse_parser.add_argument("--embedding-version", type=int, default=0)
+    embed_remap_parser = subparsers.add_parser(
+        "embed-remap-slots",
+        help="Remap orphan vectors onto current keys using a serving chunks.jsonl.",
+    )
+    embed_remap_parser.add_argument(
+        "--chunks-jsonl",
+        required=True,
+        help="Path to a prior generation chunks.jsonl (old_chunk_key + card/type/index).",
+    )
+    embed_remap_parser.add_argument("--embedding-model", default="")
+    embed_remap_parser.add_argument("--embedding-version", type=int, default=0)
+    embed_remap_schema_parser = subparsers.add_parser(
+        "embed-remap-schema",
+        help="Remap orphan vectors by recomputing pre-bump chunk_keys from live content.",
+    )
+    embed_remap_schema_parser.add_argument(
+        "--schema-versions",
+        default="5,4",
+        help="Comma-separated prior chunk_schema_version values to try (default 5,4).",
+    )
+    embed_remap_schema_parser.add_argument("--embedding-model", default="")
+    embed_remap_schema_parser.add_argument("--embedding-version", type=int, default=0)
     embed_batch_submit_parser = subparsers.add_parser(
         "embed-batch-submit",
         help="Submit pending chunks to OpenAI Batch API (50%% discount, no TPM/TPD)",
@@ -2348,6 +2376,49 @@ def main() -> None:
         except PpaError as exc:
             print(str(exc))
         return
+    if args.command == "embed-reuse":
+        try:
+            store = resolve_store()
+            result = admin_cmd.embed_reuse(
+                store=store,
+                logger=_cli_log,
+                embedding_model=str(getattr(args, "embedding_model", "") or ""),
+                embedding_version=int(getattr(args, "embedding_version", 0) or 0),
+            )
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
+        return
+    if args.command == "embed-remap-slots":
+        try:
+            store = resolve_store()
+            result = admin_cmd.embed_remap_slots(
+                store=store,
+                logger=_cli_log,
+                chunks_jsonl=str(getattr(args, "chunks_jsonl", "") or ""),
+                embedding_model=str(getattr(args, "embedding_model", "") or ""),
+                embedding_version=int(getattr(args, "embedding_version", 0) or 0),
+            )
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
+        return
+    if args.command == "embed-remap-schema":
+        try:
+            raw_versions = str(getattr(args, "schema_versions", "5,4") or "5,4")
+            versions = tuple(int(part) for part in raw_versions.split(",") if part.strip())
+            store = resolve_store()
+            result = admin_cmd.embed_remap_schema(
+                store=store,
+                logger=_cli_log,
+                schema_versions=versions or (5, 4),
+                embedding_model=str(getattr(args, "embedding_model", "") or ""),
+                embedding_version=int(getattr(args, "embedding_version", 0) or 0),
+            )
+            _print_cli_result(result)
+        except PpaError as exc:
+            print(str(exc))
+        return
     if args.command == "rebuild-indexes":
         try:
             store = resolve_store()
@@ -2785,6 +2856,8 @@ def main() -> None:
                     indent=2,
                 )
             )
+            if result.failed is not None:
+                raise SystemExit(1)
         return
     if args.command == "migration-status":
         store = resolve_store()

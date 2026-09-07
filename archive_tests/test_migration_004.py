@@ -8,7 +8,8 @@ again:
 2. ``_clear()`` no longer truncates ``embeddings``.
 3. After a full rebuild that drops + recreates ``chunks``, embedding rows
    whose ``chunk_key`` survives in the new ``chunks`` are still present.
-   Orphaned embeddings remain until ``ppa embed-gc --apply`` removes them.
+   Orphaned embeddings remain until ``ppa embed-gc --apply`` removes those
+   whose ``content_hash`` is unused by every live chunk.
 """
 
 from __future__ import annotations
@@ -51,13 +52,24 @@ def _insert_chunk(conn, schema: str, *, chunk_key: str, card_uid: str = "u1") ->
     )
 
 
-def _insert_embedding(conn, schema: str, *, chunk_key: str, dim: int) -> None:
+def _insert_embedding(
+    conn,
+    schema: str,
+    *,
+    chunk_key: str,
+    dim: int,
+    content_hash: str = "",
+    card_uid: str = "",
+) -> None:
     conn.execute(
         f"""
-        INSERT INTO {schema}.embeddings (chunk_key, embedding_model, embedding_version, embedding)
-        VALUES (%s, 'test-model', 1, %s::vector)
+        INSERT INTO {schema}.embeddings (
+            chunk_key, embedding_model, embedding_version, embedding,
+            content_hash, card_uid
+        )
+        VALUES (%s, 'test-model', 1, %s::vector, %s, %s)
         """,
-        (chunk_key, "[" + ",".join("0.0" for _ in range(dim)) + "]"),
+        (chunk_key, "[" + ",".join("0.0" for _ in range(dim)) + "]", content_hash, card_uid),
     )
 
 
@@ -133,28 +145,45 @@ class TestEmbedGc:
 
         result = embed_gc_cmd(store=store, logger=logging.getLogger("test"), dry_run=True)
         assert result["orphan_embeddings"] == 2
+        assert result["unused_hash_embeddings"] == 0
         assert result["deleted"] == 0
         with index._connect() as conn:
             row = conn.execute(f"SELECT COUNT(*) AS c FROM {index.schema}.embeddings").fetchone()
         assert int(row["c"]) == 3
 
-    def test_apply_drops_only_orphans(self, pgvector_dsn: str, tmp_path: Path) -> None:
+    def test_apply_drops_only_unused_hash_orphans(self, pgvector_dsn: str, tmp_path: Path) -> None:
         index = _bootstrap(pgvector_dsn, "ppa_embed_gc_apply", tmp_path)
         with index._connect() as conn:
             MigrationRunner(conn, index.schema).run()
             _insert_chunk(conn, index.schema, chunk_key="keep1")
             _insert_chunk(conn, index.schema, chunk_key="keep2")
-            _insert_embedding(conn, index.schema, chunk_key="keep1", dim=index.vector_dimension)
-            _insert_embedding(conn, index.schema, chunk_key="keep2", dim=index.vector_dimension)
-            _insert_embedding(conn, index.schema, chunk_key="orphan", dim=index.vector_dimension)
+            _insert_embedding(conn, index.schema, chunk_key="keep1", dim=index.vector_dimension, content_hash="keep1")
+            _insert_embedding(conn, index.schema, chunk_key="keep2", dim=index.vector_dimension, content_hash="keep2")
+            _insert_embedding(conn, index.schema, chunk_key="orphan_empty", dim=index.vector_dimension)
+            _insert_embedding(
+                conn,
+                index.schema,
+                chunk_key="orphan_reusable",
+                dim=index.vector_dimension,
+                content_hash="keep1",
+            )
+            _insert_embedding(
+                conn,
+                index.schema,
+                chunk_key="orphan_dead",
+                dim=index.vector_dimension,
+                content_hash="gone",
+            )
             conn.commit()
         store = DefaultArchiveStore(vault=tmp_path, index=index)
         import logging
 
         result = embed_gc_cmd(store=store, logger=logging.getLogger("test"), dry_run=False)
+        assert result["orphan_embeddings"] == 3
+        assert result["unused_hash_embeddings"] == 1
         assert result["deleted"] == 1
         with index._connect() as conn:
             remaining = sorted(
                 str(r["chunk_key"]) for r in conn.execute(f"SELECT chunk_key FROM {index.schema}.embeddings").fetchall()
             )
-        assert remaining == ["keep1", "keep2"]
+        assert remaining == ["keep1", "keep2", "orphan_empty", "orphan_reusable"]

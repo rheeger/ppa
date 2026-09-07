@@ -558,6 +558,19 @@ def get_publication_lease_stale_seconds() -> int:
     return max(_ppa_env_int("PPA_PUBLICATION_LEASE_STALE_SECONDS", default=30), 1)
 
 
+def get_publication_min_embed_coverage() -> float:
+    """Minimum embeddings/chunks ratio for a non-hash full publish. ``0`` disables."""
+    raw = _ppa_env("PPA_PUBLICATION_MIN_EMBED_COVERAGE")
+    if raw == "0":
+        return 0.0
+    return min(max(_ppa_env_float("PPA_PUBLICATION_MIN_EMBED_COVERAGE", default=0.9), 0.0), 1.0)
+
+
+def get_publication_min_embed_chunks() -> int:
+    """Skip the coverage gate below this chunk count (fixtures / empty gens)."""
+    return max(_ppa_env_int("PPA_PUBLICATION_MIN_EMBED_CHUNKS", default=1000), 0)
+
+
 def get_query_embed_cache_path(vault: Path | None = None) -> Path:
     raw = _ppa_env("PPA_QUERY_EMBED_CACHE_PATH")
     if raw:

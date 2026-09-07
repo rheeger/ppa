@@ -134,14 +134,20 @@ def embed_gc(
     logger: logging.Logger,
     dry_run: bool = True,
 ) -> dict[str, Any]:
-    """Prune ``embeddings`` rows whose ``chunk_key`` no longer exists in ``chunks``.
+    """Prune embeddings that are unused by both ``chunk_key`` and ``content_hash``.
 
-    Embeddings are content-addressable (Migration 004 decoupled them from chunk
-    row lifecycle). Orphans accumulate when a card's content changes (its old
-    chunk_key disappears from ``chunks`` but the matching embedding row stays).
-    Run this on demand after rebuilds or large content changes.
+    Orphans whose ``content_hash`` still matches a live chunk, or whose hash is
+    unknown (empty), stay. Those rows are the rematerialize reuse corpus.
     """
     schema = store.index.schema
+    unused_sql = f"""
+        NOT EXISTS (SELECT 1 FROM {schema}.chunks c WHERE c.chunk_key = e.chunk_key)
+        AND e.content_hash <> ''
+        AND NOT EXISTS (
+            SELECT 1 FROM {schema}.chunks live
+            WHERE live.content_hash = e.content_hash AND live.content_hash <> ''
+        )
+    """
     with store.index._connect() as conn:  # noqa: SLF001
         total = conn.execute(f"SELECT COUNT(*) FROM {schema}.embeddings").fetchone()
         orphan = conn.execute(
@@ -150,28 +156,114 @@ def embed_gc(
             WHERE NOT EXISTS (SELECT 1 FROM {schema}.chunks c WHERE c.chunk_key = e.chunk_key)
             """
         ).fetchone()
+        unused = conn.execute(
+            f"SELECT COUNT(*) FROM {schema}.embeddings e WHERE {unused_sql}"
+        ).fetchone()
         total_count = int(total[0] if not isinstance(total, dict) else next(iter(total.values())))
         orphan_count = int(orphan[0] if not isinstance(orphan, dict) else next(iter(orphan.values())))
+        unused_count = int(unused[0] if not isinstance(unused, dict) else next(iter(unused.values())))
         logger.info(
-            "embed_gc_scan total=%d orphan=%d dry_run=%s",
+            "embed_gc_scan total=%d orphan=%d unused_hash=%d dry_run=%s",
             total_count,
             orphan_count,
+            unused_count,
             dry_run,
         )
         deleted = 0
-        if not dry_run and orphan_count > 0:
-            cur = conn.execute(
-                f"""
-                DELETE FROM {schema}.embeddings e
-                WHERE NOT EXISTS (SELECT 1 FROM {schema}.chunks c WHERE c.chunk_key = e.chunk_key)
-                """
-            )
+        if not dry_run and unused_count > 0:
+            cur = conn.execute(f"DELETE FROM {schema}.embeddings e WHERE {unused_sql}")
             deleted = int(cur.rowcount or 0)
             conn.commit()
             logger.info("embed_gc_deleted rows=%d", deleted)
     return {
         "total_embeddings": total_count,
         "orphan_embeddings": orphan_count,
+        "unused_hash_embeddings": unused_count,
         "deleted": deleted,
         "dry_run": dry_run,
+    }
+
+
+def embed_reuse(
+    *,
+    store: DefaultArchiveStore,
+    logger: logging.Logger,
+    embedding_model: str = "",
+    embedding_version: int = 0,
+) -> dict[str, Any]:
+    """Copy existing vectors onto new chunk keys that share ``content_hash``."""
+    from archive_cli.index_config import get_default_embedding_model, get_default_embedding_version
+
+    model = embedding_model.strip() or get_default_embedding_model()
+    version = embedding_version or get_default_embedding_version()
+    logger.info("embed_reuse_start model=%s version=%s", model, version)
+    store.index.backfill_embedding_content_identity()
+    result = store.index.reuse_embeddings_by_content(embedding_model=model, embedding_version=version)
+    logger.info("embed_reuse_done copied=%s pending_after=%s", result.get("copied"), result.get("pending_after"))
+    return {"embedding_model": model, "embedding_version": version, **result}
+
+
+def embed_remap_slots(
+    *,
+    store: DefaultArchiveStore,
+    logger: logging.Logger,
+    chunks_jsonl: str,
+    embedding_model: str = "",
+    embedding_version: int = 0,
+) -> dict[str, Any]:
+    """One-time remap of orphan vectors onto current keys by card/type/index."""
+    from archive_cli.index_config import get_default_embedding_model, get_default_embedding_version
+
+    model = embedding_model.strip() or get_default_embedding_model()
+    version = embedding_version or get_default_embedding_version()
+    logger.info("embed_remap_slots_start jsonl=%s model=%s version=%s", chunks_jsonl, model, version)
+    loaded = store.index.load_slot_map_from_chunks_jsonl(chunks_jsonl)
+    remapped = store.index.remap_embeddings_by_slot(embedding_model=model, embedding_version=version)
+    reused = store.index.reuse_embeddings_by_content(embedding_model=model, embedding_version=version)
+    logger.info(
+        "embed_remap_slots_done loaded=%s remapped=%s reused=%s",
+        loaded,
+        remapped.get("copied"),
+        reused.get("copied"),
+    )
+    return {
+        "embedding_model": model,
+        "embedding_version": version,
+        "slot_map_rows": loaded,
+        "remapped": remapped,
+        "reused": reused,
+    }
+
+
+def embed_remap_schema(
+    *,
+    store: DefaultArchiveStore,
+    logger: logging.Logger,
+    schema_versions: tuple[int, ...] = (5, 4),
+    embedding_model: str = "",
+    embedding_version: int = 0,
+) -> dict[str, Any]:
+    """Copy vectors from pre-bump chunk_keys onto current keys."""
+    from archive_cli.index_config import get_default_embedding_model, get_default_embedding_version
+
+    model = embedding_model.strip() or get_default_embedding_model()
+    version = embedding_version or get_default_embedding_version()
+    logger.info("embed_remap_schema_start versions=%s model=%s version=%s", schema_versions, model, version)
+    remapped = store.index.remap_embeddings_by_prior_schema(
+        embedding_model=model,
+        embedding_version=version,
+        schema_versions=schema_versions,
+    )
+    reused = store.index.reuse_embeddings_by_content(embedding_model=model, embedding_version=version)
+    logger.info(
+        "embed_remap_schema_done remapped=%s reused=%s pending_after=%s",
+        remapped.get("copied"),
+        reused.get("copied"),
+        reused.get("pending_after"),
+    )
+    return {
+        "embedding_model": model,
+        "embedding_version": version,
+        "remapped": remapped,
+        "reused": reused,
     }

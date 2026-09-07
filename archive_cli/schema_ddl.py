@@ -93,6 +93,16 @@ class SchemaDDLMixin:
         stmts.append(f"CREATE INDEX IF NOT EXISTS idx_edges_target_path ON {s}.edges(target_path)")
         stmts.append(f"CREATE INDEX IF NOT EXISTS idx_edges_target_uid ON {s}.edges(target_uid)")
         stmts.append(f"CREATE INDEX IF NOT EXISTS idx_chunks_card_uid ON {s}.chunks(card_uid)")
+        stmts.append(
+            f"CREATE INDEX IF NOT EXISTS idx_embeddings_content_hash "
+            f"ON {s}.embeddings (content_hash, embedding_model, embedding_version) "
+            f"WHERE content_hash <> ''"
+        )
+        stmts.append(
+            f"CREATE INDEX IF NOT EXISTS idx_embeddings_slot "
+            f"ON {s}.embeddings (card_uid, chunk_type, chunk_index) "
+            f"WHERE card_uid <> ''"
+        )
         stmts.append(f"CREATE INDEX IF NOT EXISTS idx_ingestion_log_logged_at ON {s}.ingestion_log(logged_at)")
         stmts.append(f"CREATE INDEX IF NOT EXISTS idx_ingestion_log_card_uid ON {s}.ingestion_log(card_uid)")
         for projection in TYPED_PROJECTIONS:
@@ -424,10 +434,15 @@ class SchemaDDLMixin:
                 embedding_version INTEGER NOT NULL,
                 embedding vector({self.vector_dimension}) NOT NULL,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                content_hash TEXT NOT NULL DEFAULT '',
+                card_uid TEXT NOT NULL DEFAULT '',
+                chunk_type TEXT NOT NULL DEFAULT '',
+                chunk_index INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY(chunk_key, embedding_model, embedding_version)
             )
             """
         )
+        self._ensure_embeddings_reuse_columns(conn, ensure_indexes=ensure_indexes)
         self._ensure_batch_embed_tables(conn, ensure_indexes=ensure_indexes)
         if get_seed_links_enabled():
             self._create_seed_link_schema(conn, ensure_indexes=ensure_indexes)
@@ -591,6 +606,36 @@ class SchemaDDLMixin:
             elif is_nullable == "NO":
                 conn.execute(f"ALTER TABLE {self.schema}.cards ALTER COLUMN activity_at DROP NOT NULL")
         conn.execute(f"ALTER TABLE {self.schema}.cards ADD COLUMN IF NOT EXISTS activity_end_at TIMESTAMPTZ")
+
+    def _ensure_embeddings_reuse_columns(self, conn, *, ensure_indexes: bool = True) -> None:
+        """Content identity on embeddings so rematerialize can reuse vectors."""
+        conn.execute(
+            f"ALTER TABLE {self.schema}.embeddings ADD COLUMN IF NOT EXISTS content_hash TEXT NOT NULL DEFAULT ''"
+        )
+        conn.execute(
+            f"ALTER TABLE {self.schema}.embeddings ADD COLUMN IF NOT EXISTS card_uid TEXT NOT NULL DEFAULT ''"
+        )
+        conn.execute(
+            f"ALTER TABLE {self.schema}.embeddings ADD COLUMN IF NOT EXISTS chunk_type TEXT NOT NULL DEFAULT ''"
+        )
+        conn.execute(
+            f"ALTER TABLE {self.schema}.embeddings ADD COLUMN IF NOT EXISTS chunk_index INTEGER NOT NULL DEFAULT 0"
+        )
+        if ensure_indexes:
+            conn.execute(
+                f"""
+                CREATE INDEX IF NOT EXISTS idx_embeddings_content_hash
+                ON {self.schema}.embeddings (content_hash, embedding_model, embedding_version)
+                WHERE content_hash <> ''
+                """
+            )
+            conn.execute(
+                f"""
+                CREATE INDEX IF NOT EXISTS idx_embeddings_slot
+                ON {self.schema}.embeddings (card_uid, chunk_type, chunk_index)
+                WHERE card_uid <> ''
+                """
+            )
 
     def _ensure_note_manifest_columns(self, conn) -> None:
         """Repair note_manifest drift from earlier manifest schemas."""
@@ -950,8 +995,9 @@ class SchemaDDLMixin:
         Intentionally does NOT truncate ``embeddings``: embeddings are
         content-addressable by ``chunk_key`` and survive rebuilds for free
         (any chunk whose content is unchanged regenerates with the same
-        ``chunk_key``). Orphaned embeddings (chunks no longer present) are
-        cleaned up explicitly via ``ppa embed-gc``. Migration 004 also drops
+        ``chunk_key``). After rematerialize, reuse-by-content copies vectors
+        onto new keys that share ``content_hash``. ``embed-gc`` must not drop
+        orphans that are still reusable. Migration 004 also drops
         the historical ``embeddings.chunk_key`` FK so chunks rebuilds no
         longer cascade.
         """

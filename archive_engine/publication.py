@@ -24,6 +24,8 @@ from archive_cli.index_config import (
     get_publication_disk_budget_mb,
     get_publication_lease_stale_seconds,
     get_publication_max_chain_depth,
+    get_publication_min_embed_chunks,
+    get_publication_min_embed_coverage,
     get_serving_candidate_budget,
     get_serving_nlist,
     get_serving_nprobe,
@@ -543,6 +545,19 @@ def validate_generation(
     for uid in layout.get("tombstone_uids") or []:
         if str(uid) in live_uids:
             errors.append(f"tombstone_live:{uid}")
+    namespace = str((spec_payload or {}).get("provider_namespace") or "")
+    if spec is not None and not namespace:
+        namespace = str(getattr(spec, "provider_namespace", "") or "")
+    min_cov = get_publication_min_embed_coverage()
+    min_chunks = get_publication_min_embed_chunks()
+    if (
+        min_cov > 0
+        and namespace != "hash"
+        and chunk_count > 0
+        and chunk_count >= min_chunks
+        and (key_count / chunk_count) < min_cov
+    ):
+        errors.append(f"embedding_coverage:{key_count}/{chunk_count}")
     if errors:
         raise IncompatibleStateError("publication_validation_failed: " + ",".join(errors))
     native_open = "skipped"

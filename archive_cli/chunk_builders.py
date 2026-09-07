@@ -51,10 +51,15 @@ def _token_count(content: str) -> int:
     return max(len(content.split()), 1) if content.strip() else 0
 
 
-def _chunk_hash(chunk_type: str, content: str, source_fields: list[str]) -> str:
+def _chunk_hash_for_schema(
+    schema_version: int,
+    chunk_type: str,
+    content: str,
+    source_fields: list[str],
+) -> str:
     payload = json.dumps(
         {
-            "chunk_schema_version": CHUNK_SCHEMA_VERSION,
+            "chunk_schema_version": int(schema_version),
             "chunk_type": chunk_type,
             "source_fields": source_fields,
             "content": content,
@@ -62,6 +67,10 @@ def _chunk_hash(chunk_type: str, content: str, source_fields: list[str]) -> str:
         sort_keys=True,
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _chunk_hash(chunk_type: str, content: str, source_fields: list[str]) -> str:
+    return _chunk_hash_for_schema(CHUNK_SCHEMA_VERSION, chunk_type, content, source_fields)
 
 
 def _split_text_chunks(text: str, *, limit: int) -> list[str]:
