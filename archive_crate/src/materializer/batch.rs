@@ -516,7 +516,7 @@ fn materialize_rust_to_py(py: Python<'_>, m: MaterializedOneRust) -> PyResult<Py
 /// in-memory cache (zlib-decompressed, already provenance-stripped) instead of disk.
 /// Create the `BodyCache` once via `BodyCache.load(path)` and pass it to every batch call.
 #[pyfunction]
-#[pyo3(signature = (rows, vault_root, slug_map, path_to_uid, person_lookup, target_field_index, batch_id=None, chunk_schema_version=6, body_cache=None))]
+#[pyo3(signature = (rows, vault_root, slug_map, path_to_uid, person_lookup, target_field_index, batch_id=None, chunk_schema_version=7, body_cache=None))]
 pub fn materialize_row_batch(
     py: Python<'_>,
     rows: &Bound<'_, PyAny>,
@@ -588,7 +588,7 @@ pub fn materialize_row_batch(
 /// materializing each chunk in parallel then converting to Python. Logs progress to stderr.
 /// Returns a Python list of `ProjectionRowBuffer` objects.
 #[pyfunction]
-#[pyo3(signature = (rows, vault_root, slug_map, path_to_uid, person_lookup, target_field_index, batch_id=None, chunk_schema_version=6, body_cache=None, batch_size=5000))]
+#[pyo3(signature = (rows, vault_root, slug_map, path_to_uid, person_lookup, target_field_index, batch_id=None, chunk_schema_version=7, body_cache=None, batch_size=5000))]
 pub fn materialize_all_rows(
     py: Python<'_>,
     rows: &Bound<'_, PyAny>,

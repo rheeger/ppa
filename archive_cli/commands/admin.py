@@ -133,22 +133,47 @@ def embed_gc(
     store: DefaultArchiveStore,
     logger: logging.Logger,
     dry_run: bool = True,
+    duplicates: bool = False,
+    batch_size: int = 10_000,
 ) -> dict[str, Any]:
-    """Prune embeddings that are unused by both ``chunk_key`` and ``content_hash``.
+    """Prune leftover embeddings after rematerialize attach.
 
-    Orphans whose ``content_hash`` still matches a live chunk, or whose hash is
-    unknown (empty), stay. Those rows are the rematerialize reuse corpus.
+    Default: delete orphans whose ``content_hash`` is unused by every live chunk.
+    ``duplicates=True``: delete leftovers whose identity already has a live list.
+    Empty-hash leftovers stay until they can be identified.
     """
     schema = store.index.schema
-    unused_sql = f"""
-        NOT EXISTS (SELECT 1 FROM {schema}.chunks c WHERE c.chunk_key = e.chunk_key)
-        AND e.content_hash <> ''
+    def _unused_sql(alias: str) -> str:
+        return f"""
+        NOT EXISTS (SELECT 1 FROM {schema}.chunks c WHERE c.chunk_key = {alias}.chunk_key)
+        AND {alias}.content_hash <> ''
         AND NOT EXISTS (
             SELECT 1 FROM {schema}.chunks live
-            WHERE live.content_hash = e.content_hash AND live.content_hash <> ''
+            WHERE live.content_hash = {alias}.content_hash AND live.content_hash <> ''
         )
-    """
+        """
+
+    def _duplicate_sql(alias: str) -> str:
+        return f"""
+        NOT EXISTS (SELECT 1 FROM {schema}.chunks c WHERE c.chunk_key = {alias}.chunk_key)
+        AND {alias}.content_hash <> ''
+        AND EXISTS (
+            SELECT 1
+            FROM {schema}.chunks live
+            JOIN {schema}.embeddings have
+              ON have.chunk_key = live.chunk_key
+             AND have.embedding_model = {alias}.embedding_model
+             AND have.embedding_version = {alias}.embedding_version
+            WHERE live.content_hash = {alias}.content_hash
+              AND live.content_hash <> ''
+        )
+        """
+
+    unused_sql = _unused_sql("e")
+    duplicate_sql = _duplicate_sql("e")
+    batch = max(int(batch_size or 10_000), 1)
     with store.index._connect() as conn:  # noqa: SLF001
+        conn.execute("SET statement_timeout = 0")
         total = conn.execute(f"SELECT COUNT(*) FROM {schema}.embeddings").fetchone()
         orphan = conn.execute(
             f"""
@@ -159,28 +184,58 @@ def embed_gc(
         unused = conn.execute(
             f"SELECT COUNT(*) FROM {schema}.embeddings e WHERE {unused_sql}"
         ).fetchone()
+        duplicate = conn.execute(
+            f"SELECT COUNT(*) FROM {schema}.embeddings e WHERE {duplicate_sql}"
+        ).fetchone()
         total_count = int(total[0] if not isinstance(total, dict) else next(iter(total.values())))
         orphan_count = int(orphan[0] if not isinstance(orphan, dict) else next(iter(orphan.values())))
         unused_count = int(unused[0] if not isinstance(unused, dict) else next(iter(unused.values())))
+        duplicate_count = int(
+            duplicate[0] if not isinstance(duplicate, dict) else next(iter(duplicate.values()))
+        )
         logger.info(
-            "embed_gc_scan total=%d orphan=%d unused_hash=%d dry_run=%s",
+            "embed_gc_scan total=%d orphan=%d unused_hash=%d duplicates=%d mode=%s dry_run=%s",
             total_count,
             orphan_count,
             unused_count,
+            duplicate_count,
+            "duplicates" if duplicates else "unused_hash",
             dry_run,
         )
         deleted = 0
-        if not dry_run and unused_count > 0:
-            cur = conn.execute(f"DELETE FROM {schema}.embeddings e WHERE {unused_sql}")
-            deleted = int(cur.rowcount or 0)
-            conn.commit()
-            logger.info("embed_gc_deleted rows=%d", deleted)
+        if not dry_run:
+            if duplicates:
+                while True:
+                    cur = conn.execute(
+                        f"""
+                        DELETE FROM {schema}.embeddings e
+                        WHERE ctid IN (
+                            SELECT e2.ctid FROM {schema}.embeddings e2
+                            WHERE {_duplicate_sql("e2")}
+                            LIMIT %s
+                        )
+                        """,
+                        (batch,),
+                    )
+                    n = int(cur.rowcount or 0)
+                    deleted += n
+                    conn.commit()
+                    logger.info("embed_gc_duplicate_batch deleted=%d total_deleted=%d", n, deleted)
+                    if n < batch:
+                        break
+            elif unused_count > 0:
+                cur = conn.execute(f"DELETE FROM {schema}.embeddings e WHERE {unused_sql}")
+                deleted = int(cur.rowcount or 0)
+                conn.commit()
+                logger.info("embed_gc_deleted rows=%d", deleted)
     return {
         "total_embeddings": total_count,
         "orphan_embeddings": orphan_count,
         "unused_hash_embeddings": unused_count,
+        "duplicate_embeddings": duplicate_count,
         "deleted": deleted,
         "dry_run": dry_run,
+        "duplicates": duplicates,
     }
 
 
@@ -239,7 +294,7 @@ def embed_remap_schema(
     *,
     store: DefaultArchiveStore,
     logger: logging.Logger,
-    schema_versions: tuple[int, ...] = (5, 4),
+    schema_versions: tuple[int, ...] | None = None,
     embedding_model: str = "",
     embedding_version: int = 0,
 ) -> dict[str, Any]:

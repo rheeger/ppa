@@ -249,7 +249,18 @@ def main() -> None:
     embed_gc_parser.add_argument(
         "--apply",
         action="store_true",
-        help="Actually delete unused-hash orphans. Without --apply, prints counts only (dry-run).",
+        help="Actually delete. Without --apply, prints counts only (dry-run).",
+    )
+    embed_gc_parser.add_argument(
+        "--duplicates",
+        action="store_true",
+        help="Delete leftover keys whose content identity already has a live list.",
+    )
+    embed_gc_parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=10000,
+        help="Rows per DELETE batch for --duplicates (default 10000).",
     )
     embed_reuse_parser = subparsers.add_parser(
         "embed-reuse",
@@ -274,8 +285,8 @@ def main() -> None:
     )
     embed_remap_schema_parser.add_argument(
         "--schema-versions",
-        default="5,4",
-        help="Comma-separated prior chunk_schema_version values to try (default 5,4).",
+        default="6,5,4",
+        help="Comma-separated prior chunk_schema_version values to try (default 6,5,4).",
     )
     embed_remap_schema_parser.add_argument("--embedding-model", default="")
     embed_remap_schema_parser.add_argument("--embedding-version", type=int, default=0)
@@ -2371,6 +2382,8 @@ def main() -> None:
                 store=store,
                 logger=_cli_log,
                 dry_run=not bool(getattr(args, "apply", False)),
+                duplicates=bool(getattr(args, "duplicates", False)),
+                batch_size=int(getattr(args, "batch_size", 10000) or 10000),
             )
             _print_cli_result(result)
         except PpaError as exc:

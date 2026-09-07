@@ -15,6 +15,8 @@ from functools import partial
 from itertools import islice
 from typing import Any
 
+from archive_engine.errors import IncompatibleStateError
+
 from .index_config import (
     CHUNK_SCHEMA_VERSION,
     INDEX_SCHEMA_VERSION,
@@ -1992,20 +1994,17 @@ class LoaderMixin:
         shares that hash. Until GC they cost only disk.
         """
         try:
-            from archive_cli.index_config import get_default_embedding_model, get_default_embedding_version
-
-            self.backfill_embedding_content_identity()
-            reused = self.reuse_embeddings_by_content(
-                embedding_model=get_default_embedding_model(),
-                embedding_version=get_default_embedding_version(),
-            )
+            attached = self.attach_embeddings_after_rematerialize()
             logger.info(
-                "rebuild_embeddings_reuse copied=%s pending_after=%s",
-                reused.get("copied"),
-                reused.get("pending_after"),
+                "rebuild_embeddings_attach remapped=%s reused=%s pending_after=%s",
+                attached.get("remapped"),
+                attached.get("reused"),
+                attached.get("pending_after"),
             )
+        except IncompatibleStateError:
+            raise
         except Exception:
-            logger.exception("rebuild_embeddings_reuse_failed")
+            logger.exception("rebuild_embeddings_attach_failed")
         try:
             post_row = conn.execute(f"SELECT COUNT(*) AS c FROM {self.schema}.embeddings").fetchone()
             post_count = int(post_row["c"] if isinstance(post_row, dict) else post_row[0])

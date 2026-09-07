@@ -322,3 +322,157 @@ def test_reuse_methods_are_on_embedder_mixin() -> None:
     assert hasattr(EmbedderMixin, "reuse_embeddings_by_content")
     assert hasattr(EmbedderMixin, "remap_embeddings_by_slot")
     assert hasattr(EmbedderMixin, "load_slot_map_from_chunks_jsonl")
+    assert hasattr(EmbedderMixin, "attach_embeddings_after_rematerialize")
+
+
+def test_chunk_hash_ignores_schema_version() -> None:
+    from archive_cli.chunk_builders import _chunk_hash, _chunk_hash_for_schema
+
+    identity = _chunk_hash("body", "hello", ["body"])
+    assert identity == _chunk_hash("body", "hello", ["body"])
+    assert identity != _chunk_hash_for_schema(5, "body", "hello", ["body"])
+    assert identity != _chunk_hash_for_schema(6, "body", "hello", ["body"])
+    assert identity != _chunk_hash_for_schema(7, "body", "hello", ["body"])
+    assert _chunk_hash("body", "hello", ["body"]) != _chunk_hash("body", "hello!", ["body"])
+
+
+@pytest.mark.integration
+def test_version_only_attach_copies_v6_list_onto_content_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pgvector_dsn: str
+) -> None:
+    from archive_cli.chunk_builders import _chunk_hash, _chunk_hash_for_schema
+    from archive_cli.materializer import _chunk_key
+
+    index = _bootstrap(tmp_path, monkeypatch, pgvector_dsn)
+    content = "same body after dropping version from the hash"
+    fields = ["body"]
+    old_hash = _chunk_hash_for_schema(6, "body", content, fields)
+    new_hash = _chunk_hash("body", content, fields)
+    old_key = _chunk_key("card-identity", "body", 0, old_hash)
+    new_key = _chunk_key("card-identity", "body", 0, new_hash)
+    assert old_key != new_key
+    with index._connect() as conn:
+        conn.execute(
+            f"""
+            INSERT INTO {index.schema}.chunks (
+                chunk_key, card_uid, rel_path, chunk_type, chunk_index,
+                chunk_schema_version, source_fields, content, content_hash, token_count
+            )
+            VALUES (%s, 'card-identity', 'card-identity.md', 'body', 0, 7, %s::jsonb, %s, %s, 1)
+            """,
+            (new_key, json.dumps(fields), content, new_hash),
+        )
+        _insert_embedding(conn, index.schema, key=old_key, dim=8, fill=0.42)
+        conn.commit()
+    result = index.attach_embeddings_after_rematerialize(
+        embedding_model="reuse-hash",
+        embedding_version=1,
+        fail_if_thin=False,
+    )
+    assert result["remapped"] == 1
+    assert result["pending_after"] == 0
+    with index._connect() as conn:
+        row = conn.execute(
+            f"SELECT content_hash FROM {index.schema}.embeddings WHERE chunk_key = %s",
+            (new_key,),
+        ).fetchone()
+    assert row["content_hash"] == new_hash
+
+
+@pytest.mark.integration
+def test_text_change_does_not_copy_old_list(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pgvector_dsn: str
+) -> None:
+    from archive_cli.chunk_builders import _chunk_hash, _chunk_hash_for_schema
+    from archive_cli.materializer import _chunk_key
+
+    index = _bootstrap(tmp_path, monkeypatch, pgvector_dsn)
+    old_hash = _chunk_hash_for_schema(6, "body", "old text", ["body"])
+    new_hash = _chunk_hash("body", "new text", ["body"])
+    old_key = _chunk_key("card-changed", "body", 0, old_hash)
+    new_key = _chunk_key("card-changed", "body", 0, new_hash)
+    with index._connect() as conn:
+        conn.execute(
+            f"""
+            INSERT INTO {index.schema}.chunks (
+                chunk_key, card_uid, rel_path, chunk_type, chunk_index,
+                chunk_schema_version, source_fields, content, content_hash, token_count
+            )
+            VALUES (%s, 'card-changed', 'card-changed.md', 'body', 0, 7, %s::jsonb, %s, %s, 1)
+            """,
+            (new_key, json.dumps(["body"]), "new text", new_hash),
+        )
+        _insert_embedding(conn, index.schema, key=old_key, dim=8, fill=0.11)
+        conn.commit()
+    result = index.attach_embeddings_after_rematerialize(
+        embedding_model="reuse-hash",
+        embedding_version=1,
+        fail_if_thin=False,
+    )
+    assert result["remapped"] == 0
+    assert result["reused"] == 0
+    assert result["pending_after"] == 1
+
+
+@pytest.mark.integration
+def test_attach_fails_closed_when_coverage_is_thin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pgvector_dsn: str
+) -> None:
+    monkeypatch.setenv("PPA_PUBLICATION_MIN_EMBED_COVERAGE", "0.9")
+    monkeypatch.setenv("PPA_PUBLICATION_MIN_EMBED_CHUNKS", "1")
+    index = _bootstrap(tmp_path, monkeypatch, pgvector_dsn)
+    with index._connect() as conn:
+        _insert_chunk(conn, index.schema, key="pending-key", uid="card-thin", index=0, content_hash="alone")
+        conn.commit()
+    with pytest.raises(IncompatibleStateError, match="embedding_coverage:0/1"):
+        index.attach_embeddings_after_rematerialize(
+            embedding_model="reuse-hash",
+            embedding_version=1,
+            fail_if_thin=True,
+        )
+
+
+@pytest.mark.integration
+def test_duplicate_gc_drops_only_when_live_has_list(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pgvector_dsn: str
+) -> None:
+    index = _bootstrap(tmp_path, monkeypatch, pgvector_dsn)
+    with index._connect() as conn:
+        _insert_chunk(conn, index.schema, key="live", uid="card-live", index=0, content_hash="keep-hash")
+        _insert_embedding(
+            conn,
+            index.schema,
+            key="live",
+            dim=8,
+            fill=0.1,
+            content_hash="keep-hash",
+            uid="card-live",
+        )
+        _insert_embedding(conn, index.schema, key="dup", dim=8, fill=0.2, content_hash="keep-hash")
+        _insert_embedding(conn, index.schema, key="pending-old", dim=8, fill=0.3, content_hash="still-needed")
+        conn.commit()
+    store = DefaultArchiveStore(vault=tmp_path, index=index)
+    import logging
+
+    dry = embed_gc_cmd(
+        store=store,
+        logger=logging.getLogger("test"),
+        dry_run=True,
+        duplicates=True,
+    )
+    assert dry["duplicate_embeddings"] == 1
+    assert dry["deleted"] == 0
+    result = embed_gc_cmd(
+        store=store,
+        logger=logging.getLogger("test"),
+        dry_run=False,
+        duplicates=True,
+        batch_size=1,
+    )
+    assert result["deleted"] == 1
+    with index._connect() as conn:
+        keys = {
+            str(row["chunk_key"])
+            for row in conn.execute(f"SELECT chunk_key FROM {index.schema}.embeddings").fetchall()
+        }
+    assert keys == {"live", "pending-old"}

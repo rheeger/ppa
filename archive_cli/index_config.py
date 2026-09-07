@@ -31,7 +31,7 @@ def _ppa_env(canonical: str, default: str = "") -> str:
 # ---------------------------------------------------------------------------
 
 INDEX_SCHEMA_VERSION = 9
-CHUNK_SCHEMA_VERSION = 6
+CHUNK_SCHEMA_VERSION = 7
 MANIFEST_SCHEMA_VERSION = 2
 SCAN_MANIFEST_VERSION = 1
 DEFAULT_POSTGRES_SCHEMA = "ppa"
@@ -569,6 +569,14 @@ def get_publication_min_embed_coverage() -> float:
 def get_publication_min_embed_chunks() -> int:
     """Skip the coverage gate below this chunk count (fixtures / empty gens)."""
     return max(_ppa_env_int("PPA_PUBLICATION_MIN_EMBED_CHUNKS", default=1000), 0)
+
+
+def get_prior_chunk_schema_versions() -> tuple[int, ...]:
+    """Versioned hash recipes that may still hold leftover embedding keys."""
+    raw = _ppa_env("PPA_PRIOR_CHUNK_SCHEMA_VERSIONS")
+    if raw:
+        return tuple(int(part) for part in raw.split(",") if part.strip())
+    return (6, 5, 4)
 
 
 def get_query_embed_cache_path(vault: Path | None = None) -> Path:

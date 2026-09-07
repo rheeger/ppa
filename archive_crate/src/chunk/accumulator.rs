@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::chunk::constants::CHUNK_SCHEMA_VERSION;
-use crate::chunk::helpers::{chunk_hash, split_text_chunks, token_count};
+use crate::chunk::helpers::{chunk_hash_current, split_text_chunks, token_count};
 
 #[derive(Debug, Clone, Default)]
 pub struct BurstExtras {
@@ -90,7 +89,7 @@ impl ChunkAccumulator {
             self.seen.insert(key);
             let index = start_index + offset;
             let sf: Vec<String> = source_fields.iter().map(|s| (*s).to_string()).collect();
-            let h = chunk_hash(CHUNK_SCHEMA_VERSION, chunk_type, piece, &sf);
+            let h = chunk_hash_current(chunk_type, piece, &sf);
             let tc = token_count(piece);
             self.chunks.push(ChunkRecord {
                 chunk_type: chunk_type.to_string(),

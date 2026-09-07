@@ -14,6 +14,8 @@ from typing import Any
 from archive_engine.contracts import EmbeddingSpec
 
 from .features import build_context_prefix_for_embed_row
+from archive_engine.errors import IncompatibleStateError
+
 from .index_config import (
     CHUNK_SCHEMA_VERSION,
     EmbeddingBatchResult,
@@ -24,6 +26,11 @@ from .index_config import (
     get_embed_max_retries,
     get_embed_progress_every,
     get_embed_write_batch_size,
+    get_prior_chunk_schema_versions,
+    get_publication_min_embed_chunks,
+    get_publication_min_embed_coverage,
+    get_default_embedding_model,
+    get_default_embedding_version,
 )
 from .loader import _chunked, _log_rebuild_step, _RebuildProgressReporter
 
@@ -868,7 +875,7 @@ class EmbedderMixin:
                       AND have.embedding_model = e.embedding_model
                       AND have.embedding_version = e.embedding_version
                 )
-                ORDER BY c.chunk_key, e.created_at DESC
+                ORDER BY c.chunk_key, (e.card_uid = c.card_uid) DESC, e.created_at DESC
                 ON CONFLICT (chunk_key, embedding_model, embedding_version) DO NOTHING
                 """,
                 (embedding_model, embedding_version),
@@ -1057,20 +1064,21 @@ class EmbedderMixin:
         *,
         embedding_model: str,
         embedding_version: int,
-        schema_versions: tuple[int, ...] = (5, 4),
+        schema_versions: tuple[int, ...] | None = None,
         progress_every: int = 100_000,
     ) -> dict[str, int]:
         """Rebuild pre-bump ``chunk_key``s from live content and copy those vectors.
 
-        ``chunk_key`` includes ``content_hash``, and ``content_hash`` includes
-        ``chunk_schema_version``. A rematerialize that only bumped the schema
-        leaves paid vectors on the previous keys. No provider call.
+        ``chunk_key`` includes ``content_hash``. Older recipes folded
+        ``chunk_schema_version`` into that hash. Rebuild those keys from live
+        text and copy the leftover lists. No provider call.
         """
 
         from archive_cli.chunk_builders import _chunk_hash_for_schema
         from archive_cli.materializer import _chunk_key
 
-        versions = tuple(int(v) for v in schema_versions if int(v) > 0)
+        raw_versions = schema_versions if schema_versions is not None else get_prior_chunk_schema_versions()
+        versions = tuple(int(v) for v in raw_versions if int(v) > 0)
         if not versions:
             raise ValueError("schema_versions must contain at least one positive version")
         self.ensure_ready()
@@ -1216,6 +1224,67 @@ class EmbedderMixin:
         )
         return {"copied": copied, "identified": identified, "map_rows": loaded, "schema_versions": list(versions)}
 
+    def attach_embeddings_after_rematerialize(
+        self,
+        *,
+        embedding_model: str | None = None,
+        embedding_version: int | None = None,
+        fail_if_thin: bool = True,
+    ) -> dict[str, int]:
+        """Backfill identity, remap leftover versioned keys, then reuse by content."""
+        model = (embedding_model or "").strip() or get_default_embedding_model()
+        version = int(embedding_version or 0) or get_default_embedding_version()
+        self.backfill_embedding_content_identity()
+        remapped = self.remap_embeddings_by_prior_schema(
+            embedding_model=model,
+            embedding_version=version,
+        )
+        reused = self.reuse_embeddings_by_content(
+            embedding_model=model,
+            embedding_version=version,
+        )
+        pending_after = int(reused.get("pending_after") or 0)
+        result = {
+            "remapped": int(remapped.get("copied") or 0),
+            "reused": int(reused.get("copied") or 0),
+            "pending_after": pending_after,
+        }
+        logger.info(
+            "embeddings_attach_after_rematerialize remapped=%s reused=%s pending_after=%s",
+            result["remapped"],
+            result["reused"],
+            pending_after,
+        )
+        if fail_if_thin:
+            self._fail_if_embed_coverage_thin(
+                embedding_model=model,
+                embedding_version=version,
+                pending_after=pending_after,
+            )
+        return result
+
+    def _fail_if_embed_coverage_thin(
+        self,
+        *,
+        embedding_model: str,
+        embedding_version: int,
+        pending_after: int,
+    ) -> None:
+        min_cov = get_publication_min_embed_coverage()
+        min_chunks = get_publication_min_embed_chunks()
+        if min_cov <= 0:
+            return
+        with self._connect() as conn:
+            row = conn.execute(f"SELECT COUNT(*) AS n FROM {self.schema}.chunks").fetchone()
+        chunk_count = int(row["n"] if isinstance(row, dict) else row[0])
+        if chunk_count < min_chunks or chunk_count <= 0:
+            return
+        coverage = (chunk_count - pending_after) / chunk_count
+        if coverage < min_cov:
+            raise IncompatibleStateError(
+                f"embedding_coverage:{chunk_count - pending_after}/{chunk_count}"
+            )
+
     def embed_pending(
         self,
         *,
@@ -1282,15 +1351,16 @@ class EmbedderMixin:
                 f"dimension={provider_dimension} batch_size={batch_size} concurrency={concurrency} context_prefix={include_context_prefix}",
             )
             if not scoped:
-                self.backfill_embedding_content_identity()
-                reuse = self.reuse_embeddings_by_content(
+                attach = self.attach_embeddings_after_rematerialize(
                     embedding_model=embedding_model,
                     embedding_version=embedding_version,
+                    fail_if_thin=False,
                 )
                 logger.info(
-                    "embed_pending reuse_copied=%s pending_after=%s",
-                    reuse.get("copied"),
-                    reuse.get("pending_after"),
+                    "embed_pending attach remapped=%s reused=%s pending_after=%s",
+                    attach.get("remapped"),
+                    attach.get("reused"),
+                    attach.get("pending_after"),
                 )
 
             _log_rebuild_step(2, total_steps, "count embedding backlog")
