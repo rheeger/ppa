@@ -175,9 +175,7 @@ def load_decision_log(vault: str | Path) -> dict[str, Any]:
     if payload.get("format_name") != DECISIONS_FORMAT_NAME:
         raise IncompatibleStateError("unsupported canonical decision log format")
     if payload.get("format_version") != DECISIONS_FORMAT_VERSION:
-        raise IncompatibleStateError(
-            f"unsupported canonical decision log version: {payload.get('format_version')}"
-        )
+        raise IncompatibleStateError(f"unsupported canonical decision log version: {payload.get('format_version')}")
     decisions = payload.get("decisions")
     if not isinstance(decisions, list):
         raise IncompatibleStateError("canonical decision log decisions must be a list")

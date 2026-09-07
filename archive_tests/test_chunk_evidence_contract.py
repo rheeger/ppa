@@ -78,7 +78,7 @@ def test_multibyte_and_crlf_spans_round_trip() -> None:
         start_byte=start,
         end_byte=end,
     )
-    assert encoded[span.start_byte:span.end_byte] == "café".encode("utf-8")
+    assert encoded[span.start_byte : span.end_byte] == "café".encode("utf-8")
     ref = ChunkEvidenceRef(
         version=CHUNK_EVIDENCE_REF_VERSION,
         archive_id="p01b-freeze",
@@ -90,9 +90,7 @@ def test_multibyte_and_crlf_spans_round_trip() -> None:
         lineage_complete=True,
         source_spans=(span,),
         span_unavailable=False,
-        message_refs=(
-            MessageEvidenceRef(message_id="m1", source_revision="sha256:span", spans=(span,)),
-        ),
+        message_refs=(MessageEvidenceRef(message_id="m1", source_revision="sha256:span", spans=(span,)),),
         message_refs_available=True,
     )
     loaded = ChunkEvidenceRef.from_payload(ref.to_payload())

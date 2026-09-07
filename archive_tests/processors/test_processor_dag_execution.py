@@ -175,9 +175,7 @@ def test_idempotent_rerun_skips_already_current(tmp_path: Path) -> None:
     assert second.report.skip_reasons.get("already_current", 0) >= 1
 
     def _no_per_uid_lookup(processor_key, input_uid):
-        raise AssertionError(
-            f"execute must reuse bulk prior_by_uid, not get_input_state({processor_key}, {input_uid})"
-        )
+        raise AssertionError(f"execute must reuse bulk prior_by_uid, not get_input_state({processor_key}, {input_uid})")
 
     store.get_input_state = _no_per_uid_lookup  # type: ignore[method-assign]
     third = run_processors(

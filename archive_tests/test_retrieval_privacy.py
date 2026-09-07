@@ -395,7 +395,9 @@ def test_policy_scoped_query_cache_does_not_reuse_across_principals(tmp_path) ->
     cache.put("note", alice, [1.0, 0.0, 0.0, 0.0])
     assert cache.get("note", alice) == [1.0, 0.0, 0.0, 0.0]
     assert cache.get("note", bob) is None
-    assert query_embed_cache_key("note", model="archive-hash-dev", version=1, provider="hash", dimension=4, policy_identity=alice.policy_identity) != query_embed_cache_key(
+    assert query_embed_cache_key(
+        "note", model="archive-hash-dev", version=1, provider="hash", dimension=4, policy_identity=alice.policy_identity
+    ) != query_embed_cache_key(
         "note", model="archive-hash-dev", version=1, provider="hash", dimension=4, policy_identity=bob.policy_identity
     )
     cache.close()
@@ -420,7 +422,10 @@ def test_mcp_and_cli_payloads_omit_denied(privacy_index, tmp_path, monkeypatch) 
         def search(self, *args, **kwargs):
             return []
 
-    monkeypatch.setattr("archive_cli.commands._resolve.resolve_store", lambda: _ForceServing(vault=vault, index=_Index(), access=_ctx(sources=("gmail",))))
+    monkeypatch.setattr(
+        "archive_cli.commands._resolve.resolve_store",
+        lambda: _ForceServing(vault=vault, index=_Index(), access=_ctx(sources=("gmail",))),
+    )
     out = archive_search("note", limit=8)
     assert MEDICAL_UID not in out
     assert DENIED_TOKEN not in out
@@ -437,7 +442,11 @@ def test_mcp_and_cli_payloads_omit_denied(privacy_index, tmp_path, monkeypatch) 
     }
     env.pop("PPA_TEST_PG_DSN", None)
     proc = subprocess.run(
-        [sys.executable, "-c", "from archive_cli.serving_index import get_serving_handle; from archive_engine.access import access_request_fields; from archive_engine.contracts import AccessContext; from pathlib import Path; ctx=AccessContext(archive_id='p05b', principal='alice', profile='read-only', allowed_sources=('gmail',)); h=get_serving_handle(Path('.')); rows=h.search('note', limit=8, **access_request_fields(ctx)); print(rows)"],
+        [
+            sys.executable,
+            "-c",
+            "from archive_cli.serving_index import get_serving_handle; from archive_engine.access import access_request_fields; from archive_engine.contracts import AccessContext; from pathlib import Path; ctx=AccessContext(archive_id='p05b', principal='alice', profile='read-only', allowed_sources=('gmail',)); h=get_serving_handle(Path('.')); rows=h.search('note', limit=8, **access_request_fields(ctx)); print(rows)",
+        ],
         cwd=str(tmp_path),
         env=env,
         capture_output=True,

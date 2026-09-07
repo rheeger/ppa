@@ -340,8 +340,12 @@ def test_adapters_opt_into_sdk() -> None:
 
 
 def test_no_live_google_in_legacy_module() -> None:
-    text = Path(__file__).resolve().parents[2].joinpath("archive_sync", "connectors", "legacy.py").read_text(
-        encoding="utf-8"
+    text = (
+        Path(__file__)
+        .resolve()
+        .parents[2]
+        .joinpath("archive_sync", "connectors", "legacy.py")
+        .read_text(encoding="utf-8")
     )
     assert "gmail.googleapis" not in text
     assert "accounts.google.com" not in text

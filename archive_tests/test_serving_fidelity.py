@@ -30,7 +30,17 @@ def test_missing_corpus_state_is_unknown_not_active() -> None:
     assert serving_corpus_state(None) == UNKNOWN
     assert serving_corpus_state("") == UNKNOWN
     assert serving_corpus_state("active") == "active"
-    row = {"uid": "u1", "rel_path": "a.md", "summary": "A", "type": "person", "slug": "a", "activity_at": "", "activity_end_at": "", "search_text": "", "content_hash": "sha256:abc"}
+    row = {
+        "uid": "u1",
+        "rel_path": "a.md",
+        "summary": "A",
+        "type": "person",
+        "slug": "a",
+        "activity_at": "",
+        "activity_end_at": "",
+        "search_text": "",
+        "content_hash": "sha256:abc",
+    }
     maps = {
         "people": {},
         "sources": {},
@@ -49,7 +59,17 @@ def test_missing_corpus_state_is_unknown_not_active() -> None:
 
 
 def test_missing_policy_cannot_be_upgraded_to_active() -> None:
-    row = {"uid": "u1", "rel_path": "a.md", "summary": "A", "type": "person", "slug": "a", "activity_at": "", "activity_end_at": "", "search_text": "", "content_hash": ""}
+    row = {
+        "uid": "u1",
+        "rel_path": "a.md",
+        "summary": "A",
+        "type": "person",
+        "slug": "a",
+        "activity_at": "",
+        "activity_end_at": "",
+        "search_text": "",
+        "content_hash": "",
+    }
     maps = {
         "people": {},
         "sources": {},
@@ -81,9 +101,7 @@ def test_inferred_edge_without_confidence_has_no_trust_default() -> None:
 
 
 def test_warehouse_edge_trust_is_derived_from_contract() -> None:
-    rec = build_warehouse_edge(
-        {"source_uid": "a", "target_uid": "b", "edge_type": "wikilink", "field_name": "body"}
-    )
+    rec = build_warehouse_edge({"source_uid": "a", "target_uid": "b", "edge_type": "wikilink", "field_name": "body"})
     edge = ServingEdge.from_payload(rec)
     assert edge.method == UNKNOWN
     assert edge.confidence == 1.0
@@ -289,7 +307,7 @@ def test_native_round_trip_preserves_policy_and_inferred_edge(tmp_path, monkeypa
     assert quarantine["retrieval_weight"] == pytest.approx(QUARANTINE_RETRIEVAL_WEIGHT)
     unknown = next(r for r in listed if r["card_uid"] == "hfa-person-unknown0001")
     assert unknown["corpus_state"] == UNKNOWN
-    assert unknown.get("retrieval_weight") in (None, )
+    assert unknown.get("retrieval_weight") in (None,)
 
     graph = handle.graph("People/active.md", hops=1)
     neighbors = graph["People/active.md"]

@@ -24,7 +24,7 @@ from archive_vault.decisions import (
     list_decisions,
     open_conflicts_for,
 )
-from archive_vault.provenance import PROVENANCE_METHOD_HUMAN, ProvenanceEntry
+from archive_vault.provenance import PROVENANCE_METHOD_HUMAN
 from archive_vault.schema import FinanceCard, PersonCard
 from archive_vault.vault import read_note, write_card
 

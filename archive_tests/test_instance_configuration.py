@@ -188,7 +188,10 @@ def test_cwd_unused_when_instance_dir_set(tmp_path: Path, monkeypatch: pytest.Mo
     instance = tmp_path / "inst"
     cwd_dir.mkdir()
     instance.mkdir()
-    _write_json(cwd_dir / "ppa.json", _v1_payload(storage={"index_schema": "from_cwd", "index_dsn_ref": {"name": "PPA_INDEX_DSN"}}))
+    _write_json(
+        cwd_dir / "ppa.json",
+        _v1_payload(storage={"index_schema": "from_cwd", "index_dsn_ref": {"name": "PPA_INDEX_DSN"}}),
+    )
     _write_json(instance / "ppa.json", _v1_payload())
     monkeypatch.chdir(cwd_dir)
     config = resolve_instance_config(instance_dir=instance, environ={}, allow_cwd_discovery=True)
@@ -277,7 +280,13 @@ def test_two_instances_same_uid_isolated(tmp_path: Path) -> None:
             updated="2026-09-06",
             summary="shared",
         )
-        write_card(vault, "People/card.md", card, body=body, provenance={"summary": ProvenanceEntry("test", "2026-09-06", "deterministic")})
+        write_card(
+            vault,
+            "People/card.md",
+            card,
+            body=body,
+            provenance={"summary": ProvenanceEntry("test", "2026-09-06", "deterministic")},
+        )
 
     left = tmp_path / "a"
     right = tmp_path / "b"

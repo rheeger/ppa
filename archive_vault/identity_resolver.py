@@ -401,13 +401,18 @@ def is_same_person(
             confidence += 50 if name_score < 90 else 60
             reasons.append("fuzzy_name")
 
-    candidate_emails = [item.lower() for item in _as_list(candidate, "emails")]
-    existing_emails = [item.lower() for item in _as_list(existing, "emails")]
-    if set(candidate_emails) & set(existing_emails):
+    from archive_vault.canon.email import canonical as _email
+    from archive_vault.canon.phone import canonical as _phone
+
+    candidate_emails = [_email(item) for item in _as_list(candidate, "emails")]
+    existing_emails = [_email(item) for item in _as_list(existing, "emails")]
+    if set(filter(None, candidate_emails)) & set(filter(None, existing_emails)):
         confidence += 100
         reasons.append("exact_email")
         support_score += 100
-    if set(_as_list(candidate, "phones")) & set(_as_list(existing, "phones")):
+    candidate_phones = {_phone(item) for item in _as_list(candidate, "phones")} - {""}
+    existing_phones = {_phone(item) for item in _as_list(existing, "phones")} - {""}
+    if candidate_phones & existing_phones:
         confidence += 100
         reasons.append("exact_phone")
         support_score += 100
@@ -531,7 +536,9 @@ def resolve_person(
     if result.wikilink:
         from archive_vault.identity import canonicalize_wikilink, load_identity_map
 
-        canonical = canonicalize_wikilink(load_identity_map(vault_path) if cache is None else cache.entries, result.wikilink)
+        canonical = canonicalize_wikilink(
+            load_identity_map(vault_path) if cache is None else cache.entries, result.wikilink
+        )
         if canonical and canonical != result.wikilink:
             return ResolveResult(result.action, canonical, result.confidence, [*result.reasons, "identity_redirect"])
     return result
@@ -774,9 +781,7 @@ def merge_into_existing(
             merged_prov["aliases"] = _clone_provenance(merged_prov["summary"])
         elif "summary" in new_provenance:
             merged_prov["aliases"] = _clone_provenance(new_provenance["summary"])
-    write_card(
-        vault_root, str(target.relative_to(vault_root)), merged_card, body=merged_body, provenance=merged_prov
-    )
+    write_card(vault_root, str(target.relative_to(vault_root)), merged_card, body=merged_body, provenance=merged_prov)
     aliases = {
         "name": merged_card.summary,
         "emails": getattr(merged_card, "emails", []),

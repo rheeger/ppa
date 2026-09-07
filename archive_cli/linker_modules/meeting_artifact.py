@@ -42,20 +42,17 @@ _GENERIC_TITLE_TOKENS = frozenset(
 
 def _parse_ts(value: Any) -> datetime | None:
     """Best-effort ISO timestamp parse. Returns None on any failure."""
-    if not value:
+    from archive_vault.canon.instant import canonical as _instant
+
+    normalized = _instant(value)
+    if not normalized:
         return None
-    s = str(value).strip()
-    if not s:
-        return None
-    # Replace Z with +00:00 for fromisoformat pre-3.11.
-    if s.endswith("Z"):
-        s = s[:-1] + "+00:00"
+    text = normalized[:-1] + "+00:00" if normalized.endswith("Z") else normalized
     try:
-        dt = datetime.fromisoformat(s)
+        dt = datetime.fromisoformat(text)
     except ValueError:
-        # Try date-only.
         try:
-            dt = datetime.fromisoformat(s[:10])
+            dt = datetime.fromisoformat(text[:10])
         except ValueError:
             return None
     if dt.tzinfo is None:

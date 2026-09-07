@@ -153,36 +153,20 @@ _META_FILES: dict[str, PathClass] = {
     "identity-map.json": PathClass(
         RecoveryClass.DECISION_CRITICAL, ArtifactPresence.REQUIRED, "vault.meta.identity-map"
     ),
-    "sync-state.json": PathClass(
-        RecoveryClass.DECISION_CRITICAL, ArtifactPresence.REQUIRED, "vault.meta.sync-state"
-    ),
-    "own-emails.json": PathClass(
-        RecoveryClass.DECISION_CRITICAL, ArtifactPresence.REQUIRED, "vault.meta.own-emails"
-    ),
-    "nicknames.json": PathClass(
-        RecoveryClass.DECISION_CRITICAL, ArtifactPresence.REQUIRED, "vault.meta.nicknames"
-    ),
-    "ppa-config.json": PathClass(
-        RecoveryClass.DECISION_CRITICAL, ArtifactPresence.REQUIRED, "vault.meta.ppa-config"
-    ),
-    "llm-config.json": PathClass(
-        RecoveryClass.SECRET_REFERENCE, ArtifactPresence.REQUIRED, "vault.meta.llm-config"
-    ),
+    "sync-state.json": PathClass(RecoveryClass.DECISION_CRITICAL, ArtifactPresence.REQUIRED, "vault.meta.sync-state"),
+    "own-emails.json": PathClass(RecoveryClass.DECISION_CRITICAL, ArtifactPresence.REQUIRED, "vault.meta.own-emails"),
+    "nicknames.json": PathClass(RecoveryClass.DECISION_CRITICAL, ArtifactPresence.REQUIRED, "vault.meta.nicknames"),
+    "ppa-config.json": PathClass(RecoveryClass.DECISION_CRITICAL, ArtifactPresence.REQUIRED, "vault.meta.ppa-config"),
+    "llm-config.json": PathClass(RecoveryClass.SECRET_REFERENCE, ArtifactPresence.REQUIRED, "vault.meta.llm-config"),
     "dedup-candidates.json": PathClass(
         RecoveryClass.RECONSTRUCTIBLE, ArtifactPresence.OPTIONAL, "vault.meta.dedup-candidates"
     ),
-    "enrichment-log.json": PathClass(
-        RecoveryClass.DISPOSABLE, ArtifactPresence.OPTIONAL, "vault.meta.enrichment-log"
-    ),
-    "llm-cache.json": PathClass(
-        RecoveryClass.RECONSTRUCTIBLE, ArtifactPresence.OPTIONAL, "vault.meta.llm-cache"
-    ),
+    "enrichment-log.json": PathClass(RecoveryClass.DISPOSABLE, ArtifactPresence.OPTIONAL, "vault.meta.enrichment-log"),
+    "llm-cache.json": PathClass(RecoveryClass.RECONSTRUCTIBLE, ArtifactPresence.OPTIONAL, "vault.meta.llm-cache"),
     "validation-report.json": PathClass(
         RecoveryClass.DISPOSABLE, ArtifactPresence.OPTIONAL, "vault.meta.validation-report"
     ),
-    "processors.json": PathClass(
-        RecoveryClass.RECONSTRUCTIBLE, ArtifactPresence.OPTIONAL, "vault.meta.processors"
-    ),
+    "processors.json": PathClass(RecoveryClass.RECONSTRUCTIBLE, ArtifactPresence.OPTIONAL, "vault.meta.processors"),
     "source-updaters.json": PathClass(
         RecoveryClass.RECONSTRUCTIBLE, ArtifactPresence.OPTIONAL, "vault.meta.source-updaters"
     ),
@@ -621,9 +605,7 @@ def classify_rel_path(rel_path: str) -> PathClass | None:
         if rest.startswith("rust-search-index/") or rest == "rust-search-index":
             return PathClass(RecoveryClass.RECONSTRUCTIBLE, ArtifactPresence.OPTIONAL, "vault.meta.serving-index")
         if rest.startswith("change-journal/"):
-            return PathClass(
-                RecoveryClass.DISPOSABLE, ArtifactPresence.OPTIONAL, "vault.meta.change-journal-staged"
-            )
+            return PathClass(RecoveryClass.DISPOSABLE, ArtifactPresence.OPTIONAL, "vault.meta.change-journal-staged")
         if rest.endswith(("-wal", "-shm")):
             return PathClass(RecoveryClass.DISPOSABLE, ArtifactPresence.OPTIONAL, "vault.sqlite-wal")
         if rest.endswith("-dirty-uids.txt"):

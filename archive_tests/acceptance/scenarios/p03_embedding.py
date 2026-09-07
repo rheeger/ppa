@@ -17,12 +17,8 @@ from archive_vault.vault import write_card
 
 DIRTY_UID = "hfa-person-p03bdirty01"
 BACKLOG_UID = "hfa-person-p03bbacklg1"
-DIRTY_BODY = (
-    "P03-B dirty card body. " + ("selected multi-chunk text. " * 80)
-)
-BACKLOG_BODY = (
-    "P03-B older backlog card body. " + ("unrelated backlog text. " * 80)
-)
+DIRTY_BODY = "P03-B dirty card body. " + ("selected multi-chunk text. " * 80)
+BACKLOG_BODY = "P03-B older backlog card body. " + ("unrelated backlog text. " * 80)
 
 
 class ScenarioAssertionError(AssertionError):
@@ -297,8 +293,7 @@ register(
         id="p03.embedding_dirty_selection",
         suite="p03",
         product_guarantee=(
-            "A multi-chunk dirty card is fully embedded despite older unrelated "
-            "backlog; unselected cards are untouched"
+            "A multi-chunk dirty card is fully embedded despite older unrelated backlog; unselected cards are untouched"
         ),
         proof_tier="isolated_integration",
         fixture_seed=0,

@@ -102,11 +102,11 @@ def run_p07_restore(runtime: IsolatedRuntime) -> dict[str, Any]:
         if blake_redirect:
             raise AssertionError(f"restored undone identity still redirects: {blake_redirect}")
 
+    import os
+
     from archive_cli.commands.recovery import activate_restored_archive
     from archive_cli.server import archive_read, archive_search
     from archive_tests.acceptance.environment import reset_serving_handle
-
-    import os
 
     previous_path = os.environ.get("PPA_PATH")
     os.environ["PPA_PATH"] = str(dest)

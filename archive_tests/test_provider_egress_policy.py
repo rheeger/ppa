@@ -300,9 +300,9 @@ def build_outbound_matrix(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             (
                 "hash-local",
                 _access(),
-                lambda: EmbeddingProviderAdapter(lambda **_: HashEmbeddingProvider(dimension=8), access=_access()).embed_texts(
-                    [SYN_GMAIL], sources=("gmail",)
-                ),
+                lambda: EmbeddingProviderAdapter(
+                    lambda **_: HashEmbeddingProvider(dimension=8), access=_access()
+                ).embed_texts([SYN_GMAIL], sources=("gmail",)),
                 True,
                 False,
             ),
@@ -328,7 +328,12 @@ def build_outbound_matrix(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             ),
             (
                 "openai-medical-restricted",
-                _access(principal="alice", profile="read-only", allowed_sources=("gmail",), egress_policy_revision="p05c-restricted"),
+                _access(
+                    principal="alice",
+                    profile="read-only",
+                    allowed_sources=("gmail",),
+                    egress_policy_revision="p05c-restricted",
+                ),
                 lambda: EmbeddingProviderAdapter(
                     lambda **_: OpenAIEmbeddingProvider(dimension=8, base_url=http.base, model="test"),
                     access=_access(

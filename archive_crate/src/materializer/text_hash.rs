@@ -45,6 +45,40 @@ fn iter_string_values(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Vec<
     Ok(vec![])
 }
 
+fn identifier_search_tokens(fm: &Map<String, Value>) -> Vec<String> {
+    let mut tokens: Vec<String> = Vec::new();
+    for key in ["phones", "participant_handles", "sender_handle"] {
+        if let Some(v) = fm.get(key) {
+            for text in crate::materializer::fm_value::iter_string_values_json(v) {
+                let text = text.trim();
+                if text.is_empty() || text.contains('@') {
+                    continue;
+                }
+                tokens.extend(crate::canon::phone_alias_forms(text));
+            }
+        }
+    }
+    for key in ["emails", "from_email", "participant_emails", "to_emails", "cc_emails"] {
+        if let Some(v) = fm.get(key) {
+            for text in crate::materializer::fm_value::iter_string_values_json(v) {
+                let text = text.trim();
+                if !text.contains('@') {
+                    continue;
+                }
+                let canon = crate::canon::normalize_email(text);
+                if !canon.is_empty() {
+                    tokens.push(canon);
+                }
+            }
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    tokens
+        .into_iter()
+        .filter(|item| !item.is_empty() && seen.insert(item.clone()))
+        .collect()
+}
+
 pub fn build_search_text_value(fm: &Map<String, Value>, body: &str) -> String {
     let mut parts: Vec<String> = Vec::new();
     for (k, v) in fm.iter() {
@@ -59,6 +93,7 @@ pub fn build_search_text_value(fm: &Map<String, Value>, body: &str) -> String {
     if !body_cleaned.is_empty() {
         parts.push(body_cleaned);
     }
+    parts.extend(identifier_search_tokens(fm));
     parts.join("\n")
 }
 
@@ -81,6 +116,10 @@ pub fn build_search_text(
     let body_cleaned = body.replace('\0', "").trim().to_string();
     if !body_cleaned.is_empty() {
         parts.push(body_cleaned);
+    }
+    let value = json_stable::json_value_from_py_any(py, frontmatter.as_any())?;
+    if let Value::Object(map) = value {
+        parts.extend(identifier_search_tokens(&map));
     }
     Ok(parts.join("\n"))
 }

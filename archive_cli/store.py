@@ -921,11 +921,7 @@ class DefaultArchiveStore(ArchiveStore):
 
         plan_obj = trace["plan"]
         pipeline_meta = trace.get("pipeline_meta", {})
-        fusion_strategy = str(
-            pipeline_meta.get(
-                "fusion_strategy", "vector" if mode == "vector" else FUSION_STRATEGY
-            )
-        )
+        fusion_strategy = str(pipeline_meta.get("fusion_strategy", "vector" if mode == "vector" else FUSION_STRATEGY))
         include_ctx = bool(rc.get("context", {}).get("include_in_result_payloads", True))
         explain_rows: list[dict[str, Any]] = []
         for row in rows:

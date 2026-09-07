@@ -95,9 +95,7 @@ def test_maintenance_full_cycle(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
                             "input_uid": "purchase-a",
                             "status": "complete",
                             "output_uids": ["org-a", "org-b", "place-a"],
-                            "receipt": {
-                                "outputs": [{"uid": "org-a"}, {"uid": "org-b"}, {"uid": "place-a"}]
-                            },
+                            "receipt": {"outputs": [{"uid": "org-a"}, {"uid": "org-b"}, {"uid": "place-a"}]},
                         },
                         {
                             "processor_key": "materialization",

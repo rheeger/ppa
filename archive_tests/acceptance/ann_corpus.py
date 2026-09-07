@@ -79,16 +79,20 @@ def write_adversary_export(work: Path) -> dict[str, Any]:
                 "provenance_summary": UNKNOWN,
             }
         )
-        evidence = populated_burst_evidence(item_id, item_id) if item_id == dataset.true_neighbor_id else ChunkEvidenceRef(
-            version=CHUNK_EVIDENCE_REF_VERSION,
-            archive_id="p01b-freeze",
-            card_uid=item_id,
-            chunk_id=item_id,
-            chunk_schema_version="6",
-            algorithm_version="p01b-freeze-1",
-            evidence_kind=UNKNOWN,
-            span_unavailable=True,
-            message_refs_available=False,
+        evidence = (
+            populated_burst_evidence(item_id, item_id)
+            if item_id == dataset.true_neighbor_id
+            else ChunkEvidenceRef(
+                version=CHUNK_EVIDENCE_REF_VERSION,
+                archive_id="p01b-freeze",
+                card_uid=item_id,
+                chunk_id=item_id,
+                chunk_schema_version="6",
+                algorithm_version="p01b-freeze-1",
+                evidence_kind=UNKNOWN,
+                span_unavailable=True,
+                message_refs_available=False,
+            )
         )
         chunks.append(
             {

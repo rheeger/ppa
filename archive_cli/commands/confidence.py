@@ -120,9 +120,7 @@ def _infer_method(rows: Sequence[Mapping[str, Any]], *, exact_match: bool, metho
     return UNKNOWN
 
 
-def _infer_evidence_kind(
-    rows: Sequence[Mapping[str, Any]], *, exact_match: bool, evidence_kind: str
-) -> EvidenceKind:
+def _infer_evidence_kind(rows: Sequence[Mapping[str, Any]], *, exact_match: bool, evidence_kind: str) -> EvidenceKind:
     if evidence_kind in {"source_reported", "derived", "proposed_link", UNKNOWN}:
         return evidence_kind  # type: ignore[return-value]
     kinds = {str(row.get("evidence_kind") or "").strip() for row in rows}

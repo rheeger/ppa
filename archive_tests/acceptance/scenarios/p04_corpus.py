@@ -146,7 +146,8 @@ def run_p04_corpus(runtime: IsolatedRuntime) -> dict[str, Any]:
             raise ScenarioAssertionError(f"CLI read miss {spec['uid']}")
         rows = list(cli_search.get("rows") or [])
         if not any(
-            str(row.get("card_uid") or row.get("uid") or "") == spec["uid"] or str(row.get("rel_path") or "") == spec["rel_path"]
+            str(row.get("card_uid") or row.get("uid") or "") == spec["uid"]
+            or str(row.get("rel_path") or "") == spec["rel_path"]
             for row in rows
         ):
             raise ScenarioAssertionError(f"CLI search miss {spec['uid']} token={token}: {cli_search}")

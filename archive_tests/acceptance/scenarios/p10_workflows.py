@@ -51,7 +51,7 @@ def run_p10_workflows(runtime: IsolatedRuntime) -> dict[str, Any]:
     if Decimal(cost_row["currency_totals"]["USD"]) != Decimal("482.0"):
         raise AssertionError("actual charge was double-counted with an estimate")
 
-    eur = queries["q-p04b-agg-eur-net"]
+    _eur = queries["q-p04b-agg-eur-net"]
     totals = currency_totals(cards, currency="EUR")
     if Decimal(totals["totals"]["EUR"]) != Decimal("60.0"):
         raise AssertionError(f"EUR net was {totals['totals']}")

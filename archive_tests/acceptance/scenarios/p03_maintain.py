@@ -86,8 +86,8 @@ def run_p03_maintain(runtime: IsolatedRuntime) -> dict[str, Any]:
     _write_amazon_email(runtime.vault)
 
     from archive_cli.commands.maintain import run_maintenance
-    from archive_cli.serving_index import get_serving_handle, mark_serving_index_dirty
     from archive_cli.server import archive_search
+    from archive_cli.serving_index import get_serving_handle, mark_serving_index_dirty
     from archive_cli.store import DefaultArchiveStore
     from archive_sync.processors.constants import PROCESSOR_EMAIL_TYPED_EXTRACTION
     from archive_vault.change_journal import ChangeJournal
@@ -184,9 +184,7 @@ def run_p03_maintain(runtime: IsolatedRuntime) -> dict[str, Any]:
             if item.get("valid_no_output") or item.get("status") not in {"complete", "completed"}:
                 continue
             rec = item.get("receipt") or {}
-            all_extraction_outputs.extend(
-                row.get("uid") for row in (rec.get("outputs") or []) if row.get("uid")
-            )
+            all_extraction_outputs.extend(row.get("uid") for row in (rec.get("outputs") or []) if row.get("uid"))
     if first.cards_extracted != len(all_extraction_outputs):
         raise ScenarioAssertionError(
             f"count summaries drifted from receipts extracted={first.cards_extracted} outputs={all_extraction_outputs}"

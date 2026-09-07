@@ -199,7 +199,9 @@ def current_secret_values() -> dict[str, str]:
 
 
 @contextmanager
-def bind_instance_config(config: InstanceConfig, *, secrets: Mapping[str, str] | None = None) -> Iterator[InstanceConfig]:
+def bind_instance_config(
+    config: InstanceConfig, *, secrets: Mapping[str, str] | None = None
+) -> Iterator[InstanceConfig]:
     token = _BOUND.set(config)
     secret_token = _SECRETS.set(dict(secrets or {}))
     try:
@@ -530,7 +532,9 @@ def resolve_instance_config(
     elif storage_block.get("index_dsn_ref") or payload.get("index_dsn_ref"):
         raw_ref = storage_block.get("index_dsn_ref") or payload.get("index_dsn_ref")
         if isinstance(raw_ref, Mapping):
-            dsn_ref = SecretRef(name=_as_str(raw_ref.get("name")) or "PPA_INDEX_DSN", provider=_as_str(raw_ref.get("provider")) or "env")
+            dsn_ref = SecretRef(
+                name=_as_str(raw_ref.get("name")) or "PPA_INDEX_DSN", provider=_as_str(raw_ref.get("provider")) or "env"
+            )
         else:
             dsn_ref = SecretRef(name=_as_str(raw_ref) or "PPA_INDEX_DSN")
         origins.append(FieldOrigin("storage.index_dsn", "file", file_label))
@@ -552,9 +556,9 @@ def resolve_instance_config(
     )
     binding = _schema_binding(index_schema, schema_version_hint)
     identity = archive_identity_for(vault, schema_binding=binding, archive_id=archive_id)
-    if identity_block.get("canonical_root") and Path(str(identity_block["canonical_root"])).expanduser().resolve() != Path(
-        identity.canonical_root
-    ):
+    if identity_block.get("canonical_root") and Path(
+        str(identity_block["canonical_root"])
+    ).expanduser().resolve() != Path(identity.canonical_root):
         if not cli.get("vault_path") and bound_dir is None:
             raise ConfigError("identity.canonical_root does not match storage.vault_path")
 
@@ -586,7 +590,9 @@ def resolve_instance_config(
     )
 
     serving_default = str(Path(identity.canonical_root) / "_meta" / "rust-search-index")
-    embed_cache_default = _instance_cache_path(Path(identity.canonical_root), identity.archive_id, "query-embed-cache.sqlite")
+    embed_cache_default = _instance_cache_path(
+        Path(identity.canonical_root), identity.archive_id, "query-embed-cache.sqlite"
+    )
     serving_path = str(
         _pick(
             "storage.serving_index_path",
@@ -612,18 +618,21 @@ def resolve_instance_config(
         )
     )
 
-    native = str(
-        _pick(
-            "engine.native",
-            cli=cli.get("engine"),
-            env_value=_env(env, "PPA_ENGINE"),
-            env_name="PPA_ENGINE",
-            file_value=engine_block.get("native"),
-            default="rust",
-            origins=origins,
-            file_label=file_label,
-        )
-    ).lower() or "rust"
+    native = (
+        str(
+            _pick(
+                "engine.native",
+                cli=cli.get("engine"),
+                env_value=_env(env, "PPA_ENGINE"),
+                env_name="PPA_ENGINE",
+                file_value=engine_block.get("native"),
+                default="rust",
+                origins=origins,
+                file_label=file_label,
+            )
+        ).lower()
+        or "rust"
+    )
     if native not in {"rust", "python"}:
         raise ConfigError(f"incompatible engine spec {native!r}")
 
@@ -743,8 +752,28 @@ def resolve_instance_config(
             )
         ),
     )
-    origins.append(FieldOrigin("access.allowed_sources", "env" if _env(env, "PPA_ACCESS_ALLOWED_SOURCES") else "file" if access_block.get("allowed_sources") else "default", "access"))
-    origins.append(FieldOrigin("access.allowed_domains", "env" if _env(env, "PPA_ACCESS_ALLOWED_DOMAINS") else "file" if access_block.get("allowed_domains") else "default", "access"))
+    origins.append(
+        FieldOrigin(
+            "access.allowed_sources",
+            "env"
+            if _env(env, "PPA_ACCESS_ALLOWED_SOURCES")
+            else "file"
+            if access_block.get("allowed_sources")
+            else "default",
+            "access",
+        )
+    )
+    origins.append(
+        FieldOrigin(
+            "access.allowed_domains",
+            "env"
+            if _env(env, "PPA_ACCESS_ALLOWED_DOMAINS")
+            else "file"
+            if access_block.get("allowed_domains")
+            else "default",
+            "access",
+        )
+    )
 
     retrieval = RetrievalSettings(
         default_limit=int(
@@ -837,15 +866,21 @@ def resolve_instance_config(
             serving_index_path=str(Path(serving_path).expanduser()),
             query_embed_cache_path=str(Path(embed_cache).expanduser()),
         ),
-        engine=EngineCompat(native=native, format_compatibility=_as_str(engine_block.get("format_compatibility")) or "serving-index-v1"),
+        engine=EngineCompat(
+            native=native, format_compatibility=_as_str(engine_block.get("format_compatibility")) or "serving-index-v1"
+        ),
         embeddings=embeddings,
         access=access,
         sources=tuple(sources),
         enrichment=_as_mapping(payload.get("enrichment"), field_name="enrichment"),
         rerank=_as_mapping(payload.get("rerank"), field_name="rerank"),
         maintenance=MaintenanceBudgets(
-            rebuild_workers=int(maintenance_block["rebuild_workers"]) if maintenance_block.get("rebuild_workers") else None,
-            rebuild_batch_size=int(maintenance_block["rebuild_batch_size"]) if maintenance_block.get("rebuild_batch_size") else None,
+            rebuild_workers=int(maintenance_block["rebuild_workers"])
+            if maintenance_block.get("rebuild_workers")
+            else None,
+            rebuild_batch_size=int(maintenance_block["rebuild_batch_size"])
+            if maintenance_block.get("rebuild_batch_size")
+            else None,
         ),
         retrieval=retrieval,
         vault_tuning=vault_tuning,

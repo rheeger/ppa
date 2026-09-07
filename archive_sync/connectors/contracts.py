@@ -351,7 +351,9 @@ def parse_manifest(payload: Mapping[str, object]) -> ConnectorManifest:
         raise IncompatibleContractError(f"freshness_capability must be one of {sorted(FRESHNESS_CAPABILITIES)}")
     if freshness == "live":
         raise IncompatibleContractError("import-only connectors must not declare live freshness")
-    delete_policy = _require_nonempty(_as_str(payload.get("delete_policy"), field="delete_policy"), field="delete_policy")
+    delete_policy = _require_nonempty(
+        _as_str(payload.get("delete_policy"), field="delete_policy"), field="delete_policy"
+    )
     if delete_policy not in DELETE_POLICIES:
         raise IncompatibleContractError(f"delete_policy must be one of {sorted(DELETE_POLICIES)}")
     retention = _require_nonempty(
@@ -364,7 +366,9 @@ def parse_manifest(payload: Mapping[str, object]) -> ConnectorManifest:
     if batch_limit <= 0:
         raise IncompatibleContractError("batch_limit must be a positive integer")
     return ConnectorManifest(
-        connector_id=_require_nonempty(_as_str(payload.get("connector_id"), field="connector_id"), field="connector_id"),
+        connector_id=_require_nonempty(
+            _as_str(payload.get("connector_id"), field="connector_id"), field="connector_id"
+        ),
         connector_version=_require_nonempty(
             _as_str(payload.get("connector_version"), field="connector_version"),
             field="connector_version",
@@ -375,14 +379,18 @@ def parse_manifest(payload: Mapping[str, object]) -> ConnectorManifest:
         min_card_contract_version=min_card,
         max_card_contract_version=max_card,
         supported_sources=_as_str_tuple(payload.get("supported_sources"), field="supported_sources"),
-        supported_account_scopes=_as_str_tuple(payload.get("supported_account_scopes"), field="supported_account_scopes"),
+        supported_account_scopes=_as_str_tuple(
+            payload.get("supported_account_scopes"), field="supported_account_scopes"
+        ),
         emitted_card_types=emitted,
         deterministic_fields_owned=_as_str_tuple(
             payload.get("deterministic_fields_owned"),
             field="deterministic_fields_owned",
         ),
         identity_recipe=identity_recipe,
-        cursor_schema=_require_nonempty(_as_str(payload.get("cursor_schema"), field="cursor_schema"), field="cursor_schema"),
+        cursor_schema=_require_nonempty(
+            _as_str(payload.get("cursor_schema"), field="cursor_schema"), field="cursor_schema"
+        ),
         cursor_version=_require_nonempty(
             _as_str(payload.get("cursor_version"), field="cursor_version"),
             field="cursor_version",

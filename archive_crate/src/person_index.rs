@@ -10,6 +10,7 @@ use serde_json::{Map, Value as JsonValue};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::canon;
 use crate::walk;
 
 // --- normalization (archive_vault.identity + identity_resolver) ------------------------
@@ -26,29 +27,12 @@ pub(crate) fn normalize_person_name(name: &str) -> String {
 }
 
 pub(crate) fn normalize_email(raw: &str) -> String {
-    raw.trim().to_lowercase()
+    canon::normalize_email(raw)
 }
 
-/// Matches `archive_vault.identity._normalize_identifier(prefix="phone", ...)`.
+/// Matches `archive_vault.canon.phone.canonical`.
 pub(crate) fn normalize_phone(raw: &str) -> String {
-    let raw = raw.trim();
-    if raw.is_empty() {
-        return String::new();
-    }
-    let digits: String = raw.chars().filter(|c| c.is_ascii_digit()).collect();
-    if digits.is_empty() {
-        return String::new();
-    }
-    if raw.starts_with('+') {
-        return format!("+{digits}");
-    }
-    if digits.len() == 11 && digits.starts_with('1') {
-        return format!("+{digits}");
-    }
-    if digits.len() == 10 {
-        return format!("+1{digits}");
-    }
-    digits
+    canon::normalize_phone(raw)
 }
 
 pub(crate) fn social_lower(raw: &str) -> String {

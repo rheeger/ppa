@@ -14,9 +14,9 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Literal
 
+from archive_engine.contracts import OutputReceipt, OutputRevision
 from archive_engine.errors import IncompatibleStateError
 from archive_vault.change_journal import ChangeJournal, FaultHook, file_revision
-from archive_engine.contracts import OutputReceipt, OutputRevision
 from archive_vault.decisions import (
     KIND_CLEAR_OVERRIDE,
     KIND_FIELD_OVERRIDE,
@@ -33,8 +33,8 @@ from archive_vault.decisions import (
     append_decision,
     append_decision_payload,
     build_field_override,
-    list_decisions,
     latest_identity_merge,
+    list_decisions,
     list_identity_decisions,
     new_decision_id,
     open_conflicts_for,
@@ -42,11 +42,6 @@ from archive_vault.decisions import (
     update_decision_payload,
     value_hash,
     values_equivalent,
-)
-from archive_vault.provenance import (
-    PROVENANCE_METHOD_HUMAN,
-    ProvenanceEntry,
-    merge_provenance,
 )
 from archive_vault.identity import (
     REDIRECT_UID_PREFIX,
@@ -57,6 +52,11 @@ from archive_vault.identity import (
     person_alias_pairs,
     revert_alias_moves,
     save_identity_map,
+)
+from archive_vault.provenance import (
+    PROVENANCE_METHOD_HUMAN,
+    ProvenanceEntry,
+    merge_provenance,
 )
 from archive_vault.schema import validate_card_strict
 from archive_vault.vault import iter_note_paths, read_note, read_note_by_uid, write_card
@@ -208,7 +208,9 @@ def _latest_card_mutation(vault: str | Path, uid: str) -> str:
     return records[-1].mutation_id if records else ""
 
 
-def _write_corrected_card(resolved: _ResolvedCard, vault: Path, data: dict[str, Any], provenance: dict[str, ProvenanceEntry]) -> None:
+def _write_corrected_card(
+    resolved: _ResolvedCard, vault: Path, data: dict[str, Any], provenance: dict[str, ProvenanceEntry]
+) -> None:
     data = dict(data)
     data["updated"] = _utc_date()
     card = validate_card_strict(data)
@@ -516,7 +518,9 @@ def _rewrite_people(people: list[Any], loser_link: str, winner_link: str) -> lis
     for item in people:
         text = str(item)
         slug = text.removeprefix("[[").removesuffix("]]")
-        replacement = winner_link if text in {loser_link, f"[[{loser_slug}]]", loser_slug} or slug == loser_slug else text
+        replacement = (
+            winner_link if text in {loser_link, f"[[{loser_slug}]]", loser_slug} or slug == loser_slug else text
+        )
         if replacement in seen:
             continue
         seen.add(replacement)
@@ -524,7 +528,9 @@ def _rewrite_people(people: list[Any], loser_link: str, winner_link: str) -> lis
     return rewritten
 
 
-def identity_receipts(vault: str | Path, payload: dict[str, Any], *, status: str = "completed") -> tuple[OutputReceipt, ...]:
+def identity_receipts(
+    vault: str | Path, payload: dict[str, Any], *, status: str = "completed"
+) -> tuple[OutputReceipt, ...]:
     """P03-adoptable receipts for UIDs touched by an identity decision."""
 
     root = Path(vault)
@@ -542,7 +548,11 @@ def identity_receipts(vault: str | Path, payload: dict[str, Any], *, status: str
             outputs.append(OutputRevision(uid=uid, revision=file_revision(root / rel)))
     if not outputs:
         return ()
-    receipt_status = status if status in {"completed", "pending", "failed", "skipped", "blocked", "dependency_unmet"} else "completed"
+    receipt_status = (
+        status
+        if status in {"completed", "pending", "failed", "skipped", "blocked", "dependency_unmet"}
+        else "completed"
+    )
     return (
         OutputReceipt(
             processor=IDENTITY_PROCESSOR,
@@ -582,7 +592,9 @@ def merge_identities(
             field="identity",
             action="merge_identities",
             decision_mutation_id=str(existing.get("decision_mutation_id") or ""),
-            card_mutation_id=str((existing.get("card_mutation_ids") or [""])[0] if existing.get("card_mutation_ids") else ""),
+            card_mutation_id=str(
+                (existing.get("card_mutation_ids") or [""])[0] if existing.get("card_mutation_ids") else ""
+            ),
             before_revision=str(existing.get("winner_revision") or ""),
             after_revision=file_revision(root / str(existing.get("winner_rel_path") or "")),
             receipts=receipts,
@@ -602,7 +614,9 @@ def merge_identities(
         added = _list_added(list(winner_data.get(field_name) or []), list(loser.frontmatter.get(field_name) or []))
         if added:
             merged_values[field_name] = added
-            winner_data[field_name] = _union(list(winner_data.get(field_name) or []), list(loser.frontmatter.get(field_name) or []))
+            winner_data[field_name] = _union(
+                list(winner_data.get(field_name) or []), list(loser.frontmatter.get(field_name) or [])
+            )
     for field_name in ("company", "title", "linkedin", "github"):
         if not winner_data.get(field_name) and loser.frontmatter.get(field_name):
             merged_values[field_name] = loser.frontmatter.get(field_name)
@@ -616,7 +630,13 @@ def merge_identities(
         moves.append({"key": key, "from": map_entries.get(key, loser_link), "to": winner_link})
     moves.append({"key": f"{REDIRECT_UID_PREFIX}{loser_uid}", "from": "", "to": winner_uid})
     moves.append({"key": f"{REDIRECT_WIKILINK_PREFIX}{loser_link}", "from": "", "to": winner_link})
-    moves.append({"key": f"{UID_ALIAS_PREFIX}{loser_uid}", "from": map_entries.get(f"{UID_ALIAS_PREFIX}{loser_uid}", ""), "to": winner_link})
+    moves.append(
+        {
+            "key": f"{UID_ALIAS_PREFIX}{loser_uid}",
+            "from": map_entries.get(f"{UID_ALIAS_PREFIX}{loser_uid}", ""),
+            "to": winner_link,
+        }
+    )
 
     payload = {
         "decision_id": new_decision_id(),
@@ -670,7 +690,9 @@ def merge_identities(
         method=PROVENANCE_METHOD_HUMAN,
         input_hash=value_hash({"winner_uid": winner_uid, "loser_uid": loser_uid}),
     )
-    write_card(root, loser.rel_path, validate_card_strict(stub), body=f"Redirected to {winner_link}\n", provenance=stub_prov)
+    write_card(
+        root, loser.rel_path, validate_card_strict(stub), body=f"Redirected to {winner_link}\n", provenance=stub_prov
+    )
 
     rewritten_refs: list[dict[str, Any]] = []
     for ref in references:
@@ -686,7 +708,7 @@ def merge_identities(
     mutation_ids = [
         _latest_card_mutation(root, winner_uid),
         _latest_card_mutation(root, loser_uid),
-        *[ _latest_card_mutation(root, str(ref.get("uid") or "")) for ref in rewritten_refs if ref.get("uid") ],
+        *[_latest_card_mutation(root, str(ref.get("uid") or "")) for ref in rewritten_refs if ref.get("uid")],
     ]
     stored, _ = update_decision_payload(
         root,
@@ -779,9 +801,9 @@ def undo_identity(
 
     if (root / loser_rel).is_file():
         current_loser, _, _ = read_note(root, loser_rel)
-        if current_loser.get("redirect_to") not in {"", merge.get("winner_uid")} and current_loser.get("uid") == merge.get(
-            "loser_uid"
-        ):
+        if current_loser.get("redirect_to") not in {"", merge.get("winner_uid")} and current_loser.get(
+            "uid"
+        ) == merge.get("loser_uid"):
             if str(current_loser.get("redirect_to") or "") != str(merge.get("winner_uid") or ""):
                 conflicts.append(
                     {
@@ -801,10 +823,16 @@ def undo_identity(
         current_val = winner_now.get(field_name)
         if isinstance(added, list):
             if not isinstance(current_val, list):
-                conflicts.append({"uid": merge.get("winner_uid"), "field": field_name, "reason": "winner field shape changed"})
+                conflicts.append(
+                    {"uid": merge.get("winner_uid"), "field": field_name, "reason": "winner field shape changed"}
+                )
                 continue
             remaining = [item for item in current_val if item not in added]
-            extra = [item for item in current_val if item not in (winner_preimage.get("frontmatter") or {}).get(field_name, []) and item not in added]
+            extra = [
+                item
+                for item in current_val
+                if item not in (winner_preimage.get("frontmatter") or {}).get(field_name, []) and item not in added
+            ]
             if extra:
                 conflicts.append(
                     {
@@ -922,7 +950,9 @@ def undo_identity(
     save_identity_map(root, revert_alias_moves(load_identity_map(root), list(merge.get("aliases_moved") or [])))
     final_status = STATUS_PARTIAL if conflicts else STATUS_CLEARED
     update_decision_payload(root, str(merge["decision_id"]), {"status": STATUS_CLEARED}, source="identity")
-    update_decision_payload(root, stored["decision_id"], {"status": final_status, "conflicts": conflicts}, source="identity")
+    update_decision_payload(
+        root, stored["decision_id"], {"status": final_status, "conflicts": conflicts}, source="identity"
+    )
     receipts = identity_receipts(root, {**merge, **stored})
     return CorrectionResult(
         decision_id=str(stored["decision_id"]),
@@ -945,6 +975,3 @@ def undo_identity(
             mutation_id=_latest_card_mutation(root, str(merge.get("loser_uid") or "")),
         ),
     )
-
-
-

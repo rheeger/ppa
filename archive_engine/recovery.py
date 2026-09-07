@@ -125,9 +125,7 @@ def require_encryption_tools() -> dict[str, Any]:
 
     cap = encryption_capability()
     if not cap["openssl_available"]:
-        raise EncryptionUnavailableError(
-            "openssl is required for encrypted backup; refusing plaintext fallback"
-        )
+        raise EncryptionUnavailableError("openssl is required for encrypted backup; refusing plaintext fallback")
     if not cap["sha256_command"]:
         raise EncryptionUnavailableError(
             "sha256sum or shasum is required for backup integrity; refusing plaintext fallback"
@@ -198,9 +196,7 @@ def assert_new_restore_root(
             forbidden.append((label, raw))
     for label, root in forbidden:
         if _overlaps(dest_resolved, root):
-            raise ActiveRootRestoreError(
-                f"restore destination {dest_resolved} overlaps {label} {root}"
-            )
+            raise ActiveRootRestoreError(f"restore destination {dest_resolved} overlaps {label} {root}")
     return dest_resolved
 
 
@@ -370,7 +366,9 @@ def _latest_artifact_dir(backup_base: Path) -> Path:
     raise MissingBackupError(f"no backup artifacts under {backup_base}")
 
 
-def discover_bundle(backup_base: Path | str | None = None, *, archive_file: Path | str | None = None) -> dict[str, Path]:
+def discover_bundle(
+    backup_base: Path | str | None = None, *, archive_file: Path | str | None = None
+) -> dict[str, Path]:
     if archive_file:
         archive = Path(archive_file)
         parent = archive.parent
@@ -437,9 +435,7 @@ def create_encrypted_bundle(
         env=env,
     )
     if result.returncode != 0:
-        raise RecoveryError(
-            f"ppa-backup-encrypt failed: {(result.stderr or result.stdout or '').strip()}"
-        )
+        raise RecoveryError(f"ppa-backup-encrypt failed: {(result.stderr or result.stdout or '').strip()}")
     bundle = discover_bundle(backup_path)
     if not bundle["archive"].is_file():
         raise RecoveryError("encrypt script did not produce an encrypted archive")

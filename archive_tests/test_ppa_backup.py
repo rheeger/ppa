@@ -98,4 +98,8 @@ def test_hfa_backup_creates_encrypted_artifacts_only(tmp_vault, tmp_path):
         env={**env, "PPA_RESTORE_DIR": str(tmp_vault)},
     )
     assert blocked.returncode != 0
-    assert "active root" in blocked.stderr.lower() or "overlaps" in blocked.stderr.lower() or "not empty" in blocked.stderr.lower()
+    assert (
+        "active root" in blocked.stderr.lower()
+        or "overlaps" in blocked.stderr.lower()
+        or "not empty" in blocked.stderr.lower()
+    )

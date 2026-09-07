@@ -205,9 +205,7 @@ def test_hygiene_rollback_kit_is_decision_critical(tmp_path: Path) -> None:
     (kit / "Email/spam.md").parent.mkdir(parents=True)
     (kit / "Email/spam.md").write_text("preimage\n", encoding="utf-8")
     manifest = generate_manifest(vault)
-    record = next(
-        item for item in manifest["artifacts"] if item["rel_path"].endswith("Email/spam.md")
-    )
+    record = next(item for item in manifest["artifacts"] if item["rel_path"].endswith("Email/spam.md"))
     assert record["classification"] == "decision_critical"
     assert record["presence"] == "required"
     validate_manifest(manifest, vault)

@@ -13,8 +13,8 @@ from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 from urllib import error, request
 
-from archive_engine.errors import EgressDeniedError
 from archive_engine.egress import authorize_request, destination_from_url, guarded_urlopen
+from archive_engine.errors import EgressDeniedError
 from archive_engine.redaction import redact_text
 from archive_vault.provenance import compute_input_hash
 
@@ -110,7 +110,9 @@ def _post_json(
         except (OSError, error.URLError) as exc:
             if attempt < _MAX_RETRIES:
                 wait = _RETRY_BASE_WAIT * (2**attempt) + _random.uniform(0.5, 2.0)
-                _llm_log.info("network retry %d/%d in %.1fs: %s", attempt + 1, _MAX_RETRIES, wait, redact_text(str(exc)))
+                _llm_log.info(
+                    "network retry %d/%d in %.1fs: %s", attempt + 1, _MAX_RETRIES, wait, redact_text(str(exc))
+                )
                 time.sleep(wait)
                 continue
             _llm_log.warning("_post_json failed url=%s: %s", redact_text(url), redact_text(str(exc)))
@@ -377,7 +379,9 @@ class OllamaProvider:
             "think": False,
             "options": {"temperature": 0.0, "num_predict": max_tokens},
         }
-        response = _post_json(url, {"Content-Type": "application/json"}, payload, timeout=_LLM_HTTP_TIMEOUT, destination="ollama")
+        response = _post_json(
+            url, {"Content-Type": "application/json"}, payload, timeout=_LLM_HTTP_TIMEOUT, destination="ollama"
+        )
         content = _ollama_native_content(response)
         return content.strip() or None
 

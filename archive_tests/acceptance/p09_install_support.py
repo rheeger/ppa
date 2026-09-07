@@ -75,7 +75,9 @@ def install_isolated(
     assert_owned_test_root(dest)
     assert_outside_repo(dest, repo)
     venv_dir = dest / "venv"
-    creator = python or ("/opt/homebrew/bin/python3.12" if Path("/opt/homebrew/bin/python3.12").is_file() else sys.executable)
+    creator = python or (
+        "/opt/homebrew/bin/python3.12" if Path("/opt/homebrew/bin/python3.12").is_file() else sys.executable
+    )
     subprocess.run([creator, "-m", "venv", str(venv_dir)], check=True)
     python = venv_dir / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     ppa = venv_dir / ("Scripts/ppa.exe" if os.name == "nt" else "bin/ppa")

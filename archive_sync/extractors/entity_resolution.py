@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import random
-import re
 import warnings
 from dataclasses import dataclass, field
 from datetime import date
@@ -535,13 +534,9 @@ def run_entity_resolution(
 
 
 def _normalize_place_name(name: str) -> str:
-    n = (name or "").lower().strip()
-    if n.startswith("the "):
-        n = n[4:]
-    n = re.sub(r"\bst\b\.?", "street", n)
-    n = re.sub(r"\bave\b\.?", "avenue", n)
-    n = re.sub(r"\s+", " ", n)
-    return n.strip()
+    from archive_vault.canon.place import canonical as _place
+
+    return _place(name, profile="place_geo")
 
 
 def _city_from_address(addr: str) -> str:

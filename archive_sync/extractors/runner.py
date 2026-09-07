@@ -300,9 +300,7 @@ class ExtractionRunner:
             if note_content_matches(out_root, rel_out, er.card, er.body):
                 with lock:
                     metrics.skipped_existing += 1
-                    metrics.unchanged.append(
-                        ExtractionOutput(uid, str(er.card.uid), revision, rel_out, "unchanged")
-                    )
+                    metrics.unchanged.append(ExtractionOutput(uid, str(er.card.uid), revision, rel_out, "unchanged"))
                 self._bump(lock, metrics, eid, "skipped", 1)
                 continue
             # Staging runs: skip if an identical card already exists in the vault (post-promotion idempotency).

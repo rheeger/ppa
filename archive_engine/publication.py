@@ -907,7 +907,9 @@ def publish_snapshot(
             except IncompatibleContractError:
                 chain_depth = 2
                 live_vectors = 0
-            if should_compact(chain_depth=chain_depth, delta_vectors=len(snapshot.embeddings), live_vectors=live_vectors):
+            if should_compact(
+                chain_depth=chain_depth, delta_vectors=len(snapshot.embeddings), live_vectors=live_vectors
+            ):
                 if snapshot.dirty_uids:
                     logger.info(
                         "serving_index_publish compact deferred; delta snapshot is not a full universe parent=%s",

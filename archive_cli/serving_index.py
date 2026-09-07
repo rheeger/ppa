@@ -202,25 +202,33 @@ def load_serving_export_maps(conn: Any, schema: str, uids: list[str] | None = No
     orgs: dict[str, list[str]] = {}
     aliases: dict[str, list[str]] = {}
     emails: dict[str, list[str]] = {}
+    phones: dict[str, list[str]] = {}
     external_ids: dict[str, list[str]] = {}
     corpus_states: dict[str, str] = {}
 
     people_clause, people_params = _uid_clause("card_uid", uids)
     map_params = people_params or None
-    for row in _optional_rows(conn, f"SELECT card_uid, person FROM {schema}.card_people WHERE TRUE{people_clause}", map_params):
+    for row in _optional_rows(
+        conn, f"SELECT card_uid, person FROM {schema}.card_people WHERE TRUE{people_clause}", map_params
+    ):
         people.setdefault(str(row["card_uid"]), []).append(str(row["person"]))
-    for row in _optional_rows(conn, f"SELECT card_uid, source FROM {schema}.card_sources WHERE TRUE{people_clause}", map_params):
+    for row in _optional_rows(
+        conn, f"SELECT card_uid, source FROM {schema}.card_sources WHERE TRUE{people_clause}", map_params
+    ):
         sources.setdefault(str(row["card_uid"]), []).append(str(row["source"]))
-    for row in _optional_rows(conn, f"SELECT card_uid, org FROM {schema}.card_orgs WHERE TRUE{people_clause}", map_params):
+    for row in _optional_rows(
+        conn, f"SELECT card_uid, org FROM {schema}.card_orgs WHERE TRUE{people_clause}", map_params
+    ):
         orgs.setdefault(str(row["card_uid"]), []).append(str(row["org"]))
     for row in _optional_rows(
         conn,
-        f"SELECT card_uid, aliases_json, emails_json FROM {schema}.people WHERE TRUE{people_clause}",
+        f"SELECT card_uid, aliases_json, emails_json, phones_json FROM {schema}.people WHERE TRUE{people_clause}",
         map_params,
     ):
         uid = str(row["card_uid"])
         aliases[uid] = _as_str_list(row.get("aliases_json"))
         emails[uid] = _as_str_list(row.get("emails_json"))
+        phones[uid] = _as_str_list(row.get("phones_json"))
     for row in _optional_rows(
         conn,
         f"SELECT card_uid, external_id FROM {schema}.external_ids WHERE TRUE{people_clause}",
@@ -256,6 +264,7 @@ def load_serving_export_maps(conn: Any, schema: str, uids: list[str] | None = No
         "orgs": orgs,
         "aliases": aliases,
         "emails": emails,
+        "phones": phones,
         "external_ids": external_ids,
         "corpus_states": corpus_states,
         "corpus_state_table": corpus_state_table,
@@ -289,6 +298,7 @@ def build_serving_card(row: Any, maps: dict[str, Any]) -> dict[str, Any]:
         "orgs": list(maps["orgs"].get(uid, [])),
         "aliases": list(maps["aliases"].get(uid, [])),
         "emails": list(maps["emails"].get(uid, [])),
+        "phones": list(maps.get("phones", {}).get(uid, [])),
         "external_ids": list(dict.fromkeys(maps["external_ids"].get(uid, []))),
         "corpus_state": state,
         "retrieval_weight": serving_retrieval_weight(state),
@@ -403,6 +413,7 @@ def load_serving_edges(conn: Any, schema: str, uids: list[str] | None = None) ->
         if rec["source_uid"] and rec["target_uid"]:
             edges.append(rec)
     return edges
+
 
 _LOCK = threading.RLock()
 _HANDLES: dict[str, ServingIndexHandle] = {}
@@ -751,11 +762,7 @@ def get_serving_handle(vault: Path) -> ServingIndexHandle:
             existing = None
         else:
             existing = _HANDLES.get(key)
-        if (
-            existing is not None
-            and existing.index_root.resolve() == root.resolve()
-            and existing.generation_id == gid
-        ):
+        if existing is not None and existing.index_root.resolve() == root.resolve() and existing.generation_id == gid:
             _HANDLE = existing
             return existing
         if existing is not None:
@@ -1101,7 +1108,9 @@ def _export_warehouse_snapshot(
             _log_export_progress(log, "cards", len(cards), card_total, t_cards, every=every)
         _log_export_progress(log, "cards", len(cards), card_total or len(cards), t_cards, every=every, force=True)
         if incremental:
-            chunk_sql = f"SELECT chunk_key, card_uid, chunk_type, chunk_index FROM {schema}.chunks WHERE card_uid = ANY(%s)"
+            chunk_sql = (
+                f"SELECT chunk_key, card_uid, chunk_type, chunk_index FROM {schema}.chunks WHERE card_uid = ANY(%s)"
+            )
             chunk_params: tuple[Any, ...] | None = (dirty_uids,)
             chunk_total = _query_count(
                 conn,

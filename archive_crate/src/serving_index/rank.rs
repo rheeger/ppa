@@ -74,9 +74,12 @@ pub fn exact_flags(card: &CardMeta, query: &str) -> (bool, i32, i32, i32, i32) {
     let slug = i32::from(card.slug.to_lowercase() == q);
     let summary = i32::from(card.summary.to_lowercase() == q);
     let person = i32::from(
-        card.people.iter().any(|p| p.to_lowercase() == q)
-            || card.aliases.iter().any(|p| p.to_lowercase() == q)
-            || card.emails.iter().any(|p| p.to_lowercase() == q),
+        card.r#type == "person"
+            && (card.aliases.iter().any(|p| p.to_lowercase() == q)
+                || card.emails.iter().any(|p| p.to_lowercase() == q)
+                || crate::canon::phone_alias_forms(trimmed).iter().any(|form| {
+                    card.phones.iter().any(|phone| crate::canon::phone_alias_forms(phone).contains(form))
+                })),
     );
     let external = i32::from(card.external_ids.iter().any(|ext| {
         ext == trimmed || ext.eq_ignore_ascii_case(trimmed)
@@ -278,6 +281,7 @@ mod tests {
     fn card(state: &str, weight: Option<f64>) -> CardMeta {
         CardMeta {
             card_uid: "hfa-person-uid".into(),
+            r#type: "person".into(),
             slug: "jane-smith".into(),
             summary: "Jane Smith".into(),
             corpus_state: state.into(),
@@ -305,6 +309,9 @@ mod tests {
         assert!(exact_flags(&c, "ext-99").0);
         assert!(exact_flags(&c, "jane@example.test").0);
         assert!(!exact_flags(&c, "nope").0);
+        let mut email = c.clone();
+        email.r#type = "email_message".into();
+        assert!(!exact_flags(&email, "jane@example.test").0);
     }
 
     #[test]

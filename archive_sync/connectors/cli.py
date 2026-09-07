@@ -105,16 +105,13 @@ def quality_report(
             if proposal.card.get(field) not in ("", [], None, False):
                 inferred.append(f"{proposal.card.get('uid')}:{field}")
         methods = {
-            field: str((proposal.provenance.get(field) or {}).get("method") or "")
-            for field in proposal.provenance
+            field: str((proposal.provenance.get(field) or {}).get("method") or "") for field in proposal.provenance
         }
         for field, method in methods.items():
             if method not in {"", "deterministic", "human"} and field in owned:
                 inferred.append(f"{proposal.card.get('uid')}:{field}:method={method}")
     expected_skip = [
-        item.get("provider_object_id")
-        for item in fixtures.get("negatives") or []
-        if isinstance(item, Mapping)
+        item.get("provider_object_id") for item in fixtures.get("negatives") or [] if isinstance(item, Mapping)
     ]
     emitted_ids = [str(proposal.identity.provider_object_id) for proposal in result.proposals]
     false_promotions = [item for item in expected_skip if item in emitted_ids]
@@ -238,7 +235,9 @@ def _identity(vault: Path, archive_id: str) -> ArchiveIdentity:
 
 
 def main(argv: list[str] | None = None) -> int:
-    logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(asctime)s [%(name)s] %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, stream=sys.stderr, format="%(asctime)s [%(name)s] %(levelname)s %(message)s"
+    )
     args = build_parser().parse_args(argv)
     if args.command == "legacy-list":
         payload = remaining_legacy_adapters()

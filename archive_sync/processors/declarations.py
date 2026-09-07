@@ -353,9 +353,7 @@ def topological_order(
                 if dep.processor_key in by_key:
                     visit(dep.processor_key)
                 elif require_declared_deps:
-                    raise ProcessorGraphError(
-                        f"unknown dependency {dep.processor_key} from {key}"
-                    )
+                    raise ProcessorGraphError(f"unknown dependency {dep.processor_key} from {key}")
         visiting.remove(key)
         visited.add(key)
         order.append(key)

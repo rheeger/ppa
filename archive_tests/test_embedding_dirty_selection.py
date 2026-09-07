@@ -312,9 +312,7 @@ def test_incompatible_spec_does_not_reuse_stale_vectors(
 
 
 @pytest.mark.integration
-def test_limit_is_budget_after_allowlist(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pgvector_dsn: str
-) -> None:
+def test_limit_is_budget_after_allowlist(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pgvector_dsn: str) -> None:
     model = "p03b-hash"
     index = _make_index(tmp_path, monkeypatch, pgvector_dsn, model=model)
     _seed_dirty_and_backlog(index)

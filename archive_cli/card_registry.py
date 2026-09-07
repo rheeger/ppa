@@ -1210,7 +1210,9 @@ def materializer_registry_payload() -> dict:
 def dump_registry_json(payload: dict | None = None) -> str:
     """Canonical native-registry serialization (indent=2, sorted keys, trailing newline)."""
 
-    return json.dumps(payload if payload is not None else materializer_registry_payload(), indent=2, sort_keys=True) + "\n"
+    return (
+        json.dumps(payload if payload is not None else materializer_registry_payload(), indent=2, sort_keys=True) + "\n"
+    )
 
 
 def validate_card_type_registrations() -> None:
@@ -1238,9 +1240,7 @@ def validate_card_type_registrations() -> None:
                 f"spec={spec.typed_projection} registration={reg.projection_table}"
             )
         if projection is None or projection.table_name != reg.projection_table:
-            raise ValueError(
-                f"projection registry mismatch card_type={card_type} table={reg.projection_table}"
-            )
+            raise ValueError(f"projection registry mismatch card_type={card_type} table={reg.projection_table}")
         unknown_quality = [name for name in reg.quality_critical_fields if name not in fields]
         if unknown_quality:
             raise ValueError(f"unknown quality field card_type={card_type} fields={unknown_quality}")

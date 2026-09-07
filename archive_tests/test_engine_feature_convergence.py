@@ -27,10 +27,10 @@ from archive_sync.connectors.sample import SAMPLE_CONNECTOR_ID
 from archive_tests.test_conversation_bursts import (
     ANSWER,
     ANSWER_MESSAGE_ID,
+    _msg,
     burst_chunks,
     long_thread_messages,
     thread_frontmatter,
-    _msg,
 )
 from archive_tests.test_engine_boundaries import assert_engine_import_boundaries
 from archive_vault.provenance import ProvenanceEntry
@@ -60,11 +60,7 @@ class MemoryIndex:
 
     def search(self, query: str, limit: int = 20, **_kwargs):
         needle = (query or "").casefold()
-        hits = [
-            dict(row)
-            for row in self.rows
-            if not needle or needle in json.dumps(row).casefold()
-        ]
+        hits = [dict(row) for row in self.rows if not needle or needle in json.dumps(row).casefold()]
         return hits[:limit]
 
     def query_cards(self, **kwargs):
@@ -192,7 +188,13 @@ def _thread_rows() -> list[dict]:
     ]
 
 
-def _store(vault: Path, *, serving: MemoryServing | None = None, access: AccessContext | None = None, attach_bursts: bool = True):
+def _store(
+    vault: Path,
+    *,
+    serving: MemoryServing | None = None,
+    access: AccessContext | None = None,
+    attach_bursts: bool = True,
+):
     rows = list(serving.rows) if serving is not None else _thread_rows()
     index = MemoryIndex(rows)
     store = DefaultArchiveStore(vault=vault, index=index, access=access)

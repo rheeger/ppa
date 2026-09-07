@@ -114,7 +114,10 @@ def run_p01_fusion(_runtime: object) -> dict[str, Any]:
         reranker = HttpReranker(endpoint=f"http://{host}:{port}/rerank")
         scores = reranker.rerank("q", [{"card_uid": "a", "summary": "a"}, {"card_uid": "b", "summary": "b"}])
         ordered = apply_http_rerank_order(
-            [{"card_uid": "a", "score": 1.0, "exact_match": False}, {"card_uid": "b", "score": 0.2, "exact_match": False}],
+            [
+                {"card_uid": "a", "score": 1.0, "exact_match": False},
+                {"card_uid": "b", "score": 0.2, "exact_match": False},
+            ],
             {item.card_uid: item for item in scores},
         )
         if [row["card_uid"] for row in ordered] != ["b", "a"]:

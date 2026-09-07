@@ -10,10 +10,8 @@ import pytest
 
 from archive_cli.engine_factory import ContainedCanonicalReader, trusted_local_access
 from archive_engine.contracts import ArchiveIdentity
-from archive_engine.errors import IncompatibleContractError
 from archive_engine.service import ArchiveEngineService
 from archive_sync.connectors.cli import (
-    SDK_MIGRATED_ADAPTERS,
     check_migrated_manifests,
     check_package,
     load_manifest,

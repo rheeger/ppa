@@ -14,7 +14,22 @@ formatting. The commands layer makes them "layers" over a shared foundation.
 
 from __future__ import annotations
 
-from . import admin, analytics, confidence, configuration, evidence, explain, graph, query, read, recovery, search, seed_links, setup, status
+from . import (
+    admin,
+    analytics,
+    confidence,
+    configuration,
+    evidence,
+    explain,
+    graph,
+    query,
+    read,
+    recovery,
+    search,
+    seed_links,
+    setup,
+    status,
+)
 
 __all__ = [
     "admin",

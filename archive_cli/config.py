@@ -125,13 +125,7 @@ def load_archive_config(
     allow_cwd_discovery: bool | None = None,
 ) -> ArchiveConfig:
     bound = current_instance_config()
-    if (
-        bound is not None
-        and explicit_path is None
-        and instance_dir is None
-        and not cli_overrides
-        and environ is None
-    ):
+    if bound is not None and explicit_path is None and instance_dir is None and not cli_overrides and environ is None:
         return _archive_config_from_instance(bound)
 
     discover = True if allow_cwd_discovery is None else allow_cwd_discovery

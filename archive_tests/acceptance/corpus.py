@@ -193,7 +193,12 @@ def _story_cards() -> list[dict[str, Any]]:
             "Entities/Organizations/p04-harbor-loft.md",
             f"Harbor Loft Collective hosts the labeled NYC stay. {_token('ORG-LOFT')}",
             ["same_trip", "same_charge"],
-            {"summary": "Harbor Loft Collective", "name": "Harbor Loft Collective", "org_type": "lodging", "domain": "harbor-loft.example.test"},
+            {
+                "summary": "Harbor Loft Collective",
+                "name": "Harbor Loft Collective",
+                "org_type": "lodging",
+                "domain": "harbor-loft.example.test",
+            },
         ),
         _card(
             _uid("organization", "payr0001"),
@@ -201,7 +206,12 @@ def _story_cards() -> list[dict[str, Any]]:
             "Entities/Organizations/p04-northwind-ledger.md",
             f"Northwind Ledger Co is the namesake employer. {_token('ORG-PAY')}",
             ["namesake"],
-            {"summary": "Northwind Ledger Co", "name": "Northwind Ledger Co", "org_type": "employer", "domain": "northwind-ledger.example.test"},
+            {
+                "summary": "Northwind Ledger Co",
+                "name": "Northwind Ledger Co",
+                "org_type": "employer",
+                "domain": "northwind-ledger.example.test",
+            },
         ),
         _card(
             _uid("place", "loft0001"),
@@ -209,7 +219,13 @@ def _story_cards() -> list[dict[str, Any]]:
             "Entities/Places/p04-harbor-loft-nyc.md",
             f"Harbor Loft NYC place card. {_token('PLACE-LOFT')}",
             ["same_trip"],
-            {"summary": "Harbor Loft NYC", "name": "Harbor Loft NYC", "city": "New York", "country": "US", "place_type": "lodging"},
+            {
+                "summary": "Harbor Loft NYC",
+                "name": "Harbor Loft NYC",
+                "city": "New York",
+                "country": "US",
+                "place_type": "lodging",
+            },
         ),
         _card(
             auth_thread,
@@ -1393,7 +1409,10 @@ def materialize_corpus(vault: Path, *, owned_root: Path) -> dict[str, Any]:
 
 def collect_corpus_text(cards: list[dict[str, Any]] | None = None) -> str:
     cards = cards or build_cards()
-    parts = [canonical_dumps(frozen_payloads()[name]) for name in ("corpus_manifest", "expected_queries", "expected_relations")]
+    parts = [
+        canonical_dumps(frozen_payloads()[name])
+        for name in ("corpus_manifest", "expected_queries", "expected_relations")
+    ]
     for card in cards:
         parts.append(card["uid"])
         parts.append(card["rel_path"])

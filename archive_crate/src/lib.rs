@@ -2,6 +2,7 @@
 
 use pyo3::prelude::*;
 
+mod canon;
 mod bridge;
 mod cache;
 mod cache_build;

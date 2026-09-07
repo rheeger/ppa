@@ -25,7 +25,6 @@ except ImportError:  # pragma: no cover
             raise RuntimeError("mcp package is required to run ppa")
 
 
-from archive_engine.redaction import redact_text
 from archive_engine.access import (
     PROFILE_LABELS,
     TOOL_PROFILES,
@@ -34,6 +33,7 @@ from archive_engine.access import (
     resolve_access_context,
     tool_permitted,
 )
+from archive_engine.redaction import redact_text
 
 from .commands import admin, attachments, explain
 from .commands import analytics as analytics_cmd
@@ -59,6 +59,7 @@ def _delegated_store():
     """CLI/MCP share the instance facade. Do not construct a second engine."""
 
     return resolve_store()
+
 
 _log = logging.getLogger("ppa.server")
 
@@ -1244,7 +1245,15 @@ def archive_vector_search(
             end_date=end_date,
         )
         rows = result["rows"]
-        out = fmt.format_vector_search(model, version, rows, confidence=str(result.get("confidence", "")), reason=str(result.get("confidence_reason", "")), coverage=str((result.get("evidence") or {}).get("coverage", "")), freshness=str((result.get("evidence") or {}).get("freshness", "")))
+        out = fmt.format_vector_search(
+            model,
+            version,
+            rows,
+            confidence=str(result.get("confidence", "")),
+            reason=str(result.get("confidence_reason", "")),
+            coverage=str((result.get("evidence") or {}).get("coverage", "")),
+            freshness=str((result.get("evidence") or {}).get("freshness", "")),
+        )
         _log_tool_done("archive_vector_search", t0, result_count=len(rows))
         return out
     except PpaError as exc:
@@ -1334,7 +1343,14 @@ def archive_hybrid_search(
             end_date=end_date,
         )
         rows = payload["rows"]
-        out = fmt.format_hybrid_search(query, rows, confidence=str(payload.get("confidence", "")), reason=str(payload.get("confidence_reason", "")), coverage=str((payload.get("evidence") or {}).get("coverage", "")), freshness=str((payload.get("evidence") or {}).get("freshness", "")))
+        out = fmt.format_hybrid_search(
+            query,
+            rows,
+            confidence=str(payload.get("confidence", "")),
+            reason=str(payload.get("confidence_reason", "")),
+            coverage=str((payload.get("evidence") or {}).get("coverage", "")),
+            freshness=str((payload.get("evidence") or {}).get("freshness", "")),
+        )
         _log_tool_done("archive_hybrid_search", t0, result_count=len(rows))
         return out
     except PpaError as exc:

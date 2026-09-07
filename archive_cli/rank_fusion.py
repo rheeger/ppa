@@ -162,9 +162,7 @@ def apply_rrf_scores(rows: list[dict[str, Any]], options: FusionOptions) -> list
         )
     }
     decay_enabled = (
-        options.ranking_profile == "current_ops"
-        and not options.historical_query
-        and not options.exact_ids_present
+        options.ranking_profile == "current_ops" and not options.historical_query and not options.exact_ids_present
     )
     for row in rows:
         uid = str(row["card_uid"])

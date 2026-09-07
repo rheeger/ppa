@@ -138,9 +138,7 @@ def compile_typed_aggregate(
     if group_cols:
         select = ", ".join(group_cols) + f", {select}"
         group_sql = " GROUP BY " + ", ".join(group_cols)
-    sql = (
-        f"SELECT {select} FROM {schema}.{table} WHERE {where_sql}{group_sql} LIMIT {MAX_STATEMENT_ROWS}"
-    )
+    sql = f"SELECT {select} FROM {schema}.{table} WHERE {where_sql}{group_sql} LIMIT {MAX_STATEMENT_ROWS}"
     return CompiledAggregate(
         sql=sql,
         params=tuple(params),

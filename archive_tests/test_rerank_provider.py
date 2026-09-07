@@ -41,7 +41,9 @@ class _DeterministicHandler(BaseHTTPRequestHandler):
             self.wfile.write(b"{}")
             return
         schema = "wrong" if self.fail_schema else payload.get("schema_version")
-        results = [{"id": item["id"], "score": self.scores.get(item["id"], 0.0)} for item in payload.get("candidates", [])]
+        results = [
+            {"id": item["id"], "score": self.scores.get(item["id"], 0.0)} for item in payload.get("candidates", [])
+        ]
         body = {
             "schema_version": schema,
             "model_revision": "test-echo-1",

@@ -131,7 +131,9 @@ def _egress_deny() -> dict[str, Any]:
         raise AssertionError("egress capture contained denied archive text")
     return {
         "denied": True,
-        "events": [{"destination": event.destination, "allowed": event.allowed, "reason": event.reason} for event in events],
+        "events": [
+            {"destination": event.destination, "allowed": event.allowed, "reason": event.reason} for event in events
+        ],
     }
 
 

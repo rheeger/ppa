@@ -15,7 +15,11 @@ from typing import Any
 
 from archive_engine.changes import CONSUMER_PUBLICATION, consume_batch
 from archive_engine.contracts import UNKNOWN, EvidenceEnvelope
-from archive_engine.corrections import CorrectionCommandRequest, execute_correction_command, reconcile_pending_corrections
+from archive_engine.corrections import (
+    CorrectionCommandRequest,
+    execute_correction_command,
+    reconcile_pending_corrections,
+)
 from archive_engine.egress import capture_egress, egress_scope
 from archive_engine.errors import EgressDeniedError, PublisherBusyError
 from archive_engine.publication import (
@@ -189,7 +193,13 @@ def _write_labeled(vault: Path) -> None:
         counterparty="Harbor Loft Collective",
         note="Supported charge for the labeled stay.",
     )
-    write_card(vault, CHARGE_REL, card, body=f"Card charge 482.00 USD. {REPLY_TOKEN}", provenance=deterministic_provenance(card, "acceptance.p04c"))
+    write_card(
+        vault,
+        CHARGE_REL,
+        card,
+        body=f"Card charge 482.00 USD. {REPLY_TOKEN}",
+        provenance=deterministic_provenance(card, "acceptance.p04c"),
+    )
 
 
 def _kill_and_recover(root: Path, vault: Path, phase: str) -> dict[str, Any]:
@@ -297,7 +307,9 @@ def _provider_half_batch() -> dict[str, Any]:
             authorize_destination("hash", access=access, sources=("acceptance.p04c",))
             completed.append("hash")
             try:
-                authorize_destination("openai", access=access, sources=("acceptance.p04c",), url="https://api.openai.com/v1/embeddings")
+                authorize_destination(
+                    "openai", access=access, sources=("acceptance.p04c",), url="https://api.openai.com/v1/embeddings"
+                )
                 raise AssertionError("openai must not be authorized under local-only")
             except EgressDeniedError:
                 denied.append("openai")
@@ -335,7 +347,9 @@ def _correction_then_reimport(vault: Path) -> dict[str, Any]:
         currency="USD",
         counterparty="Harbor Loft Collective",
     )
-    write_card(vault, CHARGE_REL, card, body="original 482", provenance=deterministic_provenance(card, "acceptance.p04c"))
+    write_card(
+        vault, CHARGE_REL, card, body="original 482", provenance=deterministic_provenance(card, "acceptance.p04c")
+    )
     execute_correction_command(
         vault,
         CorrectionCommandRequest(
@@ -349,7 +363,13 @@ def _correction_then_reimport(vault: Path) -> dict[str, Any]:
         ),
     )
     older = card.model_copy(update={"amount": 482.0, "updated": "2026-04-10"})
-    write_card(vault, CHARGE_REL, older, body="replayed source 482", provenance=deterministic_provenance(older, "acceptance.p04c"))
+    write_card(
+        vault,
+        CHARGE_REL,
+        older,
+        body="replayed source 482",
+        provenance=deterministic_provenance(older, "acceptance.p04c"),
+    )
     reconcile_pending_corrections(vault)
     current = read_note(vault, CHARGE_REL)[0]
     if float(current.get("amount") or 0) != 18.5:

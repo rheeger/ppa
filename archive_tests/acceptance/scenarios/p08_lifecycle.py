@@ -13,16 +13,16 @@ from archive_sync.connectors.legacy import GMAIL_CONNECTOR_ID, run_legacy_connec
 from archive_sync.connectors.replay import (
     BURST_FRESHNESS_UNKNOWN,
     CURSOR_EXPIRED,
+    RETENTION_PROVIDER_TOMBSTONE,
     FixtureBurstResolver,
     LifecycleRunner,
-    RETENTION_PROVIDER_TOMBSTONE,
+    PendingScope,
     ThreadEvent,
     apply_provider_tombstone,
     attach_resolver,
     inspect_cursor,
     migrate_cursor,
     persist_pending_scope,
-    PendingScope,
     select_latest_events,
 )
 from archive_sync.connectors.runtime import ContainedVaultWriter
@@ -197,7 +197,9 @@ def run_p08_lifecycle(runtime: IsolatedRuntime) -> dict[str, Any]:
     scheduled = attach_resolver(runtime.vault, FixtureBurstResolver())
     pending = next((item for item in scheduled if item.event_identity == "evt-pending"), None)
     if pending is None or not pending.scheduled:
-        raise ScenarioAssertionError(f"pending scope was not scheduled once: {[item.to_payload() for item in scheduled]!r}")
+        raise ScenarioAssertionError(
+            f"pending scope was not scheduled once: {[item.to_payload() for item in scheduled]!r}"
+        )
 
     return {
         "id": "p08.lifecycle_replay",

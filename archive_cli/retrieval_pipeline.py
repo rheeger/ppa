@@ -245,9 +245,7 @@ def fuse_and_rank_hybrid(
         historical_query=query_has_historical_dates(query),
         exact_ids_present=False,
         ranking_profile=(
-            "current_ops"
-            if query_requests_current_ops(query) and not query_has_historical_dates(query)
-            else None
+            "current_ops" if query_requests_current_ops(query) and not query_has_historical_dates(query) else None
         ),
     )
     if query_has_historical_dates(query):

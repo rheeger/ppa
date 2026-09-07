@@ -9,6 +9,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from archive_vault.canon import email as canon_email
+from archive_vault.canon import handle as canon_handle
+from archive_vault.canon import phone as canon_phone
+
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 PARTIAL_DATE_RE = re.compile(r"^(?:\d{4}-\d{2}|\d{2}-\d{2}|\d{4}-\d{2}-\d{2})$")
 LINKEDIN_URL_RE = re.compile(r"(?:https?://)?(?:[\w]+\.)?linkedin\.com/in/([^/?#]+)")
@@ -449,58 +453,25 @@ def _clean_string(value: str) -> str:
 
 
 def _normalize_handle(value: str) -> str:
-    cleaned = _clean_string(value).removeprefix("@").strip("/")
-    return cleaned.lower()
+    return canon_handle.canonical(value)
 
 
 def _normalize_linkedin_fields(handle: str, url: str) -> tuple[str, str]:
-    handle_value = _normalize_handle(handle)
-    url_value = _clean_string(url)
-    match = LINKEDIN_URL_RE.search(url_value or handle_value)
-    if match:
-        handle_value = _normalize_handle(match.group(1))
-    if handle_value and not url_value:
-        url_value = f"https://www.linkedin.com/in/{handle_value}"
-    return handle_value, url_value
+    return canon_handle.linkedin_fields(handle, url)
 
 
 def _normalize_profile_handle(value: str, *, provider: str) -> str:
-    raw = _clean_string(value)
-    if not raw:
-        return ""
-    if provider == "github":
-        match = GITHUB_URL_RE.search(raw)
-        if match:
-            return _normalize_handle(match.group(1))
-    if provider == "twitter":
-        match = TWITTER_URL_RE.search(raw)
-        if match:
-            return _normalize_handle(match.group(1))
-    if provider == "instagram":
-        match = INSTAGRAM_URL_RE.search(raw)
-        if match:
-            return _normalize_handle(match.group(1))
-    if provider == "telegram":
-        match = TELEGRAM_URL_RE.search(raw)
-        if match:
-            return _normalize_handle(match.group(1))
-    return _normalize_handle(raw)
+    return canon_handle.canonical(value, provider=provider)
 
 
 def _normalize_contact_handle(value: str) -> str:
-    raw = _clean_string(value)
-    if not raw:
-        return ""
-    if "@" in raw:
-        return raw.lower()
-    digits = re.sub(r"\D", "", raw)
-    if digits:
-        if raw.startswith("+") or (len(digits) == 11 and digits.startswith("1")):
-            return f"+{digits}"
-        if len(digits) == 10:
-            return f"+1{digits}"
-        return digits
-    return raw.lower()
+    return canon_phone.contact_handle(value)
+
+
+def _canon_email_value(value: str | list[str]) -> str | list[str]:
+    if isinstance(value, str):
+        return canon_email.canonical(value)
+    return _dedupe_preserve_order([canon_email.canonical(item) for item in value if canon_email.canonical(item)])
 
 
 class BaseCard(BaseModel):
@@ -578,12 +549,12 @@ class PersonCard(BaseCard):
     @field_validator("emails")
     @classmethod
     def lowercase_emails(cls, value: list[str]) -> list[str]:
-        return _dedupe_preserve_order([item.lower().strip() for item in value if item and item.strip()])
+        return _dedupe_preserve_order([canon_email.canonical(item) for item in value if canon_email.canonical(item)])
 
     @field_validator("phones")
     @classmethod
     def dedupe_phones(cls, value: list[str]) -> list[str]:
-        return _dedupe_preserve_order([item.strip() for item in value if item and item.strip()])
+        return _dedupe_preserve_order([canon_phone.canonical(item) for item in value if canon_phone.canonical(item)])
 
     @field_validator("aliases", "companies", "titles", "websites")
     @classmethod
@@ -815,9 +786,7 @@ class EmailThreadCard(BaseCard):
     @field_validator("account_email", "participants")
     @classmethod
     def lowercase_email_fields(cls, value: str | list[str]) -> str | list[str]:
-        if isinstance(value, str):
-            return value.lower().strip()
-        return _dedupe_preserve_order([item.lower().strip() for item in value if item and item.strip()])
+        return _canon_email_value(value)
 
     @field_validator(
         "subject",
@@ -895,9 +864,7 @@ class EmailMessageCard(BaseCard):
     )
     @classmethod
     def lowercase_message_emails(cls, value: str | list[str]) -> str | list[str]:
-        if isinstance(value, str):
-            return value.lower().strip()
-        return _dedupe_preserve_order([item.lower().strip() for item in value if item and item.strip()])
+        return _canon_email_value(value)
 
     @field_validator(
         "direction",
@@ -1358,9 +1325,7 @@ class CalendarEventCard(BaseCard):
     @field_validator("account_email", "organizer_email", "attendee_emails")
     @classmethod
     def lowercase_event_emails(cls, value: str | list[str]) -> str | list[str]:
-        if isinstance(value, str):
-            return value.lower().strip()
-        return _dedupe_preserve_order([item.lower().strip() for item in value if item and item.strip()])
+        return _canon_email_value(value)
 
     @field_validator(
         "ical_uid",
@@ -1535,12 +1500,12 @@ class DocumentCard(BaseCard):
     @field_validator("emails")
     @classmethod
     def lowercase_document_emails(cls, value: list[str]) -> list[str]:
-        return _dedupe_preserve_order([item.lower().strip() for item in value if item and item.strip()])
+        return _dedupe_preserve_order([canon_email.canonical(item) for item in value if canon_email.canonical(item)])
 
     @field_validator("phones")
     @classmethod
     def dedupe_document_phones(cls, value: list[str]) -> list[str]:
-        return _dedupe_preserve_order([item.strip() for item in value if item and item.strip()])
+        return _dedupe_preserve_order([canon_phone.canonical(item) for item in value if canon_phone.canonical(item)])
 
     @field_validator("authors", "counterparties", "websites", "sheet_names", "quality_flags", "duplicates")
     @classmethod
@@ -1589,9 +1554,7 @@ class MeetingTranscriptCard(BaseCard):
     @field_validator("account_email", "speaker_emails", "participant_emails", "host_email")
     @classmethod
     def lowercase_transcript_emails(cls, value: str | list[str]) -> str | list[str]:
-        if isinstance(value, str):
-            return value.lower().strip()
-        return _dedupe_preserve_order([item.lower().strip() for item in value if item and item.strip()])
+        return _canon_email_value(value)
 
     @field_validator(
         "otter_conversation_id",

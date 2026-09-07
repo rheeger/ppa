@@ -57,9 +57,7 @@ OPERATION_DELETE = "delete"
 OPERATION_EMBED = "embed"
 OPERATION_LEGACY_DIRTY = "legacy_dirty"
 
-OPERATIONS = frozenset(
-    {OPERATION_CREATE, OPERATION_UPDATE, OPERATION_DELETE, OPERATION_EMBED, OPERATION_LEGACY_DIRTY}
-)
+OPERATIONS = frozenset({OPERATION_CREATE, OPERATION_UPDATE, OPERATION_DELETE, OPERATION_EMBED, OPERATION_LEGACY_DIRTY})
 
 STATE_PREPARED = "prepared"
 STATE_COMMITTED = "committed"
@@ -311,10 +309,14 @@ class ChangeJournal:
 
         results: list[ReconcileResult] = []
         with self._exclusive():
-            rows = self._conn_req().execute(
-                "SELECT * FROM mutations WHERE state = ? ORDER BY sequence",
-                (STATE_PREPARED,),
-            ).fetchall()
+            rows = (
+                self._conn_req()
+                .execute(
+                    "SELECT * FROM mutations WHERE state = ? ORDER BY sequence",
+                    (STATE_PREPARED,),
+                )
+                .fetchall()
+            )
             for row in rows:
                 results.append(self._reconcile_row(row))
         return results
@@ -397,23 +399,31 @@ class ChangeJournal:
         cursor = self.consumer_cursor(name)
         with self._exclusive():
             pending_gaps = list(cursor.gaps)
-            rows = self._conn_req().execute(
-                """
+            rows = (
+                self._conn_req()
+                .execute(
+                    """
                 SELECT * FROM mutations
                 WHERE state = ? AND (sequence > ? OR sequence IN ({placeholders}))
                 ORDER BY sequence
                 LIMIT ?
                 """.format(placeholders=",".join("?" for _ in pending_gaps) or "NULL"),
-                (STATE_COMMITTED, cursor.high_watermark, *pending_gaps, max(1, int(limit))),
-            ).fetchall() if pending_gaps else self._conn_req().execute(
-                """
+                    (STATE_COMMITTED, cursor.high_watermark, *pending_gaps, max(1, int(limit))),
+                )
+                .fetchall()
+                if pending_gaps
+                else self._conn_req()
+                .execute(
+                    """
                 SELECT * FROM mutations
                 WHERE state = ? AND sequence > ?
                 ORDER BY sequence
                 LIMIT ?
                 """,
-                (STATE_COMMITTED, cursor.high_watermark, max(1, int(limit))),
-            ).fetchall()
+                    (STATE_COMMITTED, cursor.high_watermark, max(1, int(limit))),
+                )
+                .fetchall()
+            )
             records = tuple(self._record_from_row(row) for row in rows)
             captured = records[-1].sequence if records else cursor.high_watermark
             return ChangeBatch(
@@ -483,10 +493,14 @@ class ChangeJournal:
     def consumer_cursor(self, consumer_name: str) -> ConsumerCursor:
         name = self._require_consumer(consumer_name)
         with self._exclusive():
-            row = self._conn_req().execute(
-                "SELECT high_watermark FROM consumer_cursors WHERE consumer_name = ?",
-                (name,),
-            ).fetchone()
+            row = (
+                self._conn_req()
+                .execute(
+                    "SELECT high_watermark FROM consumer_cursors WHERE consumer_name = ?",
+                    (name,),
+                )
+                .fetchone()
+            )
             gaps = tuple(
                 int(item["sequence"])
                 for item in self._conn_req().execute(
@@ -513,15 +527,19 @@ class ChangeJournal:
 
     def committed_records(self, *, after_sequence: int = 0, limit: int = 1000) -> list[ChangeRecord]:
         with self._exclusive():
-            rows = self._conn_req().execute(
-                """
+            rows = (
+                self._conn_req()
+                .execute(
+                    """
                 SELECT * FROM mutations
                 WHERE state = ? AND sequence > ?
                 ORDER BY sequence
                 LIMIT ?
                 """,
-                (STATE_COMMITTED, int(after_sequence), max(1, int(limit))),
-            ).fetchall()
+                    (STATE_COMMITTED, int(after_sequence), max(1, int(limit))),
+                )
+                .fetchall()
+            )
         return [self._record_from_row(row) for row in rows]
 
     def mutation_by_id(self, mutation_id: str) -> ChangeRecord | None:
@@ -533,14 +551,22 @@ class ChangeJournal:
         """P07-adoptable recovery checkpoint. Durable committed mutations only."""
 
         with self._exclusive():
-            high = self._conn_req().execute(
-                "SELECT COALESCE(MAX(sequence), 0) AS n FROM mutations WHERE state = ?",
-                (STATE_COMMITTED,),
-            ).fetchone()
-            prepared = self._conn_req().execute(
-                "SELECT COUNT(*) AS n FROM mutations WHERE state = ?",
-                (STATE_PREPARED,),
-            ).fetchone()
+            high = (
+                self._conn_req()
+                .execute(
+                    "SELECT COALESCE(MAX(sequence), 0) AS n FROM mutations WHERE state = ?",
+                    (STATE_COMMITTED,),
+                )
+                .fetchone()
+            )
+            prepared = (
+                self._conn_req()
+                .execute(
+                    "SELECT COUNT(*) AS n FROM mutations WHERE state = ?",
+                    (STATE_PREPARED,),
+                )
+                .fetchone()
+            )
         consumers = {
             name: {"high_watermark": cursor.high_watermark, "gaps": list(cursor.gaps)}
             for name, cursor in self.consumer_cursors().items()
@@ -723,16 +749,24 @@ class ChangeJournal:
         return self._conn_req().execute("SELECT * FROM mutations WHERE idempotency_key = ?", (key,)).fetchone()
 
     def _latest_for_uid(self, uid: str) -> sqlite3.Row | None:
-        return self._conn_req().execute(
-            "SELECT * FROM mutations WHERE uid = ? ORDER BY sequence DESC LIMIT 1",
-            (uid,),
-        ).fetchone()
+        return (
+            self._conn_req()
+            .execute(
+                "SELECT * FROM mutations WHERE uid = ? ORDER BY sequence DESC LIMIT 1",
+                (uid,),
+            )
+            .fetchone()
+        )
 
     def _latest_committed_for_uid(self, uid: str) -> sqlite3.Row | None:
-        return self._conn_req().execute(
-            "SELECT * FROM mutations WHERE uid = ? AND state = ? ORDER BY sequence DESC LIMIT 1",
-            (uid, STATE_COMMITTED),
-        ).fetchone()
+        return (
+            self._conn_req()
+            .execute(
+                "SELECT * FROM mutations WHERE uid = ? AND state = ? ORDER BY sequence DESC LIMIT 1",
+                (uid, STATE_COMMITTED),
+            )
+            .fetchone()
+        )
 
     def _record_from_row(self, row: sqlite3.Row) -> ChangeRecord:
         return ChangeRecord(

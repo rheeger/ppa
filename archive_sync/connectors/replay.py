@@ -329,11 +329,13 @@ def burst_freshness_for(
 ) -> tuple[BurstFreshness, tuple[str, ...]]:
     if resolver is None:
         return BURST_FRESHNESS_UNKNOWN, ()
-    keys = tuple(resolver.burst_keys_for(
-        thread_uid=thread_uid,
-        changed_message_ids=changed_message_ids,
-        content_hashes=content_hashes,
-    ))
+    keys = tuple(
+        resolver.burst_keys_for(
+            thread_uid=thread_uid,
+            changed_message_ids=changed_message_ids,
+            content_hashes=content_hashes,
+        )
+    )
     return BURST_FRESHNESS_INVALIDATED, keys
 
 
@@ -521,7 +523,11 @@ class LifecycleRunner:
                     cards_preserved=True,
                     unrelated_uids=tuple(unrelated_uids),
                 )
-        migrated = migrate_cursor(cursor if cursor is not None else checkpoint.last_safe_cursor, to_version=to_cursor_version, strategy=cursor_strategy)
+        migrated = migrate_cursor(
+            cursor if cursor is not None else checkpoint.last_safe_cursor,
+            to_version=to_cursor_version,
+            strategy=cursor_strategy,
+        )
         if migrated.status == CURSOR_EXPIRED:
             return LifecycleResult(
                 run=None,
@@ -534,11 +540,15 @@ class LifecycleRunner:
                 unrelated_uids=tuple(unrelated_uids),
             )
         latest = select_latest_events(events)
-        dirty = dirty_uids_for_thread_event(
-            latest[0],
-            thread_uid=thread_uid,
-            message_uids=message_uids,
-        ) if latest else tuple(uid for uid in (thread_uid, *message_uids) if uid)
+        dirty = (
+            dirty_uids_for_thread_event(
+                latest[0],
+                thread_uid=thread_uid,
+                message_uids=message_uids,
+            )
+            if latest
+            else tuple(uid for uid in (thread_uid, *message_uids) if uid)
+        )
         freshness, burst_keys = burst_freshness_for(
             resolver=self.burst_resolver,
             thread_uid=thread_uid,
@@ -601,13 +611,17 @@ class LifecycleRunner:
             ConnectorCheckpoint(
                 last_safe_cursor=dict(run.committed_cursor or migrated.payload),
                 last_safe_version=migrated.version,
-                connector_version=next_connector_version or checkpoint.connector_version or run.manifest.connector_version,
+                connector_version=next_connector_version
+                or checkpoint.connector_version
+                or run.manifest.connector_version,
             ),
         )
         scheduled = tuple(item.event_identity for item in scopes if item.scheduled)
         return LifecycleResult(
             run=run,
-            cursor=CursorState(version=migrated.version, status=CURSOR_ACTIVE, payload=dict(run.committed_cursor or {})),
+            cursor=CursorState(
+                version=migrated.version, status=CURSOR_ACTIVE, payload=dict(run.committed_cursor or {})
+            ),
             dirty_uids=dirty or tuple(run.uids),
             burst_freshness=freshness,
             burst_keys=burst_keys,

@@ -217,7 +217,15 @@ def resolve_egress_policy(
     )
 
 
-def _deny(policy: EgressPolicy, destination: str, url: str, reason: str, *, sources: tuple[str, ...] = (), domains: tuple[str, ...] = ()) -> None:
+def _deny(
+    policy: EgressPolicy,
+    destination: str,
+    url: str,
+    reason: str,
+    *,
+    sources: tuple[str, ...] = (),
+    domains: tuple[str, ...] = (),
+) -> None:
     _record(
         EgressEvent(
             phase="authorize",
@@ -248,10 +256,19 @@ def authorize_destination(
     payload_domains = tuple(str(item) for item in domains if str(item).strip()) or current_payload()[1]
     dest = destination_spec(name)
     if dest is None:
-        _deny(policy, name or "unknown", url, f"unknown provider destination {name or 'unknown'!r}", sources=payload_sources, domains=payload_domains)
+        _deny(
+            policy,
+            name or "unknown",
+            url,
+            f"unknown provider destination {name or 'unknown'!r}",
+            sources=payload_sources,
+            domains=payload_domains,
+        )
     assert dest is not None
     if policy.deny:
-        _deny(policy, dest.name, url, policy.revision or "access denied", sources=payload_sources, domains=payload_domains)
+        _deny(
+            policy, dest.name, url, policy.revision or "access denied", sources=payload_sources, domains=payload_domains
+        )
     if dest.transport == "none":
         if dest.name != "hash":
             _deny(
@@ -263,7 +280,14 @@ def authorize_destination(
                 domains=payload_domains,
             )
         if url:
-            _deny(policy, dest.name, url, f"destination {dest.name} does not use HTTP", sources=payload_sources, domains=payload_domains)
+            _deny(
+                policy,
+                dest.name,
+                url,
+                f"destination {dest.name} does not use HTTP",
+                sources=payload_sources,
+                domains=payload_domains,
+            )
         _record(
             EgressEvent(
                 phase="authorize",
@@ -277,11 +301,32 @@ def authorize_destination(
         )
         return dest
     if dest.locality == "remote" and policy.mode == LOCAL_ONLY:
-        _deny(policy, dest.name, url, f"local-only policy blocks remote destination {dest.name}", sources=payload_sources, domains=payload_domains)
+        _deny(
+            policy,
+            dest.name,
+            url,
+            f"local-only policy blocks remote destination {dest.name}",
+            sources=payload_sources,
+            domains=payload_domains,
+        )
     if dest.locality == "local" and url and is_remote_url(url):
-        _deny(policy, dest.name, url, f"local destination {dest.name} cannot use remote URL", sources=payload_sources, domains=payload_domains)
+        _deny(
+            policy,
+            dest.name,
+            url,
+            f"local destination {dest.name} cannot use remote URL",
+            sources=payload_sources,
+            domains=payload_domains,
+        )
     if policy.mode == LOCAL_ONLY and url and is_remote_url(url):
-        _deny(policy, dest.name, url, "local-only policy blocks remote URL", sources=payload_sources, domains=payload_domains)
+        _deny(
+            policy,
+            dest.name,
+            url,
+            "local-only policy blocks remote URL",
+            sources=payload_sources,
+            domains=payload_domains,
+        )
     if dest.locality == "remote" and (policy.mode == RESTRICTED or (access is not None and is_restricted(access))):
         ctx = access if access is not None else current_access()
         if not payload_sources:
@@ -295,7 +340,14 @@ def authorize_destination(
             )
         if payload_sources:
             if ctx is None:
-                _deny(policy, dest.name, url, "restricted egress missing access context", sources=payload_sources, domains=payload_domains)
+                _deny(
+                    policy,
+                    dest.name,
+                    url,
+                    "restricted egress missing access context",
+                    sources=payload_sources,
+                    domains=payload_domains,
+                )
             for source in payload_sources:
                 if not source_allowed(ctx.allowed_sources, source):
                     _deny(
@@ -411,7 +463,9 @@ def _request_url(req: request.Request | str) -> str:
 
 
 class _PolicyRedirectHandler(request.HTTPRedirectHandler):
-    def __init__(self, *, destination: str, access: AccessContext | None, sources: tuple[str, ...], domains: tuple[str, ...]):
+    def __init__(
+        self, *, destination: str, access: AccessContext | None, sources: tuple[str, ...], domains: tuple[str, ...]
+    ):
         super().__init__()
         self._destination = destination
         self._access = access

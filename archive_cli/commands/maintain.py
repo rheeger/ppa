@@ -358,8 +358,7 @@ def counts_from_processor_reports(reports: list[dict[str, Any]]) -> dict[str, in
         receipt_outputs = receipt.get("outputs") if isinstance(receipt, dict) else None
         if receipt_outputs:
             output_uids = _normalize_uids(
-                list(output_uids)
-                + [str(row.get("uid") or "") for row in receipt_outputs if isinstance(row, dict)]
+                list(output_uids) + [str(row.get("uid") or "") for row in receipt_outputs if isinstance(row, dict)]
             )
         if status == INPUT_STATUS_COMPLETE and not item.get("valid_no_output"):
             outputs += len(output_uids)

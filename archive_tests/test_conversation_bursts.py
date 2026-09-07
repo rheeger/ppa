@@ -44,9 +44,15 @@ def _msg(
     return payload
 
 
-def long_thread_messages(*, include_answer: bool = True, extra: list[dict[str, str]] | None = None) -> list[dict[str, str]]:
+def long_thread_messages(
+    *, include_answer: bool = True, extra: list[dict[str, str]] | None = None
+) -> list[dict[str, str]]:
     messages = [
-        _msg(f"msg-fill-{index:03d}", f"status update {index} still waiting on deploy", timestamp=f"2026-03-10T10:{index:02d}:00+00:00")
+        _msg(
+            f"msg-fill-{index:03d}",
+            f"status update {index} still waiting on deploy",
+            timestamp=f"2026-03-10T10:{index:02d}:00+00:00",
+        )
         for index in range(24)
     ]
     if include_answer:
@@ -128,7 +134,9 @@ def measure_burst_recall(card_type: str = "email_thread") -> dict[str, object]:
         "hit_burst_key": hit["burst_key"],
         "hit_message_ids": list(hit["message_ids"]),
         "hit_has_prefix": "channel:" in str(hit["content"]) and "subject:" in str(hit["content"]),
-        "raw_windows_preserved": any("thread" in str(chunk["chunk_type"]) or chunk["chunk_type"] == "body" for chunk in before),
+        "raw_windows_preserved": any(
+            "thread" in str(chunk["chunk_type"]) or chunk["chunk_type"] == "body" for chunk in before
+        ),
     }
 
 
@@ -219,7 +227,9 @@ def test_delete_retires_removed_burst():
 def test_email_uses_one_message_per_burst():
     messages = long_thread_messages()
     bursts = segment_conversation_bursts(messages, channel="email")
-    assert [list(item.message_ids) for item in bursts] == [[item["message_id"]] for item in sorted(messages, key=lambda row: (row["timestamp"], row["message_id"]))]
+    assert [list(item.message_ids) for item in bursts] == [
+        [item["message_id"]] for item in sorted(messages, key=lambda row: (row["timestamp"], row["message_id"]))
+    ]
 
 
 def test_chat_groups_same_author_until_gap_or_author_change():
@@ -251,7 +261,11 @@ def test_boilerplate_is_emitted_but_not_embed_eligible():
         ]
     )
     chunks = burst_chunks(frontmatter)
-    liked = next(chunk for chunk in chunks if "Liked a message" in str(chunk["content"]) or "liked a message" in str(chunk["content"]).lower())
+    liked = next(
+        chunk
+        for chunk in chunks
+        if "Liked a message" in str(chunk["content"]) or "liked a message" in str(chunk["content"]).lower()
+    )
     yes = next(chunk for chunk in chunks if str(chunk["content"]).endswith("yes") or "\nyes" in str(chunk["content"]))
     assert liked["embed_eligible"] is False
     assert yes["embed_eligible"] is True

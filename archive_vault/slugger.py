@@ -3,18 +3,15 @@
 from __future__ import annotations
 
 import hashlib
-import re
 from pathlib import Path
 
 
 def normalize_for_slug(name: str) -> str:
     """Normalize a name into a filesystem-friendly slug."""
 
-    slug = name.lower().strip()
-    slug = re.sub(r"[^a-z0-9\s-]", "", slug)
-    slug = re.sub(r"\s+", "-", slug)
-    slug = re.sub(r"-{2,}", "-", slug)
-    return slug.strip("-") or "unknown"
+    from archive_vault.canon.slug import canonical as _slug
+
+    return _slug(name)
 
 
 def unique_slug(vault_path: str | Path, base_slug: str, source_id: str) -> str:

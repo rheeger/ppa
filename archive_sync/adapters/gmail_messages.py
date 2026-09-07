@@ -63,7 +63,9 @@ TRANSIENT_GMAIL_STATUS_RE = re.compile(r"\b(?:429|500|502|503|504)\b")
 
 
 def _normalize_account_email(account_email: str) -> str:
-    return account_email.strip().lower()
+    from archive_vault.canon.email import account
+
+    return account(account_email)
 
 
 def _thread_identity(account_email: str, thread_id: str) -> str:

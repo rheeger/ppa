@@ -43,7 +43,9 @@ class MigrationEntry:
 
 
 def _normalize_account_email(account_email: str) -> str:
-    return account_email.strip().lower()
+    from archive_vault.canon.email import account
+
+    return account(account_email)
 
 
 def _rewrite_wikilinks(content: str, uid_mapping: dict[str, str]) -> str:

@@ -20,7 +20,6 @@ from archive_tests.acceptance.environment import (
 )
 from archive_tests.acceptance.evidence import write_junit
 from archive_tests.acceptance.oracle import cosine_similarity, exact_nearest_neighbors
-from archive_tests.acceptance.registry import load_builtin_scenarios, scenarios_for
 from archive_tests.acceptance.run import RunnerError, main, run_suite, validate_output_path
 from archive_tests.acceptance.scenarios.baseline import assert_expected_hit
 from archive_tests.conftest import OWNED_ROOT_MARKER, assert_owned_test_root
