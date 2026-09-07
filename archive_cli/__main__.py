@@ -574,7 +574,7 @@ def main() -> None:
     graph_parser = subparsers.add_parser("graph", help="Wikilink graph from a note (JSON)")
     graph_parser.add_argument("note_path")
     graph_parser.add_argument("--hops", type=int, default=2)
-    person_parser = subparsers.add_parser("person", help="Person profile by slug (JSON)")
+    person_parser = subparsers.add_parser("person", help="Person profile by name, slug, email, or phone (JSON)")
     person_parser.add_argument("name")
     timeline_parser = subparsers.add_parser(
         "timeline",

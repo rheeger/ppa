@@ -51,7 +51,7 @@ def graph(
 
 
 def person(name: str, *, store: DefaultArchiveStore, logger: logging.Logger) -> dict[str, Any]:
-    """Resolve person note content via ``store.person`` (slug fallback included)."""
+    """Resolve person note content via ``store.person`` (name/slug/email/phone)."""
     logger.info("person_start name=%r", name)
     result = store.person(name)
     logger.info("person_done found=%s", result.get("found"))

@@ -328,7 +328,7 @@ def archive_graph(note_path: str, hops: int = 2) -> str:
 
 @_tool("archive_person")
 def archive_person(name: str) -> str:
-    """Get person profile by slug."""
+    """Get person profile by name, slug, email, or phone."""
 
     profile_error = _tool_profile_error("archive_person")
     if profile_error:
