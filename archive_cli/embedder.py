@@ -892,61 +892,124 @@ class EmbedderMixin:
         max_batches: int | None = 1,
         content_hashes: Collection[str] | None = None,
     ) -> int:
-        """Delete leftover keys whose content identity already has a live list."""
+        """Delete leftover keys whose content identity already has a live list.
+
+        A scoped hash list is an index lookup. A full pass builds a key table
+        once, then deletes by ``chunk_key`` so each batch is not a warehouse scan.
+        """
         batch = max(int(batch_size or get_embed_gc_batch_size()), 1)
         hashes = [str(item) for item in (content_hashes or ()) if str(item).strip()]
-        hash_clause = ""
-        params: list[Any] = []
-        if hashes:
-            hash_clause = "AND e2.content_hash = ANY(%s)"
-            params.append(hashes)
         deleted_total = 0
         batches = 0
         with self._connect() as conn:
             conn.execute("SET statement_timeout = 0")
-            while True:
-                self._require_warehouse_free_space()
-                cur = conn.execute(
-                    f"""
-                    DELETE FROM {self.schema}.embeddings e
-                    WHERE ctid IN (
-                        SELECT e2.ctid
-                        FROM {self.schema}.embeddings e2
-                        WHERE NOT EXISTS (
+            if hashes:
+                while True:
+                    self._require_warehouse_free_space()
+                    cur = conn.execute(
+                        f"""
+                        DELETE FROM {self.schema}.embeddings e
+                        WHERE e.embedding_model = %s
+                          AND e.embedding_version = %s
+                          AND e.content_hash = ANY(%s)
+                          AND NOT EXISTS (
                             SELECT 1 FROM {self.schema}.chunks c
-                            WHERE c.chunk_key = e2.chunk_key
-                        )
-                          AND e2.content_hash <> ''
-                          AND e2.embedding_model = %s
-                          AND e2.embedding_version = %s
-                          {hash_clause}
+                            WHERE c.chunk_key = e.chunk_key
+                          )
                           AND EXISTS (
                             SELECT 1
                             FROM {self.schema}.chunks live
                             JOIN {self.schema}.embeddings have
                               ON have.chunk_key = live.chunk_key
-                             AND have.embedding_model = e2.embedding_model
-                             AND have.embedding_version = e2.embedding_version
-                            WHERE live.content_hash = e2.content_hash
-                              AND live.content_hash <> ''
+                             AND have.embedding_model = e.embedding_model
+                             AND have.embedding_version = e.embedding_version
+                            WHERE live.content_hash = e.content_hash
                           )
-                        LIMIT %s
+                        """,
+                        (embedding_model, embedding_version, hashes),
                     )
+                    n = int(cur.rowcount or 0)
+                    conn.commit()
+                    deleted_total += n
+                    batches += 1
+                    logger.info(
+                        "embeddings_duplicate_gc_scoped deleted=%s total_deleted=%s",
+                        n,
+                        deleted_total,
+                    )
+                    break
+                return deleted_total
+            conn.execute(
+                f"""
+                CREATE UNLOGGED TABLE IF NOT EXISTS {self.schema}.embedding_dup_gc (
+                    chunk_key TEXT PRIMARY KEY
+                )
+                """
+            )
+            conn.execute(f"TRUNCATE {self.schema}.embedding_dup_gc")
+            loaded = conn.execute(
+                f"""
+                INSERT INTO {self.schema}.embedding_dup_gc (chunk_key)
+                SELECT e.chunk_key
+                FROM {self.schema}.embeddings e
+                WHERE e.content_hash <> ''
+                  AND e.embedding_model = %s
+                  AND e.embedding_version = %s
+                  AND NOT EXISTS (
+                    SELECT 1 FROM {self.schema}.chunks c WHERE c.chunk_key = e.chunk_key
+                  )
+                  AND EXISTS (
+                    SELECT 1
+                    FROM {self.schema}.chunks live
+                    JOIN {self.schema}.embeddings have
+                      ON have.chunk_key = live.chunk_key
+                     AND have.embedding_model = e.embedding_model
+                     AND have.embedding_version = e.embedding_version
+                    WHERE live.content_hash = e.content_hash
+                  )
+                ON CONFLICT DO NOTHING
+                """,
+                (embedding_model, embedding_version),
+            )
+            conn.commit()
+            queued = int(loaded.rowcount or 0)
+            logger.info("embeddings_duplicate_gc_queued keys=%s", queued)
+            while queued > 0:
+                self._require_warehouse_free_space()
+                keys = [
+                    str(row["chunk_key"] if isinstance(row, dict) else row[0])
+                    for row in conn.execute(
+                        f"SELECT chunk_key FROM {self.schema}.embedding_dup_gc LIMIT %s",
+                        (batch,),
+                    ).fetchall()
+                ]
+                if not keys:
+                    break
+                cur = conn.execute(
+                    f"""
+                    DELETE FROM {self.schema}.embeddings e
+                    WHERE e.chunk_key = ANY(%s)
+                      AND e.embedding_model = %s
+                      AND e.embedding_version = %s
                     """,
-                    tuple([embedding_model, embedding_version, *params, batch]),
+                    (keys, embedding_model, embedding_version),
                 )
                 n = int(cur.rowcount or 0)
+                conn.execute(
+                    f"DELETE FROM {self.schema}.embedding_dup_gc WHERE chunk_key = ANY(%s)",
+                    (keys,),
+                )
                 conn.commit()
                 deleted_total += n
                 batches += 1
+                queued -= len(keys)
                 logger.info(
-                    "embeddings_duplicate_gc_batch deleted=%s total_deleted=%s batch=%s",
+                    "embeddings_duplicate_gc_batch deleted=%s total_deleted=%s remaining=%s batch=%s",
                     n,
                     deleted_total,
+                    queued,
                     batches,
                 )
-                if n < batch:
-                    break
                 if max_batches is not None and batches >= max_batches:
                     break
         return deleted_total
@@ -1025,15 +1088,23 @@ class EmbedderMixin:
                 )
                 conn.commit()
                 page_copied = int(inserted.rowcount or 0)
+                hash_rows = conn.execute(
+                    f"SELECT content_hash FROM {self.schema}.chunks WHERE chunk_key = ANY(%s)",
+                    (keys,),
+                ).fetchall()
+                page_hashes = [
+                    str(row["content_hash"] if isinstance(row, dict) else row[0])
+                    for row in hash_rows
+                    if str(row["content_hash"] if isinstance(row, dict) else row[0]).strip()
+                ]
             copied += page_copied
             pages += 1
             after_key = keys[-1]
-            if cleanup_duplicates:
+            if cleanup_duplicates and page_hashes:
                 cleaned += self.delete_duplicate_leftover_embeddings(
                     embedding_model=embedding_model,
                     embedding_version=embedding_version,
-                    batch_size=page,
-                    max_batches=1,
+                    content_hashes=page_hashes,
                 )
             logger.info(
                 "embeddings_reuse_batch copied=%s page_copied=%s cleaned=%s page=%s keys=%s",
