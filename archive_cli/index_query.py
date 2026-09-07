@@ -27,7 +27,7 @@ from .index_config import (
     _vector_literal,
     get_seed_links_enabled,
 )
-from .materializer import _normalize_exact_text, _normalize_slug
+from .materializer import _normalize_exact_text
 from .projections.registry import PROJECTION_REGISTRY, TYPED_PROJECTIONS, projection_for_card_type
 from .query_timing import QueryPhaseTimes, add_ms
 
@@ -940,11 +940,16 @@ class QueryMixin:
 
     def person_path(self, name: str) -> str | None:
         self.ensure_ready()
-        slug = _normalize_slug(name)
         with self._connect() as conn:
             row = conn.execute(
-                f"SELECT rel_path FROM {self.schema}.cards WHERE slug = %s AND type = 'person' LIMIT 1",
-                (slug,),
+                f"""
+                SELECT c.rel_path
+                FROM {self.schema}.cards c
+                LEFT JOIN {self.schema}.people p ON p.card_uid = c.uid
+                WHERE {person_self_match_sql(self.schema, "c")}
+                LIMIT 1
+                """,
+                tuple(person_self_match_params(name)),
             ).fetchone()
         return None if row is None else str(row["rel_path"])
 

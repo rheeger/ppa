@@ -390,6 +390,28 @@ impl MetadataStore {
         None
     }
 
+    pub fn resolve_person_card(&self, needle: &str) -> Option<&CardMeta> {
+        let needle = needle.trim();
+        if needle.is_empty() {
+            return None;
+        }
+        if let Some(card) = self.exact_identifier(needle) {
+            if card.r#type == "person" && !Self::is_suppressed(card) {
+                return Some(card);
+            }
+        }
+        let mut uids: Vec<String> = self.resolve_people_filter_uids(needle).into_iter().collect();
+        uids.sort();
+        for uid in uids {
+            if let Some(card) = self.by_uid.get(&uid) {
+                if card.r#type == "person" && !Self::is_suppressed(card) {
+                    return Some(card);
+                }
+            }
+        }
+        None
+    }
+
     fn rebuild_activity_index(&mut self) {
         let mut entries: Vec<ActivityEntry> = self
             .by_uid
@@ -1160,6 +1182,26 @@ mod access_tests {
         assert!(store.matches_typed_predicate(&thread, &pred).unwrap());
         assert_eq!(
             store.exact_identifier("9147153533").map(|card| card.card_uid.as_str()),
+            Some("hfa-person-54fc3b19aeda")
+        );
+        assert_eq!(
+            store.resolve_person_card("9147153533").map(|card| card.card_uid.as_str()),
+            Some("hfa-person-54fc3b19aeda")
+        );
+        assert_eq!(
+            store
+                .resolve_person_card("+19147153533")
+                .map(|card| card.card_uid.as_str()),
+            Some("hfa-person-54fc3b19aeda")
+        );
+        assert_eq!(
+            store
+                .resolve_person_card("sampanken@gmail.com")
+                .map(|card| card.card_uid.as_str()),
+            Some("hfa-person-54fc3b19aeda")
+        );
+        assert_eq!(
+            store.resolve_person_card("Sam Panken").map(|card| card.card_uid.as_str()),
             Some("hfa-person-54fc3b19aeda")
         );
     }

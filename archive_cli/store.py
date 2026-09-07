@@ -1090,7 +1090,7 @@ class DefaultArchiveStore(ArchiveStore):
         serving = self._try_serving_query()
         if serving is not None:
             hit = serving.person(name, **self._policy_kwargs())
-            if hit:
+            if hit and hit.get("found"):
                 rel_path = str(hit.get("rel_path") or "")
                 if rel_path:
                     content, rel = self._contained_text(rel_path)
@@ -1100,7 +1100,7 @@ class DefaultArchiveStore(ArchiveStore):
                             return {"found": False, "content": ""}
                         return payload
                     return {"found": False, "content": ""}
-                return {"found": bool(hit.get("found")), "content": str(hit.get("content") or ""), **hit}
+                return {"found": True, "content": str(hit.get("content") or ""), **hit}
         rel_path = self.index.person_path(name)
         if rel_path:
             content, rel = self._contained_text(str(rel_path))
@@ -1109,6 +1109,11 @@ class DefaultArchiveStore(ArchiveStore):
                 if not card_permitted(self.access, self._record_for_read(rel or str(rel_path), payload)):
                     return {"found": False, "content": ""}
                 return payload
+        from archive_vault.canon import phone as canon_phone
+
+        # Phone/email already failed serving + warehouse. Do not walk the vault.
+        if "@" in name or canon_phone.alias_forms(name):
+            return {"found": False, "content": ""}
         match = find_note_by_slug(self.vault, name.replace(" ", "-").lower())
         if match is None:
             return {"found": False, "content": ""}

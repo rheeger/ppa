@@ -37,7 +37,8 @@ def _write_mini_export(work: Path, *, dim: int = 4) -> None:
             "orgs": ["Endaoment"],
             "corpus_state": "active",
             "aliases": ["jane"],
-            "emails": [],
+            "emails": ["jane@example.com"],
+            "phones": ["+19145551212"],
         },
         {
             "card_uid": "hfa-email-111122223333",
@@ -136,6 +137,9 @@ def test_search_query_hybrid_on_mini_index(tmp_path, monkeypatch) -> None:
     assert hybrid
     person = handle.person("Jane Smith")
     assert person.get("found") is True
+    assert handle.person("9145551212").get("found") is True
+    assert handle.person("+19145551212").get("card_uid") == "hfa-person-aaaabbbbcccc"
+    assert handle.person("jane@example.com").get("found") is True
     graph = handle.graph("People/jane-smith.md", hops=1)
     assert graph
     neighbors = handle.neighbor_uids(["hfa-email-111122223333"], hops=1)

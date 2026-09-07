@@ -990,21 +990,16 @@ pub fn serving_index_person(
 ) -> PyResult<PyObject> {
     let idx = handle.borrow();
     let policy = req.as_ref().map(access_policy).unwrap_or_else(AccessPolicy::unrestricted);
-    let needle = name.trim().to_lowercase().replace(' ', "-");
-    let uid = idx
-        .meta
-        .by_slug
-        .get(&name.trim().to_lowercase())
-        .or_else(|| idx.meta.by_slug.get(&needle))
-        .cloned();
-    if let Some(uid) = uid {
-        if let Some(card) = idx.meta.by_uid.get(&uid) {
-            if policy.permits(card) && !MetadataStore::is_suppressed(card) {
-                return json_to_py(
-                    py,
-                    serde_json::json!({"found": true, "rel_path": card.rel_path, "card_uid": uid}),
-                );
-            }
+    if let Some(card) = idx.meta.resolve_person_card(name) {
+        if policy.permits(card) {
+            return json_to_py(
+                py,
+                serde_json::json!({
+                    "found": true,
+                    "rel_path": card.rel_path,
+                    "card_uid": card.card_uid,
+                }),
+            );
         }
     }
     json_to_py(py, serde_json::json!({"found": false, "rel_path": "", "card_uid": ""}))
