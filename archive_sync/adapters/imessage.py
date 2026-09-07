@@ -1087,36 +1087,50 @@ class IMessageAdapter(BaseAdapter):
             return
 
         if card.type == "imessage_message":
-            dest = Path(vault_path) / str(rel_path)
-            is_new = not dest.is_file()
             self._replace_generic_card(vault_path, rel_path, card, body, provenance)
-            _touch_parent_thread(vault_path, card, increment=is_new)
+            _touch_parent_thread(vault_path, card, increment=False)
             return
 
         self._replace_generic_card(vault_path, rel_path, card, body, provenance)
 
 
 def _touch_parent_thread(vault_path: str | Path, card: Any, *, increment: bool) -> None:
-    """Bump parent thread rollup when a child message is written. Does not walk the vault."""
+    """Schedule parent rollup. Never increment. Count converges via thread_projection."""
 
     from archive_cli.vault_cache import VaultScanCache
+    from archive_engine.thread_projection import pending_receipt, persist_pending_receipt
     from archive_vault.canon.wikilink import parse as parse_wikilink
+    from archive_vault.vault import update_frontmatter_fields
 
+    del increment  # non-idempotent +1 is retired
     thread_ref = parse_wikilink(str(getattr(card, "thread", "") or ""))
     if not thread_ref:
         return
     vault = Path(vault_path)
     cache_path = VaultScanCache.cache_path_for_vault(vault)
     if not cache_path.is_file():
+        persist_pending_receipt(
+            vault, pending_receipt(thread_ref, str(getattr(card, "uid", "") or ""), status="pending")
+        )
         return
     try:
         cache = VaultScanCache.build_or_load(vault, tier=1, progress_every=0)
         rel = cache.rel_path_for_uid(thread_ref)
     except Exception:
+        persist_pending_receipt(
+            vault, pending_receipt(thread_ref, str(getattr(card, "uid", "") or ""), status="pending")
+        )
         return
     if not rel:
+        persist_pending_receipt(
+            vault, pending_receipt(thread_ref, str(getattr(card, "uid", "") or ""), status="pending")
+        )
         return
     frontmatter, _body, _provenance = read_note(vault, rel)
+    persist_pending_receipt(
+        vault,
+        pending_receipt(str(frontmatter.get("uid") or thread_ref), str(frontmatter.get("updated") or ""), status="pending"),
+    )
     updates: dict[str, Any] = {}
     sent = str(getattr(card, "sent_at", "") or getattr(card, "created", "") or "")
     if sent:
@@ -1126,10 +1140,5 @@ def _touch_parent_thread(vault_path: str | Path, card: Any, *, increment: bool) 
         first = str(frontmatter.get("first_message_at") or "")
         if not first or sent < first:
             updates["first_message_at"] = sent
-    if increment:
-        updates["message_count"] = int(frontmatter.get("message_count") or 0) + 1
-    if not updates:
-        return
-    from archive_vault.vault import update_frontmatter_fields
-
-    update_frontmatter_fields(vault, rel, updates)
+    if updates:
+        update_frontmatter_fields(vault, rel, updates)

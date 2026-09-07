@@ -315,27 +315,9 @@ def write_jsonl(path: Path, rows: Iterable[Mapping[str, Any]]) -> int:
 def _install_snapshot_embeddings(dest: Path, snapshot: ServingSnapshot) -> int:
     """Move a streamed warehouse export into the generation, or write in-memory vectors."""
 
-    keys_dest = dest / "embedding_keys.txt"
-    bin_dest = dest / "embeddings.bin"
-    keys_src = str(snapshot.embedding_keys_path or "").strip()
-    bin_src = str(snapshot.embeddings_bin_path or "").strip()
-    if keys_src and bin_src:
-        src_keys = Path(keys_src)
-        src_bin = Path(bin_src)
-        if src_keys.is_file() and src_bin.is_file():
-            if src_keys.resolve() != keys_dest.resolve():
-                shutil.move(str(src_keys), str(keys_dest))
-            if src_bin.resolve() != bin_dest.resolve():
-                shutil.move(str(src_bin), str(bin_dest))
-            parent = src_keys.parent
-            if parent.name and parent.parent.name == ".export-tmp":
-                shutil.rmtree(parent, ignore_errors=True)
-            count = int(snapshot.embedding_count or 0)
-            if count <= 0 and keys_dest.is_file():
-                with keys_dest.open(encoding="utf-8") as fh:
-                    count = sum(1 for line in fh if line.strip())
-            return count
-    return write_embeddings(keys_dest, bin_dest, snapshot.embeddings)
+    from archive_engine.adapters.serving_export import install_streamed_embeddings
+
+    return install_streamed_embeddings(dest, snapshot)
 
 
 def write_embeddings(keys_path: Path, bin_path: Path, items: Sequence[tuple[str, Sequence[float]]]) -> int:
@@ -494,7 +476,12 @@ def check_publication_budget(
         raise IncompatibleStateError("publication_disk_budget")
 
 
-def validate_generation(generation_dir: Path, spec: EmbeddingSpec | None = None) -> dict[str, Any]:
+def validate_generation(
+    generation_dir: Path,
+    spec: EmbeddingSpec | None = None,
+    *,
+    require_native_open: bool = False,
+) -> dict[str, Any]:
     dest = Path(generation_dir)
     errors: list[str] = []
     for name in ("manifest.json", "cards.jsonl", "chunks.jsonl", "edges.jsonl", "embedding_keys.txt"):
@@ -558,12 +545,55 @@ def validate_generation(generation_dir: Path, spec: EmbeddingSpec | None = None)
             errors.append(f"tombstone_live:{uid}")
     if errors:
         raise IncompatibleStateError("publication_validation_failed: " + ",".join(errors))
+    native_open = "skipped"
+    canaries: dict[str, str] = {}
+    if require_native_open and card_count == 0 and key_count == 0:
+        native_open = "empty"
+        canaries = {"exact": "empty", "query": "empty", "graph": "empty"}
+    elif require_native_open:
+        try:
+            import archive_crate
+
+            opener = getattr(archive_crate, "serving_index_open_generation", None)
+            if opener is None:
+                raise IncompatibleStateError("publication_validation_failed: native_open:unavailable")
+            if dest.parent.name == "generations":
+                handle = opener(str(dest.parent.parent), dest.name)
+            else:
+                handle = opener(str(dest.parent), dest.name)
+            native_open = "opened"
+            search_fn = getattr(archive_crate, "serving_index_search", None)
+            query_fn = getattr(archive_crate, "serving_index_query", None)
+            graph_fn = getattr(archive_crate, "serving_index_graph", None)
+            if callable(search_fn):
+                search_fn(handle, {"query": "canary", "limit": 1})
+                canaries["exact"] = "ok"
+            if callable(query_fn):
+                listed = query_fn(handle, {"limit": 1})
+                canaries["query"] = "ok"
+                start = ""
+                if isinstance(listed, list) and listed:
+                    start = str(listed[0].get("rel_path") or listed[0].get("card_uid") or "")
+                if callable(graph_fn) and start:
+                    graph_fn(handle, start, 1, {})
+                    canaries["graph"] = "ok"
+                elif callable(graph_fn):
+                    canaries["graph"] = "empty"
+            close = getattr(handle, "close", None)
+            if callable(close):
+                close()
+        except IncompatibleStateError:
+            raise
+        except Exception as exc:
+            raise IncompatibleStateError(f"publication_validation_failed: native_open:{exc}") from exc
     return {
         "ok": True,
         "cards": card_count,
         "chunks": chunk_count,
         "embeddings": key_count,
         "format": 2,
+        "native_open": native_open,
+        "canaries": canaries,
     }
 
 
@@ -682,7 +712,7 @@ def recover_publication(
     if not complete:
         return {"ok": True, "promoted": False, "acked": False, "active": active, "reason": "incomplete"}
     try:
-        validate_generation(dest)
+        validate_generation(dest, require_native_open=True)
     except IncompatibleStateError as exc:
         return {"ok": False, "promoted": False, "acked": False, "active": active, "reason": str(exc)}
     native = crate
@@ -691,6 +721,13 @@ def recover_publication(
     if active != generation_id:
         native.serving_index_publish(str(index_root), generation_id)
         active = generation_id
+    if captured_batch is None and vault is not None:
+        from archive_engine.contracts import ChangeBatch
+        from archive_engine.journaled_state import PUBLICATION_CAPTURE_REL, load_json_state
+
+        payload = load_json_state(vault, PUBLICATION_CAPTURE_REL)
+        if payload.get("consumer_name"):
+            captured_batch = ChangeBatch.from_payload(payload)
     acked = acknowledge_captured(vault, captured_batch)
     return {"ok": True, "promoted": True, "acked": bool(captured_batch), "active": active, "acked_watermark": acked}
 
@@ -888,6 +925,12 @@ def publish_snapshot(
         lease.acquire()
     try:
         _maybe_fault(fault, "lease")
+        if vault is not None:
+            from archive_engine.journaled_state import SCAN_REJECTIONS_REL, load_json_state
+
+            rejection_payload = load_json_state(vault, SCAN_REJECTIONS_REL)
+            if rejection_payload.get("rejections"):
+                raise IncompatibleStateError("publication_blocked_unresolved_scan_rejections")
         check_publication_budget(root, estimate_snapshot_bytes(snapshot), budget_mb=disk_budget_mb)
         dest.mkdir(parents=True, exist_ok=True)
         parent = str(parent_generation or "").strip()
@@ -1001,7 +1044,7 @@ def publish_snapshot(
         logger.info("serving_index_build done generation=%s", gid)
         _maybe_fault(fault, "build")
         check_publication_budget(root, estimate_snapshot_bytes(snapshot), budget_mb=disk_budget_mb)
-        report = validate_generation(dest, snapshot.embedding_spec)
+        report = validate_generation(dest, snapshot.embedding_spec, require_native_open=True)
         _maybe_fault(fault, "validate")
         write_complete(
             dest,

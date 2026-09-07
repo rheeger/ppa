@@ -677,6 +677,17 @@ def merge_identities(
                 date=_utc_date(),
                 method=PROVENANCE_METHOD_HUMAN,
             )
+    from archive_vault.provenance import PROVENANCE_EXEMPT_FIELDS as _PROV_EXEMPT
+
+    for field_name, value in winner_data.items():
+        if field_name in _PROV_EXEMPT or value in ("", [], None, 0):
+            continue
+        if field_name not in winner_prov:
+            winner_prov[field_name] = ProvenanceEntry(
+                source=f"decision:{stored['decision_id']}",
+                date=_utc_date(),
+                method=PROVENANCE_METHOD_HUMAN,
+            )
     winner_data["updated"] = _utc_date()
     write_card(root, winner.rel_path, validate_card_strict(winner_data), body=winner.body, provenance=winner_prov)
 
@@ -690,6 +701,15 @@ def merge_identities(
         method=PROVENANCE_METHOD_HUMAN,
         input_hash=value_hash({"winner_uid": winner_uid, "loser_uid": loser_uid}),
     )
+    for field_name, value in stub.items():
+        if field_name in _PROV_EXEMPT or value in ("", [], None, 0):
+            continue
+        if field_name not in stub_prov:
+            stub_prov[field_name] = ProvenanceEntry(
+                source=f"decision:{stored['decision_id']}",
+                date=_utc_date(),
+                method=PROVENANCE_METHOD_HUMAN,
+            )
     write_card(
         root, loser.rel_path, validate_card_strict(stub), body=f"Redirected to {winner_link}\n", provenance=stub_prov
     )

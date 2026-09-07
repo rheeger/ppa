@@ -1,0 +1,154 @@
+{
+  "contract_version": "p31.g0",
+  "status": "pending",
+  "baseline_inspected": "03895dff3c18328759afb0f30c337624574e0776",
+  "baseline_current": "0ae7cbdb8a52b8e0625d5c84a8e6dc5d3de351d1",
+  "baseline_note": "GitHub PR #31 landed person-lookup (resolve_person_card sorted-first). That is attributed concurrent work, not F02/F04 closeout. Convert in slice E.",
+  "migration_reservation": {
+    "latest_in_tree": "010_processor_receipts.py",
+    "reserved_if_needed": "011",
+    "purpose": "snapshot-visible publication completion state at materialization commit; create only if slice B requires it"
+  },
+  "cases": [
+    {
+      "id": "F01",
+      "owner": "identity",
+      "slice": "F",
+      "scenario": "p31.identity_decisions",
+      "scenario_file": "archive_tests/acceptance/scenarios/p31_identity_decisions.py",
+      "assertion": "Alice Smith and Bob Smith sharing one household phone never auto-merge; they queue as ambiguous",
+      "proof_tier": "isolated_integration",
+      "status": "pending"
+    },
+    {
+      "id": "F02",
+      "owner": "identity/query",
+      "slice": "D,E",
+      "scenario": "p31.people_queries",
+      "scenario_file": "archive_tests/acceptance/scenarios/p31_people_queries.py",
+      "assertion": "Shared phone/email/name yields unique|ambiguous|unresolved candidate sets; shuffled load order is stable; resolve_person_card is not uniqueness",
+      "proof_tier": "isolated_integration",
+      "status": "pending"
+    },
+    {
+      "id": "F03",
+      "owner": "identity",
+      "slice": "F",
+      "scenario": "p31.identity_decisions",
+      "scenario_file": "archive_tests/acceptance/scenarios/p31_identity_decisions.py",
+      "assertion": "identity-repair merge apply calls merge_identities(); no direct redirect/alias writes from the command",
+      "proof_tier": "isolated_integration",
+      "status": "pending"
+    },
+    {
+      "id": "F04",
+      "owner": "identity/query",
+      "slice": "E",
+      "scenario": "p31.people_queries",
+      "scenario_file": "archive_tests/acceptance/scenarios/p31_people_queries.py",
+      "assertion": "People-filter resolution runs once per request; no per-card full metadata scan",
+      "proof_tier": "isolated_integration",
+      "status": "pending"
+    },
+    {
+      "id": "F05",
+      "owner": "thread",
+      "slice": "G",
+      "scenario": "p31.thread_projection",
+      "scenario_file": "archive_tests/acceptance/scenarios/p31_thread_projection.py",
+      "assertion": "Child write then crash then retry then maintenance yields exact current parent counts/time bounds via OutputReceipt-scheduled projection",
+      "proof_tier": "isolated_integration",
+      "status": "pending"
+    },
+    {
+      "id": "F06",
+      "owner": "identity",
+      "slice": "D",
+      "scenario": "p31.identifiers",
+      "scenario_file": "archive_tests/acceptance/scenarios/p31_identifiers.py",
+      "assertion": "alice42 and bob42 stay distinct opaque handles; extensions are metadata; short digits are not E.164; Python/Rust share one fixture corpus",
+      "proof_tier": "unit_and_fixture",
+      "status": "pending"
+    },
+    {
+      "id": "F07",
+      "owner": "scan/publication",
+      "slice": "H",
+      "scenario": "p31.rejections",
+      "scenario_file": "archive_tests/acceptance/scenarios/p31_rejections.py",
+      "assertion": "Schema-invalid source is preserved with ScanRejection; default promotion is blocked; partial mode discloses incompleteness",
+      "proof_tier": "isolated_integration",
+      "status": "pending"
+    },
+    {
+      "id": "F08",
+      "owner": "thread/identity",
+      "slice": "I",
+      "scenario": "p31.conversation_links",
+      "scenario_file": "archive_tests/acceptance/scenarios/p31_conversation_links.py",
+      "assertion": "Preview writes nothing; apply journals proposed_link pairs consumed by linker/seed_links; dry-run honored",
+      "proof_tier": "isolated_integration",
+      "status": "pending"
+    },
+    {
+      "id": "F09",
+      "owner": "publication",
+      "slice": "A",
+      "scenario": "p31.export",
+      "scenario_file": "archive_tests/acceptance/scenarios/p31_export.py",
+      "assertion": "Interrupted or incomplete vector export fails closed; missing staged files cannot fall back to empty in-memory vectors; ACTIVE unchanged",
+      "proof_tier": "isolated_integration",
+      "status": "pending"
+    },
+    {
+      "id": "F10",
+      "owner": "publication",
+      "slice": "B",
+      "scenario": "p31.snapshot",
+      "scenario_file": "archive_tests/acceptance/scenarios/p31_snapshot.py",
+      "assertion": "Journal capture is snapshot-bound; only represented revisions are acknowledged; DIRTY is not blanket-truncated",
+      "proof_tier": "isolated_integration",
+      "status": "pending"
+    },
+    {
+      "id": "F11",
+      "owner": "publication",
+      "slice": "B",
+      "scenario": "p31.snapshot",
+      "scenario_file": "archive_tests/acceptance/scenarios/p31_snapshot.py",
+      "assertion": "Existing PublisherLease is held from ACTIVE selection through promotion/ack; stale parent is rejected",
+      "proof_tier": "isolated_integration",
+      "status": "pending"
+    },
+    {
+      "id": "F12",
+      "owner": "publication/native",
+      "slice": "C",
+      "scenario": "p31.activation",
+      "scenario_file": "archive_tests/acceptance/scenarios/p31_activation.py",
+      "assertion": "Candidate open/canary validation precedes ACTIVE; unreadable candidates leave the previous generation",
+      "proof_tier": "isolated_integration",
+      "status": "pending"
+    },
+    {
+      "id": "F13",
+      "owner": "verification",
+      "slice": "J,K",
+      "scenario": "p31.end_to_end",
+      "scenario_file": "archive_tests/acceptance/scenarios/p31_end_to_end.py",
+      "assertion": "Installed CLI and real MCP transport observe source→PG→native evidence; MemoryServing and manufactured held-out sets are not product proof",
+      "proof_tier": "installed_product",
+      "status": "pending"
+    },
+    {
+      "id": "F14",
+      "owner": "verification/coordinator",
+      "slice": "All,K",
+      "scenario": "p31.scale",
+      "scenario_file": "archive_tests/acceptance/scenarios/p31_scale.py",
+      "assertion": "Architecture tests prohibit CLI-owned merge/publication/rollup algorithms and duplicate normalizers; adapters have removal conditions",
+      "proof_tier": "unit_and_installed",
+      "status": "pending"
+    }
+  ]
+}

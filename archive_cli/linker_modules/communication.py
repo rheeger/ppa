@@ -7,6 +7,7 @@ Behavior is byte-equivalent to the pre-Step-18 dispatch.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from archive_cli import linker_framework as lf
@@ -15,6 +16,7 @@ from archive_cli.seed_links import (
     LINK_TYPE_MESSAGE_HAS_ATTACHMENT,
     LINK_TYPE_MESSAGE_IN_THREAD,
     LINK_TYPE_MESSAGE_MENTIONS_PERSON,
+    LINK_TYPE_SAME_CONVERSATION,
     LINK_TYPE_THREAD_HAS_ATTACHMENT,
     LINK_TYPE_THREAD_HAS_MESSAGE,
     LINK_TYPE_THREAD_HAS_PERSON,
@@ -263,7 +265,47 @@ def _generate_communication_candidates(catalog: SeedLinkCatalog, source: SeedCar
                 candidate_group="participant_resolution",
             )
         )
+    results.extend(_conversation_proposal_candidates(catalog, source))
     return results
+
+
+def _conversation_proposal_candidates(catalog: SeedLinkCatalog, source: SeedCardSketch) -> list[SeedLinkCandidate]:
+    vault = getattr(catalog, "vault", None)
+    if not vault:
+        return []
+    from archive_engine.conversation_links import load_proposals
+
+    out: list[SeedLinkCandidate] = []
+    for pair in load_proposals(Path(vault)):
+        left = str(pair.get("email_thread") or "")
+        right = str(pair.get("phone_thread") or "")
+        if source.uid not in {left, right}:
+            continue
+        target_uid = right if source.uid == left else left
+        target = catalog.cards_by_uid.get(target_uid)
+        if target is None:
+            continue
+        _append_candidate(
+            out,
+            module_name=MODULE_COMMUNICATION,
+            source=source,
+            target=target,
+            proposed_link_type=LINK_TYPE_SAME_CONVERSATION,
+            candidate_group="same_conversation",
+            features={"proposed_link": 1, "method": pair.get("method") or "same_conversation_handle_pair"},
+            evidences=[
+                _make_evidence(
+                    "proposed_link",
+                    "conversation_proposal",
+                    "method",
+                    pair.get("method") or "same_conversation_handle_pair",
+                    1.0,
+                    source_uid=source.uid,
+                    target_uid=target.uid,
+                )
+            ],
+        )
+    return out
 
 
 def _score_communication_features(
@@ -320,6 +362,7 @@ lf.register_linker(
             LINK_TYPE_MESSAGE_HAS_ATTACHMENT,
             LINK_TYPE_THREAD_HAS_PERSON,
             LINK_TYPE_MESSAGE_MENTIONS_PERSON,
+            LINK_TYPE_SAME_CONVERSATION,
         ),
         generator=_generate_communication_candidates,
         scoring_fn=_score_communication_features,

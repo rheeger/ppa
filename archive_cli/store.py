@@ -1090,6 +1090,13 @@ class DefaultArchiveStore(ArchiveStore):
         serving = self._try_serving_query()
         if serving is not None:
             hit = serving.person(name, **self._policy_kwargs())
+            if hit and str(hit.get("status") or "") == "ambiguous":
+                return {
+                    "found": False,
+                    "content": "",
+                    "status": "ambiguous",
+                    "candidate_uids": list(hit.get("candidate_uids") or []),
+                }
             if hit and hit.get("found"):
                 rel_path = str(hit.get("rel_path") or "")
                 if rel_path:

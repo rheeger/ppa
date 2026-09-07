@@ -69,15 +69,12 @@ def test_hybrid_merge_redirects_email_dup_and_queues_phone_ambig(tmp_vault: Path
     canonicalize_people(tmp_vault, apply=True)
     result = merge_people(tmp_vault, apply=True)
     redirected = {item["loser"]: item for item in result["redirected"]}
-    assert "hfa-person-idrepemailb2" in redirected
-    assert redirected["hfa-person-idrepemailb2"]["winner"] == "hfa-person-idrepemaila1"
-    loser_fm, _body, _prov = read_note(tmp_vault, "People/alex-rivera-dup.md")
-    assert loser_fm["redirect_to"] == "hfa-person-idrepemaila1"
-    assert (tmp_vault / "People" / "alex-rivera-dup.md").is_file()
+    assert "hfa-person-idrepemailb2" not in redirected
     queued_uids = {tuple(sorted(item["uids"])) for item in result["queued"]}
+    assert ("hfa-person-idrepemaila1", "hfa-person-idrepemailb2") in queued_uids
     assert ("hfa-person-idrepphona01", "hfa-person-idrepphonb02") in queued_uids
-    queue = json.loads((tmp_vault / "_meta" / "dedup-candidates.json").read_text(encoding="utf-8"))
-    assert any("hfa-person-idrepphona01" in item.get("uids", []) for item in queue)
+    queue = json.loads((tmp_vault / "_meta" / "identity-proposals.json").read_text(encoding="utf-8"))
+    assert any("hfa-person-idrepphona01" in item.get("uids", []) for item in queue.get("proposals") or [])
 
 
 def test_s4_planted_ical_and_merchant_are_code_only() -> None:

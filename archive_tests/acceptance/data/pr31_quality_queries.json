@@ -1,0 +1,30 @@
+{
+  "held_out": true,
+  "independent_of_fixture_observed_sets": true,
+  "queries": [
+    {
+      "id": "q-household-phone",
+      "kind": "identity_ambiguous",
+      "needle": "+15551230000",
+      "expect_status": "ambiguous"
+    },
+    {
+      "id": "q-opaque-alice",
+      "kind": "identifier",
+      "needle": "alice42",
+      "expect_status": "unresolved"
+    },
+    {
+      "id": "q-unknown-name",
+      "kind": "identity_unknown",
+      "needle": "Zzzyx Notaperson",
+      "expect_status": "unresolved"
+    },
+    {
+      "id": "q-stub-email",
+      "kind": "identity_unique_after_merge",
+      "needle": "pat@example.com",
+      "expect_status": "unique"
+    }
+  ]
+}

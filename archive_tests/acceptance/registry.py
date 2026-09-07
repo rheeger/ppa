@@ -94,6 +94,18 @@ def load_builtin_scenarios() -> None:
     from archive_tests.acceptance.scenarios import p10_context as _p10_context  # noqa: F401
     from archive_tests.acceptance.scenarios import p10_queries as _p10_queries  # noqa: F401
     from archive_tests.acceptance.scenarios import p10_workflows as _p10_workflows  # noqa: F401
+    from archive_tests.acceptance.scenarios import p31_activation as _p31_activation  # noqa: F401
+    from archive_tests.acceptance.scenarios import p31_conversation_links as _p31_conversation  # noqa: F401
+    from archive_tests.acceptance.scenarios import p31_end_to_end as _p31_e2e  # noqa: F401
+    from archive_tests.acceptance.scenarios import p31_export as _p31_export  # noqa: F401
+    from archive_tests.acceptance.scenarios import p31_identifiers as _p31_identifiers  # noqa: F401
+    from archive_tests.acceptance.scenarios import p31_identity_decisions as _p31_identity  # noqa: F401
+    from archive_tests.acceptance.scenarios import p31_inventory as _p31_inventory  # noqa: F401
+    from archive_tests.acceptance.scenarios import p31_people_queries as _p31_people  # noqa: F401
+    from archive_tests.acceptance.scenarios import p31_rejections as _p31_rejections  # noqa: F401
+    from archive_tests.acceptance.scenarios import p31_scale as _p31_scale  # noqa: F401
+    from archive_tests.acceptance.scenarios import p31_snapshot as _p31_snapshot  # noqa: F401
+    from archive_tests.acceptance.scenarios import p31_thread_projection as _p31_threads  # noqa: F401
     from archive_tests.acceptance.scenarios import release as _release  # noqa: F401
 
     _LOADED = True

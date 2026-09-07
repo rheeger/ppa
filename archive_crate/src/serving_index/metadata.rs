@@ -221,13 +221,20 @@ pub struct MetadataStore {
     pub by_uid: HashMap<String, CardMeta>,
     pub by_slug: HashMap<String, String>,
     pub by_path: HashMap<String, String>,
-    pub by_email: HashMap<String, String>,
-    pub by_phone: HashMap<String, String>,
+    pub by_email: HashMap<String, Vec<String>>,
+    pub by_phone: HashMap<String, Vec<String>>,
     pub by_external_id: HashMap<String, String>,
     /// Cards with a parseable `activity_at`, sorted by `(at_ms, uid)`.
     pub by_activity: Vec<ActivityEntry>,
     /// Indexes into `by_activity` for cards that have an interval end.
     pub intervals: Vec<usize>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PreparedPeopleFilter {
+    pub needle: String,
+    pub uids: HashSet<String>,
+    pub status: &'static str,
 }
 
 fn activity_ms(raw: &str) -> Option<i64> {
@@ -259,12 +266,18 @@ impl MetadataStore {
         for email in &card.emails {
             let key = email.to_lowercase();
             if !key.is_empty() {
-                self.by_email.insert(key, card.card_uid.clone());
+                let slot = self.by_email.entry(key).or_default();
+                if !slot.contains(&card.card_uid) {
+                    slot.push(card.card_uid.clone());
+                }
             }
         }
         for phone in &card.phones {
             for form in crate::canon::phone_alias_forms(phone) {
-                self.by_phone.insert(form, card.card_uid.clone());
+                let slot = self.by_phone.entry(form).or_default();
+                if !slot.contains(&card.card_uid) {
+                    slot.push(card.card_uid.clone());
+                }
             }
         }
         for ext in &card.external_ids {
@@ -292,13 +305,13 @@ impl MetadataStore {
             uids.insert(uid.clone());
         }
         if parsed.contains('@') {
-            if let Some(uid) = self.by_email.get(&email) {
-                uids.insert(uid.clone());
+            if let Some(found) = self.by_email.get(&email) {
+                uids.extend(found.iter().cloned());
             }
         }
         for form in crate::canon::phone_alias_forms(&parsed) {
-            if let Some(uid) = self.by_phone.get(&form) {
-                uids.insert(uid.clone());
+            if let Some(found) = self.by_phone.get(&form) {
+                uids.extend(found.iter().cloned());
             }
         }
         if uids.is_empty() {
@@ -313,14 +326,96 @@ impl MetadataStore {
                 }
             }
         }
-        if uids.is_empty() && parsed.len() >= 7 {
-            for card in self.by_uid.values() {
-                if card.r#type == "person" && card.search_text.contains(&parsed) {
-                    uids.insert(card.card_uid.clone());
-                }
-            }
-        }
         uids
+    }
+
+    pub fn prepare_people_filter(&self, people_filter: &str) -> PreparedPeopleFilter {
+        let needle = people_filter.trim().to_string();
+        if needle.is_empty() {
+            return PreparedPeopleFilter {
+                needle,
+                uids: HashSet::new(),
+                status: "none",
+            };
+        }
+        let uids = self.resolve_people_filter_uids(&needle);
+        let status = match uids.len() {
+            0 => "unresolved",
+            1 => "unique",
+            _ => "ambiguous",
+        };
+        PreparedPeopleFilter { needle, uids, status }
+    }
+
+    pub fn people_ok(&self, card: &CardMeta, people: &PreparedPeopleFilter) -> bool {
+        if people.status == "none" {
+            return true;
+        }
+        if people.uids.is_empty() {
+            return false;
+        }
+        card.people.iter().any(|person| people.uids.contains(person))
+    }
+
+    pub fn person_resolution(&self, needle: &str) -> PreparedPeopleFilter {
+        let prepared = self.prepare_people_filter(needle);
+        if prepared.status != "none" {
+            return prepared;
+        }
+        PreparedPeopleFilter {
+            needle: needle.to_string(),
+            uids: HashSet::new(),
+            status: "unresolved",
+        }
+    }
+
+    pub fn eligible_prepared(
+        &self,
+        card: &CardMeta,
+        policy: &AccessPolicy,
+        type_filter: &str,
+        source_filter: &str,
+        people: &PreparedPeopleFilter,
+        org_filter: &str,
+        start_date: &str,
+        end_date: &str,
+    ) -> bool {
+        if !policy.permits(card) {
+            return false;
+        }
+        if Self::is_suppressed(card) {
+            return false;
+        }
+        if !type_filter.is_empty() && card.r#type != type_filter {
+            return false;
+        }
+        if !source_filter.is_empty()
+            && !card
+                .sources
+                .iter()
+                .any(|s| s == source_filter || s.contains(source_filter))
+        {
+            return false;
+        }
+        if !self.people_ok(card, people) {
+            return false;
+        }
+        if !org_filter.is_empty()
+            && !card
+                .orgs
+                .iter()
+                .any(|o| o == org_filter || o.to_lowercase().contains(&org_filter.to_lowercase()))
+        {
+            return false;
+        }
+        let act = card.activity_at.get(..10).unwrap_or("");
+        if !start_date.is_empty() && act < start_date.get(..10).unwrap_or(start_date) {
+            return false;
+        }
+        if !end_date.is_empty() && !act.is_empty() && act > end_date.get(..10).unwrap_or(end_date) {
+            return false;
+        }
+        true
     }
 
     pub fn from_cards(cards: impl IntoIterator<Item = CardMeta>) -> Self {
@@ -369,12 +464,18 @@ impl MetadataStore {
         if let Some(uid) = self.by_slug.get(&lower) {
             return self.by_uid.get(uid);
         }
-        if let Some(uid) = self.by_email.get(&lower) {
-            return self.by_uid.get(uid);
+        if let Some(found) = self.by_email.get(&lower) {
+            if found.len() == 1 {
+                return self.by_uid.get(&found[0]);
+            }
+            return None;
         }
         for form in crate::canon::phone_alias_forms(q) {
-            if let Some(uid) = self.by_phone.get(&form) {
-                return self.by_uid.get(uid);
+            if let Some(found) = self.by_phone.get(&form) {
+                if found.len() == 1 {
+                    return self.by_uid.get(&found[0]);
+                }
+                return None;
             }
         }
         if let Some(uid) = self
@@ -400,14 +501,14 @@ impl MetadataStore {
                 return Some(card);
             }
         }
-        let mut uids: Vec<String> = self.resolve_people_filter_uids(needle).into_iter().collect();
-        uids.sort();
-        for uid in uids {
-            if let Some(card) = self.by_uid.get(&uid) {
-                if card.r#type == "person" && !Self::is_suppressed(card) {
-                    return Some(card);
-                }
-            }
+        let mut persons: Vec<&CardMeta> = self
+            .resolve_people_filter_uids(needle)
+            .into_iter()
+            .filter_map(|uid| self.by_uid.get(&uid))
+            .filter(|card| card.r#type == "person" && !Self::is_suppressed(card))
+            .collect();
+        if persons.len() == 1 {
+            return Some(persons.remove(0));
         }
         None
     }
@@ -483,22 +584,8 @@ impl MetadataStore {
         {
             return false;
         }
-        if !people_filter.is_empty() {
-            let resolved = self.resolve_people_filter_uids(people_filter);
-            if !resolved.is_empty() {
-                if !card.people.iter().any(|p| resolved.contains(p)) {
-                    return false;
-                }
-            } else {
-                let needle = people_filter.to_lowercase();
-                if !card
-                    .people
-                    .iter()
-                    .any(|p| p.to_lowercase() == needle || p.to_lowercase().contains(&needle))
-                {
-                    return false;
-                }
-            }
+        if !self.people_ok(card, &self.prepare_people_filter(people_filter)) {
+            return false;
         }
         if !org_filter.is_empty()
             && !card
@@ -548,6 +635,10 @@ impl MetadataStore {
         people_filter: &str,
         policy: &AccessPolicy,
     ) -> Vec<&CardMeta> {
+        let people = self.prepare_people_filter(people_filter);
+        if people.status == "ambiguous" || people.status == "unresolved" {
+            return Vec::new();
+        }
         let start_key = start_date.get(..10).unwrap_or(start_date);
         let end_key = end_date.get(..10).unwrap_or(end_date);
         let start_idx = if start_key.is_empty() {
@@ -564,7 +655,7 @@ impl MetadataStore {
                 if !end_key.is_empty() && act > end_key {
                     break;
                 }
-                if self.eligible(card, policy, type_filter, source_filter, people_filter, "", "", "")
+                if self.eligible_prepared(card, policy, type_filter, source_filter, &people, "", "", "")
                     && (start_key.is_empty() || act >= start_key)
                 {
                     out.push(card);
@@ -598,6 +689,10 @@ impl MetadataStore {
         } else {
             (ts_ms, ts_ms)
         };
+        let people = self.prepare_people_filter(people_filter);
+        if people.status == "ambiguous" || people.status == "unresolved" {
+            return Some(Vec::new());
+        }
         let per_leg = limit.max(1);
         let mut seen: HashSet<String> = HashSet::new();
         let mut out: Vec<NeighborHit<'_>> = Vec::new();
@@ -612,7 +707,7 @@ impl MetadataStore {
                 per_leg,
                 type_filter,
                 source_filter,
-                people_filter,
+                &people,
                 policy,
                 &mut seen,
                 &mut out,
@@ -625,7 +720,7 @@ impl MetadataStore {
                 per_leg,
                 type_filter,
                 source_filter,
-                people_filter,
+                &people,
                 policy,
                 &mut seen,
                 &mut out,
@@ -637,7 +732,7 @@ impl MetadataStore {
                 per_leg,
                 type_filter,
                 source_filter,
-                people_filter,
+                &people,
                 policy,
                 &mut seen,
                 &mut out,
@@ -655,7 +750,7 @@ impl MetadataStore {
         limit: usize,
         type_filter: &str,
         source_filter: &str,
-        people_filter: &str,
+        people: &PreparedPeopleFilter,
         policy: &AccessPolicy,
         seen: &mut HashSet<String>,
         out: &mut Vec<NeighborHit<'a>>,
@@ -671,7 +766,7 @@ impl MetadataStore {
                 continue;
             }
             if let Some(card) = self.by_uid.get(&entry.uid) {
-                if self.eligible(card, policy, type_filter, source_filter, people_filter, "", "", "") {
+                if self.eligible_prepared(card, policy, type_filter, source_filter, people, "", "", "") {
                     out.push(NeighborHit { card, leg: "during" });
                     added += 1;
                 }
@@ -697,7 +792,7 @@ impl MetadataStore {
                 continue;
             }
             if let Some(card) = self.by_uid.get(&entry.uid) {
-                if self.eligible(card, policy, type_filter, source_filter, people_filter, "", "", "") {
+                if self.eligible_prepared(card, policy, type_filter, source_filter, people, "", "", "") {
                     out.push(NeighborHit { card, leg: "during" });
                     added += 1;
                 }
@@ -711,7 +806,7 @@ impl MetadataStore {
         limit: usize,
         type_filter: &str,
         source_filter: &str,
-        people_filter: &str,
+        people: &PreparedPeopleFilter,
         policy: &AccessPolicy,
         seen: &mut HashSet<String>,
         out: &mut Vec<NeighborHit<'a>>,
@@ -726,7 +821,7 @@ impl MetadataStore {
                 continue;
             }
             if let Some(card) = self.by_uid.get(&entry.uid) {
-                if self.eligible(card, policy, type_filter, source_filter, people_filter, "", "", "") {
+                if self.eligible_prepared(card, policy, type_filter, source_filter, people, "", "", "") {
                     out.push(NeighborHit {
                         card,
                         leg: "forward",
@@ -743,7 +838,7 @@ impl MetadataStore {
         limit: usize,
         type_filter: &str,
         source_filter: &str,
-        people_filter: &str,
+        people: &PreparedPeopleFilter,
         policy: &AccessPolicy,
         seen: &mut HashSet<String>,
         out: &mut Vec<NeighborHit<'a>>,
@@ -758,7 +853,7 @@ impl MetadataStore {
                 continue;
             }
             if let Some(card) = self.by_uid.get(&entry.uid) {
-                if self.eligible(card, policy, type_filter, source_filter, people_filter, "", "", "") {
+                if self.eligible_prepared(card, policy, type_filter, source_filter, people, "", "", "") {
                     out.push(NeighborHit {
                         card,
                         leg: "backward",
@@ -787,14 +882,7 @@ impl MetadataStore {
     }
 
     fn people_predicate_matches(&self, card: &CardMeta, needle: &str) -> bool {
-        let resolved = self.resolve_people_filter_uids(needle);
-        if !resolved.is_empty() {
-            return card.people.iter().any(|person| resolved.contains(person));
-        }
-        let n = needle.to_lowercase();
-        card.people
-            .iter()
-            .any(|person| person.to_lowercase() == n || person.to_lowercase().contains(&n))
+        self.people_ok(card, &self.prepare_people_filter(needle))
     }
 
     fn predicate_string(value: &serde_json::Value) -> String {
@@ -1156,7 +1244,7 @@ mod access_tests {
 
     #[test]
     fn people_filter_resolves_name_to_person_uid() {
-        let person = CardMeta {
+        let sam = CardMeta {
             phones: vec!["+19147153533".into()],
             emails: vec!["sampanken@gmail.com".into()],
             ..person("hfa-person-54fc3b19aeda", "Sam Panken")
@@ -1169,7 +1257,7 @@ mod access_tests {
             corpus_state: "active".into(),
             ..CardMeta::default()
         };
-        let store = MetadataStore::from_cards([person, thread.clone()]);
+        let store = MetadataStore::from_cards([sam, thread.clone()]);
         assert!(store.matches_filters(&thread, "imessage_thread", "", "Sam Panken", "", "", ""));
         assert!(store.matches_filters(&thread, "imessage_thread", "", "sam-panken", "", "", ""));
         assert!(store.matches_filters(&thread, "imessage_thread", "", "9147153533", "", "", ""));
@@ -1204,6 +1292,19 @@ mod access_tests {
             store.resolve_person_card("Sam Panken").map(|card| card.card_uid.as_str()),
             Some("hfa-person-54fc3b19aeda")
         );
+        let alice_card = CardMeta {
+            emails: vec!["shared@example.com".into()],
+            ..person("hfa-person-alice", "Alice Smith")
+        };
+        let alex_card = CardMeta {
+            emails: vec!["shared@example.com".into()],
+            ..person("hfa-person-alex", "Alex Rivera")
+        };
+        let collided = MetadataStore::from_cards([alice_card, alex_card]);
+        assert!(collided.resolve_person_card("shared@example.com").is_none());
+        let prepared = collided.prepare_people_filter("shared@example.com");
+        assert_eq!(prepared.status, "ambiguous");
+        assert_eq!(prepared.uids.len(), 2);
     }
 
     #[test]

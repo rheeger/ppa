@@ -213,6 +213,7 @@ LINK_TYPE_POSSIBLE_SAME_PERSON = "possible_same_person"
 LINK_TYPE_ORPHAN_REPAIR_EXACT = "orphan_repair_exact"
 LINK_TYPE_ORPHAN_REPAIR_FUZZY = "orphan_repair_fuzzy"
 LINK_TYPE_SEMANTICALLY_RELATED = "semantically_related"
+LINK_TYPE_SAME_CONVERSATION = "same_conversation"
 
 # Phase 6.5 new link types.
 LINK_TYPE_FINANCE_RECONCILES = "finance_reconciles"
@@ -240,6 +241,7 @@ PROPOSED_LINK_TYPES: set[str] = {
     LINK_TYPE_ORPHAN_REPAIR_EXACT,
     LINK_TYPE_ORPHAN_REPAIR_FUZZY,
     LINK_TYPE_SEMANTICALLY_RELATED,
+    LINK_TYPE_SAME_CONVERSATION,
 }
 
 CARD_TYPE_MODULES = {
@@ -380,6 +382,7 @@ class SeedLinkCatalog:
     media_by_day: dict[str, list[SeedCardSketch]]
     events_by_day: dict[str, list[SeedCardSketch]]
     path_buckets: dict[str, list[SeedCardSketch]]
+    vault: Path | str | None = None
 
 
 @dataclass(slots=True)
@@ -1248,6 +1251,7 @@ def build_seed_link_catalog(
         media_by_day=media_by_day,
         events_by_day=events_by_day,
         path_buckets=path_buckets,
+        vault=vault,
     )
     # Phase 6.5: invoke every registered linker's post_build_hook. This is how
     # finance_reconcile, trip_cluster, meeting_artifact and any future new
@@ -1461,6 +1465,15 @@ def get_link_surface_policies() -> list[LinkSurfacePolicy]:
             auto_promote_floor=0.50,
             canonical_floor=1.0,
             description="Semantically-related card pair discovered via embedding kNN.",
+        ),
+        LinkSurfacePolicy(
+            link_type=LINK_TYPE_SAME_CONVERSATION,
+            module_name=MODULE_COMMUNICATION,
+            surface=SURFACE_CANDIDATE_DERIVED,
+            promotion_target=PROMOTION_TARGET_DERIVED_EDGE,
+            auto_promote_floor=1.0,
+            canonical_floor=1.0,
+            description="Proposed same-conversation pair from shared person + complementary handles. Never identity.",
         ),
         # Phase 6.5 new link types.
         LinkSurfacePolicy(

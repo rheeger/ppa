@@ -1024,7 +1024,7 @@ def _export_embeddings(
                 out.append((key, tuple(nums)))
             count += 1
             _log_export_progress(log, "embeddings", count, total, started, every=every)
-    except Exception:
+    except Exception as exc:
         logger.exception("serving_index embed export failed")
         if vf is not None:
             vf.close()
@@ -1032,7 +1032,13 @@ def _export_embeddings(
         if kf is not None:
             kf.close()
             kf = None
-        return _EmbeddingExport(items=out, count=count, keys_path=keys_path, bin_path=bin_path)
+        if keys_path:
+            Path(keys_path).unlink(missing_ok=True)
+        if bin_path:
+            Path(bin_path).unlink(missing_ok=True)
+        from archive_engine.adapters.serving_export import ExportFailed
+
+        raise ExportFailed(f"export_interrupted:{exc}") from exc
     finally:
         if vf is not None:
             vf.close()
@@ -1079,6 +1085,7 @@ def _export_warehouse_snapshot(
         every,
     )
     with index._connect() as conn:
+        conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
         conn.execute("SET statement_timeout = 0")
         t_maps = time.monotonic()
         log.info("serving_index_export maps start rss_mb=%.0f", _rss_mb())
@@ -1193,6 +1200,35 @@ def publish_serving_index(
     log = logger or logging.getLogger("ppa.serving_index")
     vault = Path(store.vault)
     root = get_serving_index_path(vault)
+    from archive_engine.publication import PublisherLease
+
+    lease = PublisherLease(root)
+    lease.acquire()
+    try:
+        return _publish_serving_index_locked(
+            store,
+            logger=log,
+            dest_generation=dest_generation,
+            skip_embeddings=skip_embeddings,
+            dirty_uids=dirty_uids,
+            vault=vault,
+            root=root,
+        )
+    finally:
+        lease.release()
+
+
+def _publish_serving_index_locked(
+    store: Any,
+    *,
+    logger: logging.Logger,
+    dest_generation: str | None,
+    skip_embeddings: bool,
+    dirty_uids: list[str] | None,
+    vault: Path,
+    root: Path,
+) -> dict[str, Any]:
+    log = logger
     status = serving_index_status(vault)
     active_gid = str(status.get("serving_index_generation") or "")
     if dirty_uids is None:
@@ -1260,6 +1296,20 @@ def publish_serving_index(
         if Path(store.vault).is_dir():
             with ChangeJournal(store.vault) as journal:
                 captured = consume_batch(journal, CONSUMER_PUBLICATION)
+            if captured is not None:
+                from archive_engine.journaled_state import (
+                    PUBLICATION_CAPTURE_REL,
+                    PUBLICATION_CAPTURE_UID,
+                    persist_json_state,
+                )
+
+                persist_json_state(
+                    Path(store.vault),
+                    uid=PUBLICATION_CAPTURE_UID,
+                    rel=PUBLICATION_CAPTURE_REL,
+                    payload=captured.to_payload(),
+                    source="publication",
+                )
     except Exception:
         logger.debug("publication captured batch unavailable", exc_info=True)
         captured = None
@@ -1273,8 +1323,8 @@ def publish_serving_index(
         crate=crate,
         vault=vault,
         captured_batch=captured,
+        acquire_lease=False,
     )
-    crate.serving_index_truncate_dirty(str(root))
     pruned = prune_retired_serving_generations(vault, keep=receipt.generation_id, logger=log)
     cache = QueryEmbedCache(get_query_embed_cache_path(vault), ram_entries=get_query_embed_cache_ram_entries())
     cache.evict(max_rows=get_query_embed_cache_max_rows(), max_age_days=get_query_embed_cache_max_age_days())

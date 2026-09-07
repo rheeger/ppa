@@ -9,11 +9,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from archive_engine.identity_resolution import auto_merge_eligible
 from archive_vault.canon import phone as canon_phone
 from archive_vault.canon import wikilink as canon_wikilink
 from archive_vault.canon.email import canonical as canon_email
 from archive_vault.identity import IdentityCache, load_identity_map
-from archive_vault.identity_resolver import is_same_person, load_nicknames, normalize_person_name
+from archive_vault.identity_resolver import load_nicknames
 from archive_vault.vault import update_frontmatter_fields
 
 log = logging.getLogger("ppa.identity_repair")
@@ -53,19 +54,16 @@ def _frontmatter_rows(vault: Path, types: list[str] | None = None):
 
 
 def _phone_bucket(raw: str) -> str:
-    value = str(raw or "").strip()
-    if not value:
-        return "empty"
-    canon = canon_phone.canonical(value)
-    if value == canon:
+    parsed = canon_phone.parse(raw)
+    if parsed.validity == "opaque":
+        return "opaque_handle"
+    if parsed.validity == "unknown":
+        return "unknown"
+    if parsed.validity == "invalid":
+        return "empty" if parsed.reason == "empty" else "non_phone"
+    if parsed.region == "INTL" or str(raw or "").strip() == parsed.canonical:
         return "e164"
-    if value.isdigit() and len(value) == 10:
-        return "national10"
-    if value.isdigit() and len(value) == 11 and value.startswith("1"):
-        return "digits11"
-    if canon:
-        return "dirty_but_canonicalizable"
-    return "non_phone"
+    return "dirty_but_canonicalizable"
 
 
 def _wikilink_shape(raw: str) -> str:
@@ -314,63 +312,26 @@ def resolve_people_fields(vault: Path, *, apply: bool) -> dict[str, Any]:
 
 
 def rollup_imessage_threads(vault: Path, *, apply: bool) -> dict[str, Any]:
+    from archive_engine.thread_projection import project_from_rows
+
     rows = _frontmatter_rows(vault, types=["imessage_thread", "imessage_message"])
-    children: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    threads: dict[str, str] = {}
-    for row in rows:
-        fm = row.get("frontmatter") or {}
-        rel = str(row.get("rel_path") or "")
-        if fm.get("type") == "imessage_thread":
-            threads[str(fm.get("uid") or "")] = rel
-        elif fm.get("type") == "imessage_message":
-            parent = canon_wikilink.parse(str(fm.get("thread") or ""))
-            if parent:
-                children[parent].append(fm)
-    updated = 0
-    for uid, rel in threads.items():
-        msgs = children.get(uid) or []
-        if not msgs:
-            continue
-        times = [
-            str(m.get("sent_at") or m.get("created") or "")
-            for m in msgs
-            if str(m.get("sent_at") or m.get("created") or "")
-        ]
-        if not times:
-            continue
-        first_at, last_at = min(times), max(times)
-        count = len(msgs)
-        thread_fm = next((r["frontmatter"] for r in rows if str(r.get("frontmatter", {}).get("uid")) == uid), {})
-        if thread_fm.get("message_count") == count and str(thread_fm.get("last_message_at") or "") == last_at:
-            continue
-        updated += 1
-        if not apply:
-            continue
-        try:
-            update_frontmatter_fields(
-                vault,
-                rel,
-                {"message_count": count, "first_message_at": first_at, "last_message_at": last_at},
-            )
-        except Exception as exc:
-            log.warning("rollup skip rel=%s err=%s", rel, exc)
-            updated -= 1
-            continue
-    return {"updated_threads": updated, "applied": apply}
+    if not apply:
+        return {"updated_threads": 0, "applied": False, "pending": []}
+    from archive_engine.thread_projection import drain_pending, pending_thread_uids
+
+    if pending_thread_uids(vault):
+        return drain_pending(vault, rows)
+    return project_from_rows(vault, rows)
 
 
 def _compatible_name(left: dict[str, Any], right: dict[str, Any], nicknames: dict[str, list[str]]) -> bool:
-    left_tokens = set(normalize_person_name(f"{left.get('first_name', '')} {left.get('last_name', '')}").split())
-    right_tokens = set(normalize_person_name(f"{right.get('first_name', '')} {right.get('last_name', '')}").split())
-    if left_tokens & right_tokens:
-        return True
-    _same, _conf, reasons = is_same_person(left, right, nicknames)
-    return any(item in reasons for item in ("exact_name", "nickname_name", "fuzzy_name"))
+    from archive_engine.identity_resolution import given_names_compatible
+
+    return given_names_compatible(left, right, nicknames)
 
 
 def merge_people(vault: Path, *, apply: bool) -> dict[str, Any]:
     nicknames = load_nicknames(vault)
-    identity_cache = IdentityCache(vault) if apply else None
     people = _iter_person_rows(vault)
     by_email: dict[str, list[dict[str, Any]]] = defaultdict(list)
     by_phone: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -420,71 +381,65 @@ def merge_people(vault: Path, *, apply: bool) -> dict[str, Any]:
                 if pair in seen_pairs:
                     continue
                 seen_pairs.add(pair)
-                same_email = bool(
-                    {canon_email(x) for x in left["frontmatter"].get("emails") or []}
-                    & {canon_email(x) for x in right["frontmatter"].get("emails") or []} - {""}
+                eligible, reason = auto_merge_eligible(
+                    left["frontmatter"], right["frontmatter"], nicknames
                 )
-                same_phone = bool(
-                    {canon_phone.canonical(x) for x in left["frontmatter"].get("phones") or []}
-                    & {canon_phone.canonical(x) for x in right["frontmatter"].get("phones") or []} - {""}
-                )
-                names_ok = _compatible_name(left["frontmatter"], right["frontmatter"], nicknames)
-                if same_email or (same_phone and names_ok):
+                if eligible:
                     winner = _richer(left, right)
                     loser = right if winner is left else left
                     redirected.append(
                         {
                             "winner": str(winner["frontmatter"].get("uid")),
                             "loser": str(loser["frontmatter"].get("uid")),
-                            "reason": "exact_email" if same_email else "exact_phone_compatible_name",
+                            "reason": reason,
                         }
                     )
                     if apply:
-                        rel = str(loser["rel_path"])
-                        update_frontmatter_fields(
+                        from archive_engine.corrections import CorrectionCommandRequest, merge_identities
+
+                        merge_identities(
                             vault,
-                            rel,
-                            {"redirect_to": str(winner["frontmatter"].get("uid"))},
+                            CorrectionCommandRequest(
+                                action="merge_identities",
+                                winner_uid=str(winner["frontmatter"].get("uid")),
+                                loser_uid=str(loser["frontmatter"].get("uid")),
+                                author="identity-repair",
+                                reason=reason,
+                            ),
                         )
-                        assert identity_cache is not None
-                        identity_cache.upsert(
-                            f"[[{Path(str(winner['rel_path'])).stem}]]",
-                            {
-                                "redirect": [str(loser["frontmatter"].get("uid"))],
-                                "redirect-wikilink": [f"[[{Path(rel).stem}]]"],
-                            },
-                        )
-                elif same_phone and not names_ok:
-                    queued.append({"uids": [lu, ru], "reason": "phone_incompatible_name"})
                 else:
-                    queued.append({"uids": [lu, ru], "reason": "ambiguous"})
+                    queued.append({"uids": [lu, ru], "reason": reason})
 
     if apply and queued:
-        queue_path = vault / "_meta" / "dedup-candidates.json"
-        existing: list[Any] = []
-        if queue_path.is_file():
-            try:
-                existing = json.loads(queue_path.read_text(encoding="utf-8"))
-                if not isinstance(existing, list):
-                    existing = []
-            except json.JSONDecodeError:
-                existing = []
-        existing.extend(queued)
-        queue_path.parent.mkdir(parents=True, exist_ok=True)
-        queue_path.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
-    if identity_cache is not None:
-        identity_cache.flush()
+        from archive_engine.journaled_state import (
+            IDENTITY_PROPOSALS_REL,
+            IDENTITY_PROPOSALS_UID,
+            load_json_state,
+            merge_identity_proposals,
+            persist_json_state,
+        )
+
+        existing_payload = load_json_state(vault, IDENTITY_PROPOSALS_REL)
+        existing = list(existing_payload.get("proposals") or [])
+        merged = merge_identity_proposals(existing, queued)
+        persist_json_state(
+            vault,
+            uid=IDENTITY_PROPOSALS_UID,
+            rel=IDENTITY_PROPOSALS_REL,
+            payload={"proposals": merged, "status": "queued"},
+            source="identity-repair",
+        )
     return {"redirected": redirected, "queued": queued, "applied": apply}
 
 
-def emit_same_conversation_edges(vault: Path) -> dict[str, Any]:
-    """Record 1:1 email-handle vs phone-handle pairs that share one person. Does not smash chat IDs."""
+def emit_same_conversation_edges(vault: Path, *, apply: bool = False) -> dict[str, Any]:
+    """Propose email-handle vs phone-handle pairs. Preview writes nothing."""
 
+    from archive_engine.conversation_links import preview_or_apply
     from archive_vault.vault import read_note_frontmatter_file
 
-    rows = _frontmatter_rows(vault, types=["imessage_thread"])
-    by_person: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for row in rows:
+    threads: list[dict[str, Any]] = []
+    for row in _frontmatter_rows(vault, types=["imessage_thread"]):
         rel = str(row.get("rel_path") or "")
         fm = dict(row.get("frontmatter") or {})
         if rel:
@@ -492,28 +447,9 @@ def emit_same_conversation_edges(vault: Path) -> dict[str, Any]:
                 fm = dict(read_note_frontmatter_file(vault / rel, vault_root=vault).frontmatter)
             except Exception as exc:
                 log.warning("same-conversation skip stale-cache rel=%s err=%s", rel, exc)
-        handles = [str(h) for h in (fm.get("participant_handles") or [])]
-        people = [canon_wikilink.parse(str(p)) for p in (fm.get("people") or [])]
-        if len(handles) != 1 or len(people) != 1:
-            continue
-        by_person[people[0]].append({"uid": fm.get("uid"), "handle": handles[0], "rel_path": row.get("rel_path")})
-    pairs: list[dict[str, Any]] = []
-    for person, threads in by_person.items():
-        emails = [t for t in threads if "@" in t["handle"]]
-        phones = [t for t in threads if "@" not in t["handle"]]
-        if emails and phones:
-            pairs.append(
-                {
-                    "person": person,
-                    "email_thread": emails[0]["uid"],
-                    "phone_thread": phones[0]["uid"],
-                    "edge_type": "same_conversation",
-                }
-            )
-    out = vault / "_meta" / "same-conversation.json"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(pairs, indent=2) + "\n", encoding="utf-8")
-    return {"pairs": len(pairs), "path": str(out)}
+        threads.append(fm)
+    result = preview_or_apply(vault, threads, apply=apply)
+    return {"pairs": result.get("count", 0), "path": result.get("path") or "", "applied": apply, "truncated": result.get("truncated")}
 
 
 def _report_for_json(result: dict[str, Any]) -> dict[str, Any]:
@@ -551,7 +487,7 @@ def dispatch(args: Any) -> dict[str, Any]:
     elif action == "merge":
         result = merge_people(vault, apply=apply)
     elif action == "same-conversation":
-        result = emit_same_conversation_edges(vault)
+        result = emit_same_conversation_edges(vault, apply=apply)
     else:
         raise SystemExit(f"unknown identity-repair action: {action}")
     result["started_at"] = started
