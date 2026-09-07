@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import time
 from collections.abc import Collection
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
@@ -31,6 +32,9 @@ from .index_config import (
     get_publication_min_embed_coverage,
     get_default_embedding_model,
     get_default_embedding_version,
+    get_embed_gc_batch_size,
+    get_embed_reuse_batch_size,
+    get_warehouse_min_free_gb,
 )
 from .loader import _chunked, _log_rebuild_step, _RebuildProgressReporter
 
@@ -819,95 +823,247 @@ class EmbedderMixin:
         logger.info("embeddings_identity_backfill updated=%s", updated)
         return updated
 
+    def _warehouse_free_bytes(self) -> int:
+        root = Path(getattr(self, "vault", None) or Path.home()).expanduser()
+        try:
+            return int(shutil.disk_usage(root).free)
+        except OSError:
+            return int(shutil.disk_usage(Path.home()).free)
+
+    def _require_warehouse_free_space(self) -> None:
+        min_gb = get_warehouse_min_free_gb()
+        if min_gb <= 0:
+            return
+        free = self._warehouse_free_bytes()
+        if free < min_gb * 1024**3:
+            raise RuntimeError(
+                f"warehouse_disk_low free_gb={free / 1024**3:.1f} min_gb={min_gb}"
+            )
+
+    def _count_pending_embeddings(self, conn, *, embedding_model: str, embedding_version: int) -> int:
+        row = conn.execute(
+            f"""
+            SELECT COUNT(*) AS n
+            FROM {self.schema}.chunks c
+            WHERE NOT EXISTS (
+                SELECT 1 FROM {self.schema}.embeddings e
+                WHERE e.chunk_key = c.chunk_key
+                  AND e.embedding_model = %s
+                  AND e.embedding_version = %s
+            )
+            """,
+            (embedding_model, embedding_version),
+        ).fetchone()
+        return int(row["n"] if isinstance(row, dict) else row[0])
+
+    def _list_pending_chunk_keys(
+        self,
+        conn,
+        *,
+        embedding_model: str,
+        embedding_version: int,
+        after_key: str,
+        limit: int,
+    ) -> list[str]:
+        rows = conn.execute(
+            f"""
+            SELECT c.chunk_key
+            FROM {self.schema}.chunks c
+            WHERE c.chunk_key > %s
+              AND NOT EXISTS (
+                SELECT 1 FROM {self.schema}.embeddings e
+                WHERE e.chunk_key = c.chunk_key
+                  AND e.embedding_model = %s
+                  AND e.embedding_version = %s
+              )
+            ORDER BY c.chunk_key
+            LIMIT %s
+            """,
+            (after_key, embedding_model, embedding_version, limit),
+        ).fetchall()
+        return [str(row["chunk_key"] if isinstance(row, dict) else row[0]) for row in rows]
+
+    def delete_duplicate_leftover_embeddings(
+        self,
+        *,
+        embedding_model: str,
+        embedding_version: int,
+        batch_size: int | None = None,
+        max_batches: int | None = 1,
+        content_hashes: Collection[str] | None = None,
+    ) -> int:
+        """Delete leftover keys whose content identity already has a live list."""
+        batch = max(int(batch_size or get_embed_gc_batch_size()), 1)
+        hashes = [str(item) for item in (content_hashes or ()) if str(item).strip()]
+        hash_clause = ""
+        params: list[Any] = []
+        if hashes:
+            hash_clause = "AND e2.content_hash = ANY(%s)"
+            params.append(hashes)
+        deleted_total = 0
+        batches = 0
+        with self._connect() as conn:
+            conn.execute("SET statement_timeout = 0")
+            while True:
+                self._require_warehouse_free_space()
+                cur = conn.execute(
+                    f"""
+                    DELETE FROM {self.schema}.embeddings e
+                    WHERE ctid IN (
+                        SELECT e2.ctid
+                        FROM {self.schema}.embeddings e2
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM {self.schema}.chunks c
+                            WHERE c.chunk_key = e2.chunk_key
+                        )
+                          AND e2.content_hash <> ''
+                          AND e2.embedding_model = %s
+                          AND e2.embedding_version = %s
+                          {hash_clause}
+                          AND EXISTS (
+                            SELECT 1
+                            FROM {self.schema}.chunks live
+                            JOIN {self.schema}.embeddings have
+                              ON have.chunk_key = live.chunk_key
+                             AND have.embedding_model = e2.embedding_model
+                             AND have.embedding_version = e2.embedding_version
+                            WHERE live.content_hash = e2.content_hash
+                              AND live.content_hash <> ''
+                          )
+                        LIMIT %s
+                    )
+                    """,
+                    tuple([embedding_model, embedding_version, *params, batch]),
+                )
+                n = int(cur.rowcount or 0)
+                conn.commit()
+                deleted_total += n
+                batches += 1
+                logger.info(
+                    "embeddings_duplicate_gc_batch deleted=%s total_deleted=%s batch=%s",
+                    n,
+                    deleted_total,
+                    batches,
+                )
+                if n < batch:
+                    break
+                if max_batches is not None and batches >= max_batches:
+                    break
+        return deleted_total
+
     def reuse_embeddings_by_content(
         self,
         *,
         embedding_model: str,
         embedding_version: int,
+        batch_size: int | None = None,
+        cleanup_duplicates: bool = True,
     ) -> dict[str, int]:
         """Attach existing vectors to new chunk_keys that share ``content_hash``.
 
-        No provider call. Orphan rows stay until ``embed-gc`` after their hash
-        is unused by every live chunk.
+        Copies a page of pending keys, commits, then deletes leftover old keys
+        whose identity now has a live list. Stops if the vault volume is low.
         """
 
         self.ensure_ready()
         started = time.monotonic()
+        page = max(int(batch_size or get_embed_reuse_batch_size()), 1)
+        copied = 0
+        cleaned = 0
+        pages = 0
+        after_key = ""
         with self._connect() as conn:
             conn.execute("SET statement_timeout = 0")
-            pending_before = conn.execute(
-                f"""
-                SELECT COUNT(*) AS n
-                FROM {self.schema}.chunks c
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM {self.schema}.embeddings e
-                    WHERE e.chunk_key = c.chunk_key
-                      AND e.embedding_model = %s
-                      AND e.embedding_version = %s
-                )
-                """,
-                (embedding_model, embedding_version),
-            ).fetchone()
-            inserted = conn.execute(
-                f"""
-                INSERT INTO {self.schema}.embeddings (
-                    chunk_key, embedding_model, embedding_version, embedding,
-                    content_hash, card_uid, chunk_type, chunk_index
-                )
-                SELECT DISTINCT ON (c.chunk_key)
-                    c.chunk_key,
-                    e.embedding_model,
-                    e.embedding_version,
-                    e.embedding,
-                    c.content_hash,
-                    c.card_uid,
-                    c.chunk_type,
-                    c.chunk_index
-                FROM {self.schema}.chunks c
-                JOIN {self.schema}.embeddings e
-                    ON e.content_hash = c.content_hash
-                    AND e.embedding_model = %s
-                    AND e.embedding_version = %s
-                    AND e.content_hash <> ''
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM {self.schema}.embeddings have
-                    WHERE have.chunk_key = c.chunk_key
-                      AND have.embedding_model = e.embedding_model
-                      AND have.embedding_version = e.embedding_version
-                )
-                ORDER BY c.chunk_key, (e.card_uid = c.card_uid) DESC, e.created_at DESC
-                ON CONFLICT (chunk_key, embedding_model, embedding_version) DO NOTHING
-                """,
-                (embedding_model, embedding_version),
+            pending_before = self._count_pending_embeddings(
+                conn, embedding_model=embedding_model, embedding_version=embedding_version
             )
-            conn.commit()
-            pending_after = conn.execute(
-                f"""
-                SELECT COUNT(*) AS n
-                FROM {self.schema}.chunks c
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM {self.schema}.embeddings e
-                    WHERE e.chunk_key = c.chunk_key
-                      AND e.embedding_model = %s
-                      AND e.embedding_version = %s
+        while True:
+            self._require_warehouse_free_space()
+            with self._connect() as conn:
+                conn.execute("SET statement_timeout = 0")
+                keys = self._list_pending_chunk_keys(
+                    conn,
+                    embedding_model=embedding_model,
+                    embedding_version=embedding_version,
+                    after_key=after_key,
+                    limit=page,
                 )
-                """,
-                (embedding_model, embedding_version),
-            ).fetchone()
-        copied = int(inserted.rowcount or 0)
-        pending_before_n = int(pending_before["n"] if isinstance(pending_before, dict) else pending_before[0])
-        pending_after_n = int(pending_after["n"] if isinstance(pending_after, dict) else pending_after[0])
+                if not keys:
+                    break
+                inserted = conn.execute(
+                    f"""
+                    INSERT INTO {self.schema}.embeddings (
+                        chunk_key, embedding_model, embedding_version, embedding,
+                        content_hash, card_uid, chunk_type, chunk_index
+                    )
+                    SELECT DISTINCT ON (c.chunk_key)
+                        c.chunk_key,
+                        e.embedding_model,
+                        e.embedding_version,
+                        e.embedding,
+                        c.content_hash,
+                        c.card_uid,
+                        c.chunk_type,
+                        c.chunk_index
+                    FROM {self.schema}.chunks c
+                    JOIN {self.schema}.embeddings e
+                        ON e.content_hash = c.content_hash
+                        AND e.embedding_model = %s
+                        AND e.embedding_version = %s
+                        AND e.content_hash <> ''
+                    WHERE c.chunk_key = ANY(%s)
+                      AND NOT EXISTS (
+                        SELECT 1 FROM {self.schema}.embeddings have
+                        WHERE have.chunk_key = c.chunk_key
+                          AND have.embedding_model = e.embedding_model
+                          AND have.embedding_version = e.embedding_version
+                      )
+                    ORDER BY c.chunk_key, (e.card_uid = c.card_uid) DESC, e.created_at DESC
+                    ON CONFLICT (chunk_key, embedding_model, embedding_version) DO NOTHING
+                    """,
+                    (embedding_model, embedding_version, keys),
+                )
+                conn.commit()
+                page_copied = int(inserted.rowcount or 0)
+            copied += page_copied
+            pages += 1
+            after_key = keys[-1]
+            if cleanup_duplicates:
+                cleaned += self.delete_duplicate_leftover_embeddings(
+                    embedding_model=embedding_model,
+                    embedding_version=embedding_version,
+                    batch_size=page,
+                    max_batches=1,
+                )
+            logger.info(
+                "embeddings_reuse_batch copied=%s page_copied=%s cleaned=%s page=%s keys=%s",
+                copied,
+                page_copied,
+                cleaned,
+                pages,
+                len(keys),
+            )
+            if len(keys) < page:
+                break
+        with self._connect() as conn:
+            pending_after = self._count_pending_embeddings(
+                conn, embedding_model=embedding_model, embedding_version=embedding_version
+            )
         logger.info(
-            "embeddings_reuse_by_content copied=%s pending_before=%s pending_after=%s elapsed=%.1fs",
+            "embeddings_reuse_by_content copied=%s cleaned=%s pending_before=%s pending_after=%s pages=%s elapsed=%.1fs",
             copied,
-            pending_before_n,
-            pending_after_n,
+            cleaned,
+            pending_before,
+            pending_after,
+            pages,
             time.monotonic() - started,
         )
         return {
             "copied": copied,
-            "pending_before": pending_before_n,
-            "pending_after": pending_after_n,
+            "cleaned": cleaned,
+            "pending_before": pending_before,
+            "pending_after": pending_after,
+            "pages": pages,
         }
 
     def load_slot_map_from_chunks_jsonl(self, path: str | Path, *, progress_every: int = 100_000) -> int:

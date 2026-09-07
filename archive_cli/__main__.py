@@ -259,8 +259,8 @@ def main() -> None:
     embed_gc_parser.add_argument(
         "--batch-size",
         type=int,
-        default=10000,
-        help="Rows per DELETE batch for --duplicates (default 10000).",
+        default=2000,
+        help="Rows per DELETE batch for leftover cleanup (default 2000).",
     )
     embed_reuse_parser = subparsers.add_parser(
         "embed-reuse",
@@ -268,6 +268,17 @@ def main() -> None:
     )
     embed_reuse_parser.add_argument("--embedding-model", default="")
     embed_reuse_parser.add_argument("--embedding-version", type=int, default=0)
+    embed_reuse_parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=0,
+        help="Pending keys per INSERT (default PPA_EMBED_REUSE_BATCH_SIZE or 2000).",
+    )
+    embed_reuse_parser.add_argument(
+        "--no-cleanup",
+        action="store_true",
+        help="Do not delete leftover old keys after each reuse batch.",
+    )
     embed_remap_parser = subparsers.add_parser(
         "embed-remap-slots",
         help="Remap orphan vectors onto current keys using a serving chunks.jsonl.",
@@ -2397,6 +2408,8 @@ def main() -> None:
                 logger=_cli_log,
                 embedding_model=str(getattr(args, "embedding_model", "") or ""),
                 embedding_version=int(getattr(args, "embedding_version", 0) or 0),
+                batch_size=int(getattr(args, "batch_size", 0) or 0),
+                cleanup_duplicates=not bool(getattr(args, "no_cleanup", False)),
             )
             _print_cli_result(result)
         except PpaError as exc:

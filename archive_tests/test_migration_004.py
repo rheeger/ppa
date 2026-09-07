@@ -179,7 +179,6 @@ class TestEmbedGc:
         import logging
 
         result = embed_gc_cmd(store=store, logger=logging.getLogger("test"), dry_run=False)
-        assert result["orphan_embeddings"] == 3
         assert result["unused_hash_embeddings"] == 1
         assert result["deleted"] == 1
         with index._connect() as conn:

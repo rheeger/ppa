@@ -323,6 +323,37 @@ def test_reuse_methods_are_on_embedder_mixin() -> None:
     assert hasattr(EmbedderMixin, "remap_embeddings_by_slot")
     assert hasattr(EmbedderMixin, "load_slot_map_from_chunks_jsonl")
     assert hasattr(EmbedderMixin, "attach_embeddings_after_rematerialize")
+    assert hasattr(EmbedderMixin, "delete_duplicate_leftover_embeddings")
+
+
+@pytest.mark.integration
+def test_reuse_pages_pending_and_cleans_leftover(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pgvector_dsn: str
+) -> None:
+    monkeypatch.setenv("PPA_WAREHOUSE_MIN_FREE_GB", "0")
+    index = _bootstrap(tmp_path, monkeypatch, pgvector_dsn)
+    with index._connect() as conn:
+        _insert_chunk(conn, index.schema, key="live-a", uid="card-a", index=0, content_hash="hash-a")
+        _insert_chunk(conn, index.schema, key="live-b", uid="card-b", index=0, content_hash="hash-b")
+        _insert_embedding(conn, index.schema, key="old-a", dim=8, fill=0.21, content_hash="hash-a")
+        _insert_embedding(conn, index.schema, key="old-b", dim=8, fill=0.22, content_hash="hash-b")
+        conn.commit()
+    result = index.reuse_embeddings_by_content(
+        embedding_model="reuse-hash",
+        embedding_version=1,
+        batch_size=1,
+        cleanup_duplicates=True,
+    )
+    assert result["copied"] == 2
+    assert result["pages"] == 2
+    assert result["cleaned"] == 2
+    assert result["pending_after"] == 0
+    with index._connect() as conn:
+        keys = {
+            str(row["chunk_key"])
+            for row in conn.execute(f"SELECT chunk_key FROM {index.schema}.embeddings").fetchall()
+        }
+    assert keys == {"live-a", "live-b"}
 
 
 def test_chunk_hash_ignores_schema_version() -> None:

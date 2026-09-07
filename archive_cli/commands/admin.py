@@ -171,28 +171,40 @@ def embed_gc(
 
     unused_sql = _unused_sql("e")
     duplicate_sql = _duplicate_sql("e")
-    batch = max(int(batch_size or 10_000), 1)
-    with store.index._connect() as conn:  # noqa: SLF001
-        conn.execute("SET statement_timeout = 0")
-        total = conn.execute(f"SELECT COUNT(*) FROM {schema}.embeddings").fetchone()
-        orphan = conn.execute(
-            f"""
-            SELECT COUNT(*) FROM {schema}.embeddings e
-            WHERE NOT EXISTS (SELECT 1 FROM {schema}.chunks c WHERE c.chunk_key = e.chunk_key)
-            """
-        ).fetchone()
-        unused = conn.execute(
-            f"SELECT COUNT(*) FROM {schema}.embeddings e WHERE {unused_sql}"
-        ).fetchone()
-        duplicate = conn.execute(
-            f"SELECT COUNT(*) FROM {schema}.embeddings e WHERE {duplicate_sql}"
-        ).fetchone()
-        total_count = int(total[0] if not isinstance(total, dict) else next(iter(total.values())))
-        orphan_count = int(orphan[0] if not isinstance(orphan, dict) else next(iter(orphan.values())))
-        unused_count = int(unused[0] if not isinstance(unused, dict) else next(iter(unused.values())))
-        duplicate_count = int(
-            duplicate[0] if not isinstance(duplicate, dict) else next(iter(duplicate.values()))
-        )
+    from archive_cli.index_config import (
+        get_default_embedding_model,
+        get_default_embedding_version,
+        get_embed_gc_batch_size,
+    )
+
+    batch = max(int(batch_size or get_embed_gc_batch_size()), 1)
+    deleted = 0
+    total_count = 0
+    orphan_count = 0
+    unused_count = 0
+    duplicate_count = 0
+    if dry_run:
+        with store.index._connect() as conn:  # noqa: SLF001
+            conn.execute("SET statement_timeout = 0")
+            total = conn.execute(f"SELECT COUNT(*) FROM {schema}.embeddings").fetchone()
+            orphan = conn.execute(
+                f"""
+                SELECT COUNT(*) FROM {schema}.embeddings e
+                WHERE NOT EXISTS (SELECT 1 FROM {schema}.chunks c WHERE c.chunk_key = e.chunk_key)
+                """
+            ).fetchone()
+            unused = conn.execute(
+                f"SELECT COUNT(*) FROM {schema}.embeddings e WHERE {unused_sql}"
+            ).fetchone()
+            duplicate = conn.execute(
+                f"SELECT COUNT(*) FROM {schema}.embeddings e WHERE {duplicate_sql}"
+            ).fetchone()
+            total_count = int(total[0] if not isinstance(total, dict) else next(iter(total.values())))
+            orphan_count = int(orphan[0] if not isinstance(orphan, dict) else next(iter(orphan.values())))
+            unused_count = int(unused[0] if not isinstance(unused, dict) else next(iter(unused.values())))
+            duplicate_count = int(
+                duplicate[0] if not isinstance(duplicate, dict) else next(iter(duplicate.values()))
+            )
         logger.info(
             "embed_gc_scan total=%d orphan=%d unused_hash=%d duplicates=%d mode=%s dry_run=%s",
             total_count,
@@ -200,34 +212,28 @@ def embed_gc(
             unused_count,
             duplicate_count,
             "duplicates" if duplicates else "unused_hash",
-            dry_run,
+            True,
         )
-        deleted = 0
-        if not dry_run:
-            if duplicates:
-                while True:
-                    cur = conn.execute(
-                        f"""
-                        DELETE FROM {schema}.embeddings e
-                        WHERE ctid IN (
-                            SELECT e2.ctid FROM {schema}.embeddings e2
-                            WHERE {_duplicate_sql("e2")}
-                            LIMIT %s
-                        )
-                        """,
-                        (batch,),
-                    )
-                    n = int(cur.rowcount or 0)
-                    deleted += n
-                    conn.commit()
-                    logger.info("embed_gc_duplicate_batch deleted=%d total_deleted=%d", n, deleted)
-                    if n < batch:
-                        break
-            elif unused_count > 0:
+    elif duplicates:
+        deleted = store.index.delete_duplicate_leftover_embeddings(
+            embedding_model=get_default_embedding_model(),
+            embedding_version=get_default_embedding_version(),
+            batch_size=batch,
+            max_batches=None,
+        )
+        logger.info("embed_gc_duplicates_done deleted=%d", deleted)
+    else:
+        with store.index._connect() as conn:  # noqa: SLF001
+            conn.execute("SET statement_timeout = 0")
+            unused = conn.execute(
+                f"SELECT COUNT(*) FROM {schema}.embeddings e WHERE {unused_sql}"
+            ).fetchone()
+            unused_count = int(unused[0] if not isinstance(unused, dict) else next(iter(unused.values())))
+            if unused_count > 0:
                 cur = conn.execute(f"DELETE FROM {schema}.embeddings e WHERE {unused_sql}")
                 deleted = int(cur.rowcount or 0)
                 conn.commit()
-                logger.info("embed_gc_deleted rows=%d", deleted)
+            logger.info("embed_gc_deleted rows=%d unused_hash=%d", deleted, unused_count)
     return {
         "total_embeddings": total_count,
         "orphan_embeddings": orphan_count,
@@ -245,16 +251,34 @@ def embed_reuse(
     logger: logging.Logger,
     embedding_model: str = "",
     embedding_version: int = 0,
+    batch_size: int = 0,
+    cleanup_duplicates: bool = True,
 ) -> dict[str, Any]:
     """Copy existing vectors onto new chunk keys that share ``content_hash``."""
     from archive_cli.index_config import get_default_embedding_model, get_default_embedding_version
 
     model = embedding_model.strip() or get_default_embedding_model()
     version = embedding_version or get_default_embedding_version()
-    logger.info("embed_reuse_start model=%s version=%s", model, version)
+    logger.info(
+        "embed_reuse_start model=%s version=%s batch_size=%s cleanup=%s",
+        model,
+        version,
+        batch_size,
+        cleanup_duplicates,
+    )
     store.index.backfill_embedding_content_identity()
-    result = store.index.reuse_embeddings_by_content(embedding_model=model, embedding_version=version)
-    logger.info("embed_reuse_done copied=%s pending_after=%s", result.get("copied"), result.get("pending_after"))
+    result = store.index.reuse_embeddings_by_content(
+        embedding_model=model,
+        embedding_version=version,
+        batch_size=batch_size or None,
+        cleanup_duplicates=cleanup_duplicates,
+    )
+    logger.info(
+        "embed_reuse_done copied=%s cleaned=%s pending_after=%s",
+        result.get("copied"),
+        result.get("cleaned"),
+        result.get("pending_after"),
+    )
     return {"embedding_model": model, "embedding_version": version, **result}
 
 

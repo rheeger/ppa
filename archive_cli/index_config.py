@@ -579,6 +579,21 @@ def get_prior_chunk_schema_versions() -> tuple[int, ...]:
     return (6, 5, 4)
 
 
+def get_embed_reuse_batch_size() -> int:
+    """Pending chunk_keys per reuse INSERT. Keep this small; toast copies are huge."""
+    return max(_ppa_env_int("PPA_EMBED_REUSE_BATCH_SIZE", default=2000), 1)
+
+
+def get_embed_gc_batch_size() -> int:
+    """Leftover embedding rows per DELETE batch."""
+    return max(_ppa_env_int("PPA_EMBED_GC_BATCH_SIZE", default=2000), 1)
+
+
+def get_warehouse_min_free_gb() -> int:
+    """Stop warehouse writes when the vault volume has less than this many GiB free."""
+    return max(_ppa_env_int("PPA_WAREHOUSE_MIN_FREE_GB", default=40), 0)
+
+
 def get_query_embed_cache_path(vault: Path | None = None) -> Path:
     raw = _ppa_env("PPA_QUERY_EMBED_CACHE_PATH")
     if raw:
