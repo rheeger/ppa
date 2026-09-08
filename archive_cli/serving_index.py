@@ -604,6 +604,41 @@ def serving_index_status(vault: Path | None = None) -> dict[str, Any]:
         }
 
 
+def ack_dirty_uids(vault: Path | str | None, uids: list[str] | None) -> int:
+    """Drop published UIDs from DIRTY. Does not wipe the file or other records."""
+
+    acked = {str(uid).strip() for uid in (uids or []) if str(uid).strip()}
+    if not acked:
+        return 0
+    path = get_serving_index_path(Path(vault) if vault is not None else None) / "DIRTY"
+    if not path.is_file():
+        return 0
+    kept: list[str] = []
+    removed = 0
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            kept.append(raw)
+            continue
+        if not isinstance(rec, dict):
+            kept.append(raw)
+            continue
+        old = [str(uid).strip() for uid in (rec.get("uids") or []) if str(uid).strip()]
+        new = [uid for uid in old if uid not in acked]
+        removed += len(old) - len(new)
+        if new:
+            rec = {**rec, "uids": new}
+            kept.append(json.dumps(rec, ensure_ascii=False))
+        elif not old:
+            kept.append(raw)
+    path.write_text(("\n".join(kept) + "\n") if kept else "", encoding="utf-8")
+    return removed
+
+
 def read_dirty_uids(vault: Path | None = None) -> list[str]:
     """Concrete UIDs from DIRTY records. Empty-uid ``vault_written`` lines are ignored."""
 

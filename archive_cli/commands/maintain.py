@@ -181,6 +181,8 @@ def _uids_from_processor_reports(reports: list[dict[str, Any]]) -> list[str]:
         for uid in inner.get("output_uids") or []:
             collected.append(uid)
         for item in report.get("item_results") or inner.get("item_results") or []:
+            if item.get("already_current") or item.get("skip_reason") == "already_current":
+                continue
             if item.get("input_uid"):
                 collected.append(item["input_uid"])
             for uid in item.get("output_uids") or []:
@@ -366,7 +368,7 @@ def counts_from_processor_reports(reports: list[dict[str, Any]]) -> dict[str, in
                 extracted += len(output_uids) or (0 if item.get("already_current") else 1)
             elif key == PROCESSOR_ENTITY_RESOLUTION:
                 resolved += len(output_uids) or (0 if item.get("already_current") else 1)
-            elif key == PROCESSOR_MATERIALIZATION:
+            elif key == PROCESSOR_MATERIALIZATION and not item.get("already_current"):
                 rebuilt += 1
     rebuilt = max(rebuilt, _cards_rebuilt_from_processor_reports(reports))
     return {
@@ -537,6 +539,9 @@ def _publish_serving_index(store: Any, report: MaintenanceReport, logger: loggin
             return
         report.published_watermark = int(receipt.acked_watermark or report.published_watermark)
         report.eligible_checkpoint = int(receipt.eligible_checkpoint or plan["high_watermark"])
+        from archive_cli.serving_index import ack_dirty_uids
+
+        ack_dirty_uids(store.vault, concrete)
         logger.info(
             "serving_index_publish incremental uids=%s generation=%s acked=%s",
             len(concrete),
@@ -858,7 +863,11 @@ def _cards_rebuilt_from_processor_reports(reports: list[dict[str, Any]]) -> int:
             if match:
                 best = max(best, int(match.group(1)))
         for item in report.get("item_results") or inner.get("item_results") or []:
-            if item.get("processor_key") == "materialization" and item.get("status") == "complete":
+            if (
+                item.get("processor_key") == "materialization"
+                and item.get("status") == "complete"
+                and not item.get("already_current")
+            ):
                 best = max(best, 1)
     return best
 

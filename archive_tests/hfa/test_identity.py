@@ -7,12 +7,16 @@ def test_upsert_identity_map_indexes_arrays(tmp_vault):
     upsert_identity_map(
         tmp_vault,
         "[[jane-smith]]",
-        {"name": "Jane Smith", "emails": ["jane@example.com", "j.smith@corp.com"], "phones": ["123", "456"]},
+        {
+            "name": "Jane Smith",
+            "emails": ["jane@example.com", "j.smith@corp.com"],
+            "phones": ["+15551234567", "+15551239999"],
+        },
     )
     payload = json.loads((tmp_vault / "_meta" / "identity-map.json").read_text(encoding="utf-8"))
     assert payload["name:jane smith"] == "[[jane-smith]]"
     assert payload["email:jane@example.com"] == "[[jane-smith]]"
-    assert payload["phone:456"] == "[[jane-smith]]"
+    assert payload["phone:+15551239999"] == "[[jane-smith]]"
 
 
 def test_identity_cache_flushes_once(tmp_vault):

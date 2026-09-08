@@ -13,27 +13,26 @@ from threading import Lock
 from typing import Any
 
 from archive_engine.contracts import EmbeddingSpec
-
-from .features import build_context_prefix_for_embed_row
 from archive_engine.errors import IncompatibleStateError
 
+from .features import build_context_prefix_for_embed_row
 from .index_config import (
     CHUNK_SCHEMA_VERSION,
     EmbeddingBatchResult,
     _vector_literal,
     embed_defer_vector_index,
+    get_default_embedding_model,
+    get_default_embedding_version,
     get_embed_batch_size,
     get_embed_concurrency,
+    get_embed_gc_batch_size,
     get_embed_max_retries,
     get_embed_progress_every,
+    get_embed_reuse_batch_size,
     get_embed_write_batch_size,
     get_prior_chunk_schema_versions,
     get_publication_min_embed_chunks,
     get_publication_min_embed_coverage,
-    get_default_embedding_model,
-    get_default_embedding_version,
-    get_embed_gc_batch_size,
-    get_embed_reuse_batch_size,
     get_warehouse_min_free_gb,
 )
 from .loader import _chunked, _log_rebuild_step, _RebuildProgressReporter

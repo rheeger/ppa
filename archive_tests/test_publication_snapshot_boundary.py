@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from pathlib import Path
+import json
 from unittest.mock import MagicMock
 
-from archive_cli.serving_index import publish_serving_index
-from archive_engine.publication import PublisherLease, ServingSnapshot
+from archive_cli.serving_index import ack_dirty_uids, publish_serving_index
 from archive_engine.contracts import EmbeddingSpec
+from archive_engine.publication import PublisherLease, ServingSnapshot
 
 
 def test_publish_acquires_lease_before_status(tmp_path, monkeypatch) -> None:
@@ -139,3 +139,23 @@ def test_successful_publish_does_not_truncate_dirty(tmp_path, monkeypatch) -> No
     store.vault = vault
     publish_serving_index(store)
     assert (root / "DIRTY").read_text(encoding="utf-8") == "keep-me\n"
+
+
+def test_ack_dirty_uids_drops_published_ids_only(tmp_path) -> None:
+    vault = tmp_path / "vault"
+    root = vault / "_meta" / "rust-search-index"
+    root.mkdir(parents=True)
+    (root / "DIRTY").write_text(
+        json.dumps({"ts": "1", "reason": "p03d-create", "uids": ["hfa-person-a", "hfa-person-b"]})
+        + "\n"
+        + json.dumps({"ts": "2", "reason": "other", "uids": ["hfa-person-c"]})
+        + "\nkeep-me\n",
+        encoding="utf-8",
+    )
+    removed = ack_dirty_uids(vault, ["hfa-person-a"])
+    assert removed == 1
+    leftover = (root / "DIRTY").read_text(encoding="utf-8")
+    assert "hfa-person-a" not in leftover
+    assert "hfa-person-b" in leftover
+    assert "hfa-person-c" in leftover
+    assert "keep-me" in leftover

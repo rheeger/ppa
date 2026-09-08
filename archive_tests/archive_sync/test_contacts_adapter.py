@@ -66,7 +66,7 @@ def test_to_card_returns_valid_person():
             "source": "contacts.apple",
             "name": "Jenny Souza",
             "emails": ["jenny@example.com", "jenny@work.com"],
-            "phones": ["123", "456"],
+            "phones": ["+15551234567", "+15551239999"],
             "company": "Endaoment",
             "title": "Ops",
             "birthday": "1990-01-01",
@@ -75,7 +75,7 @@ def test_to_card_returns_valid_person():
     )
     assert isinstance(card, PersonCard)
     assert card.emails == ["jenny@example.com", "jenny@work.com"]
-    assert card.phones == ["123", "456"]
+    assert card.phones == ["+15551234567", "+15551239999"]
     assert card.companies == ["Endaoment"]
     assert card.titles == ["Ops"]
     assert provenance["emails"].method == "deterministic"
