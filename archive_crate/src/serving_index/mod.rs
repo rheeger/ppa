@@ -54,13 +54,17 @@ impl ServingIndex {
 }
 
 fn open_generation(index_root: &Path) -> PyResult<ServingIndex> {
-    let _g = OPEN_LOCK.lock().unwrap();
     let Some(gid) = generation::read_active(index_root)? else {
         return Err(pyo3::exceptions::PyFileNotFoundError::new_err(
             "serving_index_unavailable",
         ));
     };
-    let dir = generation::generation_dir(index_root, &gid);
+    open_named_generation(index_root, &gid)
+}
+
+fn open_named_generation(index_root: &Path, gid: &str) -> PyResult<ServingIndex> {
+    let _g = OPEN_LOCK.lock().unwrap();
+    let dir = generation::generation_dir(index_root, gid);
     if !dir.join("manifest.json").exists() {
         return Err(pyo3::exceptions::PyFileNotFoundError::new_err(
             "serving_index_unavailable",
@@ -104,7 +108,7 @@ fn open_generation(index_root: &Path) -> PyResult<ServingIndex> {
         }
     }
     Ok(ServingIndex {
-        generation_id: gid,
+        generation_id: gid.to_string(),
         dir,
         meta,
         graph,
@@ -298,6 +302,16 @@ pub fn serving_index_open(py: Python<'_>, path: &str) -> PyResult<Py<ServingInde
 }
 
 #[pyfunction]
+pub fn serving_index_open_generation(
+    py: Python<'_>,
+    index_root: &str,
+    generation_id: &str,
+) -> PyResult<Py<ServingIndex>> {
+    py.allow_threads(|| open_named_generation(Path::new(index_root), generation_id))
+        .and_then(|idx| Py::new(py, idx))
+}
+
+#[pyfunction]
 pub fn serving_index_search(
     py: Python<'_>,
     handle: &Bound<'_, ServingIndex>,
@@ -312,15 +326,38 @@ pub fn serving_index_search(
     let start_date = req_str(&req, "start_date");
     let end_date = req_str(&req, "end_date");
     let policy = access_policy(&req);
+    let people = idx.meta.prepare_people_filter(&people_filter);
+    if people.status == "ambiguous" {
+        let mut uids: Vec<String> = people.uids.iter().cloned().collect();
+        uids.sort();
+        return json_to_py(
+            py,
+            serde_json::json!({
+                "hits": [],
+                "status": "ambiguous",
+                "candidate_uids": uids,
+            }),
+        );
+    }
+    if people.status == "unresolved" {
+        return json_to_py(
+            py,
+            serde_json::json!({
+                "hits": [],
+                "status": "unresolved",
+                "candidate_uids": [],
+            }),
+        );
+    }
     let mut rows = Vec::new();
     let mut seen = HashSet::new();
     if let Some(card) = idx.meta.exact_identifier(&query) {
-        if idx.meta.eligible(
+        if idx.meta.eligible_prepared(
             card,
             &policy,
             &type_filter,
             &source_filter,
-            &people_filter,
+            &people,
             "",
             &start_date,
             &end_date,
@@ -368,12 +405,12 @@ pub fn serving_index_search(
             continue;
         }
         if let Some(card) = idx.meta.by_uid.get(&uid) {
-            if !idx.meta.eligible(
+            if !idx.meta.eligible_prepared(
                 card,
                 &policy,
                 &type_filter,
                 &source_filter,
-                &people_filter,
+                &people,
                 "",
                 &start_date,
                 &end_date,
@@ -425,17 +462,30 @@ pub fn serving_index_query(
     let end_date = req_str(&req, "end_date");
     let limit = req_i64(&req, "limit", 20).max(1) as usize;
     let policy = access_policy(&req);
+    let people = idx.meta.prepare_people_filter(&people_filter);
+    if people.status == "ambiguous" || people.status == "unresolved" {
+        let mut uids: Vec<String> = people.uids.iter().cloned().collect();
+        uids.sort();
+        return json_to_py(
+            py,
+            serde_json::json!({
+                "rows": [],
+                "status": people.status,
+                "candidate_uids": uids,
+            }),
+        );
+    }
     let mut cards: Vec<&CardMeta> = idx
         .meta
         .by_uid
         .values()
         .filter(|c| {
-            idx.meta.eligible(
+            idx.meta.eligible_prepared(
                 c,
                 &policy,
                 &type_filter,
                 &source_filter,
-                &people_filter,
+                &people,
                 &org_filter,
                 &start_date,
                 &end_date,
@@ -593,6 +643,19 @@ pub fn serving_index_vector(
         .unwrap_or(4096);
     let nprobe = req_i64(&req, "nprobe", default_nprobe).max(1) as usize;
     let budget = req_i64(&req, "candidate_budget", default_budget).max(1) as usize;
+    let people = idx.meta.prepare_people_filter(&people_filter);
+    if people.status == "ambiguous" || people.status == "unresolved" {
+        let mut uids: Vec<String> = people.uids.iter().cloned().collect();
+        uids.sort();
+        return json_to_py(
+            py,
+            serde_json::json!({
+                "hits": [],
+                "status": people.status,
+                "candidate_uids": uids,
+            }),
+        );
+    }
     let has_filter = policy.restricted
         || policy.deny
         || !type_filter.is_empty()
@@ -622,12 +685,12 @@ pub fn serving_index_vector(
                 }
                 if let Some((uid, _, _)) = idx.chunk_to_card.get(key) {
                     if let Some(card) = idx.meta.by_uid.get(uid) {
-                        if idx.meta.eligible(
+                        if idx.meta.eligible_prepared(
                             card,
                             &policy,
                             &type_filter,
                             &source_filter,
-                            &people_filter,
+                            &people,
                             "",
                             &start_date,
                             &end_date,
@@ -689,12 +752,12 @@ pub fn serving_index_vector(
     items.sort_by(|a, b| b.1.0.partial_cmp(&a.1.0).unwrap_or(std::cmp::Ordering::Equal));
     for (uid, (sim, ctype, cidx, matched, chunk_key)) in items {
         if let Some(card) = idx.meta.by_uid.get(&uid) {
-            if !idx.meta.eligible(
+            if !idx.meta.eligible_prepared(
                 card,
                 &policy,
                 &type_filter,
                 &source_filter,
-                &people_filter,
+                &people,
                 "",
                 &start_date,
                 &end_date,
@@ -763,6 +826,19 @@ pub fn serving_index_hybrid(
     let start_date = req_str(&req, "start_date");
     let end_date = req_str(&req, "end_date");
     let policy = access_policy(&req);
+    let people = idx.meta.prepare_people_filter(&people_filter);
+    if people.status == "ambiguous" || people.status == "unresolved" {
+        let mut uids: Vec<String> = people.uids.iter().cloned().collect();
+        uids.sort();
+        return json_to_py(
+            py,
+            serde_json::json!({
+                "hits": [],
+                "status": people.status,
+                "candidate_uids": uids,
+            }),
+        );
+    }
     let cap = (limit * 8).max(limit).max(limit * idx.chain_depth);
     let mut lexical = HashMap::new();
     for lex in &idx.lexical {
@@ -786,12 +862,12 @@ pub fn serving_index_hybrid(
                 }
                 if let Some((uid, _, _)) = idx.chunk_to_card.get(key) {
                     if let Some(card) = idx.meta.by_uid.get(uid) {
-                        if idx.meta.eligible(
+                        if idx.meta.eligible_prepared(
                             card,
                             &policy,
                             &type_filter,
                             &source_filter,
-                            &people_filter,
+                            &people,
                             "",
                             &start_date,
                             &end_date,
@@ -853,12 +929,12 @@ pub fn serving_index_hybrid(
             .by_uid
             .get(uid)
             .map(|c| {
-                idx.meta.eligible(
+                idx.meta.eligible_prepared(
                     c,
                     &policy,
                     &type_filter,
                     &source_filter,
-                    &people_filter,
+                    &people,
                     "",
                     &start_date,
                     &end_date,
@@ -871,12 +947,12 @@ pub fn serving_index_hybrid(
             .by_uid
             .get(uid)
             .map(|c| {
-                idx.meta.eligible(
+                idx.meta.eligible_prepared(
                     c,
                     &policy,
                     &type_filter,
                     &source_filter,
-                    &people_filter,
+                    &people,
                     "",
                     &start_date,
                     &end_date,
@@ -990,19 +1066,35 @@ pub fn serving_index_person(
 ) -> PyResult<PyObject> {
     let idx = handle.borrow();
     let policy = req.as_ref().map(access_policy).unwrap_or_else(AccessPolicy::unrestricted);
-    if let Some(card) = idx.meta.resolve_person_card(name) {
-        if policy.permits(card) {
-            return json_to_py(
-                py,
-                serde_json::json!({
-                    "found": true,
-                    "rel_path": card.rel_path,
-                    "card_uid": card.card_uid,
-                }),
-            );
+    let resolution = idx.meta.person_resolution(name);
+    let mut uids: Vec<String> = resolution.uids.iter().cloned().collect();
+    uids.sort();
+    if resolution.status == "unique" {
+        if let Some(card) = idx.meta.by_uid.get(&uids[0]) {
+            if card.r#type == "person" && !MetadataStore::is_suppressed(card) && policy.permits(card) {
+                return json_to_py(
+                    py,
+                    serde_json::json!({
+                        "found": true,
+                        "status": "unique",
+                        "rel_path": card.rel_path,
+                        "card_uid": card.card_uid,
+                        "candidate_uids": uids,
+                    }),
+                );
+            }
         }
     }
-    json_to_py(py, serde_json::json!({"found": false, "rel_path": "", "card_uid": ""}))
+    json_to_py(
+        py,
+        serde_json::json!({
+            "found": false,
+            "status": resolution.status,
+            "rel_path": "",
+            "card_uid": "",
+            "candidate_uids": uids,
+        }),
+    )
 }
 
 #[pyfunction]
@@ -1072,6 +1164,19 @@ pub fn serving_index_timeline(
     let people_filter = req_str(&req, "people_filter");
     let limit = req_i64(&req, "limit", 20).max(1) as usize;
     let policy = access_policy(&req);
+    let people = idx.meta.prepare_people_filter(&people_filter);
+    if people.status == "ambiguous" || people.status == "unresolved" {
+        let mut uids: Vec<String> = people.uids.iter().cloned().collect();
+        uids.sort();
+        return json_to_py(
+            py,
+            serde_json::json!({
+                "rows": [],
+                "status": people.status,
+                "candidate_uids": uids,
+            }),
+        );
+    }
     let cards = idx.meta.timeline_range(
         &start_date,
         &end_date,
@@ -1109,6 +1214,20 @@ pub fn serving_index_temporal_neighbors(
     let source_filter = req_str(&req, "source_filter");
     let people_filter = req_str(&req, "people_filter");
     let policy = access_policy(&req);
+    let people = idx.meta.prepare_people_filter(&people_filter);
+    if people.status == "ambiguous" || people.status == "unresolved" {
+        let mut uids: Vec<String> = people.uids.iter().cloned().collect();
+        uids.sort();
+        return json_to_py(
+            py,
+            serde_json::json!({
+                "ok": true,
+                "results": [],
+                "status": people.status,
+                "candidate_uids": uids,
+            }),
+        );
+    }
     let Some(hits) = idx.meta.temporal_neighbors(
         timestamp,
         direction,
@@ -1391,6 +1510,7 @@ pub fn serving_index_chunk_evidence(
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ServingIndex>()?;
     m.add_function(wrap_pyfunction!(serving_index_open, m)?)?;
+    m.add_function(wrap_pyfunction!(serving_index_open_generation, m)?)?;
     m.add_function(wrap_pyfunction!(serving_index_search, m)?)?;
     m.add_function(wrap_pyfunction!(serving_index_query, m)?)?;
     m.add_function(wrap_pyfunction!(serving_index_typed_query, m)?)?;

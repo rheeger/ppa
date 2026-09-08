@@ -150,15 +150,57 @@ def _row_sort_key(rel_path: str) -> tuple[int, int, str]:
     return (has_hash_suffix, len(rel_path), rel_path)
 
 
-def _try_canonical_row(rel_path: str, frontmatter: dict[str, Any]) -> CanonicalRow | None:
+def _try_canonical_row(
+    rel_path: str,
+    frontmatter: dict[str, Any],
+    rejections: list[dict[str, Any]] | None = None,
+) -> CanonicalRow | None:
     """Build a row or skip cards the schema cannot read."""
+
+    row, rejection = try_canonical_row(rel_path, frontmatter)
+    if rejection is not None and rejections is not None:
+        rejections.append(rejection)
+    return row
+
+
+def try_canonical_row(rel_path: str, frontmatter: dict[str, Any]) -> tuple[CanonicalRow | None, dict[str, Any] | None]:
+    """Return a row or a durable ScanRejection payload (no raw input dump)."""
 
     try:
         card = validate_card_permissive(frontmatter)
     except ValidationError as exc:
-        log.warning("scan skip invalid card rel=%s err=%s", rel_path, exc)
-        return None
-    return CanonicalRow(rel_path=rel_path, frontmatter=frontmatter, card=card)
+        fields = tuple(str(item) for item in getattr(exc, "errors", lambda: [])() if False)
+        errors = []
+        try:
+            errors = list(exc.errors())
+        except Exception:
+            errors = []
+        field_names = tuple(str(err.get("loc", ("unknown",))[0]) for err in errors if isinstance(err, dict))
+        log.warning("scan skip invalid card rel=%s code=schema_invalid fields=%s", rel_path, field_names)
+        return None, {
+            "contained_path": rel_path,
+            "error_code": "schema_invalid",
+            "field_names": field_names,
+            "disposition": "excluded",
+            "uid": str(frontmatter.get("uid") or ""),
+        }
+    return CanonicalRow(rel_path=rel_path, frontmatter=frontmatter, card=card), None
+
+
+def persist_scan_rejections(vault: Path, rejections: list[dict[str, Any]]) -> None:
+    from archive_engine.journaled_state import (
+        SCAN_REJECTIONS_REL,
+        SCAN_REJECTIONS_UID,
+        persist_json_state,
+    )
+
+    persist_json_state(
+        vault,
+        uid=SCAN_REJECTIONS_UID,
+        rel=SCAN_REJECTIONS_REL,
+        payload={"rejections": rejections, "count": len(rejections), "complete": not rejections},
+        source="scanner",
+    )
 
 
 def _register_slug(slug_map: dict[str, str], rel_path: str) -> None:
@@ -337,6 +379,7 @@ def _collect_canonical_rows(
 ) -> tuple[list[CanonicalRow], dict[str, str], int, list[tuple[Any, ...]], str, dict[str, tuple[int, int]]]:
     from .loader import _log_rebuild_step, _RebuildProgressReporter
 
+    scan_rejections: list[dict[str, Any]] = []
     allow = {str(uid).strip() for uid in (uid_allowlist or set()) if str(uid).strip()} or None
     if cache is not None and cache.tier() >= 1 and allow is not None:
         _log_rebuild_step(
@@ -375,6 +418,7 @@ def _collect_canonical_rows(
             if uid:
                 rows_by_uid[uid] = row
         rows = list(rows_by_uid.values())
+        persist_scan_rejections(vault, scan_rejections)
         _log_rebuild_step(
             1,
             6,
@@ -402,6 +446,7 @@ def _collect_canonical_rows(
         slug_map: dict[str, str] = {}
         duplicate_uid_count = 0
         duplicate_uid_groups: dict[str, list[CanonicalRow]] = {}
+        scan_rejections: list[dict[str, Any]] = []
         rust_items: list[dict[str, Any]] | None = None
         try:
             from archive_cli.ppa_engine import ppa_engine
@@ -426,7 +471,7 @@ def _collect_canonical_rows(
         else:
             iterable = [(rel_path, cache.frontmatter_for_rel_path(rel_path)) for rel_path in rel_paths]
         for index, (rel_path, frontmatter) in enumerate(iterable, start=1):
-            row = _try_canonical_row(rel_path, frontmatter)
+            row = _try_canonical_row(rel_path, frontmatter, scan_rejections)
             scan_reporter.update(index)
             if row is None:
                 continue
@@ -464,6 +509,7 @@ def _collect_canonical_rows(
         slug_map = {}
         duplicate_uid_count = 0
         duplicate_uid_groups = {}
+        scan_rejections = []
         for row in _iter_canonical_rows(
             vault,
             rel_paths=rel_paths,
@@ -487,6 +533,7 @@ def _collect_canonical_rows(
             _register_slug(slug_map, row.rel_path)
         rows = list(rows_by_uid.values()) + anonymous_rows
     rows.sort(key=lambda item: item.rel_path)
+    persist_scan_rejections(vault, scan_rejections)
     duplicate_uid_rows: list[tuple[Any, ...]] = []
     for uid, group in duplicate_uid_groups.items():
         preferred = min(group, key=lambda item: _row_sort_key(item.rel_path))

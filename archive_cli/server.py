@@ -10,19 +10,22 @@ import time
 try:
     from mcp.server.fastmcp import FastMCP
 except ImportError:  # pragma: no cover
+    try:
+        from mcp.server.mcpserver import MCPServer as FastMCP
+    except ImportError:
 
-    class FastMCP:  # type: ignore[override]
-        def __init__(self, *_args, **_kwargs):
-            pass
+        class FastMCP:  # type: ignore[override]
+            def __init__(self, *_args, **_kwargs):
+                pass
 
-        def tool(self):
-            def decorator(func):
-                return func
+            def tool(self):
+                def decorator(func):
+                    return func
 
-            return decorator
+                return decorator
 
-        def run(self):
-            raise RuntimeError("mcp package is required to run ppa")
+            def run(self):
+                raise RuntimeError("mcp package is required to run ppa")
 
 
 from archive_engine.access import (
@@ -337,6 +340,10 @@ def archive_person(name: str) -> str:
     try:
         store = resolve_store()
         result = graph_cmd.person(name, store=store, logger=_log)
+        if str(result.get("status") or "") == "ambiguous":
+            _log_tool_done("archive_person", t0, found=False, status="ambiguous")
+            uids = ", ".join(str(item) for item in (result.get("candidate_uids") or []))
+            return f"Ambiguous person; candidates: {uids}"
         if not result.get("found"):
             _log_tool_done("archive_person", t0, found=False)
             return "Person not found"

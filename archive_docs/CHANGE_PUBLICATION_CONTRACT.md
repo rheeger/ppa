@@ -43,15 +43,15 @@ against a stale `before_revision`; the journal lock serializes them.
 watermark, per-record acks, and explicit gaps. Acknowledging publication never
 advances warehouse (or any other cursor).
 
-| Name | Slot |
-| --- | --- |
+| Name          | Slot                                         |
+| ------------- | -------------------------------------------- |
 | `publication` | First consumer; serving generations (P02-B+) |
-| `warehouse` | Materialization / snapshot |
-| `vectors` | Chunks + embeddings |
-| `graph` | Edge projection |
-| `seed-link` | Seed-link jobs |
-| `enrichment` | Enrichment workers |
-| `claims` | Future assertion/claim layer |
+| `warehouse`   | Materialization / snapshot                   |
+| `vectors`     | Chunks + embeddings                          |
+| `graph`       | Edge projection                              |
+| `seed-link`   | Seed-link jobs                               |
+| `enrichment`  | Enrichment workers                           |
+| `claims`      | Future assertion/claim layer                 |
 
 Watermark is the contiguous acked prefix. Out-of-order completions stay in
 `consumer_gaps` until that sequence is acked.
@@ -92,7 +92,13 @@ snapshot references.
 
 `mark_serving_index_dirty` still appends `DIRTY`. Those UIDs are imported as
 `legacy_dirty` records when the UID is not already in the journal. DIRTY is
-not truncated here.
+not truncated here. `publish_serving_index` must not call
+`serving_index_truncate_dirty` after a successful publish.
+
+Streamed embedding export finalizes an `ExportReceipt` only after both staged
+files exist, pair, and checksum. Missing staged files fail closed and must
+not fall back to empty in-memory vectors. The existing `PublisherLease`
+covers ACTIVE selection through promotion/ack.
 
 ## Writer inventory (P02-D)
 

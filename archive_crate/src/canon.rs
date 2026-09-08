@@ -49,11 +49,17 @@ pub fn normalize_phone(raw: &str) -> String {
     if raw.is_empty() {
         return String::new();
     }
+    if raw.chars().any(|ch| ch.is_ascii_alphabetic()) && !raw.contains('@') {
+        return String::new();
+    }
     let digits: String = non_digit().replace_all(raw, "").into_owned();
     if digits.is_empty() {
         return String::new();
     }
     if raw.starts_with('+') {
+        if digits.len() < 8 {
+            return String::new();
+        }
         return format!("+{digits}");
     }
     if digits.len() == 11 && digits.starts_with('1') {
@@ -62,7 +68,7 @@ pub fn normalize_phone(raw: &str) -> String {
     if digits.len() == 10 {
         return format!("+1{digits}");
     }
-    digits
+    String::new()
 }
 
 pub fn normalize_slug(raw: &str) -> String {

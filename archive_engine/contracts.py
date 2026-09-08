@@ -881,6 +881,108 @@ class AffectedContext:
 
 
 @dataclass(frozen=True)
+class ExportReceipt:
+    """Checksummed warehouse export bound to one snapshot. Input to publish_snapshot."""
+
+    snapshot_id: str
+    checkpoint: int
+    exported_keys: tuple[str, ...]
+    rejected_keys: tuple[str, ...]
+    artifact_hashes: tuple[tuple[str, str], ...]
+    artifact_bytes: tuple[tuple[str, int], ...]
+    count: int
+    embedding_spec: EmbeddingSpec | None = None
+    canon_version: str = ""
+    schema_version: str = ""
+    complete: bool = False
+    captured_mutation_ids: tuple[str, ...] = ()
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "snapshot_id": self.snapshot_id,
+            "checkpoint": self.checkpoint,
+            "exported_keys": list(self.exported_keys),
+            "rejected_keys": list(self.rejected_keys),
+            "artifact_hashes": {name: digest for name, digest in self.artifact_hashes},
+            "artifact_bytes": {name: size for name, size in self.artifact_bytes},
+            "count": self.count,
+            "embedding_spec": None if self.embedding_spec is None else self.embedding_spec.to_payload(),
+            "canon_version": self.canon_version,
+            "schema_version": self.schema_version,
+            "complete": self.complete,
+            "captured_mutation_ids": list(self.captured_mutation_ids),
+        }
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> ExportReceipt:
+        spec_raw = payload.get("embedding_spec")
+        spec = None if spec_raw is None else EmbeddingSpec.from_payload(_as_mapping(spec_raw, field="embedding_spec"))
+        hashes_raw = payload.get("artifact_hashes")
+        hashes: list[tuple[str, str]] = []
+        if isinstance(hashes_raw, Mapping):
+            for key, value in hashes_raw.items():
+                hashes.append((str(key), _as_str(value, field=f"artifact_hashes.{key}")))
+        bytes_raw = payload.get("artifact_bytes")
+        sizes: list[tuple[str, int]] = []
+        if isinstance(bytes_raw, Mapping):
+            for key, value in bytes_raw.items():
+                sizes.append((str(key), _as_int(value, field=f"artifact_bytes.{key}")))
+        return cls(
+            snapshot_id=_as_str(payload.get("snapshot_id"), field="snapshot_id"),
+            checkpoint=_as_int(payload.get("checkpoint") or 0, field="checkpoint"),
+            exported_keys=_as_str_tuple(payload.get("exported_keys"), field="exported_keys"),
+            rejected_keys=_as_str_tuple(payload.get("rejected_keys"), field="rejected_keys"),
+            artifact_hashes=tuple(hashes),
+            artifact_bytes=tuple(sizes),
+            count=_as_int(payload.get("count") or 0, field="count"),
+            embedding_spec=spec,
+            canon_version=_as_str(payload.get("canon_version"), field="canon_version"),
+            schema_version=_as_str(payload.get("schema_version"), field="schema_version"),
+            complete=_as_bool(payload.get("complete") if payload.get("complete") is not None else False, field="complete"),
+            captured_mutation_ids=_as_str_tuple(
+                payload.get("captured_mutation_ids"), field="captured_mutation_ids"
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class ScanRejection:
+    """Durable scan rejection. Safe codes only — no raw validation input."""
+
+    contained_path: str
+    revision_hash: str
+    error_code: str
+    field_names: tuple[str, ...] = ()
+    disposition: str = "excluded"
+    uid: str = ""
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "contained_path": self.contained_path,
+            "revision_hash": self.revision_hash,
+            "error_code": self.error_code,
+            "field_names": list(self.field_names),
+            "disposition": self.disposition,
+            "uid": self.uid,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> ScanRejection:
+        return cls(
+            contained_path=_require_nonempty(
+                _as_str(payload.get("contained_path"), field="contained_path"), field="contained_path"
+            ),
+            revision_hash=_as_str(payload.get("revision_hash"), field="revision_hash"),
+            error_code=_require_nonempty(
+                _as_str(payload.get("error_code"), field="error_code"), field="error_code"
+            ),
+            field_names=_as_str_tuple(payload.get("field_names"), field="field_names"),
+            disposition=_as_str(payload.get("disposition"), field="disposition") or "excluded",
+            uid=_as_str(payload.get("uid"), field="uid"),
+        )
+
+
+@dataclass(frozen=True)
 class ExactReadResult:
     """Compatible exact-read envelope used by CLI and MCP."""
 
@@ -918,6 +1020,8 @@ _RECORD_TYPES: dict[str, type] = {
     "ArtifactHash": ArtifactHash,
     "RunEvidence": RunEvidence,
     "AffectedContext": AffectedContext,
+    "ExportReceipt": ExportReceipt,
+    "ScanRejection": ScanRejection,
 }
 
 

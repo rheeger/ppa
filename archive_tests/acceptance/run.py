@@ -44,7 +44,7 @@ def _configure_logging() -> None:
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="PPA isolated product acceptance runner")
-    parser.add_argument("--suite", required=True, choices=SUITE_IDS, help="Suite id (baseline, release, p01-p10)")
+    parser.add_argument("--suite", required=True, choices=SUITE_IDS, help="Suite id (baseline, release, p01-p10, p31)")
     parser.add_argument("--output", required=True, help="Directory for JSON, JUnit, and evidence")
     parser.add_argument(
         "--require-integration",
@@ -147,6 +147,9 @@ def run_suite(
         extra["engine"] = runtime.engine
         extra["schema"] = runtime.schema
         extra["container_name"] = runtime.container_name
+        if scale_profile:
+            os.environ["PPA_SCALE_PROFILE"] = scale_profile
+            setattr(runtime, "scale_profile", scale_profile)
         for scenario in scenarios:
             logger.info("scenario_start id=%s suite=%s", scenario.id, suite)
             case = _run_scenario(scenario, runtime)

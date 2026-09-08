@@ -1,0 +1,23 @@
+{
+  "version": "p31.1",
+  "cases": [
+    { "id": "nanp10", "input": "9147153533", "canonical": "+19147153533", "validity": "valid" },
+    {
+      "id": "nanp_fmt",
+      "input": "(914) 715-3533",
+      "canonical": "+19147153533",
+      "validity": "valid"
+    },
+    { "id": "plus", "input": "+19147153533", "canonical": "+19147153533", "validity": "valid" },
+    { "id": "alice42", "input": "alice42", "canonical": "", "validity": "opaque" },
+    { "id": "bob42", "input": "bob42", "canonical": "", "validity": "opaque" },
+    { "id": "short", "input": "42", "canonical": "", "validity": "unknown" },
+    {
+      "id": "ext",
+      "input": "5551234567 ext 99",
+      "canonical": "+15551234567",
+      "validity": "valid",
+      "extension": "99"
+    }
+  ]
+}

@@ -1054,7 +1054,10 @@ def run_maintenance(
         report.skipped_steps.append("entity_resolution (routed through processor DAG)")
         report.skipped_steps.append("incremental_rebuild (routed through processor DAG)")
 
-    scheduler_uids = _normalize_uids(list(hygiene_dirty) + leftover_dirty + tailed_uids)
+    from archive_engine.thread_projection import drain_pending, pending_thread_uids
+
+    thread_uids = pending_thread_uids(store.vault)
+    scheduler_uids = _normalize_uids(list(hygiene_dirty) + leftover_dirty + tailed_uids + thread_uids)
     should_run_processors = bool(run_processors) or bool(scheduler_uids) or bool(dirty_uids_path)
     # Explicit --run-processors honours --apply-processors. Legacy ingestion-log
     # maintain (no processor flags) still applies unless this is a dry-run.
@@ -1099,6 +1102,17 @@ def run_maintenance(
             report.errors.append({"step": "run_processors", "error": str(exc)})
     else:
         report.skipped_steps.append("processor_execution (no dirty work)")
+
+    if thread_uids and not dry_run:
+        try:
+            from archive_cli.commands.identity_repair import _frontmatter_rows
+
+            rows = _frontmatter_rows(store.vault, types=["imessage_thread", "imessage_message"])
+            drained = drain_pending(store.vault, rows)
+            report.skipped_steps.append(f"thread_projection drained={drained.get('drained', 0)}")
+        except Exception as exc:
+            logger.exception("maintain_thread_projection_failed")
+            report.errors.append({"step": "thread_projection", "error": str(exc)})
 
     report.nothing_to_do = (
         not scheduler_uids
