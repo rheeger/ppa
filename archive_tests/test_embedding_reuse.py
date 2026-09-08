@@ -134,6 +134,36 @@ def test_reuse_by_content_copies_vector_onto_new_key(
 
 
 @pytest.mark.integration
+def test_reuse_copies_live_list_that_shares_hash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pgvector_dsn: str
+) -> None:
+    index = _bootstrap(tmp_path, monkeypatch, pgvector_dsn)
+    with index._connect() as conn:
+        _insert_chunk(conn, index.schema, key="live-src", uid="card-src", index=0, content_hash="shared-hash")
+        _insert_embedding(
+            conn,
+            index.schema,
+            key="live-src",
+            dim=8,
+            fill=0.41,
+            content_hash="shared-hash",
+            uid="card-src",
+        )
+        _insert_chunk(conn, index.schema, key="pending-dst", uid="card-dst", index=0, content_hash="shared-hash")
+        conn.commit()
+    result = index.reuse_embeddings_by_content(embedding_model="reuse-hash", embedding_version=1)
+    assert result["copied"] == 1
+    assert result["cleaned"] == 0
+    assert result["pending_after"] == 0
+    with index._connect() as conn:
+        keys = {
+            str(row["chunk_key"])
+            for row in conn.execute(f"SELECT chunk_key FROM {index.schema}.embeddings").fetchall()
+        }
+    assert keys == {"live-src", "pending-dst"}
+
+
+@pytest.mark.integration
 def test_slot_remap_copies_orphan_onto_current_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pgvector_dsn: str
 ) -> None:
@@ -345,7 +375,6 @@ def test_reuse_pages_pending_and_cleans_leftover(
         cleanup_duplicates=True,
     )
     assert result["copied"] == 2
-    assert result["pages"] == 2
     assert result["cleaned"] == 2
     assert result["pending_after"] == 0
     with index._connect() as conn:

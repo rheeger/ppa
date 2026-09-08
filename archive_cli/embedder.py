@@ -840,49 +840,6 @@ class EmbedderMixin:
                 f"warehouse_disk_low free_gb={free / 1024**3:.1f} min_gb={min_gb}"
             )
 
-    def _count_pending_embeddings(self, conn, *, embedding_model: str, embedding_version: int) -> int:
-        row = conn.execute(
-            f"""
-            SELECT COUNT(*) AS n
-            FROM {self.schema}.chunks c
-            WHERE NOT EXISTS (
-                SELECT 1 FROM {self.schema}.embeddings e
-                WHERE e.chunk_key = c.chunk_key
-                  AND e.embedding_model = %s
-                  AND e.embedding_version = %s
-            )
-            """,
-            (embedding_model, embedding_version),
-        ).fetchone()
-        return int(row["n"] if isinstance(row, dict) else row[0])
-
-    def _list_pending_chunk_keys(
-        self,
-        conn,
-        *,
-        embedding_model: str,
-        embedding_version: int,
-        after_key: str,
-        limit: int,
-    ) -> list[str]:
-        rows = conn.execute(
-            f"""
-            SELECT c.chunk_key
-            FROM {self.schema}.chunks c
-            WHERE c.chunk_key > %s
-              AND NOT EXISTS (
-                SELECT 1 FROM {self.schema}.embeddings e
-                WHERE e.chunk_key = c.chunk_key
-                  AND e.embedding_model = %s
-                  AND e.embedding_version = %s
-              )
-            ORDER BY c.chunk_key
-            LIMIT %s
-            """,
-            (after_key, embedding_model, embedding_version, limit),
-        ).fetchall()
-        return [str(row["chunk_key"] if isinstance(row, dict) else row[0]) for row in rows]
-
     def delete_duplicate_leftover_embeddings(
         self,
         *,
@@ -1042,10 +999,9 @@ class EmbedderMixin:
         batch_size: int | None = None,
         cleanup_duplicates: bool = True,
     ) -> dict[str, int]:
-        """Attach existing vectors to new chunk_keys that share ``content_hash``.
+        """Attach leftover lists onto pending chunks that share ``content_hash``.
 
-        Copies a page of pending keys, commits, then deletes leftover old keys
-        whose identity now has a live list. Stops if the vault volume is low.
+        Build a key map first (no toast), then copy and delete in pages.
         """
 
         self.ensure_ready()
@@ -1054,92 +1010,163 @@ class EmbedderMixin:
         copied = 0
         cleaned = 0
         pages = 0
-        after_key = ""
         with self._connect() as conn:
             conn.execute("SET statement_timeout = 0")
-            pending_before = self._count_pending_embeddings(
-                conn, embedding_model=embedding_model, embedding_version=embedding_version
-            )
-        while True:
-            self._require_warehouse_free_space()
-            with self._connect() as conn:
-                conn.execute("SET statement_timeout = 0")
-                keys = self._list_pending_chunk_keys(
-                    conn,
-                    embedding_model=embedding_model,
-                    embedding_version=embedding_version,
-                    after_key=after_key,
-                    limit=page,
+            conn.execute(
+                f"""
+                CREATE UNLOGGED TABLE IF NOT EXISTS {self.schema}.embedding_reuse_pending (
+                    chunk_key TEXT PRIMARY KEY,
+                    content_hash TEXT NOT NULL,
+                    card_uid TEXT NOT NULL,
+                    chunk_type TEXT NOT NULL,
+                    chunk_index INTEGER NOT NULL
                 )
-                if not keys:
+                """
+            )
+            conn.execute(
+                f"""
+                CREATE UNLOGGED TABLE IF NOT EXISTS {self.schema}.embedding_reuse_map (
+                    old_chunk_key TEXT NOT NULL,
+                    new_chunk_key TEXT PRIMARY KEY,
+                    content_hash TEXT NOT NULL,
+                    card_uid TEXT NOT NULL,
+                    chunk_type TEXT NOT NULL,
+                    chunk_index INTEGER NOT NULL
+                )
+                """
+            )
+            conn.commit()
+            conn.execute(f"TRUNCATE {self.schema}.embedding_reuse_pending")
+            conn.execute(f"TRUNCATE {self.schema}.embedding_reuse_map")
+            pending = conn.execute(
+                f"""
+                INSERT INTO {self.schema}.embedding_reuse_pending (
+                    chunk_key, content_hash, card_uid, chunk_type, chunk_index
+                )
+                SELECT c.chunk_key, c.content_hash, c.card_uid, c.chunk_type, c.chunk_index
+                FROM {self.schema}.chunks c
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM {self.schema}.embeddings e
+                    WHERE e.chunk_key = c.chunk_key
+                      AND e.embedding_model = %s
+                      AND e.embedding_version = %s
+                )
+                """,
+                (embedding_model, embedding_version),
+            )
+            conn.commit()
+            pending_before = int(pending.rowcount or 0)
+            conn.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_embedding_reuse_pending_hash "
+                f"ON {self.schema}.embedding_reuse_pending (content_hash)"
+            )
+            conn.commit()
+            queued = conn.execute(
+                f"""
+                INSERT INTO {self.schema}.embedding_reuse_map (
+                    old_chunk_key, new_chunk_key, content_hash, card_uid, chunk_type, chunk_index
+                )
+                SELECT DISTINCT ON (p.chunk_key)
+                    e.chunk_key,
+                    p.chunk_key,
+                    p.content_hash,
+                    p.card_uid,
+                    p.chunk_type,
+                    p.chunk_index
+                FROM {self.schema}.embedding_reuse_pending p
+                JOIN {self.schema}.embeddings e
+                  ON e.content_hash = p.content_hash
+                 AND e.embedding_model = %s
+                 AND e.embedding_version = %s
+                WHERE p.content_hash <> ''
+                  AND e.chunk_key <> p.chunk_key
+                ORDER BY p.chunk_key,
+                         (e.card_uid = p.card_uid) DESC,
+                         (NOT EXISTS (
+                            SELECT 1 FROM {self.schema}.chunks live
+                            WHERE live.chunk_key = e.chunk_key
+                         )) DESC,
+                         e.created_at DESC
+                ON CONFLICT DO NOTHING
+                """,
+                (embedding_model, embedding_version),
+            )
+            conn.commit()
+            remaining = int(queued.rowcount or 0)
+            logger.info("embeddings_reuse_queued pairs=%s pending_before=%s", remaining, pending_before)
+            while remaining > 0:
+                self._require_warehouse_free_space()
+                rows = conn.execute(
+                    f"""
+                    SELECT old_chunk_key, new_chunk_key
+                    FROM {self.schema}.embedding_reuse_map
+                    LIMIT %s
+                    """,
+                    (page,),
+                ).fetchall()
+                if not rows:
                     break
+                old_keys = [str(row["old_chunk_key"] if isinstance(row, dict) else row[0]) for row in rows]
+                new_keys = [str(row["new_chunk_key"] if isinstance(row, dict) else row[1]) for row in rows]
                 inserted = conn.execute(
                     f"""
                     INSERT INTO {self.schema}.embeddings (
                         chunk_key, embedding_model, embedding_version, embedding,
                         content_hash, card_uid, chunk_type, chunk_index
                     )
-                    SELECT DISTINCT ON (c.chunk_key)
-                        c.chunk_key,
+                    SELECT
+                        m.new_chunk_key,
                         e.embedding_model,
                         e.embedding_version,
                         e.embedding,
-                        c.content_hash,
-                        c.card_uid,
-                        c.chunk_type,
-                        c.chunk_index
-                    FROM {self.schema}.chunks c
+                        m.content_hash,
+                        m.card_uid,
+                        m.chunk_type,
+                        m.chunk_index
+                    FROM {self.schema}.embedding_reuse_map m
                     JOIN {self.schema}.embeddings e
-                        ON e.content_hash = c.content_hash
-                        AND e.embedding_model = %s
-                        AND e.embedding_version = %s
-                        AND e.content_hash <> ''
-                    WHERE c.chunk_key = ANY(%s)
-                      AND NOT EXISTS (
-                        SELECT 1 FROM {self.schema}.embeddings have
-                        WHERE have.chunk_key = c.chunk_key
-                          AND have.embedding_model = e.embedding_model
-                          AND have.embedding_version = e.embedding_version
-                      )
-                    ORDER BY c.chunk_key, (e.card_uid = c.card_uid) DESC, e.created_at DESC
+                      ON e.chunk_key = m.old_chunk_key
+                     AND e.embedding_model = %s
+                     AND e.embedding_version = %s
+                    WHERE m.new_chunk_key = ANY(%s)
                     ON CONFLICT (chunk_key, embedding_model, embedding_version) DO NOTHING
                     """,
-                    (embedding_model, embedding_version, keys),
+                    (embedding_model, embedding_version, new_keys),
+                )
+                page_copied = int(inserted.rowcount or 0)
+                page_cleaned = 0
+                if cleanup_duplicates and old_keys:
+                    deleted = conn.execute(
+                        f"""
+                        DELETE FROM {self.schema}.embeddings e
+                        WHERE e.chunk_key = ANY(%s)
+                          AND e.embedding_model = %s
+                          AND e.embedding_version = %s
+                          AND NOT EXISTS (
+                            SELECT 1 FROM {self.schema}.chunks c WHERE c.chunk_key = e.chunk_key
+                          )
+                        """,
+                        (old_keys, embedding_model, embedding_version),
+                    )
+                    page_cleaned = int(deleted.rowcount or 0)
+                conn.execute(
+                    f"DELETE FROM {self.schema}.embedding_reuse_map WHERE new_chunk_key = ANY(%s)",
+                    (new_keys,),
                 )
                 conn.commit()
-                page_copied = int(inserted.rowcount or 0)
-                hash_rows = conn.execute(
-                    f"SELECT content_hash FROM {self.schema}.chunks WHERE chunk_key = ANY(%s)",
-                    (keys,),
-                ).fetchall()
-                page_hashes = [
-                    str(row["content_hash"] if isinstance(row, dict) else row[0])
-                    for row in hash_rows
-                    if str(row["content_hash"] if isinstance(row, dict) else row[0]).strip()
-                ]
-            copied += page_copied
-            pages += 1
-            after_key = keys[-1]
-            if cleanup_duplicates and page_hashes:
-                cleaned += self.delete_duplicate_leftover_embeddings(
-                    embedding_model=embedding_model,
-                    embedding_version=embedding_version,
-                    content_hashes=page_hashes,
+                copied += page_copied
+                cleaned += page_cleaned
+                pages += 1
+                remaining -= len(new_keys)
+                logger.info(
+                    "embeddings_reuse_batch copied=%s page_copied=%s cleaned=%s remaining=%s page=%s",
+                    copied,
+                    page_copied,
+                    cleaned,
+                    remaining,
+                    pages,
                 )
-            logger.info(
-                "embeddings_reuse_batch copied=%s page_copied=%s cleaned=%s page=%s keys=%s",
-                copied,
-                page_copied,
-                cleaned,
-                pages,
-                len(keys),
-            )
-            if len(keys) < page:
-                break
-        with self._connect() as conn:
-            pending_after = self._count_pending_embeddings(
-                conn, embedding_model=embedding_model, embedding_version=embedding_version
-            )
+            pending_after = pending_before - copied
         logger.info(
             "embeddings_reuse_by_content copied=%s cleaned=%s pending_before=%s pending_after=%s pages=%s elapsed=%.1fs",
             copied,
@@ -1312,13 +1339,15 @@ class EmbedderMixin:
         embedding_model: str,
         embedding_version: int,
         schema_versions: tuple[int, ...] | None = None,
+        batch_size: int | None = None,
+        cleanup_duplicates: bool = True,
         progress_every: int = 100_000,
     ) -> dict[str, int]:
         """Rebuild pre-bump ``chunk_key``s from live content and copy those vectors.
 
         ``chunk_key`` includes ``content_hash``. Older recipes folded
-        ``chunk_schema_version`` into that hash. Rebuild those keys from live
-        text and copy the leftover lists. No provider call.
+        ``chunk_schema_version`` into that hash. Load leftover keys once,
+        match pending text against them, then copy toast in pages.
         """
 
         from archive_cli.chunk_builders import _chunk_hash_for_schema
@@ -1330,15 +1359,93 @@ class EmbedderMixin:
             raise ValueError("schema_versions must contain at least one positive version")
         self.ensure_ready()
         started = time.monotonic()
-        loaded = 0
+        page = max(int(batch_size or get_embed_reuse_batch_size()), 1)
+        leftover_keys: set[str] = set()
+        pending = 0
+        mapped = 0
+        copied = 0
+        cleaned = 0
+        pages = 0
+        batch: list[tuple[str, str, str, str, str, int]] = []
+
+        def _flush(write_conn, pairs: list[tuple[str, str, str, str, str, int]]) -> None:
+            nonlocal copied, cleaned, pages
+            if not pairs:
+                return
+            self._require_warehouse_free_space()
+            old_keys = [item[0] for item in pairs]
+            new_keys = [item[1] for item in pairs]
+            write_conn.execute(f"TRUNCATE {self.schema}.embedding_reuse_map")
+            with write_conn.cursor() as cur:
+                with cur.copy(
+                    f"COPY {self.schema}.embedding_reuse_map "
+                    "(old_chunk_key, new_chunk_key, content_hash, card_uid, chunk_type, chunk_index) "
+                    "FROM STDIN"
+                ) as copy:
+                    for item in pairs:
+                        copy.write_row(item)
+            inserted = write_conn.execute(
+                f"""
+                INSERT INTO {self.schema}.embeddings (
+                    chunk_key, embedding_model, embedding_version, embedding,
+                    content_hash, card_uid, chunk_type, chunk_index
+                )
+                SELECT
+                    m.new_chunk_key,
+                    e.embedding_model,
+                    e.embedding_version,
+                    e.embedding,
+                    m.content_hash,
+                    m.card_uid,
+                    m.chunk_type,
+                    m.chunk_index
+                FROM {self.schema}.embedding_reuse_map m
+                JOIN {self.schema}.embeddings e
+                  ON e.chunk_key = m.old_chunk_key
+                 AND e.embedding_model = %s
+                 AND e.embedding_version = %s
+                WHERE m.new_chunk_key = ANY(%s)
+                ON CONFLICT (chunk_key, embedding_model, embedding_version) DO NOTHING
+                """,
+                (embedding_model, embedding_version, new_keys),
+            )
+            page_copied = int(inserted.rowcount or 0)
+            page_cleaned = 0
+            if cleanup_duplicates and old_keys:
+                deleted = write_conn.execute(
+                    f"""
+                    DELETE FROM {self.schema}.embeddings e
+                    WHERE e.chunk_key = ANY(%s)
+                      AND e.embedding_model = %s
+                      AND e.embedding_version = %s
+                      AND NOT EXISTS (
+                        SELECT 1 FROM {self.schema}.chunks c WHERE c.chunk_key = e.chunk_key
+                      )
+                    """,
+                    (old_keys, embedding_model, embedding_version),
+                )
+                page_cleaned = int(deleted.rowcount or 0)
+            write_conn.commit()
+            copied += page_copied
+            cleaned += page_cleaned
+            pages += 1
+            logger.info(
+                "embeddings_remap_schema_batch copied=%s page_copied=%s cleaned=%s page=%s pairs=%s",
+                copied,
+                page_copied,
+                cleaned,
+                pages,
+                len(pairs),
+            )
+
         with self._connect() as write_conn, self._connect() as read_conn:
             write_conn.execute("SET statement_timeout = 0")
             read_conn.execute("SET statement_timeout = 0")
             write_conn.execute(
                 f"""
-                CREATE TABLE IF NOT EXISTS {self.schema}.embedding_schema_remap (
+                CREATE UNLOGGED TABLE IF NOT EXISTS {self.schema}.embedding_reuse_map (
                     old_chunk_key TEXT NOT NULL,
-                    new_chunk_key TEXT NOT NULL,
+                    new_chunk_key TEXT PRIMARY KEY,
                     content_hash TEXT NOT NULL,
                     card_uid TEXT NOT NULL,
                     chunk_type TEXT NOT NULL,
@@ -1346,7 +1453,23 @@ class EmbedderMixin:
                 )
                 """
             )
-            write_conn.execute(f"TRUNCATE {self.schema}.embedding_schema_remap")
+            write_conn.commit()
+            leftover_rows = read_conn.execute(
+                f"""
+                SELECT e.chunk_key
+                FROM {self.schema}.embeddings e
+                WHERE e.embedding_model = %s
+                  AND e.embedding_version = %s
+                  AND NOT EXISTS (
+                    SELECT 1 FROM {self.schema}.chunks c WHERE c.chunk_key = e.chunk_key
+                  )
+                """,
+                (embedding_model, embedding_version),
+            )
+            leftover_keys.update(
+                str(row["chunk_key"] if isinstance(row, dict) else row[0]) for row in leftover_rows
+            )
+            logger.info("embeddings_remap_schema_leftovers keys=%s versions=%s", len(leftover_keys), versions)
             with read_conn.cursor(name="ppa_prior_schema_chunks") as rcur:
                 rcur.itersize = 10_000
                 rcur.execute(
@@ -1363,113 +1486,60 @@ class EmbedderMixin:
                     """,
                     (embedding_model, embedding_version),
                 )
-                with write_conn.cursor() as wcur:
-                    with wcur.copy(
-                        f"COPY {self.schema}.embedding_schema_remap "
-                        "(old_chunk_key, new_chunk_key, content_hash, card_uid, chunk_type, chunk_index) "
-                        "FROM STDIN"
-                    ) as copy:
-                        for row in rcur:
-                            payload = dict(row)
-                            fields = payload.get("source_fields") or []
-                            if not isinstance(fields, list):
-                                fields = list(fields)
-                            fields = [str(item) for item in fields]
-                            uid = str(payload.get("card_uid") or "")
-                            chunk_type = str(payload.get("chunk_type") or "")
-                            index = int(payload.get("chunk_index") or 0)
-                            new_key = str(payload.get("chunk_key") or "")
-                            content = str(payload.get("content") or "")
-                            live_hash = str(payload.get("content_hash") or "")
-                            if not uid or not chunk_type or not new_key:
-                                continue
-                            for version in versions:
-                                old_hash = _chunk_hash_for_schema(version, chunk_type, content, fields)
-                                old_key = _chunk_key(uid, chunk_type, index, old_hash)
-                                if old_key == new_key:
-                                    continue
-                                copy.write_row((old_key, new_key, live_hash, uid, chunk_type, index))
-                                loaded += 1
-                            if progress_every and loaded and loaded % progress_every == 0:
-                                logger.info(
-                                    "embedding_schema_remap_load rows=%s versions=%s",
-                                    loaded,
-                                    versions,
-                                )
-            logger.info("embedding_schema_remap_load done rows=%s versions=%s", loaded, versions)
-            write_conn.execute(
-                f"""
-                CREATE INDEX IF NOT EXISTS idx_embedding_schema_remap_old
-                ON {self.schema}.embedding_schema_remap (old_chunk_key)
-                """
-            )
-            write_conn.execute(
-                f"""
-                CREATE INDEX IF NOT EXISTS idx_embedding_schema_remap_new
-                ON {self.schema}.embedding_schema_remap (new_chunk_key)
-                """
-            )
-            write_conn.commit()
-            logger.info("embeddings_remap_by_prior_schema insert_start map_rows=%s", loaded)
-            inserted = write_conn.execute(
-                f"""
-                INSERT INTO {self.schema}.embeddings (
-                    chunk_key, embedding_model, embedding_version, embedding,
-                    content_hash, card_uid, chunk_type, chunk_index
-                )
-                SELECT DISTINCT ON (m.new_chunk_key)
-                    m.new_chunk_key,
-                    e.embedding_model,
-                    e.embedding_version,
-                    e.embedding,
-                    m.content_hash,
-                    m.card_uid,
-                    m.chunk_type,
-                    m.chunk_index
-                FROM {self.schema}.embedding_schema_remap m
-                JOIN {self.schema}.embeddings e
-                    ON e.chunk_key = m.old_chunk_key
-                    AND e.embedding_model = %s
-                    AND e.embedding_version = %s
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM {self.schema}.embeddings have
-                    WHERE have.chunk_key = m.new_chunk_key
-                      AND have.embedding_model = e.embedding_model
-                      AND have.embedding_version = e.embedding_version
-                )
-                ORDER BY m.new_chunk_key, e.created_at DESC
-                ON CONFLICT (chunk_key, embedding_model, embedding_version) DO NOTHING
-                """,
-                (embedding_model, embedding_version),
-            )
-            identity = write_conn.execute(
-                f"""
-                UPDATE {self.schema}.embeddings e
-                SET
-                    content_hash = m.content_hash,
-                    card_uid = m.card_uid,
-                    chunk_type = m.chunk_type,
-                    chunk_index = m.chunk_index
-                FROM {self.schema}.embedding_schema_remap m
-                WHERE e.chunk_key = m.old_chunk_key
-                  AND e.embedding_model = %s
-                  AND e.embedding_version = %s
-                  AND (e.content_hash = '' OR e.card_uid = '')
-                """,
-                (embedding_model, embedding_version),
-            )
-            write_conn.commit()
-        copied = int(inserted.rowcount or 0)
-        identified = int(identity.rowcount or 0)
+                for row in rcur:
+                    payload = dict(row)
+                    fields = payload.get("source_fields") or []
+                    if not isinstance(fields, list):
+                        fields = list(fields)
+                    fields = [str(item) for item in fields]
+                    uid = str(payload.get("card_uid") or "")
+                    chunk_type = str(payload.get("chunk_type") or "")
+                    index = int(payload.get("chunk_index") or 0)
+                    new_key = str(payload.get("chunk_key") or "")
+                    content = str(payload.get("content") or "")
+                    live_hash = str(payload.get("content_hash") or "")
+                    pending += 1
+                    if not uid or not chunk_type or not new_key:
+                        continue
+                    for version in versions:
+                        old_hash = _chunk_hash_for_schema(version, chunk_type, content, fields)
+                        old_key = _chunk_key(uid, chunk_type, index, old_hash)
+                        if old_key == new_key or old_key not in leftover_keys:
+                            continue
+                        leftover_keys.discard(old_key)
+                        batch.append((old_key, new_key, live_hash, uid, chunk_type, index))
+                        mapped += 1
+                        break
+                    if progress_every and pending % progress_every == 0:
+                        logger.info(
+                            "embeddings_remap_schema_scan pending=%s mapped=%s copied=%s",
+                            pending,
+                            mapped,
+                            copied,
+                        )
+                    if len(batch) >= page:
+                        _flush(write_conn, batch)
+                        batch = []
+            _flush(write_conn, batch)
         logger.info(
-            "embeddings_remap_by_prior_schema copied=%s identified=%s map_rows=%s versions=%s elapsed=%.1fs",
+            "embeddings_remap_by_prior_schema copied=%s cleaned=%s mapped=%s pending=%s pages=%s versions=%s elapsed=%.1fs",
             copied,
-            identified,
-            loaded,
+            cleaned,
+            mapped,
+            pending,
+            pages,
             versions,
             time.monotonic() - started,
         )
-        return {"copied": copied, "identified": identified, "map_rows": loaded, "schema_versions": list(versions)}
+        return {
+            "copied": copied,
+            "identified": 0,
+            "cleaned": cleaned,
+            "map_rows": mapped,
+            "pending": pending,
+            "pages": pages,
+            "schema_versions": list(versions),
+        }
 
     def attach_embeddings_after_rematerialize(
         self,

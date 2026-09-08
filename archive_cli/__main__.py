@@ -301,6 +301,12 @@ def main() -> None:
     )
     embed_remap_schema_parser.add_argument("--embedding-model", default="")
     embed_remap_schema_parser.add_argument("--embedding-version", type=int, default=0)
+    embed_remap_schema_parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=0,
+        help="Matched pairs per toast INSERT (default PPA_EMBED_REUSE_BATCH_SIZE or 2000).",
+    )
     embed_batch_submit_parser = subparsers.add_parser(
         "embed-batch-submit",
         help="Submit pending chunks to OpenAI Batch API (50%% discount, no TPM/TPD)",
@@ -2437,9 +2443,10 @@ def main() -> None:
             result = admin_cmd.embed_remap_schema(
                 store=store,
                 logger=_cli_log,
-                schema_versions=versions or (5, 4),
+                schema_versions=versions or (6, 5, 4),
                 embedding_model=str(getattr(args, "embedding_model", "") or ""),
                 embedding_version=int(getattr(args, "embedding_version", 0) or 0),
+                batch_size=int(getattr(args, "batch_size", 0) or 0),
             )
             _print_cli_result(result)
         except PpaError as exc:

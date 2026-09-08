@@ -321,17 +321,25 @@ def embed_remap_schema(
     schema_versions: tuple[int, ...] | None = None,
     embedding_model: str = "",
     embedding_version: int = 0,
+    batch_size: int = 0,
 ) -> dict[str, Any]:
     """Copy vectors from pre-bump chunk_keys onto current keys."""
     from archive_cli.index_config import get_default_embedding_model, get_default_embedding_version
 
     model = embedding_model.strip() or get_default_embedding_model()
     version = embedding_version or get_default_embedding_version()
-    logger.info("embed_remap_schema_start versions=%s model=%s version=%s", schema_versions, model, version)
+    logger.info(
+        "embed_remap_schema_start versions=%s model=%s version=%s batch_size=%s",
+        schema_versions,
+        model,
+        version,
+        batch_size,
+    )
     remapped = store.index.remap_embeddings_by_prior_schema(
         embedding_model=model,
         embedding_version=version,
         schema_versions=schema_versions,
+        batch_size=batch_size or None,
     )
     reused = store.index.reuse_embeddings_by_content(embedding_model=model, embedding_version=version)
     logger.info(
