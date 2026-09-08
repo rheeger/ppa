@@ -157,8 +157,7 @@ def test_reuse_copies_live_list_that_shares_hash(
     assert result["pending_after"] == 0
     with index._connect() as conn:
         keys = {
-            str(row["chunk_key"])
-            for row in conn.execute(f"SELECT chunk_key FROM {index.schema}.embeddings").fetchall()
+            str(row["chunk_key"]) for row in conn.execute(f"SELECT chunk_key FROM {index.schema}.embeddings").fetchall()
         }
     assert keys == {"live-src", "pending-dst"}
 
@@ -228,8 +227,7 @@ def test_embed_gc_keeps_reusable_and_unknown_orphans(
     assert result["deleted"] == 1
     with index._connect() as conn:
         keys = {
-            str(row["chunk_key"])
-            for row in conn.execute(f"SELECT chunk_key FROM {index.schema}.embeddings").fetchall()
+            str(row["chunk_key"]) for row in conn.execute(f"SELECT chunk_key FROM {index.schema}.embeddings").fetchall()
         }
     assert keys == {"live", "unknown", "reusable"}
 
@@ -379,8 +377,7 @@ def test_reuse_pages_pending_and_cleans_leftover(
     assert result["pending_after"] == 0
     with index._connect() as conn:
         keys = {
-            str(row["chunk_key"])
-            for row in conn.execute(f"SELECT chunk_key FROM {index.schema}.embeddings").fetchall()
+            str(row["chunk_key"]) for row in conn.execute(f"SELECT chunk_key FROM {index.schema}.embeddings").fetchall()
         }
     assert keys == {"live-a", "live-b"}
 
@@ -440,9 +437,7 @@ def test_version_only_attach_copies_v6_list_onto_content_key(
 
 
 @pytest.mark.integration
-def test_text_change_does_not_copy_old_list(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pgvector_dsn: str
-) -> None:
+def test_text_change_does_not_copy_old_list(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pgvector_dsn: str) -> None:
     from archive_cli.chunk_builders import _chunk_hash, _chunk_hash_for_schema
     from archive_cli.materializer import _chunk_key
 
@@ -532,7 +527,6 @@ def test_duplicate_gc_drops_only_when_live_has_list(
     assert result["deleted"] == 1
     with index._connect() as conn:
         keys = {
-            str(row["chunk_key"])
-            for row in conn.execute(f"SELECT chunk_key FROM {index.schema}.embeddings").fetchall()
+            str(row["chunk_key"]) for row in conn.execute(f"SELECT chunk_key FROM {index.schema}.embeddings").fetchall()
         }
     assert keys == {"live", "pending-old"}

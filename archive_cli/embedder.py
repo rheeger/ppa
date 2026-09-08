@@ -835,9 +835,7 @@ class EmbedderMixin:
             return
         free = self._warehouse_free_bytes()
         if free < min_gb * 1024**3:
-            raise RuntimeError(
-                f"warehouse_disk_low free_gb={free / 1024**3:.1f} min_gb={min_gb}"
-            )
+            raise RuntimeError(f"warehouse_disk_low free_gb={free / 1024**3:.1f} min_gb={min_gb}")
 
     def delete_duplicate_leftover_embeddings(
         self,
@@ -1465,9 +1463,7 @@ class EmbedderMixin:
                 """,
                 (embedding_model, embedding_version),
             )
-            leftover_keys.update(
-                str(row["chunk_key"] if isinstance(row, dict) else row[0]) for row in leftover_rows
-            )
+            leftover_keys.update(str(row["chunk_key"] if isinstance(row, dict) else row[0]) for row in leftover_rows)
             logger.info("embeddings_remap_schema_leftovers keys=%s versions=%s", len(leftover_keys), versions)
             with read_conn.cursor(name="ppa_prior_schema_chunks") as rcur:
                 rcur.itersize = 10_000
@@ -1597,9 +1593,7 @@ class EmbedderMixin:
             return
         coverage = (chunk_count - pending_after) / chunk_count
         if coverage < min_cov:
-            raise IncompatibleStateError(
-                f"embedding_coverage:{chunk_count - pending_after}/{chunk_count}"
-            )
+            raise IncompatibleStateError(f"embedding_coverage:{chunk_count - pending_after}/{chunk_count}")
 
     def embed_pending(
         self,

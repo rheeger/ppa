@@ -37,7 +37,9 @@ def _snapshot(**kwargs) -> ServingSnapshot:
 def test_missing_staged_files_do_not_fallback(tmp_path: Path) -> None:
     dest = tmp_path / "gen"
     dest.mkdir(parents=True, exist_ok=True)
-    snap = _snapshot(embedding_keys_path=str(tmp_path / "missing.txt"), embeddings_bin_path=str(tmp_path / "missing.bin"))
+    snap = _snapshot(
+        embedding_keys_path=str(tmp_path / "missing.txt"), embeddings_bin_path=str(tmp_path / "missing.bin")
+    )
     with pytest.raises(ExportFailed):
         install_streamed_embeddings(dest, snap)
     assert not (dest / "embedding_keys.txt").exists()

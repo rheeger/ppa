@@ -22,7 +22,11 @@ def parse_instant(raw: str) -> tuple[str, bool]:
     for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
         try:
             cleaned = text.replace("Z", "+00:00") if text.endswith("Z") else text
-            dt = datetime.fromisoformat(cleaned) if "T" in cleaned or "+" in cleaned else datetime.strptime(text[:19], fmt)
+            dt = (
+                datetime.fromisoformat(cleaned)
+                if "T" in cleaned or "+" in cleaned
+                else datetime.strptime(text[:19], fmt)
+            )
             return dt.isoformat(), True
         except ValueError:
             continue

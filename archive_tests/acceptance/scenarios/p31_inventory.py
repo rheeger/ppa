@@ -24,9 +24,7 @@ def run_p31_inventory(_runtime: IsolatedRuntime) -> dict[str, Any]:
     if missing:
         raise AssertionError(f"pr31_cases.json missing findings: {missing}")
     incomplete = [
-        case.get("id")
-        for case in cases
-        if any(not str(case.get(field) or "").strip() for field in REQUIRED_FIELDS)
+        case.get("id") for case in cases if any(not str(case.get(field) or "").strip() for field in REQUIRED_FIELDS)
     ]
     if incomplete:
         raise AssertionError(f"pr31_cases.json incomplete rows: {incomplete}")

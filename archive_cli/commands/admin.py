@@ -143,6 +143,7 @@ def embed_gc(
     Empty-hash leftovers stay until they can be identified.
     """
     schema = store.index.schema
+
     def _unused_sql(alias: str) -> str:
         return f"""
         NOT EXISTS (SELECT 1 FROM {schema}.chunks c WHERE c.chunk_key = {alias}.chunk_key)
@@ -193,18 +194,12 @@ def embed_gc(
                 WHERE NOT EXISTS (SELECT 1 FROM {schema}.chunks c WHERE c.chunk_key = e.chunk_key)
                 """
             ).fetchone()
-            unused = conn.execute(
-                f"SELECT COUNT(*) FROM {schema}.embeddings e WHERE {unused_sql}"
-            ).fetchone()
-            duplicate = conn.execute(
-                f"SELECT COUNT(*) FROM {schema}.embeddings e WHERE {duplicate_sql}"
-            ).fetchone()
+            unused = conn.execute(f"SELECT COUNT(*) FROM {schema}.embeddings e WHERE {unused_sql}").fetchone()
+            duplicate = conn.execute(f"SELECT COUNT(*) FROM {schema}.embeddings e WHERE {duplicate_sql}").fetchone()
             total_count = int(total[0] if not isinstance(total, dict) else next(iter(total.values())))
             orphan_count = int(orphan[0] if not isinstance(orphan, dict) else next(iter(orphan.values())))
             unused_count = int(unused[0] if not isinstance(unused, dict) else next(iter(unused.values())))
-            duplicate_count = int(
-                duplicate[0] if not isinstance(duplicate, dict) else next(iter(duplicate.values()))
-            )
+            duplicate_count = int(duplicate[0] if not isinstance(duplicate, dict) else next(iter(duplicate.values())))
         logger.info(
             "embed_gc_scan total=%d orphan=%d unused_hash=%d duplicates=%d mode=%s dry_run=%s",
             total_count,
@@ -225,9 +220,7 @@ def embed_gc(
     else:
         with store.index._connect() as conn:  # noqa: SLF001
             conn.execute("SET statement_timeout = 0")
-            unused = conn.execute(
-                f"SELECT COUNT(*) FROM {schema}.embeddings e WHERE {unused_sql}"
-            ).fetchone()
+            unused = conn.execute(f"SELECT COUNT(*) FROM {schema}.embeddings e WHERE {unused_sql}").fetchone()
             unused_count = int(unused[0] if not isinstance(unused, dict) else next(iter(unused.values())))
             if unused_count > 0:
                 cur = conn.execute(f"DELETE FROM {schema}.embeddings e WHERE {unused_sql}")

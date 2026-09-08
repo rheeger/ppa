@@ -1129,7 +1129,9 @@ def _touch_parent_thread(vault_path: str | Path, card: Any, *, increment: bool) 
     frontmatter, _body, _provenance = read_note(vault, rel)
     persist_pending_receipt(
         vault,
-        pending_receipt(str(frontmatter.get("uid") or thread_ref), str(frontmatter.get("updated") or ""), status="pending"),
+        pending_receipt(
+            str(frontmatter.get("uid") or thread_ref), str(frontmatter.get("updated") or ""), status="pending"
+        ),
     )
     updates: dict[str, Any] = {}
     sent = str(getattr(card, "sent_at", "") or getattr(card, "created", "") or "")

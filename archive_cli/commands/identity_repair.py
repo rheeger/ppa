@@ -381,9 +381,7 @@ def merge_people(vault: Path, *, apply: bool) -> dict[str, Any]:
                 if pair in seen_pairs:
                     continue
                 seen_pairs.add(pair)
-                eligible, reason = auto_merge_eligible(
-                    left["frontmatter"], right["frontmatter"], nicknames
-                )
+                eligible, reason = auto_merge_eligible(left["frontmatter"], right["frontmatter"], nicknames)
                 if eligible:
                     winner = _richer(left, right)
                     loser = right if winner is left else left
@@ -449,7 +447,12 @@ def emit_same_conversation_edges(vault: Path, *, apply: bool = False) -> dict[st
                 log.warning("same-conversation skip stale-cache rel=%s err=%s", rel, exc)
         threads.append(fm)
     result = preview_or_apply(vault, threads, apply=apply)
-    return {"pairs": result.get("count", 0), "path": result.get("path") or "", "applied": apply, "truncated": result.get("truncated")}
+    return {
+        "pairs": result.get("count", 0),
+        "path": result.get("path") or "",
+        "applied": apply,
+        "truncated": result.get("truncated"),
+    }
 
 
 def _report_for_json(result: dict[str, Any]) -> dict[str, Any]:

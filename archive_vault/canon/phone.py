@@ -35,7 +35,9 @@ def parse(value: str | None, *, region: str | None = None) -> IdentifierResult:
     plus = raw.startswith("+")
     digits = _NON_DIGIT.sub("", raw)
     if not digits:
-        return IdentifierResult(kind="handle", original=value or "", canonical="", validity="opaque", reason="no_digits")
+        return IdentifierResult(
+            kind="handle", original=value or "", canonical="", validity="opaque", reason="no_digits"
+        )
     configured = (region if region is not None else default_region()) or ""
     if plus:
         if len(digits) < 8:

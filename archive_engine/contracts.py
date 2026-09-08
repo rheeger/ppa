@@ -938,10 +938,10 @@ class ExportReceipt:
             embedding_spec=spec,
             canon_version=_as_str(payload.get("canon_version"), field="canon_version"),
             schema_version=_as_str(payload.get("schema_version"), field="schema_version"),
-            complete=_as_bool(payload.get("complete") if payload.get("complete") is not None else False, field="complete"),
-            captured_mutation_ids=_as_str_tuple(
-                payload.get("captured_mutation_ids"), field="captured_mutation_ids"
+            complete=_as_bool(
+                payload.get("complete") if payload.get("complete") is not None else False, field="complete"
             ),
+            captured_mutation_ids=_as_str_tuple(payload.get("captured_mutation_ids"), field="captured_mutation_ids"),
         )
 
 
@@ -973,9 +973,7 @@ class ScanRejection:
                 _as_str(payload.get("contained_path"), field="contained_path"), field="contained_path"
             ),
             revision_hash=_as_str(payload.get("revision_hash"), field="revision_hash"),
-            error_code=_require_nonempty(
-                _as_str(payload.get("error_code"), field="error_code"), field="error_code"
-            ),
+            error_code=_require_nonempty(_as_str(payload.get("error_code"), field="error_code"), field="error_code"),
             field_names=_as_str_tuple(payload.get("field_names"), field="field_names"),
             disposition=_as_str(payload.get("disposition"), field="disposition") or "excluded",
             uid=_as_str(payload.get("uid"), field="uid"),

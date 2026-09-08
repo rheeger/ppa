@@ -122,7 +122,20 @@ def test_successful_publish_does_not_truncate_dirty(tmp_path, monkeypatch) -> No
     monkeypatch.setattr("archive_cli.serving_index._crate", lambda: _Crate())
     monkeypatch.setattr(
         "archive_cli.serving_index.publish_snapshot",
-        lambda *a, **k: type("R", (), {"generation_id": "g1", "to_payload": lambda self: {}, "cards": 0, "chunks": 0, "embeddings": 0, "mode": "full", "parent_generation": "", "snapshot_id": "s"})(),
+        lambda *a, **k: type(
+            "R",
+            (),
+            {
+                "generation_id": "g1",
+                "to_payload": lambda self: {},
+                "cards": 0,
+                "chunks": 0,
+                "embeddings": 0,
+                "mode": "full",
+                "parent_generation": "",
+                "snapshot_id": "s",
+            },
+        )(),
     )
     monkeypatch.setattr("archive_cli.serving_index.prune_retired_serving_generations", lambda *a, **k: [])
     monkeypatch.setattr("archive_cli.serving_index.close_serving_handles", lambda **k: None)

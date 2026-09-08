@@ -612,9 +612,7 @@ class SchemaDDLMixin:
         conn.execute(
             f"ALTER TABLE {self.schema}.embeddings ADD COLUMN IF NOT EXISTS content_hash TEXT NOT NULL DEFAULT ''"
         )
-        conn.execute(
-            f"ALTER TABLE {self.schema}.embeddings ADD COLUMN IF NOT EXISTS card_uid TEXT NOT NULL DEFAULT ''"
-        )
+        conn.execute(f"ALTER TABLE {self.schema}.embeddings ADD COLUMN IF NOT EXISTS card_uid TEXT NOT NULL DEFAULT ''")
         conn.execute(
             f"ALTER TABLE {self.schema}.embeddings ADD COLUMN IF NOT EXISTS chunk_type TEXT NOT NULL DEFAULT ''"
         )
