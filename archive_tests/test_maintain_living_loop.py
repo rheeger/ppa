@@ -550,3 +550,81 @@ def test_apply_loop_publish_failure_fails_the_run(
     assert living_loop_ok(rep) is False
     assert "Publish failed: incomplete_export." in rep.human_summary
     assert "Result: ok." not in rep.human_summary
+
+
+def test_human_report_contains_living_loop_fields() -> None:
+    from archive_cli.commands.maintain import finalize_living_report
+
+    report = MaintenanceReport(
+        apply_loop=True,
+        planned_steps=list(APPLY_LOOP_STEPS),
+        source_updater_runs=2,
+        source_updater_reports=[
+            {
+                "source_key": "gmail-messages:me@example.com",
+                "status": "failed",
+                "dirty_card_uids": [],
+            },
+            {
+                "source_key": "contacts:google",
+                "status": "success",
+                "dirty_card_uids": ["hfa-person-a"],
+            },
+        ],
+        cards_extracted=1,
+        processor_output_count=2,
+        processor_reports=[
+            {
+                "item_results": [
+                    {
+                        "processor_key": "email_thread_enrichment",
+                        "status": "complete",
+                        "already_current": False,
+                        "valid_no_output": False,
+                        "output_uids": ["hfa-thread-a"],
+                    }
+                ],
+                "report": {
+                    "warnings": [
+                        "embedding embedded=3 reused=2 reused_by_content=8 pending_after=1 selected=4 failed=0"
+                    ]
+                },
+            }
+        ],
+        publication={"ok": True, "generation_id": "gen-report-1"},
+    )
+    finalize_living_report(report)
+    payload = report.to_dict()
+    for key in (
+        "cards_pulled",
+        "cards_written",
+        "cards_extracted",
+        "cards_enriched",
+        "embeddings_embedded",
+        "embeddings_reused",
+        "published_generation",
+        "pending_embeddings",
+        "failed_sources",
+        "errors",
+        "human_summary",
+    ):
+        assert key in payload
+    assert report.cards_pulled == 1
+    assert report.cards_written == 2
+    assert report.cards_extracted == 1
+    assert report.cards_enriched == 1
+    assert report.embeddings_embedded == 3
+    assert report.embeddings_reused == 8
+    assert report.published_generation == "gen-report-1"
+    assert report.pending_embeddings == 1
+    assert report.failed_sources == ["gmail-messages:me@example.com"]
+    summary = format_maintain_human_summary(report)
+    assert "Pulled 1 cards from 2 sources." in summary
+    assert "Failed sources: gmail-messages:me@example.com." in summary
+    assert "Extracted 1" in summary
+    assert "Enriched 1" in summary
+    assert "Embedded 3 new vectors, reused 8 by content hash." in summary
+    assert "Published generation gen-report-1." in summary
+    assert "Pending embeddings: 1." in summary
+    assert "Result: incomplete because a live source failed." in summary
+    assert living_loop_ok(report) is False
