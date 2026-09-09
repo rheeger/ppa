@@ -84,8 +84,7 @@ def _write_mini_export(work: Path, *, dim: int = 4) -> None:
         fh.write(struct.pack(f"<{dim}f", *email))
 
 
-def _publish_mini(root: Path) -> str:
-    gid = "gen-test"
+def _publish_mini(root: Path, gid: str = "gen-test") -> str:
     dest = root / "generations" / gid
     dest.mkdir(parents=True)
     work = dest / "_inbox"
@@ -116,6 +115,26 @@ def test_dirty_publish_and_status(tmp_path, monkeypatch) -> None:
     status = serving_index_status(tmp_path)
     assert status["serving_index_generation"] == gid
     assert status["serving_index_ready"] is True
+
+
+def test_warm_handle_remaps_when_generation_changes(tmp_path, monkeypatch) -> None:
+    from archive_cli import serving_index as si
+
+    si._HANDLE = None
+    si._HANDLES.clear()
+    root = tmp_path / "rust-search-index"
+    monkeypatch.setenv("PPA_SERVING_INDEX_PATH", str(root))
+    first_gid = _publish_mini(root, "gen-warm-1")
+    handle1 = get_serving_handle(tmp_path)
+    assert handle1.generation_id == first_gid
+    rows1 = handle1.search("Jane", limit=5)
+    assert any(r.get("card_uid") == "hfa-person-aaaabbbbcccc" for r in rows1)
+    second_gid = _publish_mini(root, "gen-warm-2")
+    handle2 = get_serving_handle(tmp_path)
+    assert handle2.generation_id == second_gid
+    assert handle2.generation_id != first_gid
+    rows2 = handle2.search("Jane", limit=5)
+    assert any(r.get("card_uid") == "hfa-person-aaaabbbbcccc" for r in rows2)
 
 
 def test_search_query_hybrid_on_mini_index(tmp_path, monkeypatch) -> None:

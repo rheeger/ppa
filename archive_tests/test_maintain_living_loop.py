@@ -468,3 +468,85 @@ def test_embedding_processor_uses_hash_when_llm_is_unset(monkeypatch: pytest.Mon
     assert called["uid_allowlist"] == {"card-a"}
     assert out.results[0].status == "complete"
     assert any("reused_by_content=1" in warning for warning in out.warnings)
+
+
+def test_apply_loop_publishes_when_cards_were_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _empty_store(tmp_path)
+    called: dict[str, Any] = {}
+
+    def fake_updaters(*_a, **_k):
+        return (
+            1,
+            [{"source_key": "contacts:google", "status": "success", "dirty_card_uids": ["hfa-person-new"]}],
+            False,
+        )
+
+    def fake_processors(*_a, **_k):
+        return (
+            1,
+            [
+                {
+                    "executed": True,
+                    "item_results": [
+                        {
+                            "processor_key": "materialization",
+                            "input_uid": "hfa-person-new",
+                            "status": "complete",
+                            "output_uids": ["hfa-person-new"],
+                            "receipt": {"outputs": [{"uid": "hfa-person-new"}]},
+                        }
+                    ],
+                    "report": {"warnings": ["materialization incremental rebuild cards=1 dirty_uids=1"], "errors": []},
+                }
+            ],
+            1,
+        )
+
+    def fake_publish(store, report, logger, *, dry_run):
+        called["dry_run"] = dry_run
+        called["uids"] = list(report.publish_uids)
+        report.publication = {"ok": True, "generation_id": "gen-living-1", "skipped": None}
+        report.serving_index = {"ok": True, "generation_id": "gen-living-1"}
+
+    monkeypatch.setattr("archive_cli.commands.maintain._run_source_updaters", fake_updaters)
+    monkeypatch.setattr("archive_cli.commands.maintain._run_processors", fake_processors)
+    monkeypatch.setattr(
+        "archive_cli.commands.maintain._run_file_hygiene",
+        lambda *a, **k: ({"purged": 0}, {"cards_linked": 0, "cards_scanned": 0}, []),
+    )
+    monkeypatch.setattr("archive_cli.commands.maintain._publish_serving_index", fake_publish)
+    _ready_apply(monkeypatch)
+    rep = run_maintenance(store=store, logger=logging.getLogger("t"), dry_run=False, apply_loop=True)
+    assert called["dry_run"] is False
+    assert "hfa-person-new" in called["uids"]
+    assert rep.published_generation == "gen-living-1"
+    assert "Published generation gen-living-1." in rep.human_summary
+    assert living_loop_ok(rep) is True
+
+
+def test_apply_loop_publish_failure_fails_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _empty_store(tmp_path)
+
+    def fake_updaters(*_a, **_k):
+        return 1, [{"source_key": "contacts:google", "status": "success", "dirty_card_uids": ["hfa-x"]}], False
+
+    def fake_publish(store, report, logger, *, dry_run):
+        report.publication = {"ok": False, "error": "incomplete_export"}
+        report.errors.append({"step": "serving_index_publish", "error": "incomplete_export"})
+
+    monkeypatch.setattr("archive_cli.commands.maintain._run_source_updaters", fake_updaters)
+    monkeypatch.setattr("archive_cli.commands.maintain._run_processors", lambda *a, **k: (0, [], 0))
+    monkeypatch.setattr(
+        "archive_cli.commands.maintain._run_file_hygiene",
+        lambda *a, **k: ({"purged": 0}, {"cards_linked": 0, "cards_scanned": 0}, []),
+    )
+    monkeypatch.setattr("archive_cli.commands.maintain._publish_serving_index", fake_publish)
+    _ready_apply(monkeypatch)
+    rep = run_maintenance(store=store, logger=logging.getLogger("t"), dry_run=False, apply_loop=True)
+    assert living_loop_ok(rep) is False
+    assert "Publish failed: incomplete_export." in rep.human_summary
+    assert "Result: ok." not in rep.human_summary
