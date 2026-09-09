@@ -1,6 +1,6 @@
 # Maintain living loop
 
-**Status:** implementation-ready. This document does not run maintain, load nightly, bounce HTTP MCP, or touch the living seed.  
+**Status:** A–G implemented and isolated-proven. H not run. Nightly still unloaded. This document does not run living-seed maintain, load nightly, bounce HTTP MCP, or touch the living seed.  
 **Owner increment:** late v2.5 ops. Not v3. Not `production_proven`.  
 **Branch when work starts:** a new `fix/maintain-living-loop` (or similar). Do not stack this on stranger-install work.  
 **Living status:** [STATUS.md](../STATUS.md).
