@@ -267,3 +267,159 @@ def test_apply_loop_fixture_updater_writes_dirty_uids(
     assert "hfa-join-mail-1" in dirty
     assert "hfa-join-mail-1" in rep.publish_uids
     assert adapter.ingest_kwargs.get("catch_up") is not True
+
+
+def test_apply_loop_fails_when_configured_enrichment_is_down(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _empty_store(tmp_path)
+    ran = {"updaters": False, "processors": False}
+
+    def boom_updaters(*_a, **_k):
+        ran["updaters"] = True
+        return 0, [], False
+
+    def boom_processors(*_a, **_k):
+        ran["processors"] = True
+        return (0, [], 0)
+
+    monkeypatch.setattr("archive_cli.commands.maintain._run_source_updaters", boom_updaters)
+    monkeypatch.setattr("archive_cli.commands.maintain._run_processors", boom_processors)
+    monkeypatch.setenv("PPA_ENRICHMENT_MODEL", "openai:gpt-4o-mini")
+    monkeypatch.setenv("PPA_EMBEDDING_PROVIDER", "hash")
+
+    def fake_resolve(*, refresh: bool = False):
+        provider = mock.Mock()
+        provider.name = "openai"
+        provider.model = "gpt-4o-mini"
+        provider.is_available.return_value = False
+        return provider
+
+    monkeypatch.setattr("archive_cli.providers.resolve_provider", fake_resolve)
+    rep = run_maintenance(store=store, logger=logging.getLogger("t"), dry_run=False, apply_loop=True)
+    assert ran["updaters"] is False
+    assert ran["processors"] is False
+    assert any(item.get("step") == "apply_providers" for item in rep.errors)
+    assert "unavailable" in (rep.provider_reason or "").lower()
+    assert "Result: incomplete because a required provider is down." in rep.human_summary
+    assert living_loop_ok(rep) is False
+
+
+def test_apply_provider_failure_reason_openai_embed_without_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PPA_EMBEDDING_PROVIDER", "openai")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("PPA_ENRICHMENT_MODEL", raising=False)
+    reason = apply_provider_failure_reason()
+    assert "OPENAI_API_KEY" in reason
+
+
+def test_apply_loop_passes_dirty_uids_and_not_broad_llm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _empty_store(tmp_path)
+    captured: dict[str, Any] = {}
+
+    def fake_updaters(*_a, **_k):
+        return (
+            1,
+            [{"source_key": "gmail-messages:me@example.com", "status": "success", "dirty_card_uids": ["hfa-email-dirty"]}],
+            False,
+        )
+
+    def fake_processors(*_a, **kwargs):
+        captured["extra"] = list(kwargs.get("extra_dirty_uids") or [])
+        captured["source_reports"] = kwargs.get("source_updater_reports")
+        captured["allow_broad_llm"] = kwargs.get("allow_broad_llm")
+        captured["allow_full_embedding"] = kwargs.get("allow_full_embedding")
+        return (
+            1,
+            [
+                {
+                    "executed": True,
+                    "item_results": [
+                        {
+                            "processor_key": "email_typed_extraction",
+                            "input_uid": "hfa-email-dirty",
+                            "status": "complete",
+                            "output_uids": ["hfa-purchase-derived"],
+                            "receipt": {"outputs": [{"uid": "hfa-purchase-derived"}]},
+                        }
+                    ],
+                    "report": {"warnings": [], "errors": [], "output_count": 1},
+                }
+            ],
+            1,
+        )
+
+    monkeypatch.setattr("archive_cli.commands.maintain._run_source_updaters", fake_updaters)
+    monkeypatch.setattr("archive_cli.commands.maintain._run_processors", fake_processors)
+    monkeypatch.setattr(
+        "archive_cli.commands.maintain._run_file_hygiene",
+        lambda *a, **k: ({"purged": 0}, {"cards_linked": 0, "cards_scanned": 0}, []),
+    )
+    _ready_apply(monkeypatch)
+    rep = run_maintenance(store=store, logger=logging.getLogger("t"), dry_run=False, apply_loop=True)
+    from archive_sync.processors.dirty_io import dirty_uids_from_source_reports
+
+    assert "hfa-email-dirty" in dirty_uids_from_source_reports(captured["source_reports"] or [])
+    assert captured["allow_broad_llm"] is False
+    assert captured["allow_full_embedding"] is False
+    assert rep.cards_extracted == 1
+    assert "hfa-purchase-derived" in rep.publish_uids
+
+
+def test_dirty_email_extracts_derived_card(tmp_path: Path) -> None:
+    from archive_cli.index_config import get_rebuild_workers
+    from archive_sync.extractors.amazon import AmazonExtractor
+    from archive_sync.extractors.registry import build_default_registry
+    from archive_sync.extractors.runner import ExtractionRunner
+    from archive_tests.archive_sync.extractors.conftest import write_email_to_vault
+    from archive_tests.archive_sync.extractors.test_amazon import AMAZON_ORDER_BODY
+    vault = (tmp_path / "vault").resolve()
+    for name in (
+        "People",
+        "Email",
+        "EmailThreads",
+        "Transactions/Purchases",
+        "Entities/Organizations",
+        "_meta",
+        "_templates",
+        ".obsidian",
+    ):
+        (vault / name).mkdir(parents=True, exist_ok=True)
+    (vault / "_meta" / "identity-map.json").write_text("{}", encoding="utf-8")
+    email_uid = "hfa-email-message-liveloop1"
+    fm = {
+        "uid": email_uid,
+        "type": "email_message",
+        "source": ["gmail"],
+        "source_id": "gmail.msg.liveloop1",
+        "created": "2024-03-15",
+        "updated": "2024-03-15",
+        "summary": "Your Amazon.com order confirmation",
+        "gmail_message_id": "msgid-liveloop1",
+        "gmail_thread_id": "thread-liveloop1",
+        "account_email": "me@example.com",
+        "from_email": "auto-confirm@amazon.com",
+        "to_emails": ["me@example.com"],
+        "subject": "Your Amazon.com order confirmation",
+        "sent_at": "2024-03-15T14:30:00-08:00",
+        "people": [],
+        "orgs": [],
+        "tags": [],
+    }
+    write_email_to_vault(str(vault), "Email/2024-03/liveloop-amazon.md", fm, AMAZON_ORDER_BODY)
+    runner = ExtractionRunner(
+        str(vault),
+        registry=build_default_registry(),
+        dry_run=False,
+        workers=get_rebuild_workers(),
+        limit=1,
+        uid_allowlist={email_uid},
+    )
+    metrics = runner.run()
+    purchase_uid = AmazonExtractor().generate_derived_uid(email_uid, "112-1234567-1234567")
+    assert int(getattr(metrics, "extracted_cards", 0) or 0) >= 1
+    assert metrics.created
+    assert metrics.created[0].output_uid == purchase_uid
+    assert (vault / metrics.created[0].rel_path).is_file()
