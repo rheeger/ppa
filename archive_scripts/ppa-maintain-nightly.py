@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """Nightly local-seed maintain — wrap ``ppa maintain``, do not invent a second pipeline.
 
-Nightly IS ``maintain`` with live updater + dirty-processor flags:
+Nightly IS ``maintain --apply``:
 
     python -m archive_cli --log-file logs/ppa-maintain-nightly-YYYYMMDD.log maintain \\
-        --run-source-updaters --apply-source-updaters \\
-        --run-processors --apply-processors \\
-        --source-updater <live keys>
+        --apply --allow-broad-llm --source-updater <live keys>
 
 That sequence already: pulls every executable (non-parked) source → applies new
 data → rematerializes dirty UIDs → dirty-embeds via the embedding processor
@@ -266,10 +264,7 @@ def build_maintain_argv(
         "--log-file",
         str(log_file),
         "maintain",
-        "--run-source-updaters",
-        "--apply-source-updaters",
-        "--run-processors",
-        "--apply-processors",
+        "--apply",
         "--allow-broad-llm",
     ]
     for key in source_keys:

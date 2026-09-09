@@ -1318,12 +1318,18 @@ def main() -> None:
 
     sub_maintain = subparsers.add_parser(
         "maintain",
-        help="Run maintenance cycle: tail ingestion, extract, resolve, rebuild, report",
+        help="Bring the living archive up to date: pull connected sources, process dirty cards, publish search",
+    )
+    sub_maintain.add_argument(
+        "--apply",
+        action="store_true",
+        dest="apply_loop",
+        help="Pull new evidence from connected accounts, process dirty cards, reuse unchanged embeddings, and publish a complete search generation",
     )
     sub_maintain.add_argument(
         "--dry-run",
         action="store_true",
-        help="Report what would be done without executing",
+        help="Print the same pull, process, and publish steps with no writes",
     )
     sub_maintain.add_argument(
         "--record-source-status",
@@ -1477,10 +1483,13 @@ def main() -> None:
 
         try:
             store = resolve_store()
+            explicit_run = bool(getattr(args, "run_source_updaters", False) or getattr(args, "run_processors", False))
+            apply_loop = bool(getattr(args, "apply_loop", False) or (args.dry_run and not explicit_run))
             report = run_maintenance(
                 store=store,
                 logger=_cli_log,
                 dry_run=args.dry_run,
+                apply_loop=apply_loop,
                 record_source_status=getattr(args, "record_source_status", False),
                 record_processor_status=getattr(args, "record_processor_status", False),
                 run_source_updaters=getattr(args, "run_source_updaters", False),
@@ -1497,9 +1506,13 @@ def main() -> None:
                 allow_broad_llm=getattr(args, "allow_broad_llm", False),
                 source_updater_strict=getattr(args, "strict", False),
             )
+            if report.human_summary:
+                print(report.human_summary, file=sys.stderr)
             _print_json(report.to_dict())
             if report.source_updater_partial and not getattr(args, "strict", False):
                 _cli_log.warning("maintain partial: source updater failures ignored; re-run with --strict to hard-fail")
+            if apply_loop and not args.dry_run and not report.ok:
+                raise SystemExit(1)
         except PpaError as exc:
             _cli_fail(exc)
         return
