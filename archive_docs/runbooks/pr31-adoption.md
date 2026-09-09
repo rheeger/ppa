@@ -7,20 +7,33 @@ Instance: local seed living corpus. Arnold is not in scope.
 | Vault | `/Users/rheeger/Archive/seed/hf-archives-seed-20260307-235127` |
 | Schema | `ppa` |
 | DSN | `postgresql://archive:archive@127.0.0.1:50731/archive` |
-| Worktree | `/Users/rheeger/Code/rheeger/ppa` on `codex/ppa-pr31-correctness-closeout` |
+| Worktree | `/Users/rheeger/Code/rheeger/ppa` on `fix/embedding-content-identity` (stacked on `codex/ppa-pr31-correctness-closeout`) |
 | Warm reads | existing `user-archive-local` MCP only |
 | Jobs | new `archive_cli` / `publish-serving-index.py` processes with `--log-file` before the subcommand |
 
 Code deploy, derived-index publish, and canonical identity writes are separate. This runbook authorizes only the commands below.
 
+## Nightly hold (until content-keyed serving is real)
+
+LaunchAgent `com.rheeger.ppa.maintain-nightly` stays unloaded. A Sep 7 rematerialize reminted every `chunk_key` because `content_hash` includes `chunk_schema_version`. Paid lists stayed on the old keys. A thin publish became ACTIVE.
+
+Do not `launchctl load` / `kickstart`, do not `ppa maintain`, do not source-updater apply, and do not start another `rebuild-indexes` until all of these are true:
+
+1. Rematerialize attaches lists by content identity before embed or publish, and a thin join fails the job.
+2. Seed ACTIVE has on the order of 4.3M openai lists, not tens of thousands.
+3. `maintain` and `rebuild-indexes` would publish the same content-keyed join for unchanged text.
+4. `pgrep` shows no maintain, and launchd still says the agent is not loaded.
+
+If 02:00 starts a job anyway, TERM it. HTTP MCP stays up. First wake after the hold is a dry-run argv check on this worktree's `.venv`, not a kickstart.
+
 ## Current instance (2026-09-07)
 
-- Warehouse is mid nightly rematerialize (`ppa-maintain-nightly-20260907.log`, step 5/6). Do not start a second rebuild, maintain, or publish until that process exits.
-- ACTIVE serving generation `1788743317023` is **hash-dev**, `embedding_count=0`, ~9.5 GiB. It is not the quality rollback target.
+- Nightly rematerialize was TERM'd. Warehouse live join is about 4.00M of 4.37M chunks after v5 remap. Leftover old keys remain (embeddings ~8.3M). Do not rerun v5 remap. Do not `embed-gc --apply` against those leftovers.
+- Search still serves a thin generation until a content-keyed (or recovered) openai publish.
 - Retained openai generation `1788716974760` is **text-embedding-3-small** v1, `embedding_count=4355992`, `nlist=2087`, ~34 GiB. That is the rollback pointer.
-- `_meta/scan-rejections.json` is present and empty (`count=0`). Default publish may proceed.
-- `_meta/thread-projection-receipts.json` already has pending `p31.g.1` receipts from this worktree. Nightly maintain should drain them; do not invent a second drain.
-- Disk: ~143 GiB free on the data volume. Budget one new ~34 GiB generation plus ~34 GiB staging. Keep both existing generations until the new ACTIVE validates.
+- Hash-dev generation `1788743317023` is not the quality rollback target.
+- `_meta/scan-rejections.json` is present and empty (`count=0`).
+- Disk: leave headroom for one new ~34 GiB generation plus staging. Keep the fat openai generation until the new ACTIVE validates.
 - `PPA_SERVING_INDEX_MAX_RSS_MB` for seed publish is **32768** (cutover contract). Default 8192 is too small.
 
 ## What this approval does and does not do
@@ -35,8 +48,8 @@ Code deploy, derived-index publish, and canonical identity writes are separate. 
 
 **Do not**
 
-- Kill the in-flight nightly, the HTTP MCP (`serve --http` on `100.93.60.13:8765`), or start a competing publisher.
-- Run `rebuild-indexes` or another full warehouse rematerialize. Nightly already owns that.
+- Kill the HTTP MCP (`serve --http` on `100.93.60.13:8765`), or start a competing publisher.
+- Load or kickstart nightly, run `ppa maintain`, or start another full warehouse rematerialize until the nightly hold above is lifted.
 - `identity-repair canonicalize --apply` or `resolve-people --apply`. Those rewrite stored join keys / historical decisions and stay review items.
 - Auto-undo historical named merges.
 - Cold `ppa person` / `query` / `search` against this vault.

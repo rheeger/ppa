@@ -31,7 +31,7 @@ def _ppa_env(canonical: str, default: str = "") -> str:
 # ---------------------------------------------------------------------------
 
 INDEX_SCHEMA_VERSION = 9
-CHUNK_SCHEMA_VERSION = 6
+CHUNK_SCHEMA_VERSION = 7
 MANIFEST_SCHEMA_VERSION = 2
 SCAN_MANIFEST_VERSION = 1
 DEFAULT_POSTGRES_SCHEMA = "ppa"
@@ -556,6 +556,42 @@ def get_publication_disk_budget_mb() -> int:
 
 def get_publication_lease_stale_seconds() -> int:
     return max(_ppa_env_int("PPA_PUBLICATION_LEASE_STALE_SECONDS", default=30), 1)
+
+
+def get_publication_min_embed_coverage() -> float:
+    """Minimum embeddings/chunks ratio for a non-hash full publish. ``0`` disables."""
+    raw = _ppa_env("PPA_PUBLICATION_MIN_EMBED_COVERAGE")
+    if raw == "0":
+        return 0.0
+    return min(max(_ppa_env_float("PPA_PUBLICATION_MIN_EMBED_COVERAGE", default=0.9), 0.0), 1.0)
+
+
+def get_publication_min_embed_chunks() -> int:
+    """Skip the coverage gate below this chunk count (fixtures / empty gens)."""
+    return max(_ppa_env_int("PPA_PUBLICATION_MIN_EMBED_CHUNKS", default=1000), 0)
+
+
+def get_prior_chunk_schema_versions() -> tuple[int, ...]:
+    """Versioned hash recipes that may still hold leftover embedding keys."""
+    raw = _ppa_env("PPA_PRIOR_CHUNK_SCHEMA_VERSIONS")
+    if raw:
+        return tuple(int(part) for part in raw.split(",") if part.strip())
+    return (6, 5, 4)
+
+
+def get_embed_reuse_batch_size() -> int:
+    """Pending chunk_keys per reuse INSERT. Keep this small; toast copies are huge."""
+    return max(_ppa_env_int("PPA_EMBED_REUSE_BATCH_SIZE", default=2000), 1)
+
+
+def get_embed_gc_batch_size() -> int:
+    """Leftover embedding rows per DELETE batch."""
+    return max(_ppa_env_int("PPA_EMBED_GC_BATCH_SIZE", default=2000), 1)
+
+
+def get_warehouse_min_free_gb() -> int:
+    """Stop warehouse writes when the vault volume has less than this many GiB free."""
+    return max(_ppa_env_int("PPA_WAREHOUSE_MIN_FREE_GB", default=40), 0)
 
 
 def get_query_embed_cache_path(vault: Path | None = None) -> Path:

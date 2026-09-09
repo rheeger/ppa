@@ -188,6 +188,21 @@ _META_FILES: dict[str, PathClass] = {
     "change-journal.lock": PathClass(
         RecoveryClass.DISPOSABLE, ArtifactPresence.OPTIONAL, "vault.meta.change-journal-lock"
     ),
+    "publication-capture.json": PathClass(
+        RecoveryClass.RECONSTRUCTIBLE, ArtifactPresence.OPTIONAL, "vault.meta.publication-capture"
+    ),
+    "scan-rejections.json": PathClass(
+        RecoveryClass.DECISION_CRITICAL, ArtifactPresence.OPTIONAL, "vault.meta.scan-rejections"
+    ),
+    "identity-proposals.json": PathClass(
+        RecoveryClass.DECISION_CRITICAL, ArtifactPresence.OPTIONAL, "vault.meta.identity-proposals"
+    ),
+    "conversation-proposals.json": PathClass(
+        RecoveryClass.DECISION_CRITICAL, ArtifactPresence.OPTIONAL, "vault.meta.conversation-proposals"
+    ),
+    "thread-projection-receipts.json": PathClass(
+        RecoveryClass.RECONSTRUCTIBLE, ArtifactPresence.OPTIONAL, "vault.meta.thread-projection-receipts"
+    ),
 }
 
 STATE_OWNERS: tuple[StateOwner, ...] = (
@@ -328,6 +343,46 @@ STATE_OWNERS: tuple[StateOwner, ...] = (
         "_meta/rust-search-index/",
         "archive_cli/index_config.py",
         "Rebuild via publication after P02/P03. Restore must work without it.",
+    ),
+    StateOwner(
+        "vault.meta.publication-capture",
+        RecoveryClass.RECONSTRUCTIBLE,
+        ArtifactPresence.OPTIONAL,
+        "_meta/publication-capture.json",
+        "archive_engine/journaled_state.py",
+        "Last published watermark. Rebuild from the serving ACTIVE generation.",
+    ),
+    StateOwner(
+        "vault.meta.scan-rejections",
+        RecoveryClass.DECISION_CRITICAL,
+        ArtifactPresence.OPTIONAL,
+        "_meta/scan-rejections.json",
+        "archive_engine/journaled_state.py",
+        "Durable scan skip list. Preserve when present.",
+    ),
+    StateOwner(
+        "vault.meta.identity-proposals",
+        RecoveryClass.DECISION_CRITICAL,
+        ArtifactPresence.OPTIONAL,
+        "_meta/identity-proposals.json",
+        "archive_engine/journaled_state.py",
+        "Queued identity merges. Preserve when present.",
+    ),
+    StateOwner(
+        "vault.meta.conversation-proposals",
+        RecoveryClass.DECISION_CRITICAL,
+        ArtifactPresence.OPTIONAL,
+        "_meta/conversation-proposals.json",
+        "archive_engine/journaled_state.py",
+        "Queued conversation links. Preserve when present.",
+    ),
+    StateOwner(
+        "vault.meta.thread-projection-receipts",
+        RecoveryClass.RECONSTRUCTIBLE,
+        ArtifactPresence.OPTIONAL,
+        "_meta/thread-projection-receipts.json",
+        "archive_engine/journaled_state.py",
+        "Thread recount receipts. Rebuild from messages.",
     ),
     StateOwner(
         "vault.meta.benchmark-sample",

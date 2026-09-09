@@ -15,6 +15,8 @@ from functools import partial
 from itertools import islice
 from typing import Any
 
+from archive_engine.errors import IncompatibleStateError
+
 from .index_config import (
     CHUNK_SCHEMA_VERSION,
     INDEX_SCHEMA_VERSION,
@@ -646,8 +648,8 @@ class LoaderMixin:
         # here. Embeddings are content-addressable by chunk_key. After we
         # delete + re-materialize chunks below, embeddings whose chunk_key
         # regenerates identically (i.e. content unchanged) are still valid.
-        # Truly-orphaned embeddings (chunks deleted entirely) are pruned by
-        # the explicit `ppa embed-gc --apply` step.
+        # Truly unused embeddings (no live chunk_key and no live content_hash)
+        # are pruned by `ppa embed-gc --apply`. Do not GC reusable orphans.
         conn.execute(f"DELETE FROM {self.schema}.chunks WHERE card_uid = ANY(%s)", (uid_list,))
         conn.execute(
             f"DELETE FROM {self.schema}.edges WHERE source_uid = ANY(%s) OR target_uid = ANY(%s)",
@@ -691,8 +693,8 @@ class LoaderMixin:
         chunks are re-materialized for the touched UIDs, any chunk whose content
         is unchanged regenerates with the same ``chunk_key`` and its existing
         embedding stays valid (we just save the OpenAI cost). Genuinely orphaned
-        embeddings (chunks for purge_uids that disappear entirely) get cleaned
-        up by ``ppa embed-gc --apply``.
+        embeddings (chunks for purge_uids that disappear entirely and whose
+        content_hash is unused) get cleaned up by ``ppa embed-gc --apply``.
         """
         all_uids = materialize_uids | purge_uids
         if not all_uids:
@@ -1987,9 +1989,22 @@ class LoaderMixin:
         After Migration 004 chunks DROP/CASCADE no longer wipes embeddings, so
         ``post_count`` equals ``pre_count`` (modulo concurrent embed runs).
         ``orphan_count`` is the number of embeddings whose ``chunk_key`` is no
-        longer present in ``chunks`` — those are safe to remove via
-        ``ppa embed-gc --apply``. Until that runs they cost only disk.
+        longer present in ``chunks``. Those rows stay reusable by
+        ``content_hash``; do not ``embed-gc --apply`` while a live chunk still
+        shares that hash. Until GC they cost only disk.
         """
+        try:
+            attached = self.attach_embeddings_after_rematerialize()
+            logger.info(
+                "rebuild_embeddings_attach remapped=%s reused=%s pending_after=%s",
+                attached.get("remapped"),
+                attached.get("reused"),
+                attached.get("pending_after"),
+            )
+        except IncompatibleStateError:
+            raise
+        except Exception:
+            logger.exception("rebuild_embeddings_attach_failed")
         try:
             post_row = conn.execute(f"SELECT COUNT(*) AS c FROM {self.schema}.embeddings").fetchone()
             post_count = int(post_row["c"] if isinstance(post_row, dict) else post_row[0])
@@ -2002,12 +2017,21 @@ class LoaderMixin:
                 """
             ).fetchone()
             orphan_count = int(orphan_row["c"] if isinstance(orphan_row, dict) else orphan_row[0])
+            joined_row = conn.execute(
+                f"""
+                SELECT COUNT(*) AS c FROM {self.schema}.embeddings e
+                WHERE EXISTS (
+                    SELECT 1 FROM {self.schema}.chunks c WHERE c.chunk_key = e.chunk_key
+                )
+                """
+            ).fetchone()
+            valid = int(joined_row["c"] if isinstance(joined_row, dict) else joined_row[0])
         except Exception as exc:
             logger.warning("rebuild_embeddings_summary_query_failed error=%s", exc)
             return
-        valid = max(post_count - orphan_count, 0)
         logger.info(
-            "rebuild_embeddings_summary pre=%d post=%d valid_after_rebuild=%d orphan=%d gc_with=`ppa embed-gc --apply`",
+            "rebuild_embeddings_summary pre=%d post=%d valid_after_rebuild=%d orphan=%d "
+            "gc_only_unused_hashes=`ppa embed-gc --apply`",
             pre_count,
             post_count,
             valid,

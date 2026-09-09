@@ -169,7 +169,6 @@ def try_canonical_row(rel_path: str, frontmatter: dict[str, Any]) -> tuple[Canon
     try:
         card = validate_card_permissive(frontmatter)
     except ValidationError as exc:
-        fields = tuple(str(item) for item in getattr(exc, "errors", lambda: [])() if False)
         errors = []
         try:
             errors = list(exc.errors())

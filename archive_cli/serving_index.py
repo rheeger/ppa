@@ -604,6 +604,41 @@ def serving_index_status(vault: Path | None = None) -> dict[str, Any]:
         }
 
 
+def ack_dirty_uids(vault: Path | str | None, uids: list[str] | None) -> int:
+    """Drop published UIDs from DIRTY. Does not wipe the file or other records."""
+
+    acked = {str(uid).strip() for uid in (uids or []) if str(uid).strip()}
+    if not acked:
+        return 0
+    path = get_serving_index_path(Path(vault) if vault is not None else None) / "DIRTY"
+    if not path.is_file():
+        return 0
+    kept: list[str] = []
+    removed = 0
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            kept.append(raw)
+            continue
+        if not isinstance(rec, dict):
+            kept.append(raw)
+            continue
+        old = [str(uid).strip() for uid in (rec.get("uids") or []) if str(uid).strip()]
+        new = [uid for uid in old if uid not in acked]
+        removed += len(old) - len(new)
+        if new:
+            rec = {**rec, "uids": new}
+            kept.append(json.dumps(rec, ensure_ascii=False))
+        elif not old:
+            kept.append(raw)
+    path.write_text(("\n".join(kept) + "\n") if kept else "", encoding="utf-8")
+    return removed
+
+
 def read_dirty_uids(vault: Path | None = None) -> list[str]:
     """Concrete UIDs from DIRTY records. Empty-uid ``vault_written`` lines are ignored."""
 
@@ -627,6 +662,29 @@ def read_dirty_uids(vault: Path | None = None) -> list[str]:
     return sorted(uids)
 
 
+def _generation_embedding_count(generation_dir: Path) -> int:
+    manifest = Path(generation_dir) / "manifest.json"
+    if manifest.is_file():
+        try:
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            data = {}
+        if isinstance(data, dict) and data.get("embedding_count") is not None:
+            try:
+                return int(data.get("embedding_count") or 0)
+            except (TypeError, ValueError):
+                pass
+    keys = Path(generation_dir) / "embedding_keys.txt"
+    if not keys.is_file():
+        return 0
+    count = 0
+    with keys.open(encoding="utf-8") as fh:
+        for line in fh:
+            if line.strip():
+                count += 1
+    return count
+
+
 def prune_retired_serving_generations(
     vault: Path | None = None,
     *,
@@ -634,7 +692,11 @@ def prune_retired_serving_generations(
     index_root: Path | None = None,
     logger: logging.Logger | None = None,
 ) -> list[str]:
-    """Delete generations that are not ACTIVE, not in the parent chain, and not pinned."""
+    """Delete generations that are not ACTIVE, not in the parent chain, and not pinned.
+
+    Never delete a generation whose embedding_count is higher than ACTIVE. That
+    is the paid ANN corpus; a thin publish must not prune it.
+    """
 
     log = logger or logging.getLogger("ppa.serving_index")
     root = Path(index_root) if index_root is not None else get_serving_index_path(vault)
@@ -647,6 +709,7 @@ def prune_retired_serving_generations(
             keep = ""
     keep = str(keep or "").strip()
     retain = referenced_generations(root, keep)
+    active_embeddings = _generation_embedding_count(gens / keep) if keep else 0
     removed: list[str] = []
     if not gens.is_dir():
         return removed
@@ -654,6 +717,16 @@ def prune_retired_serving_generations(
         if not child.is_dir():
             continue
         if child.name in retain:
+            continue
+        child_embeddings = _generation_embedding_count(child)
+        if child_embeddings > active_embeddings:
+            log.warning(
+                "serving_index_prune_kept_higher_coverage generation=%s embeddings=%s active=%s active_embeddings=%s",
+                child.name,
+                child_embeddings,
+                keep,
+                active_embeddings,
+            )
             continue
         try:
             shutil.rmtree(child)

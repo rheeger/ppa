@@ -16,7 +16,7 @@ def test_contacts_ingest_indexes_all_aliases(tmp_vault):
             "source": "contacts.apple",
             "name": "Jenny Souza",
             "emails": ["jenny@example.com", "jenny@work.com"],
-            "phones": ["123", "456"],
+            "phones": ["+15551234567", "+15551239999"],
             "company": "Endaoment",
             "title": "Ops",
         }
@@ -26,7 +26,7 @@ def test_contacts_ingest_indexes_all_aliases(tmp_vault):
     assert result.created == 1
     assert payload["email:jenny@example.com"] == "[[jenny-souza]]"
     assert payload["email:jenny@work.com"] == "[[jenny-souza]]"
-    assert payload["phone:456"] == "[[jenny-souza]]"
+    assert payload["phone:+15551239999"] == "[[jenny-souza]]"
 
 
 def test_mixed_source_merge_keeps_identity_map_to_supported_aliases(tmp_vault):

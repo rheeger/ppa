@@ -1,6 +1,7 @@
 //! Parity with `archive_cli.index_config`.
 
-pub const CHUNK_SCHEMA_VERSION: i32 = 6;
+#[allow(dead_code)] // metadata label; content identity no longer hashes this
+pub const CHUNK_SCHEMA_VERSION: i32 = 7;
 pub const DEFAULT_CHUNK_CHAR_LIMIT: i64 = 1200;
 pub const DEFAULT_BURST_TOKEN_LIMIT: i64 = 800;
 pub const DEFAULT_BURST_CHAT_GAP_SECONDS: i64 = 300;

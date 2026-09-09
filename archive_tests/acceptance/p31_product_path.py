@@ -44,7 +44,11 @@ def run_installed_product_path(runtime: IsolatedRuntime) -> dict[str, Any]:
     _ensure_repair_meta(runtime.vault)
     _seed(runtime.vault)
     preferred = REPO / "logs" / "plans" / "pr31" / "release"
-    release_dir = preferred if (preferred / "release-manifest.json").is_file() else Path(runtime.root).resolve().parent / "release"
+    release_dir = (
+        preferred
+        if (preferred / "release-manifest.json").is_file()
+        else Path(runtime.root).resolve().parent / "release"
+    )
     manifest = build_or_load_release(repo=REPO, output=release_dir)
     wheels = release_wheels(release_dir, manifest)
     dest = Path(tempfile.mkdtemp(prefix="ppa-p31-install-"))

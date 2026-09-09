@@ -133,45 +133,217 @@ def embed_gc(
     store: DefaultArchiveStore,
     logger: logging.Logger,
     dry_run: bool = True,
+    duplicates: bool = False,
+    batch_size: int = 10_000,
 ) -> dict[str, Any]:
-    """Prune ``embeddings`` rows whose ``chunk_key`` no longer exists in ``chunks``.
+    """Prune leftover embeddings after rematerialize attach.
 
-    Embeddings are content-addressable (Migration 004 decoupled them from chunk
-    row lifecycle). Orphans accumulate when a card's content changes (its old
-    chunk_key disappears from ``chunks`` but the matching embedding row stays).
-    Run this on demand after rebuilds or large content changes.
+    Default: delete orphans whose ``content_hash`` is unused by every live chunk.
+    ``duplicates=True``: delete leftovers whose identity already has a live list.
+    Empty-hash leftovers stay until they can be identified.
     """
     schema = store.index.schema
-    with store.index._connect() as conn:  # noqa: SLF001
-        total = conn.execute(f"SELECT COUNT(*) FROM {schema}.embeddings").fetchone()
-        orphan = conn.execute(
-            f"""
-            SELECT COUNT(*) FROM {schema}.embeddings e
-            WHERE NOT EXISTS (SELECT 1 FROM {schema}.chunks c WHERE c.chunk_key = e.chunk_key)
-            """
-        ).fetchone()
-        total_count = int(total[0] if not isinstance(total, dict) else next(iter(total.values())))
-        orphan_count = int(orphan[0] if not isinstance(orphan, dict) else next(iter(orphan.values())))
-        logger.info(
-            "embed_gc_scan total=%d orphan=%d dry_run=%s",
-            total_count,
-            orphan_count,
-            dry_run,
+
+    def _unused_sql(alias: str) -> str:
+        return f"""
+        NOT EXISTS (SELECT 1 FROM {schema}.chunks c WHERE c.chunk_key = {alias}.chunk_key)
+        AND {alias}.content_hash <> ''
+        AND NOT EXISTS (
+            SELECT 1 FROM {schema}.chunks live
+            WHERE live.content_hash = {alias}.content_hash AND live.content_hash <> ''
         )
-        deleted = 0
-        if not dry_run and orphan_count > 0:
-            cur = conn.execute(
+        """
+
+    def _duplicate_sql(alias: str) -> str:
+        return f"""
+        NOT EXISTS (SELECT 1 FROM {schema}.chunks c WHERE c.chunk_key = {alias}.chunk_key)
+        AND {alias}.content_hash <> ''
+        AND EXISTS (
+            SELECT 1
+            FROM {schema}.chunks live
+            JOIN {schema}.embeddings have
+              ON have.chunk_key = live.chunk_key
+             AND have.embedding_model = {alias}.embedding_model
+             AND have.embedding_version = {alias}.embedding_version
+            WHERE live.content_hash = {alias}.content_hash
+              AND live.content_hash <> ''
+        )
+        """
+
+    unused_sql = _unused_sql("e")
+    duplicate_sql = _duplicate_sql("e")
+    from archive_cli.index_config import (
+        get_default_embedding_model,
+        get_default_embedding_version,
+        get_embed_gc_batch_size,
+    )
+
+    batch = max(int(batch_size or get_embed_gc_batch_size()), 1)
+    deleted = 0
+    total_count = 0
+    orphan_count = 0
+    unused_count = 0
+    duplicate_count = 0
+    if dry_run:
+        with store.index._connect() as conn:  # noqa: SLF001
+            conn.execute("SET statement_timeout = 0")
+            total = conn.execute(f"SELECT COUNT(*) FROM {schema}.embeddings").fetchone()
+            orphan = conn.execute(
                 f"""
-                DELETE FROM {schema}.embeddings e
+                SELECT COUNT(*) FROM {schema}.embeddings e
                 WHERE NOT EXISTS (SELECT 1 FROM {schema}.chunks c WHERE c.chunk_key = e.chunk_key)
                 """
-            )
-            deleted = int(cur.rowcount or 0)
-            conn.commit()
-            logger.info("embed_gc_deleted rows=%d", deleted)
+            ).fetchone()
+            unused = conn.execute(f"SELECT COUNT(*) FROM {schema}.embeddings e WHERE {unused_sql}").fetchone()
+            duplicate = conn.execute(f"SELECT COUNT(*) FROM {schema}.embeddings e WHERE {duplicate_sql}").fetchone()
+            total_count = int(total[0] if not isinstance(total, dict) else next(iter(total.values())))
+            orphan_count = int(orphan[0] if not isinstance(orphan, dict) else next(iter(orphan.values())))
+            unused_count = int(unused[0] if not isinstance(unused, dict) else next(iter(unused.values())))
+            duplicate_count = int(duplicate[0] if not isinstance(duplicate, dict) else next(iter(duplicate.values())))
+        logger.info(
+            "embed_gc_scan total=%d orphan=%d unused_hash=%d duplicates=%d mode=%s dry_run=%s",
+            total_count,
+            orphan_count,
+            unused_count,
+            duplicate_count,
+            "duplicates" if duplicates else "unused_hash",
+            True,
+        )
+    elif duplicates:
+        deleted = store.index.delete_duplicate_leftover_embeddings(
+            embedding_model=get_default_embedding_model(),
+            embedding_version=get_default_embedding_version(),
+            batch_size=batch,
+            max_batches=None,
+        )
+        logger.info("embed_gc_duplicates_done deleted=%d", deleted)
+    else:
+        with store.index._connect() as conn:  # noqa: SLF001
+            conn.execute("SET statement_timeout = 0")
+            unused = conn.execute(f"SELECT COUNT(*) FROM {schema}.embeddings e WHERE {unused_sql}").fetchone()
+            unused_count = int(unused[0] if not isinstance(unused, dict) else next(iter(unused.values())))
+            if unused_count > 0:
+                cur = conn.execute(f"DELETE FROM {schema}.embeddings e WHERE {unused_sql}")
+                deleted = int(cur.rowcount or 0)
+                conn.commit()
+            logger.info("embed_gc_deleted rows=%d unused_hash=%d", deleted, unused_count)
     return {
         "total_embeddings": total_count,
         "orphan_embeddings": orphan_count,
+        "unused_hash_embeddings": unused_count,
+        "duplicate_embeddings": duplicate_count,
         "deleted": deleted,
         "dry_run": dry_run,
+        "duplicates": duplicates,
+    }
+
+
+def embed_reuse(
+    *,
+    store: DefaultArchiveStore,
+    logger: logging.Logger,
+    embedding_model: str = "",
+    embedding_version: int = 0,
+    batch_size: int = 0,
+    cleanup_duplicates: bool = True,
+) -> dict[str, Any]:
+    """Copy existing vectors onto new chunk keys that share ``content_hash``."""
+    from archive_cli.index_config import get_default_embedding_model, get_default_embedding_version
+
+    model = embedding_model.strip() or get_default_embedding_model()
+    version = embedding_version or get_default_embedding_version()
+    logger.info(
+        "embed_reuse_start model=%s version=%s batch_size=%s cleanup=%s",
+        model,
+        version,
+        batch_size,
+        cleanup_duplicates,
+    )
+    store.index.backfill_embedding_content_identity()
+    result = store.index.reuse_embeddings_by_content(
+        embedding_model=model,
+        embedding_version=version,
+        batch_size=batch_size or None,
+        cleanup_duplicates=cleanup_duplicates,
+    )
+    logger.info(
+        "embed_reuse_done copied=%s cleaned=%s pending_after=%s",
+        result.get("copied"),
+        result.get("cleaned"),
+        result.get("pending_after"),
+    )
+    return {"embedding_model": model, "embedding_version": version, **result}
+
+
+def embed_remap_slots(
+    *,
+    store: DefaultArchiveStore,
+    logger: logging.Logger,
+    chunks_jsonl: str,
+    embedding_model: str = "",
+    embedding_version: int = 0,
+) -> dict[str, Any]:
+    """One-time remap of orphan vectors onto current keys by card/type/index."""
+    from archive_cli.index_config import get_default_embedding_model, get_default_embedding_version
+
+    model = embedding_model.strip() or get_default_embedding_model()
+    version = embedding_version or get_default_embedding_version()
+    logger.info("embed_remap_slots_start jsonl=%s model=%s version=%s", chunks_jsonl, model, version)
+    loaded = store.index.load_slot_map_from_chunks_jsonl(chunks_jsonl)
+    remapped = store.index.remap_embeddings_by_slot(embedding_model=model, embedding_version=version)
+    reused = store.index.reuse_embeddings_by_content(embedding_model=model, embedding_version=version)
+    logger.info(
+        "embed_remap_slots_done loaded=%s remapped=%s reused=%s",
+        loaded,
+        remapped.get("copied"),
+        reused.get("copied"),
+    )
+    return {
+        "embedding_model": model,
+        "embedding_version": version,
+        "slot_map_rows": loaded,
+        "remapped": remapped,
+        "reused": reused,
+    }
+
+
+def embed_remap_schema(
+    *,
+    store: DefaultArchiveStore,
+    logger: logging.Logger,
+    schema_versions: tuple[int, ...] | None = None,
+    embedding_model: str = "",
+    embedding_version: int = 0,
+    batch_size: int = 0,
+) -> dict[str, Any]:
+    """Copy vectors from pre-bump chunk_keys onto current keys."""
+    from archive_cli.index_config import get_default_embedding_model, get_default_embedding_version
+
+    model = embedding_model.strip() or get_default_embedding_model()
+    version = embedding_version or get_default_embedding_version()
+    logger.info(
+        "embed_remap_schema_start versions=%s model=%s version=%s batch_size=%s",
+        schema_versions,
+        model,
+        version,
+        batch_size,
+    )
+    remapped = store.index.remap_embeddings_by_prior_schema(
+        embedding_model=model,
+        embedding_version=version,
+        schema_versions=schema_versions,
+        batch_size=batch_size or None,
+    )
+    reused = store.index.reuse_embeddings_by_content(embedding_model=model, embedding_version=version)
+    logger.info(
+        "embed_remap_schema_done remapped=%s reused=%s pending_after=%s",
+        remapped.get("copied"),
+        reused.get("copied"),
+        reused.get("pending_after"),
+    )
+    return {
+        "embedding_model": model,
+        "embedding_version": version,
+        "remapped": remapped,
+        "reused": reused,
     }

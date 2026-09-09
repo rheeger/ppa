@@ -18,7 +18,7 @@ from .conversation_bursts import (  # BurstAffectedResolver / resolve_burst_affe
     resolve_burst_affected,
 )
 from .features import CHUNKABLE_TEXT_FIELDS
-from .index_config import CHUNK_SCHEMA_VERSION, get_chunk_char_limit
+from .index_config import get_chunk_char_limit
 
 __all__ = ["BurstAffectedResolver", "resolve_burst_affected"]
 
@@ -51,16 +51,37 @@ def _token_count(content: str) -> int:
     return max(len(content.split()), 1) if content.strip() else 0
 
 
+def _chunk_hash_payload(
+    chunk_type: str,
+    content: str,
+    source_fields: list[str],
+    *,
+    schema_version: int | None = None,
+) -> str:
+    payload: dict[str, object] = {
+        "chunk_type": chunk_type,
+        "source_fields": source_fields,
+        "content": content,
+    }
+    if schema_version is not None:
+        payload["chunk_schema_version"] = int(schema_version)
+    return json.dumps(payload, sort_keys=True)
+
+
+def _chunk_hash_for_schema(
+    schema_version: int,
+    chunk_type: str,
+    content: str,
+    source_fields: list[str],
+) -> str:
+    """Versioned recipe used only to find leftover keys from older rematerializes."""
+    payload = _chunk_hash_payload(chunk_type, content, source_fields, schema_version=schema_version)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def _chunk_hash(chunk_type: str, content: str, source_fields: list[str]) -> str:
-    payload = json.dumps(
-        {
-            "chunk_schema_version": CHUNK_SCHEMA_VERSION,
-            "chunk_type": chunk_type,
-            "source_fields": source_fields,
-            "content": content,
-        },
-        sort_keys=True,
-    )
+    """Content identity: type + text + source fields. Schema version is not identity."""
+    payload = _chunk_hash_payload(chunk_type, content, source_fields)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 

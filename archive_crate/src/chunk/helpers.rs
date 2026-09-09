@@ -5,7 +5,6 @@ use std::sync::OnceLock;
 use regex::Regex;
 use sha2::{Digest, Sha256};
 
-use crate::chunk::constants::CHUNK_SCHEMA_VERSION;
 
 /// Same bytes as Python `json.dumps(s, ensure_ascii=True)` for string values (quoted).
 pub(crate) fn encode_json_string_python_ensure_ascii(s: &str) -> String {
@@ -66,7 +65,7 @@ pub fn chunk_hash_payload_json(
     out
 }
 
-/// Same SHA-256 hex as `archive_cli.chunk_builders._chunk_hash`.
+/// Same SHA-256 hex as `archive_cli.chunk_builders._chunk_hash_for_schema`.
 pub fn chunk_hash(
     schema_version: i32,
     chunk_type: &str,
@@ -79,9 +78,37 @@ pub fn chunk_hash(
     format!("{:x}", hasher.finalize())
 }
 
-/// Convenience for the current schema version (matches `_chunk_hash` in Python).
+/// Byte-for-byte match for `json.dumps({chunk_type, content, source_fields}, sort_keys=True)`.
+pub fn chunk_hash_content_payload_json(
+    chunk_type: &str,
+    content: &str,
+    source_fields: &[String],
+) -> String {
+    let mut out = String::new();
+    out.push('{');
+    out.push_str("\"chunk_type\": ");
+    out.push_str(&encode_json_string_python_ensure_ascii(chunk_type));
+    out.push_str(", \"content\": ");
+    out.push_str(&encode_json_string_python_ensure_ascii(content));
+    out.push_str(", \"source_fields\": ");
+    out.push('[');
+    for (i, sf) in source_fields.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&encode_json_string_python_ensure_ascii(sf));
+    }
+    out.push(']');
+    out.push('}');
+    out
+}
+
+/// Current identity: type + text + source fields. Schema version is not in the hash.
 pub fn chunk_hash_current(chunk_type: &str, content: &str, source_fields: &[String]) -> String {
-    chunk_hash(CHUNK_SCHEMA_VERSION, chunk_type, content, source_fields)
+    let payload = chunk_hash_content_payload_json(chunk_type, content, source_fields);
+    let mut hasher = Sha256::new();
+    hasher.update(payload.as_bytes());
+    format!("{:x}", hasher.finalize())
 }
 
 pub fn clean_text(value: &str) -> String {
@@ -356,6 +383,11 @@ fn chunk_hash_payload_matches_python_json_dumps_sort_keys() {
     assert_eq!(
         payload,
         r#"{"chunk_schema_version": 5, "chunk_type": "summary", "content": "Hello Beeper", "source_fields": ["summary"]}"#
+    );
+    let identity = chunk_hash_content_payload_json("summary", "Hello Beeper", &[String::from("summary")]);
+    assert_eq!(
+        identity,
+        r#"{"chunk_type": "summary", "content": "Hello Beeper", "source_fields": ["summary"]}"#
     );
 }
 

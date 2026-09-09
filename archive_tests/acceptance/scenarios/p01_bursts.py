@@ -45,8 +45,11 @@ def run_p01_bursts(_runtime: object) -> dict[str, Any]:
     schema = (REPO / "archive_crate/src/serving_index/schema.rs").read_text(encoding="utf-8")
     if "pub const SERVING_INDEX_FORMAT_VERSION: u32 = 2;" not in schema:
         raise AssertionError("P01-B serving format v2 was reopened")
-    if CHUNK_SCHEMA_VERSION != 6:
-        raise AssertionError("chunk row shape changed; historical threads would re-embed")
+    from archive_cli.chunk_builders import _chunk_hash, _chunk_hash_for_schema
+
+    identity = _chunk_hash("body", "same", ["body"])
+    if identity == _chunk_hash_for_schema(6, "body", "same", ["body"]):
+        raise AssertionError("chunk identity still includes schema version")
 
     bursts = burst_chunks(frontmatter)
     return {

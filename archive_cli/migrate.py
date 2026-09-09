@@ -91,6 +91,7 @@ class MigrationRunner:
                 result.applied.append(migration.version)
                 continue
             try:
+                self.conn.execute("SET statement_timeout = 0")
                 migration.upgrade(self.conn, self.schema)
                 self.conn.execute(
                     f"""

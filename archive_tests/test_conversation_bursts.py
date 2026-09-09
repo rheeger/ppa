@@ -143,7 +143,11 @@ def measure_burst_recall(card_type: str = "email_thread") -> dict[str, object]:
 def test_chunk_schema_and_serving_format_untouched():
     schema = (REPO / "archive_crate/src/serving_index/schema.rs").read_text(encoding="utf-8")
     freeze = (REPO / "archive_tests/acceptance/data/p01b_format_freeze.json").read_text(encoding="utf-8")
-    assert CHUNK_SCHEMA_VERSION == 6
+    from archive_cli.chunk_builders import _chunk_hash, _chunk_hash_for_schema
+
+    identity = _chunk_hash("body", "same", ["body"])
+    assert identity != _chunk_hash_for_schema(6, "body", "same", ["body"])
+    assert identity != _chunk_hash_for_schema(CHUNK_SCHEMA_VERSION, "body", "same", ["body"])
     assert BURST_ALGORITHM_VERSION == "p01b1-burst-1"
     assert "pub const SERVING_INDEX_FORMAT_VERSION: u32 = 2;" in schema
     assert 'pub const VECTOR_IMPL: &str = "ivf_centroids_v2";' in schema
