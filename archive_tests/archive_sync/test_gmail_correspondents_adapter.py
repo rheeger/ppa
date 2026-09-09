@@ -49,6 +49,9 @@ def test_should_keep_correspondent_filters_automated_senders():
     assert _should_keep_correspondent("Taylor Kimmett", "notifications@github.com") is False
     assert _should_keep_correspondent("American Express", "americanexpress@welcome.americanexpress.com") is False
     assert _should_keep_correspondent("Baruch Piller", "reply-abc123@reply.linkedin.com") is False
+    assert _should_keep_correspondent("Lisa Messinger", "paperlesspost@paperlesspost.com") is False
+    assert _should_keep_correspondent("Candy and Annie", "paperlesspost@accounts.paperlesspost.com") is False
+    assert _should_keep_correspondent("Host Name", "invites@evite.com") is False
 
 
 def test_fetch_max_messages_is_per_run_not_cumulative(tmp_vault):

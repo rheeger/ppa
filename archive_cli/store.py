@@ -1103,6 +1103,10 @@ class DefaultArchiveStore(ArchiveStore):
                     content, rel = self._contained_text(rel_path)
                     if content is not None:
                         payload = {"found": True, "content": content, "rel_path": rel or rel_path}
+                        if hit.get("matched_on"):
+                            payload["matched_on"] = hit.get("matched_on")
+                        if hit.get("status"):
+                            payload["status"] = hit.get("status")
                         if not card_permitted(self.access, self._record_for_read(rel or rel_path, payload)):
                             return {"found": False, "content": ""}
                         return payload

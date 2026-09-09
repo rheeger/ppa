@@ -14,6 +14,12 @@ from archive_vault.canon import phone as canon_phone
 from archive_vault.canon import wikilink as canon_wikilink
 from archive_vault.canon.email import canonical as canon_email
 from archive_vault.identity import IdentityCache, load_identity_map
+from archive_vault.identity_quality import (
+    is_shared_mailbox_email,
+    looks_like_event_title,
+    shared_mailbox_domain,
+    should_strip_invitation_alias,
+)
 from archive_vault.identity_resolver import load_nicknames
 from archive_vault.vault import update_frontmatter_fields
 
@@ -94,6 +100,8 @@ def run_census(vault: Path) -> dict[str, Any]:
     comms = 0
     thread_children: dict[str, list[str]] = defaultdict(list)
     thread_declared: dict[str, dict[str, Any]] = {}
+    person_summaries: dict[str, list[str]] = defaultdict(list)
+    person_alias_rows: list[dict[str, Any]] = []
 
     scanned = 0
     for row in rows:
@@ -105,6 +113,18 @@ def run_census(vault: Path) -> dict[str, Any]:
         uid = str(fm.get("uid") or "")
         if card_type == "person":
             person_count += 1
+            summary = str(fm.get("summary") or "").strip()
+            if summary:
+                person_summaries[summary.lower()].append(uid)
+            person_alias_rows.append(
+                {
+                    "rel_path": str(row.get("rel_path") or ""),
+                    "uid": uid,
+                    "summary": summary,
+                    "aliases": [str(item).strip() for item in (fm.get("aliases") or []) if str(item).strip()],
+                    "emails": [str(item).strip() for item in (fm.get("emails") or []) if str(item).strip()],
+                }
+            )
             for raw in fm.get("phones") or []:
                 bucket = _phone_bucket(str(raw))
                 phone_buckets[bucket] += 1
@@ -161,6 +181,10 @@ def run_census(vault: Path) -> dict[str, Any]:
         rewrite_families.append("email")
         code_only = [item for item in code_only if item != "email"]
 
+    alias_hygiene = classify_alias_hygiene(person_alias_rows, person_summaries)
+    if alias_hygiene["shared_mailbox_email_count"] or alias_hygiene["junk_alias_count"] or alias_hygiene["stolen_alias_count"]:
+        rewrite_families.append("aliases")
+
     report = {
         "vault": str(vault),
         "cards_scanned": scanned if scanned else len(rows),
@@ -176,7 +200,135 @@ def run_census(vault: Path) -> dict[str, Any]:
         "code_only_families": code_only,
         "dirty_phone_paths": sorted(set(p for p in dirty_phone_paths if p)),
         "stale_thread_paths": sorted(set(p for p in stale_thread_paths if p)),
+        "shared_mailbox_person_count": alias_hygiene["shared_mailbox_person_count"],
+        "shared_mailbox_email_count": alias_hygiene["shared_mailbox_email_count"],
+        "junk_alias_count": alias_hygiene["junk_alias_count"],
+        "stolen_alias_count": alias_hygiene["stolen_alias_count"],
+        "alias_hygiene_samples": alias_hygiene["samples"],
     }
+    return report
+
+
+def classify_alias_hygiene(
+    person_rows: list[dict[str, Any]],
+    person_summaries: dict[str, list[str]],
+) -> dict[str, Any]:
+    """Flag invitation-mailbox emails and stolen or event-title aliases."""
+
+    samples: list[dict[str, Any]] = []
+    shared_people: set[str] = set()
+    shared_emails = 0
+    junk_aliases = 0
+    stolen_aliases = 0
+    strip_aliases = 0
+    for row in person_rows:
+        uid = str(row.get("uid") or "")
+        summary = str(row.get("summary") or "").strip()
+        emails = [str(item) for item in (row.get("emails") or [])]
+        aliases = [str(item) for item in (row.get("aliases") or [])]
+        shared = [email for email in emails if is_shared_mailbox_email(email)]
+        junk = [alias for alias in aliases if looks_like_event_title(alias)]
+        stolen = []
+        strip = []
+        for alias in aliases:
+            owners = [other for other in person_summaries.get(alias.lower(), []) if other and other != uid]
+            if owners:
+                stolen.append({"alias": alias, "owner_uids": owners[:8]})
+            if should_strip_invitation_alias(
+                alias,
+                card_uid=uid,
+                emails=emails,
+                person_summaries=person_summaries,
+            ):
+                strip.append(alias)
+        if shared:
+            shared_people.add(uid)
+            shared_emails += len(shared)
+        junk_aliases += len(junk)
+        stolen_aliases += len(stolen)
+        strip_aliases += len(strip)
+        if shared or strip:
+            if len(samples) < 50:
+                samples.append(
+                    {
+                        "rel_path": row.get("rel_path") or "",
+                        "uid": uid,
+                        "summary": summary,
+                        "shared_mailbox_emails": shared,
+                        "shared_mailbox_domains": sorted(
+                            {shared_mailbox_domain(email) or "" for email in shared} - {""}
+                        ),
+                        "junk_aliases": junk,
+                        "stolen_aliases": stolen,
+                        "strip_aliases": strip,
+                    }
+                )
+    return {
+        "shared_mailbox_person_count": len(shared_people),
+        "shared_mailbox_email_count": shared_emails,
+        "junk_alias_count": junk_aliases,
+        "stolen_alias_count": stolen_aliases,
+        "strip_alias_count": strip_aliases,
+        "samples": samples,
+    }
+
+
+def alias_hygiene(vault: Path, *, apply: bool) -> dict[str, Any]:
+    """Strip invitation-mailbox emails and junk/stolen aliases from person cards."""
+
+    rows = _iter_person_rows(vault)
+    person_summaries: dict[str, list[str]] = defaultdict(list)
+    packed: list[dict[str, Any]] = []
+    for row in rows:
+        fm = dict(row.get("frontmatter") or {})
+        uid = str(fm.get("uid") or "")
+        summary = str(fm.get("summary") or "").strip()
+        if summary:
+            person_summaries[summary.lower()].append(uid)
+        packed.append(
+            {
+                "rel_path": str(row.get("rel_path") or ""),
+                "uid": uid,
+                "summary": summary,
+                "aliases": [str(item).strip() for item in (fm.get("aliases") or []) if str(item).strip()],
+                "emails": [str(item).strip() for item in (fm.get("emails") or []) if str(item).strip()],
+            }
+        )
+    report = classify_alias_hygiene(packed, person_summaries)
+    changed = 0
+    for row in packed:
+        emails = list(row["emails"])
+        aliases = list(row["aliases"])
+        uid = row["uid"]
+        if not any(is_shared_mailbox_email(email) for email in emails):
+            continue
+        keep_emails = [email for email in emails if not is_shared_mailbox_email(email)]
+        keep_aliases = [
+            alias
+            for alias in aliases
+            if not should_strip_invitation_alias(
+                alias,
+                card_uid=uid,
+                emails=emails,
+                person_summaries=person_summaries,
+            )
+        ]
+        if keep_emails == emails and keep_aliases == aliases:
+            continue
+        changed += 1
+        if not apply or not row["rel_path"]:
+            continue
+        try:
+            update_frontmatter_fields(
+                vault,
+                str(row["rel_path"]),
+                {"emails": keep_emails, "aliases": keep_aliases},
+            )
+        except Exception as exc:
+            log.warning("alias-hygiene skip rel=%s err=%s", row["rel_path"], exc)
+            changed -= 1
+    report["changed_people"] = changed
+    report["applied"] = apply
     return report
 
 
@@ -491,6 +643,8 @@ def dispatch(args: Any) -> dict[str, Any]:
         result = merge_people(vault, apply=apply)
     elif action == "same-conversation":
         result = emit_same_conversation_edges(vault, apply=apply)
+    elif action == "alias-hygiene":
+        result = alias_hygiene(vault, apply=apply)
     else:
         raise SystemExit(f"unknown identity-repair action: {action}")
     result["started_at"] = started

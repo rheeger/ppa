@@ -220,6 +220,9 @@ impl ChunkAdjacency {
 pub struct MetadataStore {
     pub by_uid: HashMap<String, CardMeta>,
     pub by_slug: HashMap<String, String>,
+    /// Display names, slugs, and aliases. Multi-value so a stolen alias cannot
+    /// uniquely win over the person whose summary is the same string.
+    pub by_name: HashMap<String, Vec<String>>,
     pub by_path: HashMap<String, String>,
     pub by_email: HashMap<String, Vec<String>>,
     pub by_phone: HashMap<String, Vec<String>>,
@@ -252,7 +255,42 @@ fn is_date_only(raw: &str) -> bool {
     s.len() == 10 && NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok()
 }
 
+fn push_uid(slot: &mut Vec<String>, uid: &str) {
+    if !uid.is_empty() && !slot.contains(&uid.to_string()) {
+        slot.push(uid.to_string());
+    }
+}
+
 impl MetadataStore {
+    fn index_name_key(&mut self, key: String, uid: &str) {
+        if key.is_empty() {
+            return;
+        }
+        push_uid(self.by_name.entry(key).or_default(), uid);
+    }
+
+    fn index_person_names(&mut self, card: &CardMeta) {
+        if card.r#type != "person" {
+            return;
+        }
+        let uid = card.card_uid.as_str();
+        if !card.slug.is_empty() {
+            self.index_name_key(card.slug.to_lowercase(), uid);
+            self.index_name_key(crate::canon::normalize_slug(&card.slug), uid);
+        }
+        if !card.summary.is_empty() {
+            self.index_name_key(card.summary.to_lowercase(), uid);
+            self.index_name_key(crate::canon::normalize_slug(&card.summary), uid);
+        }
+        for alias in &card.aliases {
+            if alias.is_empty() {
+                continue;
+            }
+            self.index_name_key(alias.to_lowercase(), uid);
+            self.index_name_key(crate::canon::normalize_slug(alias), uid);
+        }
+    }
+
     fn index_card(&mut self, card: CardMeta) {
         if !card.slug.is_empty() {
             self.by_slug.insert(card.slug.to_lowercase(), card.card_uid.clone());
@@ -260,9 +298,7 @@ impl MetadataStore {
         if !card.rel_path.is_empty() {
             self.by_path.insert(card.rel_path.clone(), card.card_uid.clone());
         }
-        for alias in &card.aliases {
-            self.by_slug.insert(alias.to_lowercase(), card.card_uid.clone());
-        }
+        self.index_person_names(&card);
         for email in &card.emails {
             let key = email.to_lowercase();
             if !key.is_empty() {
@@ -301,8 +337,16 @@ impl MetadataStore {
                 uids.insert(card.card_uid.clone());
             }
         }
-        if let Some(uid) = self.by_slug.get(&parsed_l).or_else(|| self.by_slug.get(&slug)) {
+        if let Some(uid) = self.by_slug.get(&parsed_l) {
             uids.insert(uid.clone());
+        }
+        if let Some(uid) = self.by_slug.get(&slug) {
+            uids.insert(uid.clone());
+        }
+        for key in [&parsed_l, &slug] {
+            if let Some(found) = self.by_name.get(key.as_str()) {
+                uids.extend(found.iter().cloned());
+            }
         }
         if parsed.contains('@') {
             if let Some(found) = self.by_email.get(&email) {
@@ -355,6 +399,43 @@ impl MetadataStore {
             return false;
         }
         card.people.iter().any(|person| people.uids.contains(person))
+    }
+
+    pub fn matched_on(&self, card: &CardMeta, needle: &str) -> &'static str {
+        let parsed = crate::canon::parse_wikilink(needle);
+        let parsed_l = parsed.to_lowercase();
+        let slug = crate::canon::normalize_slug(&parsed);
+        if card.summary.to_lowercase() == parsed_l {
+            return "summary";
+        }
+        if !card.slug.is_empty()
+            && (card.slug.to_lowercase() == parsed_l || crate::canon::normalize_slug(&card.slug) == slug)
+        {
+            return "slug";
+        }
+        if card
+            .aliases
+            .iter()
+            .any(|alias| alias.to_lowercase() == parsed_l || crate::canon::normalize_slug(alias) == slug)
+        {
+            return "alias";
+        }
+        if parsed.contains('@')
+            && card
+                .emails
+                .iter()
+                .any(|email| email.to_lowercase() == crate::canon::normalize_email(&parsed))
+        {
+            return "email";
+        }
+        if card.phones.iter().any(|phone| {
+            crate::canon::phone_alias_forms(phone)
+                .iter()
+                .any(|form| crate::canon::phone_alias_forms(&parsed).contains(form))
+        }) {
+            return "phone";
+        }
+        "other"
     }
 
     pub fn person_resolution(&self, needle: &str) -> PreparedPeopleFilter {
@@ -463,6 +544,25 @@ impl MetadataStore {
         let lower = q.to_lowercase();
         if let Some(uid) = self.by_slug.get(&lower) {
             return self.by_uid.get(uid);
+        }
+        if let Some(found) = self.by_name.get(&lower) {
+            if found.len() == 1 {
+                return self.by_uid.get(&found[0]);
+            }
+            if found.len() > 1 {
+                return None;
+            }
+        }
+        let slug = crate::canon::normalize_slug(q);
+        if !slug.is_empty() && slug != lower {
+            if let Some(found) = self.by_name.get(&slug) {
+                if found.len() == 1 {
+                    return self.by_uid.get(&found[0]);
+                }
+                if found.len() > 1 {
+                    return None;
+                }
+            }
         }
         if let Some(found) = self.by_email.get(&lower) {
             if found.len() == 1 {
@@ -1305,6 +1405,34 @@ mod access_tests {
         let prepared = collided.prepare_people_filter("shared@example.com");
         assert_eq!(prepared.status, "ambiguous");
         assert_eq!(prepared.uids.len(), 2);
+    }
+
+    #[test]
+    fn stolen_alias_does_not_uniquely_win_over_real_summary() {
+        let lisa = person("hfa-person-lisa", "Lisa Messinger");
+        let susan = CardMeta {
+            aliases: vec!["Lisa Messinger".into(), "Candy and Annie".into()],
+            emails: vec!["paperlesspost@paperlesspost.com".into()],
+            ..person("hfa-person-susan", "Susan Wolfe")
+        };
+        let store = MetadataStore::from_cards([lisa, susan]);
+        let prepared = store.prepare_people_filter("Lisa Messinger");
+        assert_eq!(prepared.status, "ambiguous");
+        assert_eq!(prepared.uids.len(), 2);
+        assert!(prepared.uids.contains("hfa-person-lisa"));
+        assert!(prepared.uids.contains("hfa-person-susan"));
+        assert!(store.resolve_person_card("Lisa Messinger").is_none());
+        let susan_only = store.prepare_people_filter("Susan Wolfe");
+        assert_eq!(susan_only.status, "unique");
+        assert_eq!(susan_only.uids.len(), 1);
+        assert!(susan_only.uids.contains("hfa-person-susan"));
+        assert_eq!(
+            store.matched_on(
+                store.by_uid.get("hfa-person-susan").expect("susan"),
+                "Lisa Messinger"
+            ),
+            "alias"
+        );
     }
 
     #[test]

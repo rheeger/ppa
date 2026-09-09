@@ -13,6 +13,7 @@ from typing import Any
 
 from archive_vault.config import PPAConfig, load_config
 from archive_vault.identity import IdentityCache, _normalize_identifier, resolve_any, upsert_identity_map
+from archive_vault.identity_quality import alias_is_trustworthy, is_shared_mailbox_email
 from archive_vault.provenance import ProvenanceEntry
 from archive_vault.schema import validate_card_permissive, validate_card_strict
 from archive_vault.vault import find_note_by_slug, iter_notes, read_note, read_note_by_uid, write_card
@@ -731,10 +732,12 @@ def merge_into_existing(
     changed_fields: set[str] = set()
     existing_summary = str(merged_data.get("summary", "")).strip()
     incoming_summary = str(new_data.get("summary", "")).strip()
+    incoming_emails = [str(item).strip() for item in _as_list(new_data, "emails") if str(item).strip()]
     if (
         incoming_summary
         and existing_summary
         and normalize_person_name(incoming_summary) != normalize_person_name(existing_summary)
+        and alias_is_trustworthy(incoming_summary, incoming_emails=incoming_emails)
     ):
         if "aliases" not in new_provenance and "summary" in new_provenance:
             new_provenance = {**new_provenance, "aliases": _clone_provenance(new_provenance["summary"])}
@@ -749,6 +752,16 @@ def merge_into_existing(
             continue
         existing_value = merged_data[field_name]
         if isinstance(existing_value, list) and isinstance(incoming_value, list):
+            if field_name == "emails":
+                incoming_value = [
+                    item for item in incoming_value if not is_shared_mailbox_email(str(item))
+                ]
+            elif field_name == "aliases":
+                incoming_value = [
+                    item
+                    for item in incoming_value
+                    if alias_is_trustworthy(str(item), incoming_emails=incoming_emails)
+                ]
             merged_value = _union_preserve_order(existing_value, incoming_value)
             if merged_value != existing_value:
                 merged_data[field_name] = merged_value

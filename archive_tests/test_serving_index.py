@@ -350,6 +350,78 @@ def test_temporal_neighbors_skips_full_scan(tmp_path, monkeypatch) -> None:
     assert elapsed_ms < 50.0
 
 
+def test_stolen_alias_person_lookup_is_ambiguous(tmp_path, monkeypatch) -> None:
+    from archive_cli import serving_index as si
+
+    si._HANDLE = None
+    root = tmp_path / "rust-search-index"
+    monkeypatch.setenv("PPA_SERVING_INDEX_PATH", str(root))
+    gid = "gen-alias"
+    dest = root / "generations" / gid
+    dest.mkdir(parents=True)
+    work = dest / "_inbox"
+    work.mkdir()
+    cards = [
+        {
+            "card_uid": "hfa-person-lisa0000001",
+            "rel_path": "People/lisa-messinger.md",
+            "summary": "Lisa Messinger",
+            "type": "person",
+            "slug": "lisa-messinger",
+            "activity_at": "2026-01-01T00:00:00Z",
+            "search_text": "Lisa Messinger",
+            "people": [],
+            "sources": ["contacts"],
+            "orgs": [],
+            "corpus_state": "active",
+            "aliases": [],
+            "emails": ["lisamess8@gmail.com"],
+            "phones": [],
+        },
+        {
+            "card_uid": "hfa-person-susan000001",
+            "rel_path": "People/susan-wolfe.md",
+            "summary": "Susan Wolfe",
+            "type": "person",
+            "slug": "susan-wolfe",
+            "activity_at": "2026-08-28T00:00:00Z",
+            "search_text": "Susan Wolfe Lisa Messinger",
+            "people": [],
+            "sources": ["gmail-correspondents"],
+            "orgs": [],
+            "corpus_state": "active",
+            "aliases": ["Lisa Messinger", "Candy and Annie"],
+            "emails": ["paperlesspost@paperlesspost.com"],
+            "phones": [],
+        },
+    ]
+    (work / "cards.jsonl").write_text("".join(json.dumps(c) + "\n" for c in cards), encoding="utf-8")
+    (work / "chunks.jsonl").write_text("", encoding="utf-8")
+    (work / "edges.jsonl").write_text("", encoding="utf-8")
+    (work / "embedding_keys.txt").write_text("", encoding="utf-8")
+    (work / "embeddings.bin").write_bytes(b"")
+    archive_crate.serving_index_build(
+        str(dest),
+        str(work / "cards.jsonl"),
+        str(work / "chunks.jsonl"),
+        str(work / "embedding_keys.txt"),
+        str(work / "embeddings.bin"),
+        4,
+        str(work / "edges.jsonl"),
+    )
+    archive_crate.serving_index_publish(str(root), gid)
+    handle = get_serving_handle(tmp_path)
+    hit = handle.person("Lisa Messinger")
+    assert hit.get("status") == "ambiguous"
+    assert hit.get("found") is False
+    uids = set(hit.get("candidate_uids") or [])
+    assert uids == {"hfa-person-lisa0000001", "hfa-person-susan000001"}
+    susan = handle.person("Susan Wolfe")
+    assert susan.get("found") is True
+    assert susan.get("card_uid") == "hfa-person-susan000001"
+    assert susan.get("matched_on") == "summary"
+
+
 def test_warehouse_store_fails_closed_without_active(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("PPA_SERVING_INDEX_PATH", str(tmp_path / "missing-index"))
     idx = object.__new__(PostgresArchiveIndex)

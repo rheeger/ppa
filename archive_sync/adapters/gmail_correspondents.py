@@ -23,6 +23,10 @@ from typing import Any
 
 from archive_auth import ACCOUNTS, build_google_cli_token_manager
 from archive_cli.index_config import get_gmail_api_workers
+from archive_vault.identity_quality import (
+    is_shared_mailbox_email,
+    looks_like_person_name as _looks_like_person_name,
+)
 from archive_vault.schema import PersonCard
 from archive_vault.sync_state import update_cursor
 from archive_vault.uid import generate_uid
@@ -188,6 +192,10 @@ AUTOMATED_LOCAL_PREFIXES = {
     "do-not-reply",
     "hello",
     "info",
+    "invitation",
+    "invitations",
+    "invite",
+    "invites",
     "mail",
     "mailer-daemon",
     "newsletter",
@@ -199,6 +207,7 @@ AUTOMATED_LOCAL_PREFIXES = {
     "receipt",
     "receipts",
     "reply",
+    "rsvp",
     "security",
     "subscribed",
     "support",
@@ -231,49 +240,6 @@ AUTOMATED_DOMAIN_PREFIXES = {
     "replies",
     "welcome",
 }
-NON_PERSON_NAME_TOKENS = {
-    "advisors",
-    "alliance",
-    "american",
-    "animal",
-    "air",
-    "buy",
-    "capital",
-    "club",
-    "community",
-    "company",
-    "cooking",
-    "daily",
-    "express",
-    "facebook",
-    "foundation",
-    "from",
-    "fund",
-    "geographic",
-    "group",
-    "hospital",
-    "hotels",
-    "information",
-    "institute",
-    "lines",
-    "linkedin",
-    "mail",
-    "management",
-    "making",
-    "national",
-    "news",
-    "on",
-    "partners",
-    "porter",
-    "resident",
-    "residents",
-    "running",
-    "team",
-    "the",
-    "university",
-    "via",
-    "moves",
-}
 
 
 def _split_display_name(name: str) -> tuple[str, str]:
@@ -284,22 +250,6 @@ def _split_display_name(name: str) -> tuple[str, str]:
     if len(parts) == 1:
         return parts[0], ""
     return parts[0], parts[-1]
-
-
-def _looks_like_person_name(name: str) -> bool:
-    cleaned = " ".join(name.strip().split())
-    if not cleaned or any(char in cleaned for char in "@/"):
-        return False
-    if cleaned.isupper():
-        return False
-    tokens = [re.sub(r"[^A-Za-z'-]", "", token) for token in cleaned.split()]
-    tokens = [token for token in tokens if token]
-    if len(tokens) < 2 or len(tokens) > 4:
-        return False
-    lowered = {token.lower() for token in tokens}
-    if lowered & NON_PERSON_NAME_TOKENS:
-        return False
-    return all(len(token) >= 2 and token.replace("-", "").replace("'", "").isalpha() for token in tokens)
 
 
 def _looks_like_person_local_part(local: str) -> bool:
@@ -337,6 +287,8 @@ def _should_keep_correspondent(name: str, email: str) -> bool:
     local = local.lower().strip()
     domain = domain.lower().strip()
     first_label = domain.split(".", 1)[0]
+    if is_shared_mailbox_email(email):
+        return False
     if domain in AUTOMATED_DOMAINS:
         return False
     if first_label in AUTOMATED_DOMAIN_PREFIXES:

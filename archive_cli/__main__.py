@@ -182,7 +182,7 @@ def main() -> None:
     )
     identity_repair_parser = subparsers.add_parser(
         "identity-repair",
-        help="Census and rewrite join-key families (phones, people, thread rollups, hybrid merge)",
+        help="Census and rewrite join-key families (phones, people, thread rollups, hybrid merge, alias hygiene)",
     )
     identity_repair_parser.add_argument(
         "identity_action",
@@ -194,6 +194,7 @@ def main() -> None:
             "rollup-threads",
             "merge",
             "same-conversation",
+            "alias-hygiene",
         ],
     )
     identity_repair_parser.add_argument("--apply", action="store_true", help="Write vault changes (default dry-run)")

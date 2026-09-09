@@ -28,6 +28,10 @@ REQUIRED_INSTRUCTION_NEEDLES = (
     "Don't treat snippets",
     "Don't use hyphenated types",
     "Don't put an email address in people_filter",
+    "JOBS",
+    "identify-person.md",
+    "census-channels.md",
+    "alias-only",
 )
 
 REQUIRED_RETRIEVAL_TOOLS = (
@@ -59,7 +63,7 @@ def test_server_instructions_cover_contract() -> None:
 
 
 def test_server_module_exports_live_instructions() -> None:
-    for needle in ("DO", "DON'T", "ROUTING", "archive_hybrid_search"):
+    for needle in ("JOBS", "DON'T", "identify-person.md", "archive_hybrid_search"):
         assert needle in _server_instructions
 
 
@@ -82,6 +86,9 @@ def test_query_and_hybrid_descriptions_teach_filters() -> None:
     assert "people_filter=Sarah" in query
     assert "query=<email>" in hybrid
     assert "trust boundary" in TOOL_DESCRIPTIONS["archive_read"].lower()
+    person = TOOL_DESCRIPTIONS["archive_person"].lower()
+    assert "candidate" in person
+    assert "alias" in person
 
 
 def test_playbook_teaches_composition() -> None:

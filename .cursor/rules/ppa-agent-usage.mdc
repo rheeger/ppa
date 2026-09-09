@@ -1,27 +1,31 @@
 ---
-description: PPA archive retrieval — warm MCP only; never a new archive_cli per question
+description: PPA archive retrieval — warm MCP only; load archive-query job files
 alwaysApply: true
 ---
 
 # PPA archive usage
 
-**Do not** spawn `python -m archive_cli` / `ppa <query>` once per question against the living archive. That cold-opens the multi-GB search index. Use the already-running MCP. See `ppa-no-cold-cli-query.mdc`.
+Do not spawn `python -m archive_cli` / `ppa <query>` once per question against
+the living archive. That cold-opens the multi-GB search index. Use the already
+running MCP. See `ppa-no-cold-cli-query.mdc`.
 
-## Decision tree
+For retrieval, read `.cursor/skills/archive-query/SKILL.md` and open the job
+file for the work in front of you:
 
-1. **Known UID or path?** → `archive_read` (or `archive_read_many` for batch)
-2. **Structured filters** (type, person, source, date)? → `archive_query`
-3. **Keywords or phrases?** → `archive_search_json`
-4. **Vague or semantic question?** → `archive_hybrid_search_json`
-5. **Relationship context?** → `archive_graph`
-6. **Person lookup?** → `archive_person`
-7. **Date-range browsing?** → `archive_timeline`
+1. Identify a person → `identify-person.md`
+2. Census their channels → `census-channels.md`
+3. Read a stack → `read-a-stack.md`
+4. Answer a fact → `answer-a-fact.md`
+5. Reconstruct a story → `reconstruct-a-story.md`
+
+A "who is X" or profile is jobs 1, then 2, then 5.
 
 ## Grounding
 
-- Always read canonical cards (`archive_read`) before factual claims.
-- Search and embeddings are navigation aids, not canonical truth.
-- If evidence conflicts, say so; prefer deterministic fields over inferred summaries.
+Always read canonical cards (`archive_read`) before factual claims.
+Search and embeddings are navigation aids, not canonical truth.
+If evidence conflicts, say so. Prefer deterministic fields over inferred
+summaries. An alias-only `archive_person` hit is not the person.
 
 ## Status / health
 
@@ -31,4 +35,5 @@ alwaysApply: true
 
 ## Prefer JSON tools
 
-Use `_json` variants (`archive_search_json`, `archive_hybrid_search_json`, `archive_status_json`) when available — structured output is easier to parse.
+Use `_json` variants (`archive_search_json`, `archive_hybrid_search_json`,
+`archive_status_json`) when available. Structured output is easier to parse.
