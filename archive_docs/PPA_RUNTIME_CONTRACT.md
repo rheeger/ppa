@@ -26,43 +26,43 @@ Both invoke `archive_mcp.__main__:main`. This starts the MCP server using stdio 
 
 ### CLI subcommands (frozen)
 
-| Subcommand                 | Purpose                                                                                 | Safety on production |
-| -------------------------- | --------------------------------------------------------------------------------------- | -------------------- |
-| `serve`                    | Start MCP server (stdio); optional `--tunnel USER@HOST` spawns SSH to `PPA_TUNNEL_PORT` | Safe                 |
-| `mcp-config`               | Print paste-ready MCP JSON from current `PPA_*` env (secrets omitted)                   | Safe                 |
-| `search <query>`           | Full-text search (JSON on stdout)                                                       | Safe                 |
-| `read <path_or_uid>`       | Read one note (JSON)                                                                    | Safe                 |
-| `read-many <uid> …`        | Read multiple notes (JSON)                                                              | Safe                 |
-| `query`                    | Structured query with `--type` / `--source` / etc. (JSON)                               | Safe                 |
-| `graph <note_path>`        | Wikilink graph from a note (JSON)                                                       | Safe                 |
-| `person <name>`            | Person profile by slug (JSON)                                                           | Safe                 |
-| `timeline`                 | Notes in date range (JSON)                                                              | Safe                 |
-| `stats`                    | Vault/index stats (JSON)                                                                | Safe                 |
-| `validate`                 | Validate all vault cards (JSON)                                                         | Safe                 |
-| `duplicates`               | Dedup candidates from `_meta` (JSON)                                                    | Safe                 |
-| `vector-search <query>`    | Semantic search (JSON)                                                                  | Safe                 |
-| `hybrid-search <query>`    | Hybrid lexical + vector (JSON)                                                          | Safe                 |
-| `explain <query>`          | Retrieval explain payload (JSON)                                                        | Safe                 |
-| `embedding-status`         | Embedding coverage (JSON)                                                               | Safe                 |
-| `embedding-backlog`        | Pending embedding chunks (JSON)                                                         | Safe                 |
-| `status`                   | Current-instance production status (Section F). Never claims fresh from a manifest.     | Safe                 |
-| `instance-status`          | Native/warehouse/auth/backup capability. `fresh` is always false for a manifest.        | Safe                 |
-| `readiness`                | Fail-closed current-instance readiness. `local_seed_living_corpus` does not transfer.   | Safe                 |
-| `setup`                    | Fixture-only independent archive (`sample.fixture`). Does not overwrite an existing root. | Safe on empty root |
-| `maintain`                 | Incremental maintain + serving publish                                                  | Safe                 |
-| `rebuild-indexes`          | Truncate and rebuild all index tables from vault                                        | **DESTRUCTIVE**      |
-| `index-status`             | Report index health (human-readable text, MCP parity)                                   | Slow, may OOM        |
-| `bootstrap-postgres`       | Create extensions and base schema layout                                                | Safe on fresh DB     |
-| `embed-pending`            | Process embedding backlog                                                               | Safe                 |
-| `migrate`                  | Apply pending SQL schema migrations                                                     | Safe                 |
-| `migration-status`         | Report migration history and pending count                                              | Safe                 |
-| `health`                   | Check vault, DB, embeddings, migrations                                                 | Safe                 |
-| `projection-inventory`     | List registered typed projections                                                       | Safe                 |
-| `projection-status`        | Show projection coverage                                                                | Safe                 |
-| `projection-explain <uid>` | Explain projection for a card                                                           | Safe                 |
-| `duplicate-uids`           | Find duplicate UIDs                                                                     | Safe                 |
-| `build-benchmark-sample`   | Build a benchmark vault sample                                                          | Safe                 |
-| `benchmark-rebuild`        | Benchmark rebuild performance                                                           | Safe                 |
+| Subcommand                 | Purpose                                                                                   | Safety on production |
+| -------------------------- | ----------------------------------------------------------------------------------------- | -------------------- |
+| `serve`                    | Start MCP server (stdio); optional `--tunnel USER@HOST` spawns SSH to `PPA_TUNNEL_PORT`   | Safe                 |
+| `mcp-config`               | Print paste-ready MCP JSON from current `PPA_*` env (secrets omitted)                     | Safe                 |
+| `search <query>`           | Full-text search (JSON on stdout)                                                         | Safe                 |
+| `read <path_or_uid>`       | Read one note (JSON)                                                                      | Safe                 |
+| `read-many <uid> …`        | Read multiple notes (JSON)                                                                | Safe                 |
+| `query`                    | Structured query with `--type` / `--source` / etc. (JSON)                                 | Safe                 |
+| `graph <note_path>`        | Wikilink graph from a note (JSON)                                                         | Safe                 |
+| `person <name>`            | Person profile by slug (JSON)                                                             | Safe                 |
+| `timeline`                 | Notes in date range (JSON)                                                                | Safe                 |
+| `stats`                    | Vault/index stats (JSON)                                                                  | Safe                 |
+| `validate`                 | Validate all vault cards (JSON)                                                           | Safe                 |
+| `duplicates`               | Dedup candidates from `_meta` (JSON)                                                      | Safe                 |
+| `vector-search <query>`    | Semantic search (JSON)                                                                    | Safe                 |
+| `hybrid-search <query>`    | Hybrid lexical + vector (JSON)                                                            | Safe                 |
+| `explain <query>`          | Retrieval explain payload (JSON)                                                          | Safe                 |
+| `embedding-status`         | Embedding coverage (JSON)                                                                 | Safe                 |
+| `embedding-backlog`        | Pending embedding chunks (JSON)                                                           | Safe                 |
+| `status`                   | Current-instance production status (Section F). Never claims fresh from a manifest.       | Safe                 |
+| `instance-status`          | Native/warehouse/auth/backup capability. `fresh` is always false for a manifest.          | Safe                 |
+| `readiness`                | Fail-closed current-instance readiness. `local_seed_living_corpus` does not transfer.     | Safe                 |
+| `setup`                    | Fixture-only independent archive (`sample.fixture`). Does not overwrite an existing root. | Safe on empty root   |
+| `maintain`                 | Incremental maintain + serving publish                                                    | Safe                 |
+| `rebuild-indexes`          | Truncate and rebuild all index tables from vault                                          | **DESTRUCTIVE**      |
+| `index-status`             | Report index health (human-readable text, MCP parity)                                     | Slow, may OOM        |
+| `bootstrap-postgres`       | Create extensions and base schema layout                                                  | Safe on fresh DB     |
+| `embed-pending`            | Process embedding backlog                                                                 | Safe                 |
+| `migrate`                  | Apply pending SQL schema migrations                                                       | Safe                 |
+| `migration-status`         | Report migration history and pending count                                                | Safe                 |
+| `health`                   | Check vault, DB, embeddings, migrations                                                   | Safe                 |
+| `projection-inventory`     | List registered typed projections                                                         | Safe                 |
+| `projection-status`        | Show projection coverage                                                                  | Safe                 |
+| `projection-explain <uid>` | Explain projection for a card                                                             | Safe                 |
+| `duplicate-uids`           | Find duplicate UIDs                                                                       | Safe                 |
+| `build-benchmark-sample`   | Build a benchmark vault sample                                                            | Safe                 |
+| `benchmark-rebuild`        | Benchmark rebuild performance                                                             | Safe                 |
 
 Seed-link subcommands (`seed-link-*`, `link-*`, `review-link-candidate`, `benchmark-seed-links`) are gated by `PPA_SEED_LINKS_ENABLED` and exit with a message when disabled.
 
@@ -105,48 +105,48 @@ still exist on some launcher seams; do not treat them as the instance contract.
 
 These control rebuild, embedding, and flush behavior.
 
-| Variable                           | Default        |
-| ---------------------------------- | -------------- |
-| `PPA_VECTOR_DIMENSION`             | `1536`         |
-| `PPA_CHUNK_CHAR_LIMIT`             | `1200`         |
-| `PPA_EMBED_BATCH_SIZE`             | `32`           |
-| `PPA_EMBED_MAX_RETRIES`            | `3`            |
-| `PPA_EMBED_CONCURRENCY`            | `4`            |
-| `PPA_EMBED_WRITE_BATCH_SIZE`       | _(= batch)_    |
-| `PPA_EMBED_PROGRESS_EVERY`         | `0`            |
-| `PPA_EMBED_DEFER_VECTOR_INDEX`     | `0`            |
-| `PPA_REBUILD_WORKERS`              | _(cpu count)_  |
-| `PPA_REBUILD_BATCH_SIZE`           | `1000`         |
-| `PPA_REBUILD_COMMIT_INTERVAL`      | `5000`         |
-| `PPA_REBUILD_PROGRESS_EVERY`       | `10000`        |
-| `PPA_REBUILD_EXECUTOR`             | `thread`       |
-| `PPA_REBUILD_STAGING_MODE`         | `direct`       |
-| `PPA_FORCE_FULL_REBUILD`           | `0`            |
-| `PPA_DISABLE_MANIFEST_CACHE`       | `0`            |
+| Variable                           | Default                              |
+| ---------------------------------- | ------------------------------------ |
+| `PPA_VECTOR_DIMENSION`             | `1536`                               |
+| `PPA_CHUNK_CHAR_LIMIT`             | `1200`                               |
+| `PPA_EMBED_BATCH_SIZE`             | `32`                                 |
+| `PPA_EMBED_MAX_RETRIES`            | `3`                                  |
+| `PPA_EMBED_CONCURRENCY`            | `4`                                  |
+| `PPA_EMBED_WRITE_BATCH_SIZE`       | _(= batch)_                          |
+| `PPA_EMBED_PROGRESS_EVERY`         | `0`                                  |
+| `PPA_EMBED_DEFER_VECTOR_INDEX`     | `0`                                  |
+| `PPA_REBUILD_WORKERS`              | _(cpu count)_                        |
+| `PPA_REBUILD_BATCH_SIZE`           | `1000`                               |
+| `PPA_REBUILD_COMMIT_INTERVAL`      | `5000`                               |
+| `PPA_REBUILD_PROGRESS_EVERY`       | `10000`                              |
+| `PPA_REBUILD_EXECUTOR`             | `thread`                             |
+| `PPA_REBUILD_STAGING_MODE`         | `direct`                             |
+| `PPA_FORCE_FULL_REBUILD`           | `0`                                  |
+| `PPA_DISABLE_MANIFEST_CACHE`       | `0`                                  |
 | `PPA_ANYDOC_EXTRACT_CACHE`         | `~/.ppa/anydoc-extract-cache.sqlite` |
-| `PPA_SEED_FROZEN`                  | `0`            |
-| `PPA_REBUILD_RESUME`               | `0`            |
-| `PPA_REBUILD_FLUSH_MAX_TOTAL_ROWS` | _(adaptive)_   |
-| `PPA_REBUILD_FLUSH_ROW_MULT`       | `120`          |
-| `PPA_REBUILD_FLUSH_MAX_EDGES`      | `100000`       |
-| `PPA_REBUILD_FLUSH_MAX_CHUNKS`     | `50000`        |
-| `PPA_REBUILD_FLUSH_MAX_BYTES`      | `268435456`    |
-| `PPA_OPENAI_TIMEOUT_SECONDS`       | `60`           |
-| `PPA_OPENAI_MAX_RETRIES`           | `3`            |
-| `PPA_OPENAI_BASE_URL`              | OpenAI default |
-| `PPA_STATEMENT_TIMEOUT_MS`         | `30000`        |
-| `PPA_CONNECT_TIMEOUT`              | `5`            |
+| `PPA_SEED_FROZEN`                  | `0`                                  |
+| `PPA_REBUILD_RESUME`               | `0`                                  |
+| `PPA_REBUILD_FLUSH_MAX_TOTAL_ROWS` | _(adaptive)_                         |
+| `PPA_REBUILD_FLUSH_ROW_MULT`       | `120`                                |
+| `PPA_REBUILD_FLUSH_MAX_EDGES`      | `100000`                             |
+| `PPA_REBUILD_FLUSH_MAX_CHUNKS`     | `50000`                              |
+| `PPA_REBUILD_FLUSH_MAX_BYTES`      | `268435456`                          |
+| `PPA_OPENAI_TIMEOUT_SECONDS`       | `60`                                 |
+| `PPA_OPENAI_MAX_RETRIES`           | `3`                                  |
+| `PPA_OPENAI_BASE_URL`              | OpenAI default                       |
+| `PPA_STATEMENT_TIMEOUT_MS`         | `30000`                              |
+| `PPA_CONNECT_TIMEOUT`              | `5`                                  |
 
 ### 2.4 Historical Arnold integration environment variables
 
 These belonged to one historical host. They are **not** the independent-instance contract and are not required for fixture setup or a second archive.
 
-| Variable                              | Purpose                                    |
-| ------------------------------------- | ------------------------------------------ |
-| `PPA_USE_ARNOLD_OPENAI_KEY`           | Historical 1Password-resolved OpenAI key   |
-| `PPA_OPENAI_API_KEY_OP_REF`           | Historical 1Password reference             |
-| `PPA_OP_SERVICE_ACCOUNT_TOKEN_FILE`   | Historical service-account token file      |
-| `PPA_OP_SERVICE_ACCOUNT_TOKEN_OP_REF` | Historical service-account OP ref          |
+| Variable                              | Purpose                                  |
+| ------------------------------------- | ---------------------------------------- |
+| `PPA_USE_ARNOLD_OPENAI_KEY`           | Historical 1Password-resolved OpenAI key |
+| `PPA_OPENAI_API_KEY_OP_REF`           | Historical 1Password reference           |
+| `PPA_OP_SERVICE_ACCOUNT_TOKEN_FILE`   | Historical service-account token file    |
+| `PPA_OP_SERVICE_ACCOUNT_TOKEN_OP_REF` | Historical service-account OP ref        |
 
 Some launchers still accept `ARCHIVE_*` spellings of the same names. New instances should set `PPA_INDEX_DSN`, `PPA_PATH` / instance dir, `PPA_INDEX_SCHEMA`, and embedding refs only.
 
