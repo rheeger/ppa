@@ -628,3 +628,77 @@ def test_human_report_contains_living_loop_fields() -> None:
     assert "Pending embeddings: 1." in summary
     assert "Result: incomplete because a live source failed." in summary
     assert living_loop_ok(report) is False
+
+
+@pytest.mark.integration
+def test_isolated_living_loop_acceptance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pytestconfig: pytest.Config
+) -> None:
+    from archive_sync.extractors.amazon import AmazonExtractor
+    from archive_tests.acceptance.environment import provision_isolated_runtime, reset_serving_handle
+    from archive_tests.acceptance.fixtures import init_vault
+    from archive_tests.acceptance.scenarios.p03_maintain import EMAIL_UID, ORDER_NUMBER, _write_amazon_email
+    from archive_tests.conftest import require_integration_enabled
+    from archive_cli.commands.maintain import run_maintenance
+    from archive_cli.serving_index import get_serving_handle
+    from archive_cli.store import DefaultArchiveStore
+    from archive_vault.vault import read_note_by_uid
+
+    if not require_integration_enabled(pytestconfig):
+        pytest.skip("living-loop G requires --require-integration")
+
+    monkeypatch.delenv("PPA_TEST_PG_DSN", raising=False)
+    monkeypatch.delenv("PPA_ENRICHMENT_MODEL", raising=False)
+    monkeypatch.delenv("GOOGLE_ACCOUNT", raising=False)
+    monkeypatch.setenv("PPA_EMBEDDING_PROVIDER", "hash")
+    runtime = provision_isolated_runtime(tmp_path / "iso", require_integration=True, suite="maintain")
+    try:
+        runtime.apply()
+        init_vault(runtime.vault, owned_root=runtime.root)
+        for extra in ("Transactions/Purchases", "Entities/Organizations"):
+            (runtime.vault / extra).mkdir(parents=True, exist_ok=True)
+        _write_amazon_email(runtime.vault)
+        store = DefaultArchiveStore(vault=runtime.vault)
+        store.bootstrap()
+        purchase_uid = AmazonExtractor().generate_derived_uid(EMAIL_UID, ORDER_NUMBER)
+
+        def fake_updaters(*_a, **kwargs):
+            return (
+                1,
+                [
+                    {
+                        "source_key": "fixture:local",
+                        "status": "success",
+                        "dirty_card_uids": [EMAIL_UID],
+                    }
+                ],
+                False,
+            )
+
+        monkeypatch.setattr("archive_cli.commands.maintain._run_source_updaters", fake_updaters)
+        dry = run_maintenance(store=store, logger=logging.getLogger("t"), dry_run=True, apply_loop=True)
+        assert tuple(dry.planned_steps) == APPLY_LOOP_STEPS
+        assert "serving_index_publish (dry-run)" in dry.skipped_steps
+        assert read_note_by_uid(str(runtime.vault), purchase_uid) is None
+
+        first = run_maintenance(store=store, logger=logging.getLogger("t"), dry_run=False, apply_loop=True)
+        assert first.cards_extracted >= 1
+        assert first.ok is True
+        assert first.published_generation
+        note = read_note_by_uid(str(runtime.vault), purchase_uid)
+        assert note is not None
+        reset_serving_handle()
+        handle = get_serving_handle(runtime.vault)
+        listed = handle.query(limit=50)
+        hits = [str(row.get("card_uid") or "") for row in listed]
+        exact = handle.search(purchase_uid, limit=8)
+        assert purchase_uid in hits or any(row.get("card_uid") == purchase_uid for row in exact)
+        handle.close()
+        reset_serving_handle()
+
+        second = run_maintenance(store=store, logger=logging.getLogger("t"), dry_run=False, apply_loop=True)
+        assert second.embeddings_embedded == 0
+        assert second.ok is True
+    finally:
+        runtime.restore()
+        runtime.cleanup()
