@@ -207,10 +207,11 @@ Tools: `archive_validate`, `archive_duplicates`, `archive_duplicate_uids`, `arch
 
 ## 5. Retrieval Semantics
 
-Agent-facing wording (do's, don'ts, type-filter recipes) is generated from
+Agent-facing wording (safety, job router, type-filter recipes) is generated from
 `archive_cli/mcp_instructions.py` and served as MCP `instructions` plus tool
-descriptions. Update that module when teaching agents how to query. The frozen
-rules below are the semantic contract those descriptions must stay compatible with.
+descriptions. Job recipes live in `.cursor/skills/archive-query/`. Update both
+when teaching agents how to query. The frozen rules below are the semantic
+contract those descriptions must stay compatible with.
 
 ### Retrieval order (frozen)
 

@@ -348,7 +348,15 @@ def archive_person(name: str) -> str:
             _log_tool_done("archive_person", t0, found=False)
             return "Person not found"
         _log_tool_done("archive_person", t0, found=True)
-        return str(result.get("content", ""))
+        content = str(result.get("content", ""))
+        if str(result.get("matched_on") or "") == "alias":
+            return (
+                "Person card matched on alias only. Confirm summary equals the needle "
+                "before using this card. Invitation From-lines (Paperless Post, Evite) "
+                "often steal other people's names.\n\n"
+                f"{content}"
+            )
+        return content
     except PpaError as exc:
         return _ppa_err("archive_person", exc)
 

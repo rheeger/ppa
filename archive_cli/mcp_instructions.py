@@ -3,9 +3,9 @@
 FastMCP sends ``build_server_instructions()`` as initialize.instructions.
 Per-tool recipes live in ``TOOL_DESCRIPTIONS`` and are attached at registration.
 
-This module is the source of truth. Consuming agents (Arnold, Cursor, others)
-receive it on the next tools/list. Update here — do not fork the rules into
-skill docs or AGENTS.md.
+This module is the thin live contract (safety + job router). Job recipes live
+in ``.cursor/skills/archive-query/``. MCP-only clients follow the stop tests
+here. Cursor agents must open the matching job file before retrieving.
 """
 
 from __future__ import annotations
@@ -43,9 +43,9 @@ Start wide or narrow. Then follow parent / attachment / duplicate UIDs.
 - Wide scan: archive_search or archive_hybrid_search (raise limit when
   you need more than the default). archive_query when you know type /
   person / source. Multi-type is fine — run another type_filter.
-- People: archive_person, then people_filter on search / query / hybrid /
+- People: identify-person.md, then people_filter on search / query / hybrid /
   evidence. people_filter is a name/slug, never an email; put emails in
-  query=.
+  query=. archive_person is a candidate. Census channels before a profile.
 - Dates: archive_timeline or start_date/end_date on evidence / hybrid /
   search. archive_temporal_neighbors for a single timestamp.
 - Compact dated stack: archive_evidence (uid, date, type, title, why,
@@ -96,32 +96,44 @@ HOW IT WORKS
   Compose: list compactly when you want a dated stack; read bodies for the
   UIDs you will use; follow parent/attachment/duplicate pointers on demand.
 
+JOBS
+Pick one job. If you can read this repo, open
+.cursor/skills/archive-query/<file> and follow it before retrieving.
+MCP-only clients use the stop tests here.
+
+1. Identify a person — identify-person.md
+   archive_person is a candidate, not identity. Confirm summary equals the
+   needle, or an email/phone you already saw on a grounded message. If the
+   needle is only in aliases, the name was stolen (Paperless Post / Evite
+   From-lines). Search the name and read every type=person hit. Prefer
+   email/phone over display name. status=ambiguous: list candidates; do not
+   pick. A thin contact stub is not the biography.
+
+2. Census their channels — census-channels.md
+   archive_analytics workflow=query once each for imessage_thread,
+   imessage_message, email_message, calendar_event. Read matched_total.
+   A page of 40 with truncated is not the corpus. Read thread cards
+   (message_count, first_message_at, last_message_at) before sampling
+   bodies. type_filter=person plus the same people_filter can be empty.
+
+3. Read a stack — read-a-stack.md
+   archive_evidence for a compact dated list. Do not add life/school/work
+   to query= when people_filter is set. Recency-sorted archive_query
+   without a type is latest chatter. Follow parent/attachment/duplicate
+   UIDs. Read bodies only for UIDs you will use.
+
+4. Answer a fact — answer-a-fact.md
+   Known UID → archive_read. Ground every cite. The person tool's first
+   hit is not a cite when summary is not the needle.
+
+5. Reconstruct a story — reconstruct-a-story.md
+   Identify, then census, then dated evidence without extra query text,
+   then bodies. Do not call the last email the last update until iMessage
+   (and Beeper) totals are in hand.
+
 """
     + CARD_STACK_PLAYBOOK
     + """
-DO
-- Open-ended recall → archive_hybrid_search (or archive_hybrid_search_json).
-  Raise limit for a wider scan; follow UIDs with evidence or read.
-- Known type/person/source → archive_query (multi-type = more than one call).
-- Deterministic workflows / saved scopes → archive_analytics (JSON; no FX or advice).
-- Exact phrase → archive_search / archive_search_json.
-- Who is X → archive_person, then search / query / hybrid / evidence with
-  people_filter.
-- Reconstruct a story → archive_evidence (narrative=true) and/or timeline,
-  then read the supporting UIDs.
-- Date range listing → archive_timeline or archive_evidence.
-- Point-in-time → archive_temporal_neighbors.
-- Relationships → archive_graph from a known card.
-- Ground facts with archive_read. Batch with archive_read_many when you
-  already have the UIDs.
-- Retry: reformulate, change filters, switch modes, raise limit. Never stop
-  after one miss.
-- Check confidence and confidence_reason. Low = narrow, widen, or say
-  the archive does not have it. High is exact-identifier evidence
-  quality, not corpus completeness.
-- Prefer *_json tools when you will parse results.
-- Search a person by name (people_filter) and separately by email (query=).
-
 DON'T
 - Don't treat snippets, titles, chunks, or embeddings as canonical.
 - Don't use hyphenated types (email-message, calendar-event).
@@ -131,18 +143,8 @@ DON'T
 - Don't invent when tools fail or return empty.
 - Don't call rebuild / embed / seed-link tools unless you are doing ops.
 - Don't give up on a specific fact after one phrasing.
-
-ROUTING
-- Known UID or path → archive_read (attachment/duplicate flags = link lists)
-- Compact chronological stack → archive_evidence
-- Type / person / source known → archive_query
-- Exact keywords → archive_search / archive_search_json
-- Fuzzy / "what do we know" → archive_hybrid_search
-- Pure semantic → archive_vector_search
-- Who / relationship → archive_person, then archive_graph
-- When / timeline → archive_evidence or archive_timeline or archive_temporal_neighbors
-- Aggregations (orders, rides, shops) → archive_query + type_filter, aggregate yourself
-- Subscriptions / trip costs / changes-since → archive_analytics (facts + completeness)
+- Don't treat an alias-only person hit as identity.
+- Don't skip the channel census on a who-is / profile question.
 """
 )
 
@@ -233,9 +235,11 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "same as archive_read."
     ),
     "archive_person": (
-        "Person profile by name or slug, with linked cards. Use for 'who is X', "
-        "then search / query / hybrid / evidence with people_filter. "
-        "people_filter elsewhere takes a name, not an email."
+        "Candidate person card by name, slug, email, or phone. Not identity. "
+        "Confirm summary equals the needle before using the card. Alias-only "
+        "hits are stolen names (Paperless Post / Evite From-lines). Ambiguous "
+        "returns candidate UIDs; do not pick a winner. Then census channels "
+        "(identify-person.md). people_filter elsewhere takes a name, not an email."
     ),
     "archive_graph": (
         "Expand wikilinks and discovered relationships from a known card. "

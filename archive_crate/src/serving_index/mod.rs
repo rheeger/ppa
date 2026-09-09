@@ -1080,6 +1080,7 @@ pub fn serving_index_person(
                         "rel_path": card.rel_path,
                         "card_uid": card.card_uid,
                         "candidate_uids": uids,
+                        "matched_on": idx.meta.matched_on(card, name),
                     }),
                 );
             }

@@ -1,18 +1,29 @@
 # HFA Agent Usage
 
-The live agent contract is the MCP toolset:
+The live agent contract is two layers:
 
 - Server `instructions` — `archive_cli.mcp_instructions.build_server_instructions()`
+  (safety, type rules, job router, don'ts)
+- Job recipes — `.cursor/skills/archive-query/` (`SKILL.md` plus one file per job)
 - Per-tool recipes — `archive_cli.mcp_instructions.TOOL_DESCRIPTIONS`
 
-Clients receive both on initialize / tools/list. Update that module. Do not fork
-do's, don'ts, type filters, or routing into skill docs.
+Clients receive the MCP layer on initialize / tools/list. Cursor agents must
+open the matching job file before retrieving. Do not fork job recipes into
+AGENTS.md. Edit the skill file, then keep the MCP router in sync.
+
+## Jobs
+
+1. Identify a person — `identify-person.md`
+2. Census their channels — `census-channels.md`
+3. Read a stack — `read-a-stack.md`
+4. Answer a fact — `answer-a-fact.md`
+5. Reconstruct a story — `reconstruct-a-story.md`
 
 ## What agents get automatically
 
 1. High-level system: PPA is a retrieval engine; cards are truth; search is navigation.
-2. Do / don't for successful queries (underscore types, people_filter is a name, ground with reads).
-3. Routing: hybrid vs query vs search vs person vs timeline.
+2. Job router with stop tests (candidate person cards, channel census, stolen aliases).
+3. Don'ts (underscore types, people_filter is a name, ground with reads).
 4. Per-tool parameter recipes when the agent inspects a tool.
 
 ## CLI parity (no MCP)
