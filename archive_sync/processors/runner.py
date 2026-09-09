@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -458,17 +459,38 @@ def _execute_entity_resolution(ctx: ExecuteContext, items: list[ProcessorPlanIte
     return out
 
 
+def _embedding_provider_ready() -> tuple[bool, str]:
+    """Embedding readiness is independent of the enrichment LLM provider."""
+
+    from archive_cli.embedding_provider import DEFAULT_EMBEDDING_PROVIDER
+    from archive_cli.index_config import _ppa_env
+
+    name = (_ppa_env("PPA_EMBEDDING_PROVIDER", default=DEFAULT_EMBEDDING_PROVIDER) or "hash").lower()
+    if name in {"", "hash"}:
+        return True, ""
+    if name == "openai":
+        if (os.environ.get("OPENAI_API_KEY") or "").strip():
+            return True, ""
+        return False, "OPENAI_API_KEY missing"
+    return False, f"unsupported embedding provider: {name}"
+
+
 def _execute_embedding(ctx: ExecuteContext, items: list[ProcessorPlanItem]) -> BatchExecuteResult:
     """Embed dirty cards by UID allowlist. Limit is a budget after selection.
 
     Full-corpus embed requires ``allow_full_embedding`` and uses the unscoped
     admin route. Provider failure or leftover pending chunks do not mark a
-    card complete.
+    card complete. Content-hash reuse runs inside ``embed_pending`` before
+    any new vectors are paid for.
     """
 
     out = BatchExecuteResult()
-    if not ctx.provider_available:
-        return _skip_provider_items(items, PROCESSOR_EMBEDDING)
+    ready, reason = _embedding_provider_ready()
+    if not ready:
+        skipped = _skip_provider_items(items, PROCESSOR_EMBEDDING)
+        if reason:
+            skipped.warnings.append(reason)
+        return skipped
     if not ctx.apply or ctx.dry_run:
         out.results.extend(_complete_items(items))
         return out
@@ -495,8 +517,12 @@ def _execute_embedding(ctx: ExecuteContext, items: list[ProcessorPlanItem]) -> B
         if not isinstance(result, dict):
             result = {"embedded": result, "failed": 0}
         embedded = result.get("embedded", 0)
+        reused_by_content = int(result.get("reused_by_content") or 0)
         out.warnings.append(
-            f"embedding embedded={embedded} selected={result.get('selected', 0)} "
+            f"embedding embedded={embedded} reused={result.get('reused', 0)} "
+            f"reused_by_content={reused_by_content} "
+            f"pending_after={len(result.get('pending_chunk_keys') or [])} "
+            f"selected={result.get('selected', 0)} "
             f"failed={result.get('failed', 0)} concurrency={concurrency}"
         )
     except Exception as exc:

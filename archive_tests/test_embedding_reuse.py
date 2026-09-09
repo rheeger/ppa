@@ -346,6 +346,69 @@ def test_prior_schema_remap_copies_v5_vector(
     assert row["content_hash"] == new_hash
 
 
+@pytest.mark.integration
+def test_scoped_embed_pending_reuses_reminted_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pgvector_dsn: str
+) -> None:
+    from archive_cli.embedding_provider import HashEmbeddingProvider
+    from archive_cli.engine_factory import embedding_spec_from_env
+
+    index = _bootstrap(tmp_path, monkeypatch, pgvector_dsn)
+    with index._connect() as conn:
+        _insert_chunk(conn, index.schema, key="old-key", uid="card-remint", index=0, content_hash="hash-same")
+        _insert_embedding(
+            conn,
+            index.schema,
+            key="old-key",
+            dim=8,
+            fill=0.33,
+            content_hash="hash-same",
+            uid="card-remint",
+        )
+        conn.execute(f"DELETE FROM {index.schema}.chunks WHERE chunk_key = 'old-key'")
+        _insert_chunk(conn, index.schema, key="new-key", uid="card-remint", index=0, content_hash="hash-same")
+        conn.commit()
+
+    class CountingHash:
+        name = "hash"
+
+        def __init__(self) -> None:
+            self.inner = HashEmbeddingProvider(model="reuse-hash", dimension=8)
+            self.model = "reuse-hash"
+            self.dimension = 8
+            self.calls = 0
+
+        def embed_texts(self, texts: list[str]) -> list[list[float]]:
+            self.calls += 1
+            return self.inner.embed_texts(texts)
+
+    provider = CountingHash()
+    first = index.embed_pending(
+        provider=provider,
+        embedding_model="reuse-hash",
+        embedding_version=1,
+        limit=0,
+        include_context_prefix=False,
+        uid_allowlist={"card-remint"},
+        embedding_spec=embedding_spec_from_env(),
+    )
+    assert first.get("reused_by_content") == 1
+    assert first["embedded"] == 0
+    assert provider.calls == 0
+    second = index.embed_pending(
+        provider=provider,
+        embedding_model="reuse-hash",
+        embedding_version=1,
+        limit=0,
+        include_context_prefix=False,
+        uid_allowlist={"card-remint"},
+        embedding_spec=embedding_spec_from_env(),
+    )
+    assert second["embedded"] == 0
+    assert second.get("reused_by_content") == 0
+    assert provider.calls == 0
+
+
 def test_reuse_methods_are_on_embedder_mixin() -> None:
     assert hasattr(EmbedderMixin, "reuse_embeddings_by_content")
     assert hasattr(EmbedderMixin, "remap_embeddings_by_slot")

@@ -995,10 +995,13 @@ class EmbedderMixin:
         embedding_version: int,
         batch_size: int | None = None,
         cleanup_duplicates: bool = True,
+        uid_allowlist: Collection[str] | None = None,
     ) -> dict[str, int]:
         """Attach leftover lists onto pending chunks that share ``content_hash``.
 
         Build a key map first (no toast), then copy and delete in pages.
+        Incremental maintain passes ``uid_allowlist`` so a dirty rematerialize
+        does not scan the whole warehouse.
         """
 
         self.ensure_ready()
@@ -1007,6 +1010,7 @@ class EmbedderMixin:
         copied = 0
         cleaned = 0
         pages = 0
+        scoped_uids = normalize_embed_allowlist(uid_allowlist) if uid_allowlist is not None else None
         with self._connect() as conn:
             conn.execute("SET statement_timeout = 0")
             conn.execute(
@@ -1035,8 +1039,7 @@ class EmbedderMixin:
             conn.commit()
             conn.execute(f"TRUNCATE {self.schema}.embedding_reuse_pending")
             conn.execute(f"TRUNCATE {self.schema}.embedding_reuse_map")
-            pending = conn.execute(
-                f"""
+            pending_sql = f"""
                 INSERT INTO {self.schema}.embedding_reuse_pending (
                     chunk_key, content_hash, card_uid, chunk_type, chunk_index
                 )
@@ -1048,9 +1051,12 @@ class EmbedderMixin:
                       AND e.embedding_model = %s
                       AND e.embedding_version = %s
                 )
-                """,
-                (embedding_model, embedding_version),
-            )
+                """
+            pending_params: list[Any] = [embedding_model, embedding_version]
+            if scoped_uids is not None:
+                pending_sql += " AND c.card_uid = ANY(%s)"
+                pending_params.append(list(scoped_uids))
+            pending = conn.execute(pending_sql, pending_params)
             conn.commit()
             pending_before = int(pending.rowcount or 0)
             conn.execute(
@@ -1542,6 +1548,7 @@ class EmbedderMixin:
         embedding_model: str | None = None,
         embedding_version: int | None = None,
         fail_if_thin: bool = True,
+        uid_allowlist: Collection[str] | None = None,
     ) -> dict[str, int]:
         """Backfill identity, remap leftover versioned keys, then reuse by content."""
         model = (embedding_model or "").strip() or get_default_embedding_model()
@@ -1554,6 +1561,7 @@ class EmbedderMixin:
         reused = self.reuse_embeddings_by_content(
             embedding_model=model,
             embedding_version=version,
+            uid_allowlist=uid_allowlist,
         )
         pending_after = int(reused.get("pending_after") or 0)
         result = {
@@ -1660,17 +1668,32 @@ class EmbedderMixin:
                 "validate embedding provider complete",
                 f"dimension={provider_dimension} batch_size={batch_size} concurrency={concurrency} context_prefix={include_context_prefix}",
             )
+            reused_by_content = 0
             if not scoped:
                 attach = self.attach_embeddings_after_rematerialize(
                     embedding_model=embedding_model,
                     embedding_version=embedding_version,
                     fail_if_thin=False,
                 )
+                reused_by_content = int(attach.get("reused") or 0)
                 logger.info(
                     "embed_pending attach remapped=%s reused=%s pending_after=%s",
                     attach.get("remapped"),
                     attach.get("reused"),
                     attach.get("pending_after"),
+                )
+            else:
+                reused_attach = self.reuse_embeddings_by_content(
+                    embedding_model=embedding_model,
+                    embedding_version=embedding_version,
+                    uid_allowlist=uid_allowlist,
+                )
+                reused_by_content = int(reused_attach.get("copied") or 0)
+                logger.info(
+                    "embed_pending reuse_by_content copied=%s pending_after=%s uids=%s",
+                    reused_by_content,
+                    reused_attach.get("pending_after"),
+                    len(uid_allowlist or ()),
                 )
 
             _log_rebuild_step(2, total_steps, "count embedding backlog")
@@ -1725,6 +1748,7 @@ class EmbedderMixin:
                     "chunk_schema_version": CHUNK_SCHEMA_VERSION,
                     "embedded": 0,
                     "reused": len(reused_keys),
+                    "reused_by_content": reused_by_content,
                     "selected": len(selected_keys) if scoped else total_chunks,
                     "unscoped": not scoped,
                     "selected_chunk_keys": list(selected_keys),
@@ -1939,6 +1963,7 @@ class EmbedderMixin:
                 "embedded": embedded,
                 "failed": failed,
                 "reused": len(reused_keys),
+                "reused_by_content": reused_by_content,
                 "selected": len(selected_keys) if scoped else total_chunks,
                 "unscoped": not scoped,
                 "selected_chunk_keys": list(selected_keys),

@@ -423,3 +423,48 @@ def test_dirty_email_extracts_derived_card(tmp_path: Path) -> None:
     assert metrics.created
     assert metrics.created[0].output_uid == purchase_uid
     assert (vault / metrics.created[0].rel_path).is_file()
+
+
+def test_embedding_processor_uses_hash_when_llm_is_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    from archive_sync.processors.batch import ProcessorPlanItem
+    from archive_sync.processors.constants import PROCESSOR_EMBEDDING
+    from archive_sync.processors.runner import ExecuteContext, _execute_embedding
+
+    monkeypatch.delenv("PPA_ENRICHMENT_MODEL", raising=False)
+    monkeypatch.setenv("PPA_EMBEDDING_PROVIDER", "hash")
+    called: dict[str, Any] = {}
+
+    def fake_embed_pending(**kwargs):
+        called["uid_allowlist"] = kwargs.get("uid_allowlist")
+        return {
+            "embedded": 0,
+            "reused": 1,
+            "reused_by_content": 1,
+            "failed": 0,
+            "selected": 1,
+            "chunk_keys_by_uid": {"card-a": ["new-key"]},
+            "completed_chunk_keys": ["new-key"],
+            "failed_chunk_keys": [],
+            "pending_chunk_keys": [],
+        }
+
+    ctx = ExecuteContext(
+        vault_path=".",
+        store=SimpleNamespace(embed_pending=fake_embed_pending),
+        apply=True,
+        dry_run=False,
+        provider_available=False,
+    )
+    item = ProcessorPlanItem(
+        processor_key=PROCESSOR_EMBEDDING,
+        input_uid="card-a",
+        current_input_hash="h",
+        input_revision="h",
+        processor_version="embedding-v1",
+    )
+    out = _execute_embedding(ctx, [item])
+    assert called["uid_allowlist"] == {"card-a"}
+    assert out.results[0].status == "complete"
+    assert any("reused_by_content=1" in warning for warning in out.warnings)
