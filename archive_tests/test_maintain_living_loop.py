@@ -142,3 +142,128 @@ def test_apply_loop_implies_source_and_processor_apply(
     assert captured["updater_apply"] is True
     assert captured["processor_apply"] is True
     assert tuple(rep.planned_steps) == APPLY_LOOP_STEPS
+
+
+def _ready_apply(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PPA_ENRICHMENT_MODEL", raising=False)
+    monkeypatch.setenv("PPA_EMBEDDING_PROVIDER", "hash")
+    import archive_cli.providers as providers_mod
+
+    providers_mod.resolve_provider(refresh=True)
+
+
+def test_apply_loop_uses_default_maintain_source_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _empty_store(tmp_path)
+    captured: dict[str, Any] = {}
+
+    def fake_default(**kwargs):
+        captured["default_kwargs"] = kwargs
+        return ["contacts:google", "file-libraries:documents"]
+
+    def fake_run(**kwargs):
+        captured["source_keys"] = list(kwargs.get("source_keys") or [])
+        reports = [
+            mock.Mock(
+                to_dict=lambda: {
+                    "source_key": key,
+                    "status": "success",
+                    "dirty_card_uids": [],
+                }
+            )
+            for key in captured["source_keys"]
+        ]
+        return mock.Mock(reports=reports, completion_state="success")
+
+    monkeypatch.setattr("archive_sync.source_updaters.runner.default_maintain_source_keys", fake_default)
+    monkeypatch.setattr("archive_sync.source_updaters.runner.run_source_updaters", fake_run)
+    monkeypatch.setattr("archive_cli.commands.maintain._run_processors", lambda *a, **k: (0, [], 0))
+    monkeypatch.setattr(
+        "archive_cli.commands.maintain._run_file_hygiene",
+        lambda *a, **k: ({"purged": 0}, {"cards_linked": 0, "cards_scanned": 0}, []),
+    )
+    monkeypatch.setenv("GOOGLE_ACCOUNT", "me@example.com")
+    _ready_apply(monkeypatch)
+    rep = run_maintenance(store=store, logger=logging.getLogger("t"), dry_run=False, apply_loop=True)
+    assert captured["source_keys"] == ["contacts:google", "file-libraries:documents"]
+    assert captured["default_kwargs"]["gmail_accounts"] == ("me@example.com",)
+    assert "photos" not in " ".join(captured["source_keys"])
+    assert rep.source_updater_runs == 2
+
+
+def test_apply_loop_failed_source_is_named(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    store = _empty_store(tmp_path)
+
+    def fake_updaters(*_a, **kwargs):
+        return (
+            2,
+            [
+                {
+                    "source_key": "gmail-messages:me@example.com",
+                    "status": "failed",
+                    "dirty_card_uids": [],
+                    "errors": ["gmail history walk failed"],
+                },
+                {
+                    "source_key": "contacts:google",
+                    "status": "success",
+                    "dirty_card_uids": ["hfa-person-fixture"],
+                },
+            ],
+            True,
+        )
+
+    monkeypatch.setattr("archive_cli.commands.maintain._run_source_updaters", fake_updaters)
+    monkeypatch.setattr("archive_cli.commands.maintain._run_processors", lambda *a, **k: (0, [], 0))
+    monkeypatch.setattr(
+        "archive_cli.commands.maintain._run_file_hygiene",
+        lambda *a, **k: ({"purged": 0}, {"cards_linked": 0, "cards_scanned": 0}, []),
+    )
+    _ready_apply(monkeypatch)
+    rep = run_maintenance(store=store, logger=logging.getLogger("t"), dry_run=False, apply_loop=True)
+    assert rep.failed_sources == ["gmail-messages:me@example.com"]
+    assert "gmail-messages:me@example.com" in rep.human_summary
+    assert "Result: incomplete because a live source failed." in rep.human_summary
+    assert living_loop_ok(rep) is False
+    assert "ok." not in rep.human_summary.split("Result:")[-1]
+
+
+def test_apply_loop_fixture_updater_writes_dirty_uids(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from archive_tests.test_maintain import _JoinProofGmailAdapter, _join_vault
+
+    vault = _join_vault(tmp_path)
+    adapter = _JoinProofGmailAdapter()
+
+    def _build_adapter(adapter_source_id: str):
+        assert adapter_source_id == "gmail-messages"
+        return adapter
+
+    monkeypatch.setattr("archive_sync.source_updaters.runner.build_adapter", _build_adapter)
+    monkeypatch.setattr("archive_cli.commands.maintain._run_processors", lambda *a, **k: (0, [], 0))
+    monkeypatch.setattr(
+        "archive_cli.commands.maintain._run_file_hygiene",
+        lambda *a, **k: ({"purged": 0}, {"cards_linked": 0, "cards_scanned": 0}, []),
+    )
+    _ready_apply(monkeypatch)
+    store = _empty_store(vault)
+    store.vault = vault
+    monkeypatch.setenv("PPA_PATH", str(vault))
+    monkeypatch.delenv("PPA_INDEX_DSN", raising=False)
+    rep = run_maintenance(
+        store=store,
+        logger=logging.getLogger("t"),
+        dry_run=False,
+        apply_loop=True,
+        source_updater_keys=["gmail-messages:me@example.com"],
+    )
+    assert not any(item.get("step") == "run_source_updaters" for item in rep.errors)
+    su = rep.source_updater_reports[0]
+    dirty = list(su.get("dirty_card_uids") or [])
+    if not dirty and isinstance(su.get("batch"), dict):
+        dirty = list(su["batch"].get("dirty_card_uids") or [])
+    assert "hfa-join-mail-1" in dirty
+    assert "hfa-join-mail-1" in rep.publish_uids
+    assert adapter.ingest_kwargs.get("catch_up") is not True
