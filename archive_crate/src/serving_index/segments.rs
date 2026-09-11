@@ -208,11 +208,20 @@ fn edge_key(edge: &EdgeRow) -> (String, String, String, String) {
     )
 }
 
-fn drop_incident(
+fn drop_uids(
+    cards: &mut HashMap<String, CardMeta>,
+    chunks: &mut HashMap<String, LiveChunk>,
     edges: &mut HashMap<(String, String, String, String), EdgeRow>,
-    uid: &str,
+    drop: &HashSet<String>,
 ) {
-    edges.retain(|(src, tgt, _, _), _| src != uid && tgt != uid);
+    if drop.is_empty() {
+        return;
+    }
+    for uid in drop {
+        cards.remove(uid);
+    }
+    chunks.retain(|_, chunk| !drop.contains(&chunk.card_uid));
+    edges.retain(|(src, tgt, _, _), _| !drop.contains(src) && !drop.contains(tgt));
 }
 
 fn spec_space(spec: &serde_json::Value) -> Option<(String, String, String, String, String, i64)> {
@@ -280,25 +289,23 @@ pub fn resolve_live(index_root: &Path, active_gid: &str) -> PyResult<ResolvedLiv
         chain_ids.push(gid.clone());
         embedding_spec = check_spec_compat(embedding_spec.as_ref(), layout.embedding_spec.as_ref())?;
 
+        let mut drop: HashSet<String> = HashSet::new();
         for uid in &layout.tombstone_uids {
             let uid = uid.trim();
             if uid.is_empty() {
                 continue;
             }
             tombstoned.insert(uid.to_string());
-            cards.remove(uid);
-            chunks.retain(|_, chunk| chunk.card_uid != uid);
-            drop_incident(&mut edges, uid);
+            drop.insert(uid.to_string());
         }
         for uid in &layout.replaced_uids {
             let uid = uid.trim();
             if uid.is_empty() || tombstoned.contains(uid) {
                 continue;
             }
-            cards.remove(uid);
-            chunks.retain(|_, chunk| chunk.card_uid != uid);
-            drop_incident(&mut edges, uid);
+            drop.insert(uid.to_string());
         }
+        drop_uids(&mut cards, &mut chunks, &mut edges, &drop);
         for key in &layout.tombstone_chunk_keys {
             let key = key.trim();
             if !key.is_empty() {
@@ -513,6 +520,64 @@ mod tests {
         let live = resolve_live(&root, "delta").unwrap();
         assert_eq!(live.cards["msg"].summary, "new");
         assert_eq!(live.live_chunk_keys, HashSet::from(["ck-new".to_string()]));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn many_replacements_drop_incident_edges_in_one_pass() {
+        let root = std::env::temp_dir().join(format!("ppa-seg-many-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let mut cards = String::from("{\"card_uid\":\"keep\",\"summary\":\"Keep\"}\n");
+        let mut chunks = String::from(
+            "{\"chunk_key\":\"ck-keep\",\"card_uid\":\"keep\",\"chunk_type\":\"body\",\"chunk_index\":0}\n",
+        );
+        let mut edges =
+            String::from("{\"source_uid\":\"keep\",\"target_uid\":\"keep\",\"edge_type\":\"self\",\"field_name\":\"body\"}\n");
+        let mut replaced = Vec::new();
+        for i in 0..80 {
+            let uid = format!("gone-{i}");
+            cards.push_str(&format!("{{\"card_uid\":\"{uid}\",\"summary\":\"Gone\"}}\n"));
+            chunks.push_str(&format!(
+                "{{\"chunk_key\":\"ck-{uid}\",\"card_uid\":\"{uid}\",\"chunk_type\":\"body\",\"chunk_index\":0}}\n"
+            ));
+            edges.push_str(&format!(
+                "{{\"source_uid\":\"keep\",\"target_uid\":\"{uid}\",\"edge_type\":\"mentions\",\"field_name\":\"body\"}}\n"
+            ));
+            replaced.push(format!("\"{uid}\""));
+        }
+        write_gen(
+            &root,
+            "base",
+            r#"{"layout_version":1,"mode":"full"}"#,
+            &cards,
+            &chunks,
+            &edges,
+        );
+        write_gen(
+            &root,
+            "delta",
+            &format!(
+                r#"{{"layout_version":1,"mode":"delta","parent_generation":"base","replaced_uids":[{}]}}"#,
+                replaced.join(",")
+            ),
+            "{\"card_uid\":\"gone-0\",\"summary\":\"new\"}\n",
+            "{\"chunk_key\":\"ck-gone-0-new\",\"card_uid\":\"gone-0\",\"chunk_type\":\"body\",\"chunk_index\":0}\n",
+            "",
+        );
+        let live = resolve_live(&root, "delta").unwrap();
+        assert!(live.live_uids.contains("keep"));
+        assert_eq!(live.cards["gone-0"].summary, "new");
+        assert!(!live.live_uids.contains("gone-1"));
+        assert!(live.live_chunk_keys.contains("ck-keep"));
+        assert!(live.live_chunk_keys.contains("ck-gone-0-new"));
+        assert!(!live.live_chunk_keys.contains("ck-gone-0"));
+        assert_eq!(live.edges.len(), 1);
+        assert!(live.edges.contains_key(&(
+            "keep".to_string(),
+            "keep".to_string(),
+            "self".to_string(),
+            "body".to_string()
+        )));
         let _ = fs::remove_dir_all(&root);
     }
 

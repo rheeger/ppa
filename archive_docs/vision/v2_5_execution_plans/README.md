@@ -1,6 +1,8 @@
 # PPA v2.5 Execution Plans - Agent Handoff
 
-This directory is the implementation entrypoint for v2.5. A zero-context agent should read this file first, then `../v2.5vision.md`, then the section plans in the order below.
+**Living status:** [STATUS.md](../../STATUS.md). This directory is the A–H implementation handoff frozen at local close-out `5980464`. Ten-plan hardening (PR 29) and PRs 24–33 landed after. Do not re-implement A–H. Do not treat “Arnold is down / do not deploy” as a ban on Arnold as an HTTP MCP *client*.
+
+This directory was the implementation entrypoint for v2.5 sections A–H. A zero-context agent should read [STATUS.md](../../STATUS.md) first, then `../v2.5vision.md`, then these plans only if they are changing hygiene or updater contracts.
 
 v2.5 implementation is production-sensitive. Do not deploy Arnold. Do not copy this seed. Do not start by writing broad migrations. Do not run expensive corpus jobs before the relevant dry-run/report gate exists.
 

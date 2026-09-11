@@ -37,3 +37,9 @@ summaries. An alias-only `archive_person` hit is not the person.
 
 Use `_json` variants (`archive_search_json`, `archive_hybrid_search_json`,
 `archive_status_json`) when available. Structured output is easier to parse.
+
+## Long jobs (not retrieval)
+
+`maintain`, rebuild, embed, slice, enrich, extract, and Gmail walks go
+through `.cursor/skills/long-running-jobs/SKILL.md`. Detached `setsid`
+session only. Never a Cursor-managed terminal.

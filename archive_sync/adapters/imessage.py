@@ -1000,7 +1000,7 @@ class IMessageAdapter(BaseAdapter):
 
         raise ValueError(f"Unsupported iMessage record kind: {kind}")
 
-    def merge_card(self, vault_path, rel_path, card, body, provenance) -> None:
+    def merge_card(self, vault_path, rel_path, card, body, provenance) -> bool:
         if card.type == "imessage_thread":
             frontmatter, existing_body, existing_provenance = read_note(vault_path, str(rel_path))
             existing_card = validate_card_permissive(frontmatter)
@@ -1080,18 +1080,21 @@ class IMessageAdapter(BaseAdapter):
 
             if changed:
                 merged_data["updated"] = date.today().isoformat()
+            if not changed:
+                return False
 
             merged_card = validate_card_strict(merged_data)
             merged_provenance = merge_provenance(existing_provenance, provenance)
             write_card(vault_path, str(rel_path), merged_card, body=body or existing_body, provenance=merged_provenance)
-            return
+            return True
 
         if card.type == "imessage_message":
-            self._replace_generic_card(vault_path, rel_path, card, body, provenance)
-            _touch_parent_thread(vault_path, card, increment=False)
-            return
+            wrote = self._replace_generic_card(vault_path, rel_path, card, body, provenance)
+            if wrote:
+                _touch_parent_thread(vault_path, card, increment=False)
+            return wrote
 
-        self._replace_generic_card(vault_path, rel_path, card, body, provenance)
+        return self._replace_generic_card(vault_path, rel_path, card, body, provenance)
 
 
 def _touch_parent_thread(vault_path: str | Path, card: Any, *, increment: bool) -> None:

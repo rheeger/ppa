@@ -23,13 +23,15 @@ AGENTS.md. Edit the skill file, then keep the MCP router in sync.
 
 1. High-level system: PPA is a retrieval engine; cards are truth; search is navigation.
 2. Job router with stop tests (candidate person cards, channel census, stolen aliases).
-3. Don'ts (underscore types, people_filter is a name, ground with reads).
+3. Don'ts (underscore types, people_filter is a name or slug, ground with
+   reads). `archive_person` accepts name, slug, email, or phone.
 4. Per-tool parameter recipes when the agent inspects a tool.
 
 ## CLI parity (no MCP)
 
-`ppa search`, `ppa query`, `ppa hybrid-search`, `ppa read`, `ppa graph`, `ppa health`,
-`ppa status` — same retrieval family as the MCP tools. They are **not** one command:
+`ppa search`, `ppa query`, `ppa hybrid-search`, `ppa analytics`, `ppa read`,
+`ppa graph`, `ppa health`, `ppa status` — same retrieval family as the MCP tools.
+They are **not** one command:
 `ppa health` is structural/behavioral checks; `ppa status` / `archive_status_json`
 are current-instance production status; `archive_stats` is corpus counts.
 
@@ -38,3 +40,8 @@ are current-instance production status; `archive_stats` is corpus counts.
 `archive_rebuild_indexes`, `archive_embed_pending`, seed-link tools, and similar are
 operational. Do not use them as a reasoning shortcut. Chunk rows power vector/hybrid
 search; they are not canonical evidence.
+
+Long CLI jobs (`maintain`, `rebuild-indexes`, `embed-pending`, `slice-seed`,
+`enrich-emails`, `extract-emails`, Gmail catch-up) must start detached:
+`setsid`, stdin from `/dev/null`, PPID 1, `--log-file` before the subcommand.
+Never a Cursor-managed terminal. See `.cursor/skills/long-running-jobs/SKILL.md`.

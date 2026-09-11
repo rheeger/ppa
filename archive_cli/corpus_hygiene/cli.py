@@ -27,6 +27,7 @@ from archive_cli.validation_gates.instance_identity import derive_archive_instan
 from .apply import apply_from_decisions_path
 from .census import (
     CensusContext,
+    filter_threads_since,
     load_card_classifications_from_db,
     load_threads_from_vault_cache,
     run_email_census_dry_run,
@@ -123,6 +124,11 @@ def cmd_email_census(args: argparse.Namespace) -> int:
         return EXIT_REFUSED
 
     threads = load_threads_from_vault_cache(store.vault)
+    since = str(getattr(args, "since", "") or "").strip()
+    if since:
+        before = len(threads)
+        threads = filter_threads_since(threads, since)
+        print(f"date scope since={since} threads={len(threads)} of {before}", file=sys.stderr)
     context = CensusContext(
         vault_path=str(store.vault),
         index_schema=store.index.schema,
@@ -132,6 +138,7 @@ def cmd_email_census(args: argparse.Namespace) -> int:
         ladder_gate=ladder,
         decision_run_id=decision_run_id,
         allow_new_llm=args.allow_new_llm,
+        since=since,
     )
 
     with store.index._connect() as conn:
@@ -344,6 +351,11 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         "--allow-new-llm",
         action="store_true",
         help="Opt-in to new LLM classification for missing threads (expensive)",
+    )
+    p_census.add_argument(
+        "--since",
+        default="",
+        help="Only threads with first or last message on or after YYYY-MM-DD (vault cards, not a Gmail walk)",
     )
     p_census.set_defaults(func=cmd_email_census)
 

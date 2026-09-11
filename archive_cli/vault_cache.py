@@ -744,6 +744,103 @@ class VaultScanCache:
     def vault_fingerprint(self) -> str:
         return self._vault_fingerprint
 
+    def refresh_paths(self, vault: Path, rel_paths: list[str], *, tier: int | None = None) -> int:
+        """Reparse ``rel_paths`` into this cache and stamp fingerprint from the notes table."""
+
+        vault = Path(vault).resolve()
+        wanted = [str(path).strip().replace("\\", "/") for path in rel_paths if str(path).strip()]
+        if not wanted:
+            return 0
+        use_tier = int(tier or self._tier)
+        batch: list[tuple[Any, ...]] = []
+        missing = 0
+        with self._lock:
+            for rel_path in wanted:
+                target = vault / rel_path
+                try:
+                    st = target.stat()
+                except OSError:
+                    missing += 1
+                    continue
+                mtime_ns = getattr(st, "st_mtime_ns", int(st.st_mtime * 1_000_000_000))
+                file_size = int(st.st_size)
+                if use_tier >= 2:
+                    note = read_note_file(target, vault_root=vault)
+                    fm = note.frontmatter
+                    card = validate_card_permissive(fm)
+                    body_b = zlib.compress(note.body.encode("utf-8"), level=ZLIB_LEVEL)
+                    ch = _content_hash(fm, note.body)
+                    wikis = json.dumps(list(extract_wikilinks(note.body)))
+                    raw_hex = hashlib.sha256(note.content.encode("utf-8")).hexdigest()
+                    batch.append(
+                        (
+                            rel_path,
+                            str(card.uid).strip(),
+                            str(card.type or ""),
+                            Path(rel_path).stem,
+                            mtime_ns,
+                            file_size,
+                            json.dumps(fm, sort_keys=True, default=str),
+                            _frontmatter_hash_stable(fm),
+                            body_b,
+                            ch,
+                            wikis,
+                            raw_hex,
+                        )
+                    )
+                else:
+                    note = read_note_frontmatter_file(target, vault_root=vault)
+                    fm = note.frontmatter
+                    card = validate_card_permissive(fm)
+                    batch.append(
+                        (
+                            rel_path,
+                            str(card.uid).strip(),
+                            str(card.type or ""),
+                            Path(rel_path).stem,
+                            mtime_ns,
+                            file_size,
+                            json.dumps(fm, sort_keys=True, default=str),
+                            _frontmatter_hash_stable(fm),
+                            None,
+                            None,
+                            None,
+                            None,
+                        )
+                    )
+            if batch:
+                self._conn.executemany(
+                    """
+                    INSERT OR REPLACE INTO notes (
+                        rel_path, uid, card_type, slug, mtime_ns, file_size,
+                        frontmatter_json, frontmatter_hash, body_compressed, content_hash, wikilinks_json,
+                        raw_content_sha256
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    batch,
+                )
+            rows = [
+                (str(rel), int(mtime_ns), int(file_size))
+                for rel, mtime_ns, file_size in self._conn.execute(
+                    "SELECT rel_path, mtime_ns, file_size FROM notes"
+                )
+            ]
+            rows.sort(key=lambda item: item[0])
+            fp = hashlib.sha256(
+                "\n".join(f"{rel}\t{mtime_ns}\t{file_size}" for rel, mtime_ns, file_size in rows).encode("utf-8")
+            ).hexdigest()
+            _meta_set(self._conn, "vault_fingerprint", fp)
+            _meta_set(self._conn, "tier", str(max(use_tier, self._tier)))
+            _meta_set(self._conn, "cache_version", str(CACHE_VERSION))
+            _meta_set(self._conn, "note_count", str(len(rows)))
+            self._conn.commit()
+            self._vault_fingerprint = fp
+            if use_tier > self._tier:
+                self._tier = use_tier
+        if missing:
+            logger.info("vault-cache refresh_paths missing=%s rebuilt=%s", missing, len(batch))
+        return len(batch)
+
     def uid_to_rel_path(self) -> dict[str, str]:
         with self._lock:
             rows = self._conn.execute("SELECT uid, rel_path FROM notes WHERE uid != ''").fetchall()
@@ -767,6 +864,35 @@ class VaultScanCache:
             return None
         return str(row[0])
 
+    def note_for_uid(self, uid: str) -> tuple[str, dict[str, Any], str | None] | None:
+        """Point lookup of rel_path, frontmatter, and body when tier-2 stored it.
+
+        Body is ``None`` on a tier-1 row. Never dumps the notes table.
+        """
+
+        value = str(uid or "").strip()
+        if not value:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT rel_path, frontmatter_json, body_compressed FROM notes WHERE uid = ? LIMIT 1",
+                (value,),
+            ).fetchone()
+        if not row or not row[0]:
+            return None
+        fm: dict[str, Any] = {}
+        if row[1]:
+            try:
+                parsed = json.loads(row[1])
+            except json.JSONDecodeError:
+                parsed = {}
+            if isinstance(parsed, dict):
+                fm = parsed
+        body: str | None = None
+        if row[2] is not None:
+            body = zlib.decompress(row[2]).decode("utf-8")
+        return str(row[0]), fm, body
+
     def uid_for_rel_path(self, rel_path: str) -> str:
         """Point lookup — never dump the notes table."""
 
@@ -781,6 +907,48 @@ class VaultScanCache:
         if not row or not row[0]:
             return ""
         return str(row[0])
+
+    def frontmatter_rows_for_card_types(
+        self,
+        card_types: set[str] | frozenset[str] | list[str],
+    ) -> list[dict[str, Any]]:
+        """One query of uid / rel_path / frontmatter for the given card types."""
+
+        wanted = sorted({str(ct).strip() for ct in card_types if str(ct).strip()})
+        if not wanted:
+            return []
+        out: list[dict[str, Any]] = []
+        placeholders = ",".join("?" * len(wanted))
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT uid, rel_path, card_type, frontmatter_json FROM notes WHERE card_type IN ({placeholders})",
+                wanted,
+            ).fetchall()
+        for uid_raw, rel_raw, _card_type, fj_raw in rows:
+            fm: dict[str, Any] = {}
+            if fj_raw:
+                try:
+                    parsed = json.loads(fj_raw)
+                except json.JSONDecodeError:
+                    parsed = {}
+                if isinstance(parsed, dict):
+                    fm = parsed
+            out.append({"uid": str(uid_raw), "rel_path": str(rel_raw), "frontmatter": fm})
+        return out
+
+    def frontmatter_rows_for_card_type(self, card_type: str) -> list[dict[str, Any]]:
+        return self.frontmatter_rows_for_card_types([card_type])
+
+    def stamp_vault_fingerprint(self, fingerprint: str) -> None:
+        """Write ``vault_fingerprint`` on this connection. Does not open a sidecar."""
+
+        fp = str(fingerprint or "").strip()
+        if not fp:
+            return
+        with self._lock:
+            _meta_set(self._conn, "vault_fingerprint", fp)
+            self._conn.commit()
+            self._vault_fingerprint = fp
 
     def frontmatter_rows_for_uids(self, uids: set[str] | frozenset[str] | list[str]) -> list[dict[str, Any]]:
         """One IN-query dump of uid / rel_path / frontmatter for the given UIDs."""

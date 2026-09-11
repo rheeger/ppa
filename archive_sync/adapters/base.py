@@ -354,7 +354,7 @@ class BaseAdapter(ABC):
         card: BaseCard,
         body: str,
         provenance: dict[str, ProvenanceEntry],
-    ) -> None:
+    ) -> bool:
         frontmatter, existing_body, existing_provenance = read_note(vault_path, str(rel_path))
         existing_card = validate_card_permissive(frontmatter)
         merged_data = existing_card.model_dump(mode="python")
@@ -397,6 +397,8 @@ class BaseAdapter(ABC):
             changed = True
         if changed:
             merged_data["updated"] = date.today().isoformat()
+        if not changed:
+            return False
 
         if overrides:
             merged_data, _ = overlay_overrides(merged_data, overrides)
@@ -407,6 +409,7 @@ class BaseAdapter(ABC):
             protected_fields=protected,
         )
         self._write_canonical_card(vault_path, rel_path, merged_card, merged_body, merged_provenance)
+        return True
 
     def _write_canonical_card(
         self,
@@ -431,7 +434,7 @@ class BaseAdapter(ABC):
         card: BaseCard,
         body: str,
         provenance: dict[str, ProvenanceEntry],
-    ) -> None:
+    ) -> bool:
         frontmatter, existing_body, existing_provenance = read_note(vault_path, str(rel_path))
         existing_card = validate_card_permissive(frontmatter)
         merged_data = existing_card.model_dump(mode="python")
@@ -451,7 +454,7 @@ class BaseAdapter(ABC):
         for field_name, incoming_value in incoming_data.items():
             if field_name in protected:
                 continue
-            if field_name in {"uid", "type", "source_id", "created"}:
+            if field_name in {"uid", "type", "source_id", "created", "updated"}:
                 continue
             if field_name == "source":
                 merged_source: list[Any] = []
@@ -482,6 +485,8 @@ class BaseAdapter(ABC):
             changed = True
         if changed:
             merged_data["updated"] = date.today().isoformat()
+        if not changed:
+            return False
 
         if overrides:
             merged_data, _ = overlay_overrides(merged_data, overrides)
@@ -492,6 +497,7 @@ class BaseAdapter(ABC):
             protected_fields=protected,
         )
         self._write_canonical_card(vault_path, rel_path, merged_card, merged_body, merged_provenance)
+        return True
 
     def merge_card(
         self,
@@ -500,8 +506,8 @@ class BaseAdapter(ABC):
         card: BaseCard,
         body: str,
         provenance: dict[str, ProvenanceEntry],
-    ) -> None:
-        self._merge_generic_card(vault_path, rel_path, card, body, provenance)
+    ) -> bool:
+        return self._merge_generic_card(vault_path, rel_path, card, body, provenance)
 
     def after_card_write(
         self,
@@ -720,7 +726,14 @@ class BaseAdapter(ABC):
                     existing_rel_path = candidate_rel_path
             if existing_rel_path is not None:
                 if not dry_run:
-                    self.merge_card(vault, existing_rel_path, card, prepared.body, prepared.provenance)
+                    wrote = self.merge_card(vault, existing_rel_path, card, prepared.body, prepared.provenance)
+                    if wrote is False:
+                        result.skipped += 1
+                        result.skip_details["unchanged"] = result.skip_details.get("unchanged", 0) + 1
+                        processed_successfully += 1
+                        existing_uid_index[card.uid] = existing_rel_path
+                        _checkpoint(prepared.raw_item, card, prepared.item_index)
+                        return "skip-unchanged"
                     self.after_card_write(
                         vault,
                         card,

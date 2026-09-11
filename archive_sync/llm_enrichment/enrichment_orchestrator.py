@@ -305,10 +305,22 @@ class EnrichmentOrchestrator:
         t0 = time.perf_counter()
         _, _, new_fp = _compute_fingerprint_with_paths(self.vault_path)
 
-        conn = sqlite3.connect(str(cache_path), timeout=60.0)
-        conn.execute("INSERT OR REPLACE INTO cache_meta (key, value) VALUES ('vault_fingerprint', ?)", (new_fp,))
-        conn.commit()
-        conn.close()
+        try:
+            from archive_cli.vault_cache_runtime import peek_process_cache
+
+            warm = peek_process_cache(self.vault_path)
+        except Exception:
+            warm = None
+        if warm is not None:
+            warm.stamp_vault_fingerprint(new_fp)
+        else:
+            conn = sqlite3.connect(str(cache_path), timeout=60.0)
+            conn.execute(
+                "INSERT OR REPLACE INTO cache_meta (key, value) VALUES ('vault_fingerprint', ?)",
+                (new_fp,),
+            )
+            conn.commit()
+            conn.close()
         log.info(
             "vault-cache fingerprint refreshed in %.1fs (skip full rebuild for next step)",
             time.perf_counter() - t0,

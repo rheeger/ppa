@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from archive_cli.commands.admin import embed_gc as embed_gc_cmd
+from archive_cli.commands.admin import embed_gc_after_reunify
 from archive_cli.embedder import EmbedderMixin
 from archive_cli.index_config import _vector_literal
 from archive_cli.index_store import PostgresArchiveIndex
@@ -232,6 +233,82 @@ def test_embed_gc_keeps_reusable_and_unknown_orphans(
     assert keys == {"live", "unknown", "reusable"}
 
 
+@pytest.mark.integration
+def test_embed_gc_unknown_deletes_empty_hash_leftovers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pgvector_dsn: str
+) -> None:
+    index = _bootstrap(tmp_path, monkeypatch, pgvector_dsn)
+    with index._connect() as conn:
+        _insert_chunk(conn, index.schema, key="live", uid="card-live", index=0, content_hash="keep-hash")
+        _insert_embedding(
+            conn,
+            index.schema,
+            key="live",
+            dim=8,
+            fill=0.1,
+            content_hash="keep-hash",
+            uid="card-live",
+        )
+        _insert_embedding(conn, index.schema, key="unknown", dim=8, fill=0.2)
+        _insert_embedding(conn, index.schema, key="reusable", dim=8, fill=0.3, content_hash="keep-hash")
+        conn.commit()
+    store = DefaultArchiveStore(vault=tmp_path, index=index)
+    import logging
+
+    result = embed_gc_cmd(
+        store=store,
+        logger=logging.getLogger("test"),
+        dry_run=False,
+        unknown=True,
+        embedding_model="reuse-hash",
+        embedding_version=1,
+    )
+    assert result["deleted"] == 1
+    with index._connect() as conn:
+        keys = {
+            str(row["chunk_key"]) for row in conn.execute(f"SELECT chunk_key FROM {index.schema}.embeddings").fetchall()
+        }
+    assert keys == {"live", "reusable"}
+
+
+@pytest.mark.integration
+def test_embed_gc_after_reunify_deletes_duplicates_and_unused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pgvector_dsn: str
+) -> None:
+    index = _bootstrap(tmp_path, monkeypatch, pgvector_dsn)
+    with index._connect() as conn:
+        _insert_chunk(conn, index.schema, key="live", uid="card-live", index=0, content_hash="keep-hash")
+        _insert_embedding(
+            conn,
+            index.schema,
+            key="live",
+            dim=8,
+            fill=0.1,
+            content_hash="keep-hash",
+            uid="card-live",
+        )
+        _insert_embedding(conn, index.schema, key="unknown", dim=8, fill=0.2)
+        _insert_embedding(conn, index.schema, key="duplicate", dim=8, fill=0.3, content_hash="keep-hash")
+        _insert_embedding(conn, index.schema, key="dead", dim=8, fill=0.4, content_hash="unused-hash")
+        conn.commit()
+    store = DefaultArchiveStore(vault=tmp_path, index=index)
+    import logging
+
+    result = embed_gc_after_reunify(
+        store=store,
+        logger=logging.getLogger("test"),
+        embedding_model="reuse-hash",
+        embedding_version=1,
+    )
+    assert result["duplicates"]["deleted"] == 1
+    assert result["unused_hash"]["deleted"] == 1
+    with index._connect() as conn:
+        keys = {
+            str(row["chunk_key"]) for row in conn.execute(f"SELECT chunk_key FROM {index.schema}.embeddings").fetchall()
+        }
+    assert keys == {"live", "unknown"}
+
+
 def _write_generation(dest: Path, *, chunks: list[str], keys: list[str], namespace: str) -> None:
     dest.mkdir(parents=True, exist_ok=True)
     spec = EmbeddingSpec(
@@ -344,6 +421,89 @@ def test_prior_schema_remap_copies_v5_vector(
             (new_key,),
         ).fetchone()
     assert row["content_hash"] == new_hash
+
+
+@pytest.mark.integration
+def test_scoped_embed_pending_reuses_reminted_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pgvector_dsn: str
+) -> None:
+    from archive_cli.embedding_provider import HashEmbeddingProvider
+    from archive_cli.engine_factory import embedding_spec_from_env
+
+    index = _bootstrap(tmp_path, monkeypatch, pgvector_dsn)
+    with index._connect() as conn:
+        _insert_chunk(conn, index.schema, key="old-key", uid="card-remint", index=0, content_hash="hash-same")
+        _insert_embedding(
+            conn,
+            index.schema,
+            key="old-key",
+            dim=8,
+            fill=0.33,
+            content_hash="hash-same",
+            uid="card-remint",
+        )
+        conn.execute(f"DELETE FROM {index.schema}.chunks WHERE chunk_key = 'old-key'")
+        _insert_chunk(conn, index.schema, key="new-key", uid="card-remint", index=0, content_hash="hash-same")
+        conn.commit()
+
+    class CountingHash:
+        name = "hash"
+
+        def __init__(self) -> None:
+            self.inner = HashEmbeddingProvider(model="reuse-hash", dimension=8)
+            self.model = "reuse-hash"
+            self.dimension = 8
+            self.calls = 0
+
+        def embed_texts(self, texts: list[str]) -> list[list[float]]:
+            self.calls += 1
+            return self.inner.embed_texts(texts)
+
+    provider = CountingHash()
+    first = index.embed_pending(
+        provider=provider,
+        embedding_model="reuse-hash",
+        embedding_version=1,
+        limit=0,
+        include_context_prefix=False,
+        uid_allowlist={"card-remint"},
+        embedding_spec=embedding_spec_from_env(),
+    )
+    assert first.get("reused_by_content") == 1
+    assert first["embedded"] == 0
+    assert provider.calls == 0
+    second = index.embed_pending(
+        provider=provider,
+        embedding_model="reuse-hash",
+        embedding_version=1,
+        limit=0,
+        include_context_prefix=False,
+        uid_allowlist={"card-remint"},
+        embedding_spec=embedding_spec_from_env(),
+    )
+    assert second["embedded"] == 0
+    assert second.get("reused_by_content") == 0
+    assert provider.calls == 0
+
+
+def test_attach_skips_remap_when_nothing_is_pending() -> None:
+    class Fake(EmbedderMixin):
+        schema = "ppa"
+
+        def backfill_embedding_content_identity(self) -> None:
+            return None
+
+        def _count_pending_chunks(self, **_kwargs) -> int:
+            return 0
+
+        def remap_embeddings_by_prior_schema(self, **_kwargs):
+            raise AssertionError("remap must not run when pending is 0")
+
+        def reuse_embeddings_by_content(self, **_kwargs):
+            raise AssertionError("reuse must not run when pending is 0")
+
+    result = Fake().attach_embeddings_after_rematerialize(fail_if_thin=False)
+    assert result == {"remapped": 0, "reused": 0, "pending_after": 0}
 
 
 def test_reuse_methods_are_on_embedder_mixin() -> None:

@@ -29,7 +29,7 @@ A new instance does **not** inherit `local_seed_living_corpus`. That leftover is
 
 ## Analytics
 
-CLI/MCP narrative workflows are **pending** (P10). They were not present on P09-C. P04-D closes capability status on the integrated SHA. Do not treat `ppa status` analytics cells as shipped.
+At P09-D write time, narrative workflows were still pending. **P10-D / PR 29 shipped** `ppa analytics` / `archive_analytics`. Treat this section as historical. Current status: [STATUS.md](../STATUS.md).
 
 ## Platform leftovers (from P09-C, still unresolved)
 

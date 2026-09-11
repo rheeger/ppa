@@ -1,9 +1,11 @@
 # PPA roadmap rebase
 
+**Superseded as the living map on 2026-09-09.** Read [STATUS.md](STATUS.md) and [PRODUCT_CAPABILITY_MATRIX.md](PRODUCT_CAPABILITY_MATRIX.md) first. This file is a P09-A inventory (`d36663b`, 2026-09-06). Analytics, AccessContext, bursts/RRF, saved scopes, and the ten-plan hardening (PR 29) landed after it.
+
 **Slice:** P09-A. **Inventory date:** 2026-09-06. **Baseline SHA:** `d36663b`.  
 **Inputs:** this repository’s code, tests, runtime/MCP docs, and v2 / v2.5 / v3 / v4 vision files. No external attachments.
 
-This document maps **historical phase claims** to **current code**. P09-D rewrote the public-doc paragraphs listed below; treat those files as current unless a later slice supersedes them.
+This document mapped **historical phase claims** to **then-current code**. Keep it for archaeology. Do not use the “Deferred to P10” analytics row or the “person lookup is name/slug only” implication as current truth.
 
 ## How to use this rebase
 

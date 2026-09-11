@@ -59,10 +59,11 @@ def test_build_maintain_argv_flags() -> None:
         "/tmp/logs/ppa-maintain-nightly-20260830.log",
         "maintain",
     ]
-    assert "--run-source-updaters" in argv
-    assert "--apply-source-updaters" in argv
-    assert "--run-processors" in argv
-    assert "--apply-processors" in argv
+    assert "--apply" in argv
+    assert "--run-source-updaters" not in argv
+    assert "--apply-source-updaters" not in argv
+    assert "--run-processors" not in argv
+    assert "--apply-processors" not in argv
     assert "--catch-up" not in argv
     assert "--allow-full-embedding" not in argv
     assert "--allow-all-linkers" not in argv
@@ -126,8 +127,9 @@ def test_dry_run_exits_zero(tmp_path: Path, monkeypatch, caplog) -> None:
     with caplog.at_level(logging.INFO, logger="ppa"):
         rc = mod.main(["--dry-run"])
     assert rc == 0
-    text = caplog.text
-    assert "--run-source-updaters" in text
+    log_file = mod.default_log_path(REPO_ROOT)
+    text = log_file.read_text(encoding="utf-8") if log_file.is_file() else caplog.text
+    assert "--apply" in text
     assert "--allow-broad-llm" in text
     assert "--catch-up" not in text
     assert "photos" not in text.lower() or "parked" in text.lower()

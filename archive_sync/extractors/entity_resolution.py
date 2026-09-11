@@ -74,6 +74,45 @@ PERSON_RESOLVABLE_CARD_TYPES = DERIVED_ENTITY_CARD_TYPES | frozenset(
 )
 
 
+def _frontmatter_from_scan_rows(
+    rows: list[dict[str, Any]],
+    *,
+    types_set: frozenset[str],
+    allowed: set[str] | None,
+    vault_path: str | Path,
+) -> list[dict[str, Any]]:
+    """Build resolver frontmatter from cache rows. Missing allowlist UIDs use point lookup."""
+
+    out: list[dict[str, Any]] = []
+    found: set[str] = set()
+    for row in rows:
+        fm = dict(row.get("frontmatter") or {})
+        uid = str(fm.get("uid") or row.get("uid") or "")
+        if allowed is not None and uid not in allowed:
+            continue
+        if uid:
+            found.add(uid)
+        fm["_rel_path"] = row.get("rel_path")
+        out.append(fm)
+    if allowed is None:
+        return out
+    from archive_vault.vault import read_note_by_uid
+
+    for uid in allowed:
+        if uid in found:
+            continue
+        note = read_note_by_uid(vault_path, uid)
+        if note is None:
+            continue
+        rel, fm, _body, _prov = note
+        if str(fm.get("type") or "") not in types_set:
+            continue
+        payload = dict(fm)
+        payload["_rel_path"] = str(rel)
+        out.append(payload)
+    return out
+
+
 def iter_derived_card_dicts(
     vault_path: str,
     *,
@@ -82,16 +121,28 @@ def iter_derived_card_dicts(
 ) -> list[dict[str, Any]]:
     """Load frontmatter dicts for card types that feed entity resolution.
 
-    *card_types* defaults to ``PERSON_RESOLVABLE_CARD_TYPES`` (derived entity types + finance).
-    *uid_allowlist* restricts the scan to those card UIDs (same pattern as
-    ``ExtractionRunner.uid_allowlist``).
-
-    When ``PPA_ENGINE=rust`` and a tier-2 cache exists, reads frontmatter directly from SQLite
-    via ``archive_crate.frontmatter_dicts_from_cache`` — no per-note file I/O.
+    Prefer the warm process cache. A cache file that fails to open does not
+    fall through to a full vault walk.
     """
+
     types_set = card_types or PERSON_RESOLVABLE_CARD_TYPES
     allowed = set(uid_allowlist) if uid_allowlist is not None else None
     vault = Path(vault_path)
+
+    try:
+        from archive_cli.vault_cache_runtime import peek_process_cache
+
+        warm = peek_process_cache(vault)
+    except Exception:
+        warm = None
+    if warm is not None:
+        return _frontmatter_from_scan_rows(
+            warm.frontmatter_rows_for_card_types(types_set),
+            types_set=types_set,
+            allowed=allowed,
+            vault_path=vault_path,
+        )
+
     if ppa_engine() == "rust":
         from archive_vault.vault import _tier2_cache_path
 
@@ -104,35 +155,26 @@ def iter_derived_card_dicts(
                     str(cache_path),
                     types=list(types_set),
                 )
-                out: list[dict[str, Any]] = []
-                found: set[str] = set()
-                for row in rows:
-                    fm = dict(row["frontmatter"])
-                    uid = str(fm.get("uid") or "")
-                    if allowed is not None and uid not in allowed:
-                        continue
-                    if uid:
-                        found.add(uid)
-                    fm["_rel_path"] = row["rel_path"]
-                    out.append(fm)
-                if allowed is not None:
-                    missing = [uid for uid in allowed if uid not in found]
-                    if missing:
-                        from archive_vault.vault import read_note_by_uid
-
-                        for uid in missing:
-                            note = read_note_by_uid(vault_path, uid)
-                            if note is None:
-                                continue
-                            rel, fm, _body, _prov = note
-                            if str(fm.get("type") or "") not in types_set:
-                                continue
-                            payload = dict(fm)
-                            payload["_rel_path"] = str(rel)
-                            out.append(payload)
-                return out
-            except Exception:
-                pass
+                return _frontmatter_from_scan_rows(
+                    [{"rel_path": row["rel_path"], "frontmatter": row["frontmatter"]} for row in rows],
+                    types_set=types_set,
+                    allowed=allowed,
+                    vault_path=vault_path,
+                )
+            except Exception as exc:
+                log.warning(
+                    "entity_resolution cache read failed cache=%s error=%s; not walking vault",
+                    cache_path,
+                    exc,
+                )
+                if allowed:
+                    return _frontmatter_from_scan_rows(
+                        [],
+                        types_set=types_set,
+                        allowed=allowed,
+                        vault_path=vault_path,
+                    )
+                return []
 
     out = []
     found: set[str] = set()

@@ -14,7 +14,7 @@ import subprocess
 import threading
 import zipfile
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import date, datetime, timezone
 from email import policy
@@ -379,6 +379,37 @@ def _sha256_file(path: Path) -> str:
                 break
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _is_unchanged_source_file(
+    existing: Mapping[str, set[str]],
+    source_id: str,
+    content_sha: str,
+) -> bool:
+    """True when this file's bytes already sit on a card for ``source_id``."""
+
+    sha = (content_sha or "").strip().lower()
+    if not sha or not source_id:
+        return False
+    known = existing.get(source_id) or set()
+    return sha in {item.strip().lower() for item in known if item}
+
+
+def _is_unchanged_source_stat(
+    existing: Mapping[str, set[tuple[int, str]]],
+    source_id: str,
+    size_bytes: int,
+    file_modified_at: str,
+) -> bool:
+    """True when a card already stores this source file's size and mtime."""
+
+    if not source_id or size_bytes < 0:
+        return False
+    mtime = (file_modified_at or "").strip()
+    if not mtime:
+        return False
+    known = existing.get(source_id) or set()
+    return (int(size_bytes), mtime) in known
 
 
 def _iso_from_timestamp(timestamp: float) -> str:
@@ -1291,28 +1322,45 @@ class FileLibrariesAdapter(BaseAdapter):
             rows.append({"rel_path": rel, "frontmatter": fm})
         return rows
 
-    def _load_existing_hashes(self, vault_path: str) -> dict[str, str]:
-        hashes: dict[str, str] = {}
+    def _load_existing_file_identity(
+        self, vault_path: str
+    ) -> tuple[dict[str, set[str]], dict[str, set[tuple[int, str]]]]:
+        """``source_id`` → content hashes and (size, mtime) pairs on Documents/ cards."""
+
+        hashes: dict[str, set[str]] = {}
+        stats: dict[str, set[tuple[int, str]]] = {}
         documents_dir = Path(vault_path) / "Documents"
         if not documents_dir.exists():
-            return hashes
+            return hashes, stats
         rows = self._document_frontmatter_rows_from_cache(vault_path)
         started = perf_counter()
         total = len(rows)
         progress_every = 50_000
+        sha_count = 0
         for index, row in enumerate(rows, start=1):
             frontmatter = dict(row.get("frontmatter") or {})
             if str(frontmatter.get("type", "")).strip() != "document":
                 continue
             source_id = _clean(frontmatter.get("source_id", ""))
-            metadata_sha = _clean(frontmatter.get("metadata_sha", ""))
-            if source_id and metadata_sha:
-                hashes[source_id] = metadata_sha
+            content_sha = _clean(frontmatter.get("content_sha", "")).lower()
+            if source_id and content_sha:
+                bucket = hashes.setdefault(source_id, set())
+                if content_sha not in bucket:
+                    sha_count += 1
+                bucket.add(content_sha)
+            if source_id:
+                try:
+                    size_bytes = int(frontmatter.get("size_bytes") or 0)
+                except (TypeError, ValueError):
+                    size_bytes = 0
+                mtime = _clean(frontmatter.get("file_modified_at", ""))
+                if size_bytes > 0 and mtime:
+                    stats.setdefault(source_id, set()).add((size_bytes, mtime))
             if progress_every and total and index % progress_every == 0:
                 elapsed = max(perf_counter() - started, 0.0)
                 minutes, seconds = divmod(int(elapsed), 60)
                 logger.info(
-                    "document hash load rows=%d/%d (%.0f%%) elapsed=%d:%02d hashes=%d",
+                    "document identity load rows=%d/%d (%.0f%%) elapsed=%d:%02d sources=%d",
                     index,
                     total,
                     100.0 * index / total,
@@ -1323,12 +1371,23 @@ class FileLibrariesAdapter(BaseAdapter):
         elapsed = max(perf_counter() - started, 0.0)
         minutes, seconds = divmod(int(elapsed), 60)
         logger.info(
-            "document hash load done rows=%d hashes=%d elapsed=%d:%02d",
+            "document identity load done rows=%d sources=%d content_shas=%d elapsed=%d:%02d",
             total,
             len(hashes),
+            sha_count,
             minutes,
             seconds,
         )
+        return hashes, stats
+
+    def _load_existing_hashes(self, vault_path: str) -> dict[str, set[str]]:
+        """``source_id`` → source-file ``content_sha`` values on Documents/ cards.
+
+        Duplicate dated copies of the same file all count. Skip is by file
+        bytes, not extract-derived ``metadata_sha`` (that hash churns).
+        """
+
+        hashes, _stats = self._load_existing_file_identity(vault_path)
         return hashes
 
     def _build_item(
@@ -1565,7 +1624,9 @@ class FileLibrariesAdapter(BaseAdapter):
             max_files=max_files,
             verbose=verbose,
         )
-        existing_hashes = self._load_existing_hashes(vault_path) if quick_update else {}
+        existing_hashes, existing_stats = (
+            self._load_existing_file_identity(vault_path) if quick_update else ({}, {})
+        )
         max_workers = max(
             1, int(workers or os.environ.get("HFA_FILE_LIBRARY_STAGE_WORKERS") or min(8, os.cpu_count() or 1))
         )
@@ -1579,7 +1640,27 @@ class FileLibrariesAdapter(BaseAdapter):
 
         failures_path = stage_path / "analysis-failures.jsonl"
         failure_handle = failures_path.open("a", encoding="utf-8")
-        serialized_candidates = [(root_label, str(root_path), str(path)) for root_label, root_path, path in candidates]
+        serialized_candidates: list[tuple[str, str, str]] = []
+        for root_label, root_path, path in candidates:
+            if quick_update:
+                source_id = f"{root_label}:{_relative_path(path, root_path)}"
+                try:
+                    stat = path.stat()
+                    size_bytes = _path_size(path)
+                    mtime_iso = _iso_from_timestamp(stat.st_mtime)
+                    if _is_unchanged_source_stat(existing_stats, source_id, size_bytes, mtime_iso):
+                        processed += 1
+                        analysis_skips["skipped_unchanged_documents"] += 1
+                        continue
+                    file_sha = _sha256_file(path)
+                except OSError:
+                    serialized_candidates.append((root_label, str(root_path), str(path)))
+                    continue
+                if _is_unchanged_source_file(existing_hashes, source_id, file_sha):
+                    processed += 1
+                    analysis_skips["skipped_unchanged_documents"] += 1
+                    continue
+            serialized_candidates.append((root_label, str(root_path), str(path)))
 
         executor: ProcessPoolExecutor | None = None
         try:
@@ -1612,7 +1693,11 @@ class FileLibrariesAdapter(BaseAdapter):
                             + "\n"
                         )
                 elif item is not None:
-                    if quick_update and existing_hashes.get(item["source_id"]) == item["metadata_sha"]:
+                    if quick_update and _is_unchanged_source_file(
+                        existing_hashes,
+                        str(item.get("source_id") or ""),
+                        str(item.get("content_sha") or ""),
+                    ):
                         analysis_skips["skipped_unchanged_documents"] += 1
                     else:
                         emitted += 1
@@ -1740,7 +1825,9 @@ class FileLibrariesAdapter(BaseAdapter):
         batch_size = max(
             1, int(kwargs.get("batch_size") or os.environ.get("HFA_FILE_LIBRARY_BATCH_SIZE") or DEFAULT_BATCH_SIZE)
         )
-        existing_hashes = self._load_existing_hashes(vault_path) if quick_update else {}
+        existing_hashes, existing_stats = (
+            self._load_existing_file_identity(vault_path) if quick_update else ({}, {})
+        )
         identity_cache = IdentityCache(vault_path)
         batch_items: list[dict[str, Any]] = []
         sequence = 0
@@ -1817,6 +1904,24 @@ class FileLibrariesAdapter(BaseAdapter):
                         total_skips["skipped_too_large"] += 1
                         skipped_since_yield["skipped_too_large"] += 1
                         continue
+                    if quick_update:
+                        source_id = f"{root_label}:{_relative_path(path, root_path)}"
+                        try:
+                            stat = path.stat()
+                            mtime_iso = _iso_from_timestamp(stat.st_mtime)
+                            if _is_unchanged_source_stat(existing_stats, source_id, size_bytes, mtime_iso):
+                                total_skips["skipped_unchanged_documents"] += 1
+                                skipped_since_yield["skipped_unchanged_documents"] += 1
+                                continue
+                            file_sha = _sha256_file(path)
+                        except OSError:
+                            total_skips["read_failed"] += 1
+                            skipped_since_yield["read_failed"] += 1
+                            continue
+                        if _is_unchanged_source_file(existing_hashes, source_id, file_sha):
+                            total_skips["skipped_unchanged_documents"] += 1
+                            skipped_since_yield["skipped_unchanged_documents"] += 1
+                            continue
                     try:
                         item = self._build_item(
                             path=path,
@@ -1828,7 +1933,11 @@ class FileLibrariesAdapter(BaseAdapter):
                         total_skips["read_failed"] += 1
                         skipped_since_yield["read_failed"] += 1
                         continue
-                    if quick_update and existing_hashes.get(item["source_id"]) == item["metadata_sha"]:
+                    if quick_update and _is_unchanged_source_file(
+                        existing_hashes,
+                        str(item.get("source_id") or ""),
+                        str(item.get("content_sha") or ""),
+                    ):
                         total_skips["skipped_unchanged_documents"] += 1
                         skipped_since_yield["skipped_unchanged_documents"] += 1
                         continue
@@ -1892,8 +2001,8 @@ class FileLibrariesAdapter(BaseAdapter):
         provenance = deterministic_provenance(card, FILE_LIBRARY_SOURCE)
         return card, provenance, str(item.get("body", "")).strip()
 
-    def merge_card(self, vault_path, rel_path, card, body, provenance) -> None:
-        self._replace_generic_card(vault_path, rel_path, card, body, provenance)
+    def merge_card(self, vault_path, rel_path, card, body, provenance) -> bool:
+        return self._replace_generic_card(vault_path, rel_path, card, body, provenance)
 
     def after_card_write(self, vault_path, card, rel_path, *, raw_item, action, **kwargs) -> None:
         sha = str(getattr(card, "content_sha", "") or "").strip()

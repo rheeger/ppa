@@ -30,6 +30,9 @@ _CACHES: dict[str, VaultScanCache] = {}
 _DIRTY: set[str] = set()
 _DEFERRED_WRITTEN: set[str] = set()
 _DEFERRED_UIDS: dict[str, set[str]] = {}
+_DEFERRED_PATHS: dict[str, set[str]] = {}
+_KNOWN_UIDS: dict[str, set[str]] = {}
+_KNOWN_PATHS: dict[str, set[str]] = {}
 _DEFER_DEPTH = 0
 _INSTALLED = False
 _ORIG_BUILD = VaultScanCache.build_or_load
@@ -37,6 +40,10 @@ _ORIG_BUILD = VaultScanCache.build_or_load
 
 def _normalize_dirty_uids(uids: list[str] | None) -> list[str]:
     return [str(uid).strip() for uid in (uids or []) if str(uid).strip()]
+
+
+def _normalize_rel_paths(rel_paths: list[str] | None) -> list[str]:
+    return [str(path).strip().replace("\\", "/") for path in (rel_paths or []) if str(path).strip()]
 
 
 def _vault_key(vault: Path | str) -> str:
@@ -75,10 +82,16 @@ def flush_deferred_vault_written() -> int:
     with _LOCK:
         pending = set(_DEFERRED_WRITTEN)
         uids_by_vault = {key: set(_DEFERRED_UIDS.get(key, set())) for key in pending}
+        paths_by_vault = {key: set(_DEFERRED_PATHS.get(key, set())) for key in pending}
         _DEFERRED_WRITTEN.clear()
         _DEFERRED_UIDS.clear()
+        _DEFERRED_PATHS.clear()
         for key in pending:
             _DIRTY.add(key)
+            if uids_by_vault.get(key):
+                _KNOWN_UIDS.setdefault(key, set()).update(uids_by_vault[key])
+            if paths_by_vault.get(key):
+                _KNOWN_PATHS.setdefault(key, set()).update(paths_by_vault[key])
     if pending:
         logger.info("vault-cache flush_deferred count=%s", len(pending))
         from archive_cli.serving_index import mark_serving_index_dirty
@@ -107,20 +120,36 @@ def _reconcile_journal(vault: Path | str) -> None:
         logger.debug("change journal reconcile after vault_written failed", exc_info=True)
 
 
-def mark_vault_written(vault: Path | str, uids: list[str] | None = None) -> None:
+def mark_vault_written(
+    vault: Path | str,
+    uids: list[str] | None = None,
+    rel_paths: list[str] | None = None,
+) -> None:
     """Next ``build_or_load`` for this vault must refresh (fingerprint + incremental)."""
 
     key = _vault_key(vault)
     uid_list = _normalize_dirty_uids(uids)
+    path_list = _normalize_rel_paths(rel_paths)
     with _LOCK:
         if _DEFER_DEPTH > 0:
             _DEFERRED_WRITTEN.add(key)
             if uid_list:
                 _DEFERRED_UIDS.setdefault(key, set()).update(uid_list)
-            logger.info("vault-cache mark_written deferred vault=%s uids=%s", key, len(uid_list))
+            if path_list:
+                _DEFERRED_PATHS.setdefault(key, set()).update(path_list)
+            logger.info(
+                "vault-cache mark_written deferred vault=%s uids=%s paths=%s",
+                key,
+                len(uid_list),
+                len(path_list),
+            )
             return
         _DIRTY.add(key)
-    logger.info("vault-cache mark_written vault=%s uids=%s", key, len(uid_list))
+        if uid_list:
+            _KNOWN_UIDS.setdefault(key, set()).update(uid_list)
+        if path_list:
+            _KNOWN_PATHS.setdefault(key, set()).update(path_list)
+    logger.info("vault-cache mark_written vault=%s uids=%s paths=%s", key, len(uid_list), len(path_list))
     try:
         from archive_cli.serving_index import mark_serving_index_dirty
 
@@ -161,10 +190,53 @@ def clear_process_cache() -> None:
         _DIRTY.clear()
         _DEFERRED_WRITTEN.clear()
         _DEFERRED_UIDS.clear()
+        _DEFERRED_PATHS.clear()
+        _KNOWN_UIDS.clear()
+        _KNOWN_PATHS.clear()
 
 
 def process_reuse_installed() -> bool:
     return _INSTALLED
+
+
+def peek_process_cache(vault: Path | str) -> VaultScanCache | None:
+    """Return the warm in-process cache, or ``None`` if reuse is off or not loaded."""
+
+    if not _INSTALLED:
+        return None
+    with _LOCK:
+        return _CACHES.get(_vault_key(vault))
+
+
+def _refresh_known_writes(
+    cache: VaultScanCache,
+    vault: Path,
+    uids: set[str],
+    rel_paths: set[str],
+    *,
+    tier: int,
+) -> VaultScanCache | None:
+    """Reparse only the notes this process wrote. Skip the full vault fingerprint walk."""
+
+    if cache.tier() < tier:
+        return None
+    paths = {path for path in rel_paths if path}
+    if uids:
+        for row in cache.frontmatter_rows_for_uids(uids):
+            rel = str(row.get("rel_path") or "").strip()
+            if rel:
+                paths.add(rel)
+    if not paths:
+        return None
+    started = time.monotonic()
+    cache.refresh_paths(vault, sorted(paths), tier=max(tier, cache.tier()))
+    logger.info(
+        "vault-cache refresh_known_writes vault=%s paths=%s skipped_fingerprint=1 elapsed=%.2fs",
+        _vault_key(vault),
+        len(paths),
+        time.monotonic() - started,
+    )
+    return cache
 
 
 def _wrapped_build_or_load(
@@ -180,6 +252,8 @@ def _wrapped_build_or_load(
     with _LOCK:
         existing = _CACHES.get(key)
         dirty = key in _DIRTY
+        known_uids = set(_KNOWN_UIDS.get(key, set()))
+        known_paths = set(_KNOWN_PATHS.get(key, set()))
         if existing is not None and not no_cache and not dirty and existing.tier() >= tier:
             logger.info(
                 "vault-cache process-hit vault=%s tier=%s notes=%s skip_fingerprint=1",
@@ -188,6 +262,15 @@ def _wrapped_build_or_load(
                 existing.note_count(),
             )
             return existing
+    if existing is not None and dirty and not no_cache:
+        refreshed = _refresh_known_writes(existing, Path(vault), known_uids, known_paths, tier=tier)
+        if refreshed is not None:
+            with _LOCK:
+                _CACHES[key] = refreshed
+                _DIRTY.discard(key)
+                _KNOWN_UIDS.pop(key, None)
+                _KNOWN_PATHS.pop(key, None)
+            return refreshed
     cache = _ORIG_BUILD(
         vault,
         tier=tier,
@@ -198,6 +281,8 @@ def _wrapped_build_or_load(
     with _LOCK:
         _CACHES[key] = cache
         _DIRTY.discard(key)
+        _KNOWN_UIDS.pop(key, None)
+        _KNOWN_PATHS.pop(key, None)
     return cache
 
 

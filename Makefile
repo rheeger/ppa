@@ -198,7 +198,12 @@ embed-gc:
 	PPA_PATH=$(PPA_PATH) \
 	PPA_INDEX_DSN="$$PPA_INDEX_DSN" \
 	PPA_INDEX_SCHEMA=$(PPA_INDEX_SCHEMA) \
-	$(PYTHON) -m archive_cli embed-gc $(if $(EMBED_GC_APPLY),--apply)
+	$(PYTHON) -m archive_cli embed-gc \
+		--embedding-model $(or $(PPA_EMBEDDING_MODEL),text-embedding-3-small) \
+		--embedding-version $(or $(PPA_EMBEDDING_VERSION),1) \
+		$(if $(EMBED_GC_APPLY),--apply) \
+		$(if $(EMBED_GC_DUPLICATES),--duplicates) \
+		$(if $(EMBED_GC_UNKNOWN),--unknown)
 
 # Move ingested *-out.jsonl into _artifacts/_embedding-recovery-cache/run-{ts}/
 # (warm cache for future re-ingest without re-downloading from OpenAI). Keeps

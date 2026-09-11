@@ -169,6 +169,37 @@ def test_incremental_links_missing_dups_without_stamping_unique(tmp_path: Path, 
     assert unique.uid not in out["dirty_uids"]
 
 
+def test_already_linked_groups_skip_disk_reread(tmp_path: Path, monkeypatch) -> None:
+    vault = tmp_path / "vault"
+    (vault / "Documents" / "2026-01").mkdir(parents=True)
+    monkeypatch.setenv("PPA_FILE_IDENTITY_DB", str(tmp_path / "id.sqlite"))
+    sha = "ef" * 32
+    a = _doc("hfa-document-aaa111aaa111", sha=sha)
+    b = _doc("hfa-document-bbb222bbb222", sha=sha)
+    _write(vault, "Documents/2026-01/hfa-document-aaa111aaa111.md", a)
+    _write(vault, "Documents/2026-01/hfa-document-bbb222bbb222.md", b)
+    from archive_cli.vault_cache import VaultScanCache
+
+    VaultScanCache.build_or_load(vault, tier=2, progress_every=0)
+    first = run_file_duplicate_linking(vault, dry_run=False, identity_db=tmp_path / "id.sqlite", incremental=True)
+    assert first["cards_linked"] == 2
+    VaultScanCache.build_or_load(vault, tier=2, progress_every=0)
+
+    from archive_sync import file_identity as fi
+
+    reads = {"n": 0}
+    real_read = fi.read_note
+
+    def wrapped(*args, **kwargs):
+        reads["n"] += 1
+        return real_read(*args, **kwargs)
+
+    monkeypatch.setattr(fi, "read_note", wrapped)
+    second = run_file_duplicate_linking(vault, dry_run=False, identity_db=tmp_path / "id.sqlite", incremental=True)
+    assert second["cards_linked"] == 0
+    assert reads["n"] == 0
+
+
 def test_junk_purged_uid_is_not_linked(tmp_path: Path) -> None:
     identity = FileIdentityIndex(tmp_path / "id.sqlite")
     sha = "cd" * 32

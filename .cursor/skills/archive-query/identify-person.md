@@ -4,7 +4,9 @@
 
 ## Sequence
 
-1. Call `archive_person` with the display name.
+1. Call `archive_person` with the display name, an email, or a phone. The
+   tool accepts all three. `people_filter` on search and query is still a
+   name or slug only.
 2. Read the card. Confirm `summary` equals the needle, or that an email or
    phone on the card already appeared on a message you read.
 3. If the needle appears only in `aliases`, the name was stolen. Do not use

@@ -251,3 +251,22 @@ def test_merge_into_existing_derives_alias_provenance_from_summary(
     frontmatter, _, provenance = read_note(tmp_vault, "People/jane-smith.md")
     assert "Jane Alexandra Smith" in frontmatter["aliases"]
     assert provenance["aliases"].source == "linkedin"
+
+
+def test_merge_into_existing_skips_write_when_identity_unchanged(
+    tmp_vault, sample_person_card, sample_person_provenance
+):
+    write_card(tmp_vault, "People/jane-smith.md", sample_person_card, provenance=sample_person_provenance)
+    path = tmp_vault / "People/jane-smith.md"
+    before = path.stat().st_mtime_ns
+    result = merge_into_existing(
+        tmp_vault,
+        "[[jane-smith]]",
+        {
+            **sample_person_card.model_dump(mode="python"),
+            "updated": "2026-09-10",
+        },
+        sample_person_provenance,
+    )
+    assert result is None
+    assert path.stat().st_mtime_ns == before

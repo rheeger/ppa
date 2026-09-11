@@ -17,7 +17,7 @@ PPA gives you that view without making a third-party app the source of truth:
 - Ask "which flight, hotel, and rental car were part of this trip?" from structural links, not vague similarity.
 - Ask "which purchase matches this credit-card charge?" through deterministic finance reconciliation.
 - Ask "tell me about my relationship with Sarah" by combining the PersonCard, message threads, calendar events, photos, and graph neighbors.
-- Compose "what subscriptions am I paying for?" from `subscription` cards plus `query` / `evidence` / `read`. Narrative analytics workflows (subscriptions, trip costs, changes-since) are **pending** (P10).
+- Ask "what subscriptions am I paying for?" or "what did that trip cost?" through `ppa analytics` / `archive_analytics`. Those workflows read the full eligible set and say when coverage or freshness is incomplete. They do not advise, invent a current subscription, or convert currencies.
 
 A folder indexer can search files. A note app can search notes. PPA is built for the harder problem: turning messy personal or organizational exhaust into a durable, queryable, evidence-backed knowledge system.
 
@@ -29,7 +29,11 @@ A folder indexer can search files. A note app can search notes. PPA is built for
 
 **Provenance is a trust boundary.** Deterministic imports, LLM enrichment, manual edits, and derived fields are distinguishable. Agents can prefer canonical fields over summaries, exact fields over inferred ones, and body-backed evidence over embeddings.
 
-**Retrieval is multi-modal.** The same corpus supports exact reads, structured queries, lexical search, vector search, hybrid search, graph traversal, temporal neighbors, people lookup, timeline lookup, retrieval explanations, and index health checks.
+**Retrieval is multi-modal, and it is built for long personal history, not a notes folder.** The same corpus supports exact reads, structured queries, lexical search, vector search, hybrid search, graph traversal, temporal neighbors, people lookup, timeline lookup, retrieval explanations, and index health checks. Hybrid search fuses lexical and vector ranks (RRF) over a trained IVF index. Conversation bursts embed the short answer inside a long email or message thread, not only the thread summary. After a hit, neighbor context can include the message before and after. Denied sources do not leak through those hops.
+
+**People resolve across channels without silent merges.** `archive_person` accepts a name, slug, email, or phone. Shared household numbers and shared inboxes stay `ambiguous` instead of collapsing to one card.
+
+**Query reads a complete generation.** Maintain journals what it built and publishes an immutable serving generation. A half-written index cannot become `ACTIVE`. Cards stay portable Markdown. Search is derived, versioned, and fail-closed.
 
 **The graph is typed, not a confidence warehouse.** Serving graph hops carry an edge type and a `trust` default of 1.0. Warehouse `edges` rows have no `method` / `confidence` / `evidence_uids` columns. Seed-link confidence is a separate gated path (`PPA_SEED_LINKS_ENABLED`). Do not treat every neighbor as equally evidenced.
 
@@ -101,9 +105,10 @@ PPA supports several retrieval paths over the same archive:
 - `archive_query` for structured filters by type, source, person, org, and date
 - `archive_search` for lexical recall
 - `archive_vector_search` for semantic recall
-- `archive_hybrid_search` for lexical + vector + graph ranking
+- `archive_hybrid_search` for lexical + vector + graph ranking (RRF fusion; conversation bursts; optional freshness)
+- `archive_analytics` for typed query, neighbor context, subscriptions, trip costs, and changes-since
 - `archive_temporal_neighbors` for "what happened around this time?"
-- `archive_person`, `archive_graph`, and `archive_timeline` for relationship and chronology work
+- `archive_person` (name, slug, email, or phone), `archive_graph`, and `archive_timeline` for relationship and chronology work
 - `archive_retrieval_explain` for understanding why results ranked the way they did
 - `archive_status_json`, `archive_embedding_status`, and related tools for operational health
 - `archive_knowledge` exists but is an **empty fallback** (lexical search). There is no populated knowledge cache or 46-facet living profile.
@@ -118,7 +123,8 @@ PPA is designed for regular incremental operation:
 - Extractors produce derived cards from new source material.
 - Entity resolution creates or updates people, places, and organizations.
 - Incremental rebuilds update the index without reprocessing the whole vault.
-- `ppa maintain` sequences the routine maintenance path and reports new cards, extracted cards, resolved entities, rebuild work, enrichment queue depth, retrieval gaps, skipped steps, and errors.
+- `ppa maintain` journals source work, runs the processor DAG, and publishes only the eligible checkpoint. Query sees the cards this run built.
+- Two independent archives on one machine can stay isolated through restart. Saved scopes are reusable filters, not household ACLs.
 
 Full rebuilds remain available as a reset button, but the normal operating model is incremental.
 
@@ -234,6 +240,8 @@ ppa hybrid-search "that flight to NYC"
 ppa query --type meal_order
 ppa temporal-neighbors "2025-12-27T18:00:00Z"
 ppa person "Sarah"
+ppa analytics subscriptions
+ppa analytics trip-costs
 ppa graph "People/sarah.md"
 ppa read "hfa-email-message-..."
 ppa status
@@ -244,7 +252,7 @@ ppa maintain
 ppa setup --help
 ```
 
-`ppa status` / `ppa readiness` evaluate the **current instance only**. The historical `local_seed_living_corpus` leftover is bound to the original local seed and does not transfer. Analytics CLI/MCP workflows are **pending** (P10). A manifest file is never a freshness signal.
+`ppa status` / `ppa readiness` evaluate the **current instance only**. The historical `local_seed_living_corpus` leftover is bound to the original local seed and does not transfer. `ppa analytics` / `archive_analytics` are shipped. Coverage means the eligible stored set, not every real-world event. A manifest file is never a freshness signal.
 
 Admin commands such as `rebuild-indexes`, `bootstrap-postgres`, migrations, embedding backfills, and linker operations are documented in the [runtime contract](archive_docs/PPA_RUNTIME_CONTRACT.md). Restrict admin tools in production with `PPA_MCP_TOOL_PROFILE`.
 
@@ -278,6 +286,8 @@ The test suite covers schema validation, adapters, index behavior, MCP/CLI surfa
 
 ## Documentation
 
+- [Current status](archive_docs/STATUS.md) (what is true today; wins over older vision notes)
+- [Product capability matrix](archive_docs/PRODUCT_CAPABILITY_MATRIX.md)
 - [Architecture](archive_docs/ARCHITECTURE.md)
 - [Indexing](archive_docs/INDEXING.md)
 - [Agent usage](archive_docs/AGENT_USAGE.md)

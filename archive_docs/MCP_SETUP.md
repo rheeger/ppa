@@ -6,7 +6,7 @@
 2. Bind an instance (`ppa setup` or an existing `ppa.json` root). Set `PPA_INDEX_DSN`, `PPA_PATH` / instance dir, `PPA_INDEX_SCHEMA` (see [PPA_RUNTIME_CONTRACT.md](PPA_RUNTIME_CONTRACT.md) §2).
 3. Run `ppa mcp-config` and paste the JSON into your MCP client. Secrets such as `OPENAI_API_KEY` are never printed — add those in the client’s `env` block separately.
 
-Analytics CLI/MCP workflows are **pending** (P10). `archive_knowledge` is an empty search fallback, not a 46-facet cache.
+`ppa analytics` / `archive_analytics` are shipped (subscriptions, trip costs, changes-since, typed query, neighbor context). Coverage is the eligible stored set. `archive_knowledge` is an empty search fallback, not a 46-facet cache. Living status: [STATUS.md](STATUS.md).
 
 ## Local vs remote
 

@@ -2704,6 +2704,20 @@ class OtterTranscriptsAdapter(BaseAdapter):
         **kwargs,
     ):
         client = self._build_client()
+        if not updated_after:
+            updated_after = str(cursor.get("last_sync") or "").strip() or None
+        page_token = cursor.get("page_token")
+        first_response = client.list_meetings(
+            page_size=max(1, page_size),
+            page_token=page_token,
+            updated_after=updated_after,
+            start_after=start_after,
+            end_before=end_before,
+        )
+        first_rows = self._list_rows(first_response)
+        if not first_rows:
+            logger.info("otter incremental list empty updated_after=%s", updated_after or "")
+            return
         identity_cache = IdentityCache(vault_path)
         (
             event_lookup_by_id,
@@ -2718,18 +2732,22 @@ class OtterTranscriptsAdapter(BaseAdapter):
             if quick_update_enabled
             else {}
         )
-        page_token = cursor.get("page_token")
         emitted_meetings = int(cursor.get("emitted_meetings", 0) or 0)
         sequence = int(cursor.get("batch_sequence", 0) or 0)
         total_skipped = int(cursor.get("skipped_unchanged_meetings", 0) or 0)
+        pending_response: dict[str, Any] | None = first_response
         while True:
-            response = client.list_meetings(
-                page_size=max(1, page_size),
-                page_token=page_token,
-                updated_after=updated_after,
-                start_after=start_after,
-                end_before=end_before,
-            )
+            if pending_response is not None:
+                response = pending_response
+                pending_response = None
+            else:
+                response = client.list_meetings(
+                    page_size=max(1, page_size),
+                    page_token=page_token,
+                    updated_after=updated_after,
+                    start_after=start_after,
+                    end_before=end_before,
+                )
             rows = self._list_rows(response)
             if not rows:
                 break
@@ -2895,5 +2913,5 @@ class OtterTranscriptsAdapter(BaseAdapter):
         provenance = deterministic_provenance(card, MEETING_SOURCE)
         return card, provenance, str(item.get("body", "")).strip()
 
-    def merge_card(self, vault_path, rel_path, card, body, provenance) -> None:
-        self._replace_generic_card(vault_path, rel_path, card, body, provenance)
+    def merge_card(self, vault_path, rel_path, card, body, provenance) -> bool:
+        return self._replace_generic_card(vault_path, rel_path, card, body, provenance)

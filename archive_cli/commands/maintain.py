@@ -1,15 +1,12 @@
-"""Maintenance automation -- sequences existing operations to keep the system current.
+"""Living-archive maintain: pull, process dirty cards, publish search.
 
-A single CLI command (ppa maintain) that sequences:
-1. Tail ingestion ledger for new entries since last maintenance
-2. Auto-extract new emails via Phase 2 extractor registry
-3. Entity resolution for newly extracted derived cards
-4. Incremental rebuild to index new cards
-5. Coverage report with all metrics
-6. Update maintenance watermark
+``ppa maintain --apply`` is the user loop. It pulls incremental updates from
+connected sources, runs dirty-only processors (extract, enrich, rematerialize,
+reuse leftover embeddings, embed leftovers, incremental links), then publishes
+one complete serving generation. Dry-run prints the same steps with no writes.
 
-Each step is independently idempotent and failure-isolated.
-Steps with missing upstream dependencies are skipped gracefully via _try_import().
+Bare ``ppa maintain`` without ``--apply`` still tails the ingestion ledger for
+compatibility. Nightly is a thin wrapper of ``--apply``, not a second pipeline.
 """
 
 from __future__ import annotations
@@ -17,6 +14,7 @@ from __future__ import annotations
 import importlib
 import logging
 import os
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -24,6 +22,8 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ..store import DefaultArchiveStore
+
+_LOG = logging.getLogger("ppa.maintain")
 
 
 def _try_import(module_path: str) -> Any | None:
@@ -56,17 +56,18 @@ def _get_watermark(conn: Any, schema: str) -> str:
 
 
 def _tail_ingestion_log(conn: Any, schema: str, watermark: str) -> list[dict[str, Any]]:
-    if watermark:
-        rows = conn.execute(
-            f"SELECT card_uid, action, source_adapter, logged_at "
-            f"FROM {schema}.ingestion_log "
-            f"WHERE logged_at > %s ORDER BY logged_at ASC",
-            (watermark,),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            f"SELECT card_uid, action, source_adapter, logged_at FROM {schema}.ingestion_log ORDER BY logged_at ASC"
-        ).fetchall()
+    mark = str(watermark or "").strip()
+    if not mark:
+        # Empty watermark used to SELECT the whole ledger. On this seed that is
+        # millions of rows and rematerializes the vault.
+        _LOG.warning("ingestion_log tail skipped: last_maintenance_at is empty")
+        return []
+    rows = conn.execute(
+        f"SELECT card_uid, action, source_adapter, logged_at "
+        f"FROM {schema}.ingestion_log "
+        f"WHERE logged_at > %s ORDER BY logged_at ASC",
+        (mark,),
+    ).fetchall()
     out: list[dict[str, Any]] = []
     for r in rows:
         if isinstance(r, dict):
@@ -123,6 +124,10 @@ def _retrieval_gaps_since(conn: Any, schema: str, watermark: str) -> int:
     return int(row[0] or 0)
 
 
+APPLY_LOOP_STEPS = ("pull", "process", "publish")
+FAILED_SOURCE_STATUSES = frozenset({"failed", "blocked"})
+
+
 @dataclass
 class MaintenanceReport:
     started_at: str = ""
@@ -158,9 +163,180 @@ class MaintenanceReport:
     failed_revision_uids: list[str] = field(default_factory=list)
     publication: dict[str, Any] = field(default_factory=dict)
     maintenance_run_id: str = ""
+    apply_loop: bool = False
+    planned_steps: list[str] = field(default_factory=list)
+    cards_pulled: int = 0
+    cards_written: int = 0
+    cards_enriched: int = 0
+    embeddings_embedded: int = 0
+    embeddings_reused: int = 0
+    published_generation: str = ""
+    pending_embeddings: int = 0
+    failed_sources: list[str] = field(default_factory=list)
+    provider_reason: str = ""
+    ok: bool = True
+    human_summary: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {k: v for k, v in self.__dict__.items()}
+
+
+def apply_provider_failure_reason() -> str:
+    """One-line reason the apply loop cannot run. Empty means providers are ok.
+
+    Unset enrichment is not a hard fail (deterministic extract still runs).
+    A configured enrichment or paid embedding provider that is down is a fail.
+    Hash embeddings are always available.
+    """
+
+    from archive_cli.embedding_provider import DEFAULT_EMBEDDING_PROVIDER
+    from archive_cli.index_config import _ppa_env
+
+    embed_name = (_ppa_env("PPA_EMBEDDING_PROVIDER", default=DEFAULT_EMBEDDING_PROVIDER) or "hash").lower()
+    if embed_name == "openai" and not (os.environ.get("OPENAI_API_KEY") or "").strip():
+        return "OPENAI_API_KEY missing; apply cannot embed dirty cards"
+    if embed_name not in {"", "hash", "openai"}:
+        return f"unsupported embedding provider {embed_name}; apply cannot embed dirty cards"
+    raw = (os.environ.get("PPA_ENRICHMENT_MODEL") or "").strip()
+    if not raw:
+        return ""
+    try:
+        from archive_cli.providers import resolve_provider
+
+        provider = resolve_provider(refresh=True)
+    except ValueError as exc:
+        return str(exc)
+    if provider is None:
+        return "PPA_ENRICHMENT_MODEL is set but no provider resolved"
+    if not provider.is_available():
+        return f"enrichment provider unavailable: {provider.name} {provider.model}"
+    return ""
+
+
+def failed_source_keys(source_reports: list[dict[str, Any]] | None) -> list[str]:
+    out: list[str] = []
+    for report in source_reports or []:
+        key = str(report.get("source_key") or "").strip()
+        status = str(report.get("status") or "").strip()
+        if key and status in FAILED_SOURCE_STATUSES:
+            out.append(key)
+    return out
+
+
+def format_maintain_human_summary(report: MaintenanceReport) -> str:
+    """Short human report. A person should be able to read it once."""
+
+    mode = "dry-run" if "serving_index_publish (dry-run)" in report.skipped_steps else "apply"
+    lines = [f"Maintain {mode}"]
+    if report.planned_steps:
+        lines.append("Steps: " + ", ".join(report.planned_steps) + ".")
+    if mode == "dry-run":
+        lines.append("Would pull connected sources, process dirty cards, and publish a complete search generation.")
+        lines.append("No writes.")
+        if report.failed_sources:
+            lines.append("Failed sources: " + ", ".join(report.failed_sources) + ".")
+        if report.provider_reason:
+            lines.append(report.provider_reason + ".")
+        return "\n".join(lines)
+    source_runs = int(report.source_updater_runs or 0)
+    lines.append(f"Pulled {report.cards_pulled} cards from {source_runs} sources.")
+    if report.failed_sources:
+        lines.append("Failed sources: " + ", ".join(report.failed_sources) + ".")
+    lines.append(
+        f"Wrote {report.cards_written} cards. Extracted {report.cards_extracted}. Enriched {report.cards_enriched}."
+    )
+    lines.append(
+        f"Embedded {report.embeddings_embedded} new vectors, reused {report.embeddings_reused} by content hash."
+    )
+    if report.published_generation:
+        lines.append(f"Published generation {report.published_generation}.")
+    elif report.publication.get("skipped") == "clean":
+        lines.append("Publish skipped: nothing new to serve.")
+    elif report.publication.get("error"):
+        lines.append(f"Publish failed: {report.publication.get('error')}.")
+    else:
+        lines.append("No new generation published.")
+    lines.append(f"Pending embeddings: {report.pending_embeddings}.")
+    if report.provider_reason:
+        lines.append(report.provider_reason + ".")
+        lines.append("Result: incomplete because a required provider is down.")
+    elif report.failed_sources:
+        lines.append("Result: incomplete because a live source failed.")
+    elif report.errors:
+        first = report.errors[0]
+        lines.append(f"Result: incomplete ({first.get('step')}: {first.get('error')}).")
+    elif report.ok:
+        lines.append("Result: ok.")
+    else:
+        lines.append("Result: incomplete.")
+    return "\n".join(lines)
+
+
+def living_loop_ok(report: MaintenanceReport) -> bool:
+    if report.errors:
+        return False
+    if report.failed_sources:
+        return False
+    publication = report.publication or {}
+    if publication.get("dry_run"):
+        return True
+    if publication.get("ok") is False and publication.get("skipped") != "clean":
+        return False
+    return True
+
+
+def apply_living_loop_counts(report: MaintenanceReport) -> None:
+    """Fill the human-report counters from receipts this run already collected."""
+
+    from archive_sync.processors.constants import PROCESSOR_EMAIL_THREAD_ENRICHMENT
+    from archive_sync.processors.dirty_io import dirty_uids_from_source_reports
+
+    pulled = dirty_uids_from_source_reports(report.source_updater_reports or [])
+    report.cards_pulled = len(pulled) if pulled else int(report.new_cards_ingested or 0)
+    report.cards_written = max(int(report.processor_output_count or 0), int(report.cards_extracted or 0))
+    enriched = 0
+    for item in _iter_processor_items(report.processor_reports or []):
+        key = str(item.get("processor_key") or "")
+        if key != PROCESSOR_EMAIL_THREAD_ENRICHMENT:
+            continue
+        status = str(item.get("status") or "")
+        if status == "complete" and not item.get("already_current") and not item.get("valid_no_output"):
+            enriched += 1
+    report.cards_enriched = enriched
+    embedded = 0
+    reused = 0
+    pending = 0
+    for proc in report.processor_reports or []:
+        inner = proc.get("report") or proc
+        for warning in inner.get("warnings") or []:
+            text = str(warning)
+            match = re.search(r"embedded=(\d+)", text)
+            if match:
+                embedded = max(embedded, int(match.group(1)))
+            match = re.search(r"reused_by_content=(\d+)", text)
+            if match:
+                reused = max(reused, int(match.group(1)))
+            else:
+                match = re.search(r"\breused=(\d+)", text)
+                if match:
+                    reused = max(reused, int(match.group(1)))
+            match = re.search(r"pending_after=(\d+)", text)
+            if match:
+                pending = max(pending, int(match.group(1)))
+    report.embeddings_embedded = embedded
+    report.embeddings_reused = reused
+    report.pending_embeddings = pending
+    report.failed_sources = failed_source_keys(report.source_updater_reports)
+    publication = report.publication or report.serving_index or {}
+    report.published_generation = str(
+        publication.get("generation_id") or publication.get("generation") or ""
+    )
+
+
+def finalize_living_report(report: MaintenanceReport) -> None:
+    apply_living_loop_counts(report)
+    report.ok = living_loop_ok(report)
+    report.human_summary = format_maintain_human_summary(report)
 
 
 def _normalize_uids(values: Iterable[Any]) -> list[str]:
@@ -438,8 +614,13 @@ def _finish_maintain(
     store: Any, report: MaintenanceReport, logger: logging.Logger, *, dry_run: bool
 ) -> MaintenanceReport:
     apply_processor_counts(report)
-    _publish_serving_index(store, report, logger, dry_run=dry_run)
+    provider_blocked = any(item.get("step") == "apply_providers" for item in report.errors)
+    if provider_blocked and not dry_run:
+        report.publication = {"ok": False, "error": report.provider_reason or "apply_providers"}
+    else:
+        _publish_serving_index(store, report, logger, dry_run=dry_run)
     report.completed_at = datetime.now(timezone.utc).isoformat()
+    finalize_living_report(report)
     return report
 
 
@@ -901,10 +1082,34 @@ def run_maintenance(
     allow_full_embedding: bool = False,
     allow_all_linkers: bool = False,
     allow_broad_llm: bool = False,
+    apply_loop: bool = False,
 ) -> MaintenanceReport:
     report = MaintenanceReport()
     report.started_at = datetime.now(timezone.utc).isoformat()
     report.maintenance_run_id = datetime.now(timezone.utc).strftime("maintain-%Y%m%dT%H%M%S%fZ")
+    report.apply_loop = bool(apply_loop)
+    if dirty_uids_path:
+        from pathlib import Path
+
+        from archive_sync.processors.dirty_io import load_dirty_uids
+
+        file_uids = load_dirty_uids(Path(dirty_uids_path))
+        _extend_publish_uids(report, file_uids)
+        logger.info("maintain dirty_uids_path uids=%s path=%s", len(file_uids), dirty_uids_path)
+    if apply_loop:
+        report.planned_steps = list(APPLY_LOOP_STEPS)
+        run_source_updaters = True
+        run_processors = True
+        apply_source_updaters = not dry_run
+        apply_processors = not dry_run
+        logger.info("maintain apply_loop dry_run=%s steps=%s", dry_run, ",".join(APPLY_LOOP_STEPS))
+        if not dry_run:
+            reason = apply_provider_failure_reason()
+            if reason:
+                report.provider_reason = reason
+                report.errors.append({"step": "apply_providers", "error": reason})
+                logger.error("maintain apply refused: %s", reason)
+                return _finish_maintain(store, report, logger, dry_run=False)
     if not os.environ.get("PYTEST_CURRENT_TEST"):
         try:
             from archive_cli.vault_cache_runtime import install_process_reuse
@@ -912,6 +1117,13 @@ def run_maintenance(
             install_process_reuse()
         except Exception:
             logger.exception("maintain_vault_cache_process_reuse_failed")
+        if apply_loop and not dry_run:
+            try:
+                from archive_cli.serving_index import schedule_serving_handle_warm
+
+                schedule_serving_handle_warm(store.vault)
+            except Exception:
+                logger.exception("maintain_serving_handle_warm_failed")
     idx = store.index
     schema = str(getattr(idx, "schema", "ppa"))
 
@@ -1056,7 +1268,7 @@ def run_maintenance(
         new_rows = []
 
     tailed_uids = _normalize_uids(row.get("card_uid") for row in new_rows)
-    if new_rows:
+    if new_rows and not apply_loop:
         report.new_cards_ingested = len(new_rows)
         _extend_publish_uids(report, tailed_uids)
         report.skipped_steps.append("auto_extract (routed through processor DAG)")
@@ -1066,7 +1278,26 @@ def run_maintenance(
     from archive_engine.thread_projection import drain_pending, pending_thread_uids
 
     thread_uids = pending_thread_uids(store.vault)
-    scheduler_uids = _normalize_uids(list(hygiene_dirty) + leftover_dirty + tailed_uids + thread_uids)
+    # Apply loop dirty set is this run's source UIDs (passed via source
+    # reports), hygiene, leftover serving-index dirty, and pending threads.
+    # The warehouse ingestion_log is a historical ledger. Unioning it here
+    # rematerialized 1.39 million cards on the living seed.
+    processor_tail = [] if apply_loop else tailed_uids
+    if apply_loop and tailed_uids:
+        logger.info(
+            "maintain apply_loop omitting ingestion_log tail from processors uids=%s",
+            len(tailed_uids),
+        )
+    scheduler_uids = _normalize_uids(list(hygiene_dirty) + leftover_dirty + processor_tail + thread_uids)
+    logger.info(
+        "maintain processor dirty hygiene=%s leftover=%s tail=%s threads=%s scheduled=%s apply_loop=%s",
+        len(hygiene_dirty),
+        len(leftover_dirty),
+        len(processor_tail),
+        len(thread_uids),
+        len(scheduler_uids),
+        apply_loop,
+    )
     should_run_processors = bool(run_processors) or bool(scheduler_uids) or bool(dirty_uids_path)
     # Explicit --run-processors honours --apply-processors. Legacy ingestion-log
     # maintain (no processor flags) still applies unless this is a dry-run.

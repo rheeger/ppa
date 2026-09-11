@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from archive_sync.adapters.base import deterministic_provenance
 from archive_sync.adapters.calendar_events import CalendarEventsAdapter, _event_uid
-from archive_vault.schema import CalendarEventCard, EmailMessageCard, EmailThreadCard
+from archive_cli.vault_cache import VaultScanCache
+from archive_vault.schema import CalendarEventCard, EmailMessageCard, EmailThreadCard, validate_card_strict
 from archive_vault.vault import read_note, write_card
 
 
@@ -437,3 +438,128 @@ def test_quick_update_skips_unchanged_events(tmp_vault):
     assert result.merged == 0
     assert result.skipped == 1
     assert result.skip_details["skipped_unchanged_events"] == 1
+
+
+def test_quick_update_skips_when_etag_missing_but_body_sha_matches(tmp_vault):
+    adapter = CalendarEventsAdapter()
+    payload = {
+        "items": [
+            {
+                "id": "event-google-1",
+                "etag": '"etag-1"',
+                "iCalUID": "event-uid-1",
+                "summary": "Board Meeting",
+                "start": {"dateTime": "2026-03-08T15:00:00Z"},
+                "end": {"dateTime": "2026-03-08T16:00:00Z"},
+                "organizer": {"email": "alice@example.com", "displayName": "Alice Example"},
+                "attendees": [{"email": "me@example.com"}],
+                "status": "confirmed",
+            }
+        ],
+        "nextPageToken": None,
+    }
+    adapter._gws = lambda args: payload  # type: ignore[method-assign]
+    first = adapter.ingest(str(tmp_vault), account_email="me@example.com", max_events=10)
+    assert first.created == 1
+    event_path = next((tmp_vault / "Calendar").rglob("*.md"))
+    frontmatter, body, provenance = read_note(tmp_vault, str(event_path.relative_to(tmp_vault)))
+    frontmatter["event_etag"] = ""
+    write_card(
+        tmp_vault,
+        str(event_path.relative_to(tmp_vault)),
+        validate_card_strict(frontmatter),
+        body,
+        provenance,
+    )
+    VaultScanCache.build_or_load(tmp_vault, tier=2, progress_every=0)
+    (tmp_vault / "_meta" / "sync-state.json").write_text("{}", encoding="utf-8")
+    adapter = CalendarEventsAdapter()
+    adapter._gws = lambda args: payload  # type: ignore[method-assign]
+    result = adapter.ingest(
+        str(tmp_vault),
+        account_email="me@example.com",
+        max_events=10,
+        quick_update=True,
+    )
+    assert result.created == 0
+    assert result.merged == 0
+    assert result.skip_details["skipped_unchanged_events"] == 1
+
+
+def test_quick_update_skips_primary_lookup_when_card_stores_real_calendar_id(tmp_vault):
+    adapter = CalendarEventsAdapter()
+    payload = {
+        "items": [
+            {
+                "id": "event-google-1",
+                "etag": '"etag-1"',
+                "iCalUID": "event-uid-1",
+                "summary": "Board Meeting",
+                "start": {"dateTime": "2026-03-08T15:00:00Z"},
+                "end": {"dateTime": "2026-03-08T16:00:00Z"},
+                "organizer": {"email": "alice@example.com", "displayName": "Alice Example"},
+                "attendees": [{"email": "me@example.com"}],
+                "status": "confirmed",
+            }
+        ],
+        "nextPageToken": None,
+    }
+    adapter._gws = lambda args: payload  # type: ignore[method-assign]
+    first = adapter.ingest(str(tmp_vault), account_email="me@example.com", max_events=10)
+    assert first.created == 1
+    event_path = next((tmp_vault / "Calendar").rglob("*.md"))
+    frontmatter, body, provenance = read_note(tmp_vault, str(event_path.relative_to(tmp_vault)))
+    frontmatter["calendar_id"] = "me@example.com"
+    write_card(
+        tmp_vault,
+        str(event_path.relative_to(tmp_vault)),
+        validate_card_strict(frontmatter),
+        body,
+        provenance,
+    )
+    VaultScanCache.build_or_load(tmp_vault, tier=2, progress_every=0)
+    (tmp_vault / "_meta" / "sync-state.json").write_text("{}", encoding="utf-8")
+    adapter = CalendarEventsAdapter()
+    adapter._gws = lambda args: payload  # type: ignore[method-assign]
+    result = adapter.ingest(
+        str(tmp_vault),
+        account_email="me@example.com",
+        max_events=10,
+        quick_update=True,
+    )
+    assert result.created == 0
+    assert result.merged == 0
+    assert result.skip_details["skipped_unchanged_events"] == 1
+
+
+def test_merge_skips_rewrite_when_only_updated_changes(tmp_vault):
+    adapter = CalendarEventsAdapter()
+    payload = {
+        "items": [
+            {
+                "id": "event-google-1",
+                "etag": '"etag-1"',
+                "iCalUID": "event-uid-1",
+                "summary": "Board Meeting",
+                "start": {"dateTime": "2026-03-08T15:00:00Z"},
+                "end": {"dateTime": "2026-03-08T16:00:00Z"},
+                "organizer": {"email": "alice@example.com", "displayName": "Alice Example"},
+                "attendees": [{"email": "me@example.com"}],
+                "status": "confirmed",
+            }
+        ],
+        "nextPageToken": None,
+    }
+    adapter._gws = lambda args: payload  # type: ignore[method-assign]
+    first = adapter.ingest(str(tmp_vault), account_email="me@example.com", max_events=10)
+    assert first.created == 1
+    event_path = next((tmp_vault / "Calendar").rglob("*.md"))
+    before = event_path.stat().st_mtime_ns
+    (tmp_vault / "_meta" / "sync-state.json").write_text("{}", encoding="utf-8")
+    adapter = CalendarEventsAdapter()
+    adapter._gws = lambda args: payload  # type: ignore[method-assign]
+    result = adapter.ingest(str(tmp_vault), account_email="me@example.com", max_events=10)
+    assert result.created == 0
+    assert result.merged == 0
+    assert result.skip_details.get("unchanged") == 1
+    assert event_path.stat().st_mtime_ns == before

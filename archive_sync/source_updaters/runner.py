@@ -192,8 +192,13 @@ def adapter_ingest_kwargs(
         if catch_up:
             # Reset page cursor so threads.list starts at newest mail.
             # Keep the promotion gate on; history_id quick-update stays cheap.
+            # Adapter fetch defaults cap at 100 threads/messages/attachments.
+            # Catch-up must walk past that or a six-month mailbox gap stays empty.
             kwargs["catch_up"] = True
             kwargs["quick_update"] = True
+            kwargs["max_threads"] = None
+            kwargs["max_messages"] = None
+            kwargs["max_attachments"] = None
         return kwargs
     if adapter_id == "calendar-events":
         kwargs["account_email"] = scope
@@ -209,6 +214,7 @@ def adapter_ingest_kwargs(
         return kwargs
     if adapter_id == "otter-transcripts":
         kwargs["account_email"] = scope
+        kwargs["quick_update"] = True
         return kwargs
     if adapter_id == "file-libraries":
         kwargs["roots"] = [scope]
@@ -264,7 +270,11 @@ def _commit_state_store(state_store: SourceUpdaterStateStore | None) -> None:
         logger.exception("source updater state commit failed")
 
 
-def _install_dirty_uid_tracker(adapter: BaseAdapter, dirty: list[str]) -> Callable[[], None]:
+def _install_dirty_uid_tracker(
+    adapter: BaseAdapter,
+    dirty: list[str],
+    rel_paths: list[str] | None = None,
+) -> Callable[[], None]:
     """Track persisted card UIDs for downstream processors.
 
     Only ``after_card_write`` (actual create/merge). ``to_card`` used to mark every
@@ -274,6 +284,7 @@ def _install_dirty_uid_tracker(adapter: BaseAdapter, dirty: list[str]) -> Callab
     original_to_card = adapter.to_card
     original_after = adapter.after_card_write
     seen: set[str] = set()
+    seen_paths: set[str] = set()
 
     def _track(uid: object) -> None:
         text = str(uid or "").strip()
@@ -294,6 +305,11 @@ def _install_dirty_uid_tracker(adapter: BaseAdapter, dirty: list[str]) -> Callab
         **kwargs,
     ):
         _track(getattr(card, "uid", ""))
+        if rel_paths is not None:
+            path_text = str(rel_path or "").strip()
+            if path_text and path_text not in seen_paths:
+                seen_paths.add(path_text)
+                rel_paths.append(path_text)
         return original_after(
             vault_path,
             card,
@@ -467,7 +483,8 @@ def run_source_updater(
         cursor_before = read_adapter_cursor(vault, decl.adapter_source_id)
 
     dirty: list[str] = []
-    restore = _install_dirty_uid_tracker(adapter_obj, dirty)
+    written_rel_paths: list[str] = []
+    restore = _install_dirty_uid_tracker(adapter_obj, dirty, written_rel_paths)
     dry_run = not apply
     warnings: list[str] = []
     if dry_run:
@@ -595,7 +612,7 @@ def run_source_updater(
         try:
             from archive_cli.vault_cache_runtime import mark_vault_written
 
-            mark_vault_written(vault_path, uids=dirty)
+            mark_vault_written(vault_path, uids=dirty, rel_paths=written_rel_paths)
         except Exception:
             logger.debug("source updater mark_vault_written failed", exc_info=True)
 

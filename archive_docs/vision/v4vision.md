@@ -4,7 +4,7 @@
 
 ## The Core Thesis
 
-After v3, PPA is a **self-hosted archive** that can install a fixture instance and keep two roots isolated through restart. Anyone comfortable with Docker and a terminal can run their own private archive. Extractors and MCP retrieval work. The knowledge cache does **not** work (empty fallback). The CLI is the product surface; analytics workflows are still pending.
+After v3, PPA is a **self-hosted archive** that can install a fixture instance and keep two roots isolated through restart. Anyone comfortable with Docker and a terminal can run their own private archive. Extractors and MCP retrieval work. The knowledge cache does **not** work (empty fallback). The CLI is the product surface. Analytics workflows (`ppa analytics` / `archive_analytics`) already shipped in v2.5. See [STATUS.md](../STATUS.md).
 
 v4 makes PPA **accessible to everyone**. Three pillars:
 

@@ -145,6 +145,102 @@ def test_quick_update_skips_unchanged_documents(tmp_vault: Path, tmp_path: Path)
     assert second.skip_details["skipped_unchanged_documents"] == 1
 
 
+def test_quick_update_skips_when_metadata_sha_would_churn(tmp_vault: Path, tmp_path: Path):
+    import hashlib
+
+    from archive_sync.adapters.file_libraries import _is_unchanged_source_file
+
+    docs_root = tmp_path / "docs"
+    docs_root.mkdir()
+    body = "# Old memo\n\nbytes did not change"
+    doc_path = docs_root / "old-memo.md"
+    doc_path.write_text(body, encoding="utf-8")
+    content_sha = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    source_id = "custom:docs:old-memo.md"
+    card = DocumentCard(
+        uid="hfa-document-abc123def456",
+        type="document",
+        source=["file.library"],
+        source_id=source_id,
+        created="2017-06-03",
+        updated="2026-08-29",
+        summary="Old memo",
+        content_sha=content_sha,
+        metadata_sha="stale-extract-hash",
+        quality_flags=["metadata_only"],
+    )
+    write_card(
+        tmp_vault,
+        "Documents/2017-06/hfa-document-abc123def456.md",
+        card,
+        provenance=deterministic_provenance(card, "file.library"),
+    )
+    twin = DocumentCard(
+        uid="hfa-document-abc123def456",
+        type="document",
+        source=["file.library"],
+        source_id=source_id,
+        created="2017-05-24",
+        updated="2026-09-10",
+        summary="OLD MEMO FROM EXTRACT",
+        content_sha=content_sha,
+        metadata_sha="other-extract-hash",
+    )
+    write_card(
+        tmp_vault,
+        "Documents/2017-05/hfa-document-abc123def456.md",
+        twin,
+        provenance=deterministic_provenance(twin, "file.library"),
+    )
+
+    hashes = FileLibrariesAdapter()._load_existing_hashes(str(tmp_vault))
+    assert hashes[source_id] == {content_sha}
+    assert _is_unchanged_source_file(hashes, source_id, content_sha)
+
+    result = FileLibrariesAdapter().ingest(str(tmp_vault), roots=[str(docs_root)], quick_update=True)
+    assert result.created == 0
+    assert result.merged == 0
+    assert result.skip_details["skipped_unchanged_documents"] == 1
+
+
+def test_quick_update_skips_hash_when_mtime_and_size_match(tmp_vault: Path, tmp_path: Path, monkeypatch):
+    from archive_sync.adapters import file_libraries as file_libraries_mod
+
+    docs_root = tmp_path / "docs"
+    docs_root.mkdir()
+    doc_path = docs_root / "endaoment-overview.md"
+    doc_path.write_text("# Endaoment Overview\n\nCharitable infrastructure", encoding="utf-8")
+    adapter = FileLibrariesAdapter()
+    first = adapter.ingest(str(tmp_vault), roots=[str(docs_root)], quick_update=True)
+    assert first.created == 1
+
+    def boom(_path):
+        raise AssertionError("content hash must not run when size and mtime match")
+
+    monkeypatch.setattr(file_libraries_mod, "_sha256_file", boom)
+    second = FileLibrariesAdapter().ingest(str(tmp_vault), roots=[str(docs_root)], quick_update=True)
+    assert second.created == 0
+    assert second.merged == 0
+    assert second.skip_details["skipped_unchanged_documents"] == 1
+
+
+def test_quick_update_merges_when_file_bytes_change(tmp_vault: Path, tmp_path: Path):
+    docs_root = tmp_path / "docs"
+    docs_root.mkdir()
+    doc_path = docs_root / "endaoment-overview.md"
+    doc_path.write_text("# Endaoment Overview\n\nfirst", encoding="utf-8")
+    adapter = FileLibrariesAdapter()
+
+    first = adapter.ingest(str(tmp_vault), roots=[str(docs_root)], quick_update=True)
+    doc_path.write_text("# Endaoment Overview\n\nsecond", encoding="utf-8")
+    second = adapter.ingest(str(tmp_vault), roots=[str(docs_root)], quick_update=True)
+
+    assert first.created == 1
+    assert second.created == 0
+    assert second.merged == 1
+    assert second.skip_details.get("skipped_unchanged_documents", 0) == 0
+
+
 def test_load_existing_hashes_uses_vault_scan_cache_not_rglob(tmp_vault: Path, monkeypatch):
     card = DocumentCard(
         uid="hfa-document-abc123def456",
@@ -154,6 +250,7 @@ def test_load_existing_hashes_uses_vault_scan_cache_not_rglob(tmp_vault: Path, m
         created="2026-03-10",
         updated="2026-03-10",
         summary="Endaoment Overview",
+        content_sha="a" * 64,
         metadata_sha="abc123metadata",
     )
     write_card(
@@ -170,6 +267,7 @@ def test_load_existing_hashes_uses_vault_scan_cache_not_rglob(tmp_vault: Path, m
         created="2026-03-10",
         updated="2026-03-10",
         summary="Outside Documents",
+        content_sha="b" * 64,
         metadata_sha="outsidehash",
     )
     write_card(
@@ -189,7 +287,7 @@ def test_load_existing_hashes_uses_vault_scan_cache_not_rglob(tmp_vault: Path, m
     monkeypatch.setattr(Path, "rglob", _rglob)
 
     hashes = FileLibrariesAdapter()._load_existing_hashes(str(tmp_vault))
-    assert hashes == {"custom:endaoment-overview.md": "abc123metadata"}
+    assert hashes == {"custom:endaoment-overview.md": {"a" * 64}}
     assert "custom:outside.md" not in hashes
 
 

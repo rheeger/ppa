@@ -245,7 +245,7 @@ def main() -> None:
     embed_estimate_parser.add_argument("--embedding-version", type=int, default=0)
     embed_gc_parser = subparsers.add_parser(
         "embed-gc",
-        help="GC unused-hash orphans only. Keeps rematerialize reuse corpus.",
+        help="GC leftover embeddings. Default unused-hash. Live keys stay.",
     )
     embed_gc_parser.add_argument(
         "--apply",
@@ -258,11 +258,18 @@ def main() -> None:
         help="Delete leftover keys whose content identity already has a live list.",
     )
     embed_gc_parser.add_argument(
+        "--unknown",
+        action="store_true",
+        help="Delete leftovers with an empty content_hash. Re-embed later if needed.",
+    )
+    embed_gc_parser.add_argument(
         "--batch-size",
         type=int,
         default=2000,
         help="Rows per DELETE batch for leftover cleanup (default 2000).",
     )
+    embed_gc_parser.add_argument("--embedding-model", default="")
+    embed_gc_parser.add_argument("--embedding-version", type=int, default=0)
     embed_reuse_parser = subparsers.add_parser(
         "embed-reuse",
         help="Copy existing vectors onto new chunk_keys that share content_hash.",
@@ -291,6 +298,11 @@ def main() -> None:
     )
     embed_remap_parser.add_argument("--embedding-model", default="")
     embed_remap_parser.add_argument("--embedding-version", type=int, default=0)
+    embed_remap_parser.add_argument(
+        "--no-gc",
+        action="store_true",
+        help="Skip leftover embed-gc after remap/reuse.",
+    )
     embed_remap_schema_parser = subparsers.add_parser(
         "embed-remap-schema",
         help="Remap orphan vectors by recomputing pre-bump chunk_keys from live content.",
@@ -307,6 +319,11 @@ def main() -> None:
         type=int,
         default=0,
         help="Matched pairs per toast INSERT (default PPA_EMBED_REUSE_BATCH_SIZE or 2000).",
+    )
+    embed_remap_schema_parser.add_argument(
+        "--no-gc",
+        action="store_true",
+        help="Skip leftover embed-gc after remap/reuse.",
     )
     embed_batch_submit_parser = subparsers.add_parser(
         "embed-batch-submit",
@@ -839,6 +856,16 @@ def main() -> None:
         help="Skip Stage 1 LLM classify — only extract threads matching the domain gate (faster, fewer cards)",
     )
     enrich_parser.add_argument(
+        "--since",
+        default="",
+        help="Only threads with a message on or after YYYY-MM-DD (vault cards, not a Gmail walk)",
+    )
+    enrich_parser.add_argument(
+        "--classify-only",
+        action="store_true",
+        help="Write classify_index then stop — no Stage 2 extract (use before corpus-hygiene)",
+    )
+    enrich_parser.add_argument(
         "--classify-index-db",
         default="_artifacts/_classify_index.db",
         help="Persistent thread classification index path (stores classify results for reuse)",
@@ -1318,12 +1345,18 @@ def main() -> None:
 
     sub_maintain = subparsers.add_parser(
         "maintain",
-        help="Run maintenance cycle: tail ingestion, extract, resolve, rebuild, report",
+        help="Bring the living archive up to date: pull connected sources, process dirty cards, publish search",
+    )
+    sub_maintain.add_argument(
+        "--apply",
+        action="store_true",
+        dest="apply_loop",
+        help="Pull new evidence from connected accounts, process dirty cards, reuse unchanged embeddings, and publish a complete search generation",
     )
     sub_maintain.add_argument(
         "--dry-run",
         action="store_true",
-        help="Report what would be done without executing",
+        help="Print the same pull, process, and publish steps with no writes",
     )
     sub_maintain.add_argument(
         "--record-source-status",
@@ -1477,10 +1510,13 @@ def main() -> None:
 
         try:
             store = resolve_store()
+            explicit_run = bool(getattr(args, "run_source_updaters", False) or getattr(args, "run_processors", False))
+            apply_loop = bool(getattr(args, "apply_loop", False) or (args.dry_run and not explicit_run))
             report = run_maintenance(
                 store=store,
                 logger=_cli_log,
                 dry_run=args.dry_run,
+                apply_loop=apply_loop,
                 record_source_status=getattr(args, "record_source_status", False),
                 record_processor_status=getattr(args, "record_processor_status", False),
                 run_source_updaters=getattr(args, "run_source_updaters", False),
@@ -1497,9 +1533,13 @@ def main() -> None:
                 allow_broad_llm=getattr(args, "allow_broad_llm", False),
                 source_updater_strict=getattr(args, "strict", False),
             )
+            if report.human_summary:
+                print(report.human_summary, file=sys.stderr)
             _print_json(report.to_dict())
             if report.source_updater_partial and not getattr(args, "strict", False):
                 _cli_log.warning("maintain partial: source updater failures ignored; re-run with --strict to hard-fail")
+            if apply_loop and not args.dry_run and not report.ok:
+                raise SystemExit(1)
         except PpaError as exc:
             _cli_fail(exc)
         return
@@ -1825,6 +1865,8 @@ def main() -> None:
                 no_gate=bool(getattr(args, "no_gate", False)),
                 skip_classify=bool(getattr(args, "skip_classify", False)),
                 classify_index_db=str(getattr(args, "classify_index_db", "") or "").strip() or None,
+                since=str(getattr(args, "since", "") or "").strip(),
+                classify_only=bool(getattr(args, "classify_only", False)),
             )
             metrics = runner.run()
             _print_json(metrics.to_dict())
@@ -2401,7 +2443,10 @@ def main() -> None:
                 logger=_cli_log,
                 dry_run=not bool(getattr(args, "apply", False)),
                 duplicates=bool(getattr(args, "duplicates", False)),
+                unknown=bool(getattr(args, "unknown", False)),
                 batch_size=int(getattr(args, "batch_size", 10000) or 10000),
+                embedding_model=str(getattr(args, "embedding_model", "") or ""),
+                embedding_version=int(getattr(args, "embedding_version", 0) or 0),
             )
             _print_cli_result(result)
         except PpaError as exc:
@@ -2431,6 +2476,7 @@ def main() -> None:
                 chunks_jsonl=str(getattr(args, "chunks_jsonl", "") or ""),
                 embedding_model=str(getattr(args, "embedding_model", "") or ""),
                 embedding_version=int(getattr(args, "embedding_version", 0) or 0),
+                gc=not bool(getattr(args, "no_gc", False)),
             )
             _print_cli_result(result)
         except PpaError as exc:
@@ -2448,6 +2494,7 @@ def main() -> None:
                 embedding_model=str(getattr(args, "embedding_model", "") or ""),
                 embedding_version=int(getattr(args, "embedding_version", 0) or 0),
                 batch_size=int(getattr(args, "batch_size", 0) or 0),
+                gc=not bool(getattr(args, "no_gc", False)),
             )
             _print_cli_result(result)
         except PpaError as exc:
@@ -2914,6 +2961,14 @@ def main() -> None:
         "true",
         "yes",
     }
+    if args.command == "serve":
+        try:
+            from .commands._resolve import resolve_vault
+            from .serving_index import start_serving_generation_watcher
+
+            start_serving_generation_watcher(resolve_vault())
+        except Exception:
+            logging.getLogger("ppa.cli").exception("serving_index_watch_start_failed")
     if args.command == "serve" and want_http:
         from .http_serve import DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT, resolve_http_auth_token, run_http
 

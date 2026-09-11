@@ -2,7 +2,7 @@
 
 **Slice:** P10-D. **Contract:** `p10d.1`. **`production_proven`:** false.
 
-P09-D owns public README / ARCHITECTURE / MCP_SETUP / runtime-contract rewrites. This file is the P10 capability delta only — do not treat it as a matrix rewrite.
+Public README / STATUS / capability matrix were refreshed 2026-09-09 to match this delta. This file remains the P10 slice receipt.
 
 ## Newly supported after D
 

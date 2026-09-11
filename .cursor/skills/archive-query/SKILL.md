@@ -25,4 +25,6 @@ A "who is X" or profile write-up is job 1, then job 2, then job 5. A single
 dated question is job 3 or 4.
 
 Types use underscores (`email_message`, `imessage_thread`). `people_filter` is
-a name or slug, never an email. Put emails in `query=`.
+a name or slug, never an email. Put emails in `query=` or pass them to
+`archive_person` (name, slug, email, or phone). If `archive_person` returns
+`ambiguous`, list the candidates. Do not pick a winner.

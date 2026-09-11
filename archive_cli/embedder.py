@@ -804,6 +804,7 @@ class EmbedderMixin:
 
         self.ensure_ready()
         with self._connect() as conn:
+            conn.execute("SET statement_timeout = 0")
             cur = conn.execute(
                 f"""
                 UPDATE {self.schema}.embeddings e
@@ -988,6 +989,92 @@ class EmbedderMixin:
                     break
         return deleted_total
 
+    def delete_unknown_leftover_embeddings(
+        self,
+        *,
+        embedding_model: str,
+        embedding_version: int,
+        batch_size: int | None = None,
+        max_batches: int | None = None,
+    ) -> int:
+        """Delete leftovers with no content_hash. Live keys stay."""
+
+        batch = max(int(batch_size or get_embed_gc_batch_size()), 1)
+        deleted_total = 0
+        batches = 0
+        with self._connect() as conn:
+            conn.execute("SET statement_timeout = 0")
+            conn.execute(
+                f"""
+                CREATE UNLOGGED TABLE IF NOT EXISTS {self.schema}.embedding_unknown_gc (
+                    chunk_key TEXT PRIMARY KEY
+                )
+                """
+            )
+            conn.commit()
+            conn.execute(f"TRUNCATE {self.schema}.embedding_unknown_gc")
+            loaded = conn.execute(
+                f"""
+                INSERT INTO {self.schema}.embedding_unknown_gc (chunk_key)
+                SELECT e.chunk_key
+                FROM {self.schema}.embeddings e
+                WHERE e.embedding_model = %s
+                  AND e.embedding_version = %s
+                  AND e.content_hash = ''
+                  AND NOT EXISTS (
+                    SELECT 1 FROM {self.schema}.chunks c WHERE c.chunk_key = e.chunk_key
+                  )
+                ON CONFLICT DO NOTHING
+                """,
+                (embedding_model, embedding_version),
+            )
+            conn.commit()
+            queued = int(loaded.rowcount or 0)
+            logger.info("embeddings_unknown_gc_queued keys=%s", queued)
+            while queued > 0:
+                self._require_warehouse_free_space()
+                keys = [
+                    str(row["chunk_key"] if isinstance(row, dict) else row[0])
+                    for row in conn.execute(
+                        f"SELECT chunk_key FROM {self.schema}.embedding_unknown_gc LIMIT %s",
+                        (batch,),
+                    ).fetchall()
+                ]
+                if not keys:
+                    break
+                cur = conn.execute(
+                    f"""
+                    DELETE FROM {self.schema}.embeddings e
+                    WHERE e.chunk_key = ANY(%s)
+                      AND e.embedding_model = %s
+                      AND e.embedding_version = %s
+                      AND e.content_hash = ''
+                      AND NOT EXISTS (
+                        SELECT 1 FROM {self.schema}.chunks c WHERE c.chunk_key = e.chunk_key
+                      )
+                    """,
+                    (keys, embedding_model, embedding_version),
+                )
+                n = int(cur.rowcount or 0)
+                conn.execute(
+                    f"DELETE FROM {self.schema}.embedding_unknown_gc WHERE chunk_key = ANY(%s)",
+                    (keys,),
+                )
+                conn.commit()
+                deleted_total += n
+                batches += 1
+                queued -= len(keys)
+                logger.info(
+                    "embeddings_unknown_gc_batch deleted=%s total_deleted=%s remaining=%s batch=%s",
+                    n,
+                    deleted_total,
+                    queued,
+                    batches,
+                )
+                if max_batches is not None and batches >= max_batches:
+                    break
+        return deleted_total
+
     def reuse_embeddings_by_content(
         self,
         *,
@@ -995,10 +1082,13 @@ class EmbedderMixin:
         embedding_version: int,
         batch_size: int | None = None,
         cleanup_duplicates: bool = True,
+        uid_allowlist: Collection[str] | None = None,
     ) -> dict[str, int]:
         """Attach leftover lists onto pending chunks that share ``content_hash``.
 
         Build a key map first (no toast), then copy and delete in pages.
+        Incremental maintain passes ``uid_allowlist`` so a dirty rematerialize
+        does not scan the whole warehouse.
         """
 
         self.ensure_ready()
@@ -1007,6 +1097,7 @@ class EmbedderMixin:
         copied = 0
         cleaned = 0
         pages = 0
+        scoped_uids = normalize_embed_allowlist(uid_allowlist) if uid_allowlist is not None else None
         with self._connect() as conn:
             conn.execute("SET statement_timeout = 0")
             conn.execute(
@@ -1035,8 +1126,7 @@ class EmbedderMixin:
             conn.commit()
             conn.execute(f"TRUNCATE {self.schema}.embedding_reuse_pending")
             conn.execute(f"TRUNCATE {self.schema}.embedding_reuse_map")
-            pending = conn.execute(
-                f"""
+            pending_sql = f"""
                 INSERT INTO {self.schema}.embedding_reuse_pending (
                     chunk_key, content_hash, card_uid, chunk_type, chunk_index
                 )
@@ -1048,9 +1138,12 @@ class EmbedderMixin:
                       AND e.embedding_model = %s
                       AND e.embedding_version = %s
                 )
-                """,
-                (embedding_model, embedding_version),
-            )
+                """
+            pending_params: list[Any] = [embedding_model, embedding_version]
+            if scoped_uids is not None:
+                pending_sql += " AND c.card_uid = ANY(%s)"
+                pending_params.append(list(scoped_uids))
+            pending = conn.execute(pending_sql, pending_params)
             conn.commit()
             pending_before = int(pending.rowcount or 0)
             conn.execute(
@@ -1465,6 +1558,21 @@ class EmbedderMixin:
             )
             leftover_keys.update(str(row["chunk_key"] if isinstance(row, dict) else row[0]) for row in leftover_rows)
             logger.info("embeddings_remap_schema_leftovers keys=%s versions=%s", len(leftover_keys), versions)
+            if not leftover_keys:
+                logger.info(
+                    "embeddings_remap_by_prior_schema skipped leftovers=0 elapsed=%.1fs",
+                    time.monotonic() - started,
+                )
+                return {
+                    "copied": 0,
+                    "identified": 0,
+                    "cleaned": 0,
+                    "map_rows": 0,
+                    "pending": 0,
+                    "pages": 0,
+                    "schema_versions": list(versions),
+                    "skipped": "leftovers=0",
+                }
             with read_conn.cursor(name="ppa_prior_schema_chunks") as rcur:
                 rcur.itersize = 10_000
                 rcur.execute(
@@ -1536,17 +1644,60 @@ class EmbedderMixin:
             "schema_versions": list(versions),
         }
 
+    def _count_pending_chunks(
+        self,
+        *,
+        embedding_model: str,
+        embedding_version: int,
+        uid_allowlist: Collection[str] | None = None,
+    ) -> int:
+        scoped = normalize_embed_allowlist(uid_allowlist) if uid_allowlist is not None else None
+        sql = f"""
+            SELECT COUNT(*) AS n
+            FROM {self.schema}.chunks c
+            WHERE NOT EXISTS (
+                SELECT 1 FROM {self.schema}.embeddings e
+                WHERE e.chunk_key = c.chunk_key
+                  AND e.embedding_model = %s
+                  AND e.embedding_version = %s
+            )
+        """
+        params: list[Any] = [embedding_model, embedding_version]
+        if scoped is not None:
+            sql += " AND c.card_uid = ANY(%s)"
+            params.append(list(scoped))
+        with self._connect() as conn:
+            conn.execute("SET statement_timeout = 0")
+            row = conn.execute(sql, params).fetchone()
+        if row is None:
+            return 0
+        if isinstance(row, dict):
+            return int(row.get("n") or 0)
+        return int(row[0] or 0)
+
     def attach_embeddings_after_rematerialize(
         self,
         *,
         embedding_model: str | None = None,
         embedding_version: int | None = None,
         fail_if_thin: bool = True,
+        uid_allowlist: Collection[str] | None = None,
     ) -> dict[str, int]:
         """Backfill identity, remap leftover versioned keys, then reuse by content."""
         model = (embedding_model or "").strip() or get_default_embedding_model()
         version = int(embedding_version or 0) or get_default_embedding_version()
         self.backfill_embedding_content_identity()
+        pending_before = self._count_pending_chunks(embedding_model=model, embedding_version=version)
+        if pending_before == 0:
+            logger.info("embeddings_attach_after_rematerialize skipped remap leftovers pending=0")
+            result = {"remapped": 0, "reused": 0, "pending_after": 0}
+            if fail_if_thin:
+                self._fail_if_embed_coverage_thin(
+                    embedding_model=model,
+                    embedding_version=version,
+                    pending_after=0,
+                )
+            return result
         remapped = self.remap_embeddings_by_prior_schema(
             embedding_model=model,
             embedding_version=version,
@@ -1554,6 +1705,7 @@ class EmbedderMixin:
         reused = self.reuse_embeddings_by_content(
             embedding_model=model,
             embedding_version=version,
+            uid_allowlist=uid_allowlist,
         )
         pending_after = int(reused.get("pending_after") or 0)
         result = {
@@ -1660,17 +1812,32 @@ class EmbedderMixin:
                 "validate embedding provider complete",
                 f"dimension={provider_dimension} batch_size={batch_size} concurrency={concurrency} context_prefix={include_context_prefix}",
             )
+            reused_by_content = 0
             if not scoped:
                 attach = self.attach_embeddings_after_rematerialize(
                     embedding_model=embedding_model,
                     embedding_version=embedding_version,
                     fail_if_thin=False,
                 )
+                reused_by_content = int(attach.get("reused") or 0)
                 logger.info(
                     "embed_pending attach remapped=%s reused=%s pending_after=%s",
                     attach.get("remapped"),
                     attach.get("reused"),
                     attach.get("pending_after"),
+                )
+            else:
+                reused_attach = self.reuse_embeddings_by_content(
+                    embedding_model=embedding_model,
+                    embedding_version=embedding_version,
+                    uid_allowlist=uid_allowlist,
+                )
+                reused_by_content = int(reused_attach.get("copied") or 0)
+                logger.info(
+                    "embed_pending reuse_by_content copied=%s pending_after=%s uids=%s",
+                    reused_by_content,
+                    reused_attach.get("pending_after"),
+                    len(uid_allowlist or ()),
                 )
 
             _log_rebuild_step(2, total_steps, "count embedding backlog")
@@ -1725,6 +1892,7 @@ class EmbedderMixin:
                     "chunk_schema_version": CHUNK_SCHEMA_VERSION,
                     "embedded": 0,
                     "reused": len(reused_keys),
+                    "reused_by_content": reused_by_content,
                     "selected": len(selected_keys) if scoped else total_chunks,
                     "unscoped": not scoped,
                     "selected_chunk_keys": list(selected_keys),
@@ -1939,6 +2107,7 @@ class EmbedderMixin:
                 "embedded": embedded,
                 "failed": failed,
                 "reused": len(reused_keys),
+                "reused_by_content": reused_by_content,
                 "selected": len(selected_keys) if scoped else total_chunks,
                 "unscoped": not scoped,
                 "selected_chunk_keys": list(selected_keys),
