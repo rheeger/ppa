@@ -58,6 +58,11 @@ def _normalize_partial_date(value: str) -> str:
 class ContactsAdapter(BaseAdapter):
     source_id = "contacts"
 
+    def __init__(self) -> None:
+        super().__init__()
+        self._last_google_sync_token = ""
+        self._person_etags: dict[str, str] = {}
+
     def get_cursor_key(self, **kwargs) -> str:
         raw_sources = kwargs.get("sources") or []
         normalized = {
@@ -84,7 +89,7 @@ class ContactsAdapter(BaseAdapter):
         items: list[dict[str, Any]] = []
         if "google" in selected:
             max_items = kwargs.get("max_items")
-            items.extend(self._fetch_google(max_items=max_items))
+            items.extend(self._fetch_google(cursor=cursor, max_items=max_items))
         if {"apple", "vcf"} & selected:
             if vcf_paths:
                 items.extend(self._fetch_vcf_files(vcf_paths=vcf_paths))
@@ -117,7 +122,15 @@ class ContactsAdapter(BaseAdapter):
                 return [account_name]
         return list(available_accounts)
 
-    def _fetch_google_page_via_proxy(self, account: str, *, fields: str, page_token: str | None) -> dict[str, Any]:
+    def _fetch_google_page_via_proxy(
+        self,
+        account: str,
+        *,
+        fields: str,
+        page_token: str | None,
+        sync_token: str | None = None,
+        request_sync_token: bool = False,
+    ) -> dict[str, Any]:
         from arnoldlib.auth import build_service_proxied
         from arnoldlib.gate import _auto_issue_ticket
 
@@ -135,14 +148,26 @@ class ContactsAdapter(BaseAdapter):
             action="google.contacts.list",
             requested_by="archive-sync",
         )
-        return (
-            service.people()
-            .connections()
-            .list(resourceName="people/me", personFields=fields, pageSize=200, pageToken=page_token)
-            .execute()
-        )
+        kwargs: dict[str, Any] = {
+            "resourceName": "people/me",
+            "personFields": fields,
+            "pageSize": 200,
+            "pageToken": page_token,
+            "requestSyncToken": bool(request_sync_token),
+        }
+        if sync_token:
+            kwargs["syncToken"] = sync_token
+        return service.people().connections().list(**kwargs).execute()
 
-    def _fetch_google_page_via_direct(self, account: str, *, fields: str, page_token: str | None) -> dict[str, Any]:
+    def _fetch_google_page_via_direct(
+        self,
+        account: str,
+        *,
+        fields: str,
+        page_token: str | None,
+        sync_token: str | None = None,
+        request_sync_token: bool = False,
+    ) -> dict[str, Any]:
         from archive_auth import build_google_cli_token_manager
 
         manager = build_google_cli_token_manager(account_name=account, services=["contacts"])
@@ -152,9 +177,12 @@ class ContactsAdapter(BaseAdapter):
             "personFields": fields,
             "pageSize": "200",
             "resourceName": "people/me",
+            "requestSyncToken": "true" if request_sync_token else "false",
         }
         if page_token:
             params["pageToken"] = page_token
+        if sync_token:
+            params["syncToken"] = sync_token
         url = "https://people.googleapis.com/v1/people/me/connections?" + urllib.parse.urlencode(params)
 
         def _request(*, force_refresh: bool = False) -> dict[str, Any]:
@@ -183,9 +211,48 @@ class ContactsAdapter(BaseAdapter):
             )
         )
 
-    def _fetch_google(self, max_items: int | None = None) -> list[dict[str, Any]]:
+    def _google_sync_expired(self, exc: Exception) -> bool:
+        if isinstance(exc, urllib.error.HTTPError) and exc.code == 410:
+            return True
+        message = str(exc).lower()
+        return "410" in message and ("sync" in message or "expired" in message or "gone" in message)
+
+    def _fetch_google_page(
+        self,
+        account: str,
+        *,
+        fields: str,
+        page_token: str | None,
+        sync_token: str | None,
+        request_sync_token: bool,
+        has_arnoldlib: bool,
+    ) -> dict[str, Any]:
+        kwargs = {
+            "fields": fields,
+            "page_token": page_token,
+            "sync_token": sync_token,
+            "request_sync_token": request_sync_token,
+        }
+        if has_arnoldlib:
+            try:
+                return self._fetch_google_page_via_proxy(account, **kwargs)
+            except Exception as exc:
+                if not self._should_fallback_to_direct_google(exc):
+                    raise
+                return self._fetch_google_page_via_direct(account, **kwargs)
+        return self._fetch_google_page_via_direct(account, **kwargs)
+
+    def _fetch_google(self, cursor: dict[str, Any] | None = None, max_items: int | None = None) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         remaining = None if max_items in (None, "") else max(0, int(max_items))
+        state = cursor if isinstance(cursor, dict) else {}
+        stored_etags = {
+            str(name).strip(): str(etag).strip()
+            for name, etag in dict(state.get("person_etags") or {}).items()
+            if str(name).strip() and str(etag).strip()
+        }
+        self._person_etags = dict(stored_etags)
+        self._last_google_sync_token = str(state.get("sync_token") or "").strip()
         try:
             from archive_auth import ACCOUNTS
 
@@ -201,36 +268,57 @@ class ContactsAdapter(BaseAdapter):
             for account in self._selected_google_accounts(ACCOUNTS):
                 if remaining is not None and remaining <= 0:
                     break
+                sync_token = self._last_google_sync_token or None
                 page_token = None
                 while True:
                     try:
-                        if _has_arnoldlib:
-                            try:
-                                response = self._fetch_google_page_via_proxy(
-                                    account, fields=fields, page_token=page_token
-                                )
-                            except Exception as exc:
-                                if not self._should_fallback_to_direct_google(exc):
-                                    raise
-                                response = self._fetch_google_page_via_direct(
-                                    account, fields=fields, page_token=page_token
-                                )
-                        else:
-                            response = self._fetch_google_page_via_direct(account, fields=fields, page_token=page_token)
-                    except Exception:
+                        response = self._fetch_google_page(
+                            account,
+                            fields=fields,
+                            page_token=page_token,
+                            sync_token=sync_token if page_token is None else None,
+                            request_sync_token=True,
+                            has_arnoldlib=_has_arnoldlib,
+                        )
+                    except Exception as exc:
+                        if sync_token and self._google_sync_expired(exc):
+                            self._last_google_sync_token = ""
+                            sync_token = None
+                            page_token = None
+                            continue
                         break
                     for person in response.get("connections", []):
+                        resource_name = str(person.get("resourceName") or "").strip()
+                        etag = str(person.get("etag") or "").strip()
+                        if resource_name and etag and stored_etags.get(resource_name) == etag:
+                            continue
+                        if resource_name and etag:
+                            self._person_etags[resource_name] = etag
                         rows.append(self._google_fields(person))
                         if remaining is not None:
                             remaining -= 1
                             if remaining <= 0:
+                                next_sync = str(response.get("nextSyncToken") or "").strip()
+                                if next_sync:
+                                    self._last_google_sync_token = next_sync
                                 return rows
                     page_token = response.get("nextPageToken")
+                    next_sync = str(response.get("nextSyncToken") or "").strip()
+                    if next_sync:
+                        self._last_google_sync_token = next_sync
                     if not page_token:
                         break
         except Exception:
-            return []
+            return rows
         return rows
+
+    def finalize_cursor(self, cursor: dict[str, Any], **kwargs) -> dict[str, Any] | None:
+        patch = {"last_sync": datetime.now().isoformat()}
+        if self._last_google_sync_token:
+            patch["sync_token"] = self._last_google_sync_token
+        if self._person_etags:
+            patch["person_etags"] = dict(self._person_etags)
+        return patch
 
     def _fetch_vcf_files(self, *, vcf_paths: list[str] | None = None) -> list[dict[str, Any]]:
         configured_paths = [path for path in (vcf_paths or self._configured_vcf_paths()) if str(path).strip()]

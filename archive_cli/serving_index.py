@@ -859,6 +859,17 @@ def _install_handle(key: str, handle: ServingIndexHandle, *, previous: ServingIn
         previous.close()
 
 
+def schedule_serving_handle_warm(vault: Path) -> None:
+    """Open ACTIVE in a background thread so the first neighbor hop is not a cold mmap."""
+
+    try:
+        gid, root, _status = _active_generation(Path(vault))
+    except ServingIndexUnavailableError:
+        logger.info("serving_index_warm skip reason=unavailable")
+        return
+    _schedule_warm(Path(vault), gid, root)
+
+
 def _schedule_warm(vault: Path, gid: str, root: Path) -> None:
     key = _vault_handle_key(vault)
     with _LOCK:

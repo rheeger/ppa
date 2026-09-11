@@ -151,12 +151,12 @@ def test_fetch_google_falls_back_to_direct_for_selected_account(monkeypatch):
     adapter = ContactsAdapter()
     monkeypatch.setenv("GOOGLE_ACCOUNT", "rheeger@gmail.com")
 
-    def fake_proxy(account, *, fields, page_token):
+    def fake_proxy(account, *, fields, page_token, sync_token=None, request_sync_token=False):
         raise RuntimeError("auto-issue failed: connection refused")
 
     calls: list[str] = []
 
-    def fake_direct(account, *, fields, page_token):
+    def fake_direct(account, *, fields, page_token, sync_token=None, request_sync_token=False):
         calls.append(account)
         return {
             "connections": [
@@ -193,3 +193,32 @@ def test_fetch_google_falls_back_to_direct_for_selected_account(monkeypatch):
     rows = adapter._fetch_google()
     assert calls == ["rheeger"]
     assert rows[0]["name"] == "Jane Smith"
+
+
+def test_fetch_google_skips_matching_etag_and_stores_sync_token(monkeypatch):
+    adapter = ContactsAdapter()
+
+    def fake_page(account, *, fields, page_token, sync_token, request_sync_token, has_arnoldlib):
+        assert sync_token == "sync-1"
+        assert request_sync_token is True
+        return {
+            "connections": [
+                {"resourceName": "people/same", "etag": "etag-same", "names": [{"displayName": "Same"}]},
+                {"resourceName": "people/new", "etag": "etag-new", "names": [{"displayName": "New"}]},
+            ],
+            "nextSyncToken": "sync-2",
+        }
+
+    monkeypatch.setattr(adapter, "_fetch_google_page", fake_page)
+    monkeypatch.setattr(adapter, "_selected_google_accounts", lambda _accounts: ["rheeger"])
+    monkeypatch.setitem(
+        sys.modules,
+        "archive_auth",
+        types.SimpleNamespace(ACCOUNTS={"rheeger": {"email": "rheeger@gmail.com"}}),
+    )
+    rows = adapter._fetch_google(cursor={"sync_token": "sync-1", "person_etags": {"people/same": "etag-same"}})
+    assert [row["name"] for row in rows] == ["New"]
+    assert adapter._last_google_sync_token == "sync-2"
+    patch = adapter.finalize_cursor({})
+    assert patch["sync_token"] == "sync-2"
+    assert patch["person_etags"]["people/new"] == "etag-new"

@@ -203,6 +203,27 @@ def test_quick_update_skips_when_metadata_sha_would_churn(tmp_vault: Path, tmp_p
     assert result.skip_details["skipped_unchanged_documents"] == 1
 
 
+def test_quick_update_skips_hash_when_mtime_and_size_match(tmp_vault: Path, tmp_path: Path, monkeypatch):
+    from archive_sync.adapters import file_libraries as file_libraries_mod
+
+    docs_root = tmp_path / "docs"
+    docs_root.mkdir()
+    doc_path = docs_root / "endaoment-overview.md"
+    doc_path.write_text("# Endaoment Overview\n\nCharitable infrastructure", encoding="utf-8")
+    adapter = FileLibrariesAdapter()
+    first = adapter.ingest(str(tmp_vault), roots=[str(docs_root)], quick_update=True)
+    assert first.created == 1
+
+    def boom(_path):
+        raise AssertionError("content hash must not run when size and mtime match")
+
+    monkeypatch.setattr(file_libraries_mod, "_sha256_file", boom)
+    second = FileLibrariesAdapter().ingest(str(tmp_vault), roots=[str(docs_root)], quick_update=True)
+    assert second.created == 0
+    assert second.merged == 0
+    assert second.skip_details["skipped_unchanged_documents"] == 1
+
+
 def test_quick_update_merges_when_file_bytes_change(tmp_vault: Path, tmp_path: Path):
     docs_root = tmp_path / "docs"
     docs_root.mkdir()

@@ -1103,6 +1103,27 @@ def test_stage_transcripts_walks_mcp_day_windows_backward(tmp_vault, tmp_path):
     ]
 
 
+def test_live_fetch_stops_on_empty_incremental_list(tmp_vault, monkeypatch):
+    adapter = OtterTranscriptsAdapter()
+    client = _FakeOtterClient(pages=[{"meetings": [], "nextPageToken": None}], details={}, transcripts={})
+    adapter._build_client = lambda: client  # type: ignore[method-assign]
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("calendar lookup must not run on an empty incremental list")
+
+    monkeypatch.setattr(adapter, "_calendar_lookup", boom)
+    batches = list(
+        adapter._live_fetch_batches(
+            str(tmp_vault),
+            {"last_sync": "2026-09-10T22:00:00"},
+            account_email="robbie@example.com",
+            quick_update=True,
+        )
+    )
+    assert batches == []
+    assert client.list_calls == 1
+
+
 def test_quick_update_skips_unchanged_meetings(tmp_vault):
     _seed_event(tmp_vault)
     adapter = OtterTranscriptsAdapter()

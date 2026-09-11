@@ -12,8 +12,10 @@ from archive_cli.index_store import PostgresArchiveIndex
 from archive_cli.serving_index import (
     get_serving_handle,
     mark_serving_index_dirty,
+    schedule_serving_handle_warm,
     serving_index_status,
     verify_serving_index,
+    wait_serving_handle,
 )
 from archive_cli.store import DefaultArchiveStore
 
@@ -171,6 +173,20 @@ def test_generation_flip_returns_old_handle_without_blocking(tmp_path, monkeypat
     assert elapsed < 0.2
     rows = during.search("Jane", limit=5)
     assert any(r.get("card_uid") == "hfa-person-aaaabbbbcccc" for r in rows)
+
+
+def test_schedule_serving_handle_warm_opens_active(tmp_path, monkeypatch) -> None:
+    from archive_cli import serving_index as si
+
+    si._HANDLE = None
+    si._HANDLES.clear()
+    si._WARMING.clear()
+    root = tmp_path / "rust-search-index"
+    monkeypatch.setenv("PPA_SERVING_INDEX_PATH", str(root))
+    gid = _publish_mini(root, "gen-prewarm-1")
+    schedule_serving_handle_warm(tmp_path)
+    handle = wait_serving_handle(tmp_path, generation_id=gid, timeout=15)
+    assert handle.generation_id == gid
 
 
 def test_get_serving_handle_reuses_cache_when_legacy_slot_cleared(tmp_path, monkeypatch) -> None:

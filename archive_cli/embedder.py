@@ -1558,6 +1558,21 @@ class EmbedderMixin:
             )
             leftover_keys.update(str(row["chunk_key"] if isinstance(row, dict) else row[0]) for row in leftover_rows)
             logger.info("embeddings_remap_schema_leftovers keys=%s versions=%s", len(leftover_keys), versions)
+            if not leftover_keys:
+                logger.info(
+                    "embeddings_remap_by_prior_schema skipped leftovers=0 elapsed=%.1fs",
+                    time.monotonic() - started,
+                )
+                return {
+                    "copied": 0,
+                    "identified": 0,
+                    "cleaned": 0,
+                    "map_rows": 0,
+                    "pending": 0,
+                    "pages": 0,
+                    "schema_versions": list(versions),
+                    "skipped": "leftovers=0",
+                }
             with read_conn.cursor(name="ppa_prior_schema_chunks") as rcur:
                 rcur.itersize = 10_000
                 rcur.execute(
@@ -1629,6 +1644,37 @@ class EmbedderMixin:
             "schema_versions": list(versions),
         }
 
+    def _count_pending_chunks(
+        self,
+        *,
+        embedding_model: str,
+        embedding_version: int,
+        uid_allowlist: Collection[str] | None = None,
+    ) -> int:
+        scoped = normalize_embed_allowlist(uid_allowlist) if uid_allowlist is not None else None
+        sql = f"""
+            SELECT COUNT(*) AS n
+            FROM {self.schema}.chunks c
+            WHERE NOT EXISTS (
+                SELECT 1 FROM {self.schema}.embeddings e
+                WHERE e.chunk_key = c.chunk_key
+                  AND e.embedding_model = %s
+                  AND e.embedding_version = %s
+            )
+        """
+        params: list[Any] = [embedding_model, embedding_version]
+        if scoped is not None:
+            sql += " AND c.card_uid = ANY(%s)"
+            params.append(list(scoped))
+        with self._connect() as conn:
+            conn.execute("SET statement_timeout = 0")
+            row = conn.execute(sql, params).fetchone()
+        if row is None:
+            return 0
+        if isinstance(row, dict):
+            return int(row.get("n") or 0)
+        return int(row[0] or 0)
+
     def attach_embeddings_after_rematerialize(
         self,
         *,
@@ -1641,6 +1687,17 @@ class EmbedderMixin:
         model = (embedding_model or "").strip() or get_default_embedding_model()
         version = int(embedding_version or 0) or get_default_embedding_version()
         self.backfill_embedding_content_identity()
+        pending_before = self._count_pending_chunks(embedding_model=model, embedding_version=version)
+        if pending_before == 0:
+            logger.info("embeddings_attach_after_rematerialize skipped remap leftovers pending=0")
+            result = {"remapped": 0, "reused": 0, "pending_after": 0}
+            if fail_if_thin:
+                self._fail_if_embed_coverage_thin(
+                    embedding_model=model,
+                    embedding_version=version,
+                    pending_after=0,
+                )
+            return result
         remapped = self.remap_embeddings_by_prior_schema(
             embedding_model=model,
             embedding_version=version,

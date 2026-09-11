@@ -1117,6 +1117,13 @@ def run_maintenance(
             install_process_reuse()
         except Exception:
             logger.exception("maintain_vault_cache_process_reuse_failed")
+        if apply_loop and not dry_run:
+            try:
+                from archive_cli.serving_index import schedule_serving_handle_warm
+
+                schedule_serving_handle_warm(store.vault)
+            except Exception:
+                logger.exception("maintain_serving_handle_warm_failed")
     idx = store.index
     schema = str(getattr(idx, "schema", "ppa"))
 

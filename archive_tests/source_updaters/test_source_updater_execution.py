@@ -541,7 +541,7 @@ def test_adapter_ingest_kwargs_per_live_source(monkeypatch: pytest.MonkeyPatch) 
     assert "snapshot_dir" not in imessage
 
     otter = adapter_ingest_kwargs(resolve_declaration("otter-transcripts:me@example.com"), apply=False)
-    assert otter == {"account_email": "me@example.com"}
+    assert otter == {"account_email": "me@example.com", "quick_update": True}
 
     documents = adapter_ingest_kwargs(resolve_declaration("file-libraries:documents"), apply=False)
     assert documents == {"roots": ["documents"]}

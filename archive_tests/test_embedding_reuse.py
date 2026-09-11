@@ -486,6 +486,26 @@ def test_scoped_embed_pending_reuses_reminted_text(
     assert provider.calls == 0
 
 
+def test_attach_skips_remap_when_nothing_is_pending() -> None:
+    class Fake(EmbedderMixin):
+        schema = "ppa"
+
+        def backfill_embedding_content_identity(self) -> None:
+            return None
+
+        def _count_pending_chunks(self, **_kwargs) -> int:
+            return 0
+
+        def remap_embeddings_by_prior_schema(self, **_kwargs):
+            raise AssertionError("remap must not run when pending is 0")
+
+        def reuse_embeddings_by_content(self, **_kwargs):
+            raise AssertionError("reuse must not run when pending is 0")
+
+    result = Fake().attach_embeddings_after_rematerialize(fail_if_thin=False)
+    assert result == {"remapped": 0, "reused": 0, "pending_after": 0}
+
+
 def test_reuse_methods_are_on_embedder_mixin() -> None:
     assert hasattr(EmbedderMixin, "reuse_embeddings_by_content")
     assert hasattr(EmbedderMixin, "remap_embeddings_by_slot")
