@@ -192,8 +192,13 @@ def adapter_ingest_kwargs(
         if catch_up:
             # Reset page cursor so threads.list starts at newest mail.
             # Keep the promotion gate on; history_id quick-update stays cheap.
+            # Adapter fetch defaults cap at 100 threads/messages/attachments.
+            # Catch-up must walk past that or a six-month mailbox gap stays empty.
             kwargs["catch_up"] = True
             kwargs["quick_update"] = True
+            kwargs["max_threads"] = None
+            kwargs["max_messages"] = None
+            kwargs["max_attachments"] = None
         return kwargs
     if adapter_id == "calendar-events":
         kwargs["account_email"] = scope

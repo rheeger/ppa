@@ -1,6 +1,6 @@
 # PPA status
 
-**As of 2026-09-09.** Main `a815dc1`. Living seed serving generation `1788902927628`.
+**As of 2026-09-09.** Branch `fix/maintain-living-loop`. Living seed serving generation `1788997214192`.
 
 This page is the current product state. When a vision file, rebase, or older report conflicts with this page or [PRODUCT_CAPABILITY_MATRIX.md](PRODUCT_CAPABILITY_MATRIX.md), this page wins. Vision files stay historical intent. There is no v2.75.
 
@@ -48,16 +48,16 @@ Model rerank stays optional and off. Million-vector train at 1536-d on an 8 GB c
 
 ## Ops on this machine
 
-| Fact                                      | Status                                                                                                                                                                         |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Living vault                              | `/Users/rheeger/Archive/seed/hf-archives-seed-20260307-235127`, schema `ppa`                                                                                                   |
-| Query                                     | Rust serving index. Postgres is warehouse-only.                                                                                                                                |
-| Arnold                                    | Remote HTTP MCP client of Ginger. Not the home of the corpus. Do not copy the seed there.                                                                                      |
-| Nightly `ppa maintain`                    | Apply loop is implemented and isolated-proven (`ppa maintain --apply`). LaunchAgent `com.rheeger.ppa.maintain-nightly` is still **unloaded**. Do not load it until a supervised living-seed run (plan H) proves attach + publish on this seed. |
-| HTTP MCP                                  | `com.rheeger.ppa.mcp-http` on the current Tailscale address, read-only profile. Pin the `ppa-http-mcp` worktree to current main and bounce after a deploy.                     |
-| Photos, Apple Health, `--catch-up`        | Parked                                                                                                                                                                         |
-| Knowledge cache / 46-facet living profile | Empty. `archive_knowledge` falls back to search.                                                                                                                               |
-| New archives                              | Fail closed on their own instance. They do not inherit `local_seed_living_corpus`.                                                                                             |
+| Fact                                      | Status                                                                                                                                                                                                                                         |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Living vault                              | `/Users/rheeger/Archive/seed/hf-archives-seed-20260307-235127`, schema `ppa`                                                                                                                                                                   |
+| Query                                     | Rust serving index. Postgres is warehouse-only.                                                                                                                                                                                                |
+| Arnold                                    | Remote HTTP MCP client of Ginger. Not the home of the corpus. Do not copy the seed there.                                                                                                                                                      |
+| Nightly `ppa maintain`                    | Apply loop no longer tails the whole ingestion ledger. A follow-up apply rematerialized 2,516 dirty cards (not 1.39 million) and published generation `1788997214192`. LaunchAgent `com.rheeger.ppa.maintain-nightly` stays **unloaded**. Receipt: [reports/maintain-living-loop.md](reports/maintain-living-loop.md). |
+| HTTP MCP                                  | `com.rheeger.ppa.mcp-http` on the current Tailscale address, read-only profile. Pin the `ppa-http-mcp` worktree to current main and bounce after a deploy.                                                                                     |
+| Photos, Apple Health, `--catch-up`        | Parked                                                                                                                                                                                                                                         |
+| Knowledge cache / 46-facet living profile | Empty. `archive_knowledge` falls back to search.                                                                                                                                                                                               |
+| New archives                              | Fail closed on their own instance. They do not inherit `local_seed_living_corpus`.                                                                                                                                                             |
 
 Ask living-archive questions through the already-running MCP. Do not cold-open `archive_cli` once per question.
 
@@ -71,11 +71,11 @@ These are **v3**, not a gate for this machine:
 - Prove Linux or any second platform.
 - Flip `production_proven` to true after a formal sign-off.
 
-The daily loop is implemented and isolated-proven. Nightly stays unloaded until a supervised living-seed run. See [plans/maintain-living-loop.md](plans/maintain-living-loop.md).
+The apply loop is dirty-only on this seed. Gmail from April through July 2026 is still thin on disk (April folder missing). A Gmail-only uncapped catch-up is walking the mailbox to fill that gap. Nightly stays unloaded. See [reports/maintain-living-loop.md](reports/maintain-living-loop.md).
 
 ## What is not done
 
-- Maintain living loop slice H: one supervised `ppa maintain --apply` on this seed, with a receipt. Nightly stays unloaded until you approve that run. Slices A–G are done.
+- Maintain living loop: rematerialize scope is fixed and proven on this seed. Gmail April–July 2026 backfill is in progress (uncapped `gmail-messages` catch-up). Nightly stays unloaded.
 - v3: stranger-ready install, Docker as the product, vault encryption UX, Linux wheels, `production_proven=true`.
 - v4: native app, OAuth proxy, billing, signed connector feed.
 

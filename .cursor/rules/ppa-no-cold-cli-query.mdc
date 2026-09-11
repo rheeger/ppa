@@ -32,6 +32,6 @@ Do not start a second `archive_cli` “to use the new worktree” while MCP is a
 
 ## Exceptions (not queries)
 
-New processes are fine for **jobs**: `maintain`, `embed-pending`, `rebuild-indexes`, full search publish. Those are not “ask a question.” Use `--log-file` **before** the subcommand.
+New processes are fine for **jobs**: `maintain`, `embed-pending`, `rebuild-indexes`, full search publish. Those are not “ask a question.” Launch them detached (`setsid`, PPID 1, non-managed terminal) with `--log-file` **before** the subcommand. See `.cursor/skills/long-running-jobs/SKILL.md`.
 
 Fixture/slice tests in pytest are fine. The living seed is not a fixture.

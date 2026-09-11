@@ -569,6 +569,13 @@ def validate_generation(
         try:
             import archive_crate
 
+            logger.info(
+                "serving_index_validate native_open start dest=%s cards=%s chunks=%s embeddings=%s",
+                dest,
+                card_count,
+                chunk_count,
+                key_count,
+            )
             opener = getattr(archive_crate, "serving_index_open_generation", None)
             if opener is None:
                 raise IncompatibleStateError("publication_validation_failed: native_open:unavailable")
@@ -597,6 +604,7 @@ def validate_generation(
             close = getattr(handle, "close", None)
             if callable(close):
                 close()
+            logger.info("serving_index_validate native_open done dest=%s canaries=%s", dest, canaries)
         except IncompatibleStateError:
             raise
         except Exception as exc:
@@ -874,20 +882,13 @@ def ancestor_chunk_keys_for_uids(index_root: Path, generation_id: str, uids: Ite
     live: dict[str, str] = {}
     for dest in chain:
         layout = read_layout(dest)
-        for uid in layout.get("tombstone_uids") or []:
-            text = str(uid).strip()
-            if not text:
-                continue
-            for key, owner in list(live.items()):
-                if owner == text:
-                    live.pop(key, None)
-        for uid in layout.get("replaced_uids") or []:
-            text = str(uid).strip()
-            if not text:
-                continue
-            for key, owner in list(live.items()):
-                if owner == text:
-                    live.pop(key, None)
+        drop = {
+            str(uid).strip()
+            for uid in list(layout.get("tombstone_uids") or []) + list(layout.get("replaced_uids") or [])
+            if str(uid).strip()
+        }
+        if drop:
+            live = {key: owner for key, owner in live.items() if owner not in drop}
         for key in layout.get("tombstone_chunk_keys") or []:
             live.pop(str(key).strip(), None)
         for row in iter_jsonl(dest / "chunks.jsonl"):

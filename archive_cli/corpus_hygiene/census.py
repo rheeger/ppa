@@ -13,6 +13,7 @@ from archive_cli.validation_gates.constants import GATE_RUN_STATUS_PASSED, GATE_
 from archive_cli.validation_gates.gate_registry import GateRegistry
 from archive_cli.validation_gates.report import GateRunReport, write_gate_report
 from archive_sync.llm_enrichment.email_promotion_policy import EMAIL_PROMOTION_POLICY_VERSION
+from archive_sync.llm_enrichment.thread_date import any_activity_since
 
 from .classification_reuse import (
     ClassificationReuseLoader,
@@ -38,6 +39,7 @@ class CensusContext:
     decision_run_id: str = ""
     allow_new_llm: bool = False
     deterministic: bool = False
+    since: str = ""
 
 
 @dataclass
@@ -288,6 +290,19 @@ def _frontmatter_rows_from_cache(vault: Path) -> list[dict[str, Any]]:
                 continue
             rows.append({"rel_path": rel, "frontmatter": fm})
     return rows
+
+
+def filter_threads_since(threads: list[EmailThreadRecord], since: str) -> list[EmailThreadRecord]:
+    """Keep threads with first or last message on or after ``since``."""
+
+    cutoff = str(since or "").strip()
+    if not cutoff:
+        return list(threads)
+    return [
+        thread
+        for thread in threads
+        if any_activity_since((thread.first_message_at, thread.last_message_at), cutoff)
+    ]
 
 
 def load_threads_from_vault_cache(vault_path: Path) -> list[EmailThreadRecord]:

@@ -1,7 +1,8 @@
 """Process-level handle for the Rust serving index.
 
 The store is cheap and constructed per MCP call. This module caches the native
-mmap handle keyed by (vault, index_root, ACTIVE generation).
+mmap handle keyed by (vault, index_root). When ACTIVE flips, queries keep the
+current handle and a background thread opens the new generation, then swaps.
 """
 
 from __future__ import annotations
@@ -52,6 +53,7 @@ from .index_config import (
     get_serving_export_batch_size,
     get_serving_index_max_rss_mb,
     get_serving_index_path,
+    get_serving_warm_poll_seconds,
     get_serving_nlist,
     get_serving_nprobe,
     get_serving_train_iters,
@@ -418,6 +420,11 @@ def load_serving_edges(conn: Any, schema: str, uids: list[str] | None = None) ->
 _LOCK = threading.RLock()
 _HANDLES: dict[str, ServingIndexHandle] = {}
 _HANDLE: ServingIndexHandle | None = None
+_WARMING: dict[str, str] = {}
+_WARM_THREADS: dict[str, threading.Thread] = {}
+_WATCH_STOP = threading.Event()
+_WATCH_THREAD: threading.Thread | None = None
+_WATCH_VAULT: Path | None = None
 
 
 def _vault_handle_key(vault: Path) -> str:
@@ -587,21 +594,30 @@ def serving_index_format_supported(status: dict[str, Any] | None) -> bool:
 def serving_index_status(vault: Path | None = None) -> dict[str, Any]:
     root = get_serving_index_path(vault)
     try:
-        return dict(_crate().serving_index_status(str(root)) or {})
+        payload = dict(_crate().serving_index_status(str(root)) or {})
     except ServingIndexUnavailableError:
-        return {
+        payload = {
             "serving_index_generation": "",
             "serving_index_format": 0,
             "serving_index_dirty_records": 0,
             "serving_index_ready": False,
         }
     except Exception:
-        return {
+        payload = {
             "serving_index_generation": "",
             "serving_index_format": 0,
             "serving_index_dirty_records": 0,
             "serving_index_ready": False,
         }
+    key = _vault_handle_key(vault) if vault is not None else ""
+    with _LOCK:
+        handle = _HANDLES.get(key) if key else _HANDLE
+        warming = _WARMING.get(key, "") if key else ""
+        if not warming and handle is not None:
+            warming = next((gid for vault_key, gid in _WARMING.items() if vault_key == key), "")
+    payload["serving_index_open_generation"] = str(getattr(handle, "generation_id", "") or "")
+    payload["serving_index_warming_generation"] = warming
+    return payload
 
 
 def ack_dirty_uids(vault: Path | str | None, uids: list[str] | None) -> int:
@@ -804,17 +820,18 @@ def close_serving_handles(*, vault: Path | None = None) -> None:
                 handle.close()
             _HANDLES.clear()
             _HANDLE = None
+            _WARMING.clear()
             return
         key = _vault_handle_key(vault)
         handle = _HANDLES.pop(key, None)
+        _WARMING.pop(key, None)
         if handle is not None:
             handle.close()
         if _HANDLE is handle:
             _HANDLE = None
 
 
-def get_serving_handle(vault: Path) -> ServingIndexHandle:
-    global _HANDLE
+def _active_generation(vault: Path) -> tuple[str, Path, dict[str, Any]]:
     root = get_serving_index_path(vault)
     crate = _crate()
     status = dict(crate.serving_index_status(str(root)) or {})
@@ -826,6 +843,141 @@ def get_serving_handle(vault: Path) -> ServingIndexHandle:
         raise ServingIndexUnavailableError(
             f"serving_index_format_unsupported: found {found}, need {REQUIRED_SERVING_INDEX_FORMAT} ({REQUIRED_VECTOR_IMPL})"
         )
+    return gid, root, status
+
+
+def _open_native_handle(vault: Path, root: Path, gid: str) -> ServingIndexHandle:
+    native = _crate().serving_index_open(str(root))
+    return ServingIndexHandle(Path(vault), root, gid, native)
+
+
+def _install_handle(key: str, handle: ServingIndexHandle, *, previous: ServingIndexHandle | None) -> None:
+    global _HANDLE
+    _HANDLES[key] = handle
+    _HANDLE = handle
+    if previous is not None and previous is not handle:
+        previous.close()
+
+
+def _schedule_warm(vault: Path, gid: str, root: Path) -> None:
+    key = _vault_handle_key(vault)
+    with _LOCK:
+        if _WARMING.get(key) == gid:
+            return
+        current = _HANDLES.get(key)
+        if current is not None and current.generation_id == gid:
+            return
+        _WARMING[key] = gid
+
+    def _run() -> None:
+        logger.info("serving_index_warm start generation=%s vault=%s", gid, vault)
+        opened: ServingIndexHandle | None = None
+        try:
+            opened = _open_native_handle(vault, root, gid)
+            with _LOCK:
+                try:
+                    live_gid, _, _ = _active_generation(vault)
+                except ServingIndexUnavailableError:
+                    live_gid = ""
+                previous = _HANDLES.get(key)
+                if live_gid != gid:
+                    logger.info(
+                        "serving_index_warm discard generation=%s active=%s",
+                        gid,
+                        live_gid,
+                    )
+                    opened.close()
+                    if _WARMING.get(key) == gid:
+                        _WARMING.pop(key, None)
+                    if live_gid:
+                        _schedule_warm(vault, live_gid, get_serving_index_path(vault))
+                    return
+                _install_handle(key, opened, previous=previous)
+                if _WARMING.get(key) == gid:
+                    _WARMING.pop(key, None)
+            logger.info("serving_index_warm done generation=%s", gid)
+        except Exception:
+            logger.exception("serving_index_warm failed generation=%s", gid)
+            if opened is not None:
+                try:
+                    opened.close()
+                except Exception:
+                    logger.debug("serving_index_warm close failed generation=%s", gid, exc_info=True)
+            with _LOCK:
+                if _WARMING.get(key) == gid:
+                    _WARMING.pop(key, None)
+
+    thread = threading.Thread(target=_run, name=f"ppa-serving-warm-{gid}", daemon=True)
+    _WARM_THREADS[key] = thread
+    thread.start()
+
+
+def wait_serving_handle(vault: Path, *, generation_id: str = "", timeout: float = 30.0) -> ServingIndexHandle:
+    """Block until this process has opened ``generation_id`` or current ACTIVE."""
+
+    deadline = time.monotonic() + max(timeout, 0.1)
+    wanted = str(generation_id or "").strip()
+    if not wanted:
+        wanted, _, _ = _active_generation(vault)
+    while time.monotonic() < deadline:
+        handle = get_serving_handle(vault)
+        if handle.generation_id == wanted:
+            return handle
+        time.sleep(0.05)
+    raise ServingIndexUnavailableError(f"serving_index_warm_timeout generation={wanted}")
+
+
+def start_serving_generation_watcher(vault: Path) -> None:
+    """Poll ACTIVE and open a new generation before the next MCP query."""
+
+    global _WATCH_THREAD, _WATCH_VAULT
+    stop_serving_generation_watcher()
+    _WATCH_STOP.clear()
+    _WATCH_VAULT = Path(vault)
+
+    def _loop() -> None:
+        while not _WATCH_STOP.wait(get_serving_warm_poll_seconds()):
+            target = _WATCH_VAULT
+            if target is None:
+                continue
+            try:
+                gid, root, _ = _active_generation(target)
+            except ServingIndexUnavailableError:
+                continue
+            except Exception:
+                logger.debug("serving_index_watch status failed", exc_info=True)
+                continue
+            key = _vault_handle_key(target)
+            with _LOCK:
+                current = _HANDLES.get(key)
+            if current is None:
+                try:
+                    get_serving_handle(target)
+                except ServingIndexUnavailableError:
+                    continue
+                continue
+            if current.generation_id != gid:
+                _schedule_warm(target, gid, root)
+
+    _WATCH_THREAD = threading.Thread(target=_loop, name="ppa-serving-watch", daemon=True)
+    _WATCH_THREAD.start()
+    logger.info("serving_index_watch start vault=%s poll_s=%s", vault, get_serving_warm_poll_seconds())
+
+
+def stop_serving_generation_watcher() -> None:
+    global _WATCH_THREAD, _WATCH_VAULT
+    _WATCH_STOP.set()
+    thread = _WATCH_THREAD
+    _WATCH_THREAD = None
+    _WATCH_VAULT = None
+    if thread is not None and thread.is_alive() and thread is not threading.current_thread():
+        thread.join(timeout=2.0)
+    _WATCH_STOP.clear()
+
+
+def get_serving_handle(vault: Path) -> ServingIndexHandle:
+    global _HANDLE
+    gid, root, _status = _active_generation(vault)
     key = _vault_handle_key(vault)
     with _LOCK:
         if _HANDLE is None:
@@ -839,13 +991,17 @@ def get_serving_handle(vault: Path) -> ServingIndexHandle:
             _HANDLE = existing
             return existing
         if existing is not None:
-            existing.close()
-            _HANDLES.pop(key, None)
-        native = crate.serving_index_open(str(root))
-        handle = ServingIndexHandle(Path(vault), root, gid, native)
-        _HANDLES[key] = handle
-        _HANDLE = handle
-        return handle
+            _schedule_warm(vault, gid, root)
+            return existing
+    native_handle = _open_native_handle(vault, root, gid)
+    with _LOCK:
+        current = _HANDLES.get(key)
+        if current is not None and current.generation_id == gid:
+            native_handle.close()
+            _HANDLE = current
+            return current
+        _install_handle(key, native_handle, previous=current)
+        return native_handle
 
 
 def _snapshot_binding(vault: Path, gid: str) -> tuple[str, int]:

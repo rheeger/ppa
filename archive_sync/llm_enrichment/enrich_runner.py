@@ -30,6 +30,7 @@ from archive_sync.llm_enrichment.classify_index import ClassifyIndex
 from archive_sync.llm_enrichment.defaults import DEFAULT_ENRICH_EXTRACT_MODEL
 from archive_sync.llm_enrichment.extract import ExtractedCard, extract_cards_for_thread
 from archive_sync.llm_enrichment.known_senders import TRANSACTIONAL_DOMAINS, _email_domain, _is_marketing_subject
+from archive_sync.llm_enrichment.thread_date import any_activity_since, iso_day
 from archive_sync.llm_enrichment.threads import (
     ThreadDocument,
     ThreadStub,
@@ -331,6 +332,9 @@ class EnrichmentMetrics:
     round_trip_warnings: int = 0
     wall_clock_seconds: float = 0.0
     per_card_type: dict[str, int] = field(default_factory=dict)
+    date_since: str = ""
+    threads_before_date_scope: int = 0
+    classify_only: bool = False
 
     @property
     def total_extract_candidates(self) -> int:
@@ -356,6 +360,9 @@ class EnrichmentMetrics:
             "round_trip_warnings": self.round_trip_warnings,
             "wall_clock_seconds": round(self.wall_clock_seconds, 3),
             "per_card_type": dict(self.per_card_type),
+            "date_since": self.date_since,
+            "threads_before_date_scope": self.threads_before_date_scope,
+            "classify_only": self.classify_only,
         }
 
 
@@ -387,6 +394,8 @@ class LlmEnrichmentRunner:
         no_gate: bool = False,
         skip_classify: bool = False,
         classify_index_db: Path | str | None = None,
+        since: str = "",
+        classify_only: bool = False,
         # Legacy — accepted but ignored (no triage stage)
         triage_model: str = "",
     ) -> None:
@@ -407,6 +416,8 @@ class LlmEnrichmentRunner:
         self.no_gate = bool(no_gate)
         self.skip_classify = bool(skip_classify)
         self.classify_index_db = Path(classify_index_db) if classify_index_db else None
+        self.since = iso_day(since)
+        self.classify_only = bool(classify_only)
 
     def run(self) -> EnrichmentMetrics:
         t0 = time.perf_counter()
@@ -449,6 +460,22 @@ class LlmEnrichmentRunner:
             return min((s.sent_at or "" for s in group), default=tid)
 
         thread_items.sort(key=_thread_sort_key)
+
+        metrics.date_since = self.since
+        metrics.classify_only = self.classify_only
+        metrics.threads_before_date_scope = len(thread_items)
+        if self.since:
+            thread_items = [
+                (tid, group)
+                for tid, group in thread_items
+                if any_activity_since((s.sent_at for s in group), self.since)
+            ]
+            log.info(
+                "date scope since=%s threads=%d of %d",
+                self.since,
+                len(thread_items),
+                metrics.threads_before_date_scope,
+            )
 
         if self.vault_percent is not None:
             thread_items = [
@@ -667,6 +694,15 @@ class LlmEnrichmentRunner:
             metrics.stage0_fast_track,
             metrics.stage1_transactional,
         )
+
+        if self.classify_only:
+            log.info("classify-only: skipping stage2 extract queue=%d", len(extract_queue))
+            metrics.wall_clock_seconds = time.perf_counter() - t0
+            self.staging_dir.mkdir(parents=True, exist_ok=True)
+            metrics_path = self.staging_dir / "_metrics.json"
+            metrics_path.write_text(json.dumps(metrics.to_dict(), indent=2), encoding="utf-8")
+            log.info("enrich-emails classify-only done — wrote %s", metrics_path)
+            return metrics
 
         def _process_thread(item: tuple[str, list[ThreadStub], list[str]]) -> dict[str, Any]:
             tid, group, card_types = item

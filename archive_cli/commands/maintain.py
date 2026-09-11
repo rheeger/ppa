@@ -23,6 +23,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from ..store import DefaultArchiveStore
 
+_LOG = logging.getLogger("ppa.maintain")
+
 
 def _try_import(module_path: str) -> Any | None:
     try:
@@ -54,17 +56,18 @@ def _get_watermark(conn: Any, schema: str) -> str:
 
 
 def _tail_ingestion_log(conn: Any, schema: str, watermark: str) -> list[dict[str, Any]]:
-    if watermark:
-        rows = conn.execute(
-            f"SELECT card_uid, action, source_adapter, logged_at "
-            f"FROM {schema}.ingestion_log "
-            f"WHERE logged_at > %s ORDER BY logged_at ASC",
-            (watermark,),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            f"SELECT card_uid, action, source_adapter, logged_at FROM {schema}.ingestion_log ORDER BY logged_at ASC"
-        ).fetchall()
+    mark = str(watermark or "").strip()
+    if not mark:
+        # Empty watermark used to SELECT the whole ledger. On this seed that is
+        # millions of rows and rematerializes the vault.
+        _LOG.warning("ingestion_log tail skipped: last_maintenance_at is empty")
+        return []
+    rows = conn.execute(
+        f"SELECT card_uid, action, source_adapter, logged_at "
+        f"FROM {schema}.ingestion_log "
+        f"WHERE logged_at > %s ORDER BY logged_at ASC",
+        (mark,),
+    ).fetchall()
     out: list[dict[str, Any]] = []
     for r in rows:
         if isinstance(r, dict):
@@ -1085,6 +1088,14 @@ def run_maintenance(
     report.started_at = datetime.now(timezone.utc).isoformat()
     report.maintenance_run_id = datetime.now(timezone.utc).strftime("maintain-%Y%m%dT%H%M%S%fZ")
     report.apply_loop = bool(apply_loop)
+    if dirty_uids_path:
+        from pathlib import Path
+
+        from archive_sync.processors.dirty_io import load_dirty_uids
+
+        file_uids = load_dirty_uids(Path(dirty_uids_path))
+        _extend_publish_uids(report, file_uids)
+        logger.info("maintain dirty_uids_path uids=%s path=%s", len(file_uids), dirty_uids_path)
     if apply_loop:
         report.planned_steps = list(APPLY_LOOP_STEPS)
         run_source_updaters = True
@@ -1250,7 +1261,7 @@ def run_maintenance(
         new_rows = []
 
     tailed_uids = _normalize_uids(row.get("card_uid") for row in new_rows)
-    if new_rows:
+    if new_rows and not apply_loop:
         report.new_cards_ingested = len(new_rows)
         _extend_publish_uids(report, tailed_uids)
         report.skipped_steps.append("auto_extract (routed through processor DAG)")
@@ -1260,7 +1271,26 @@ def run_maintenance(
     from archive_engine.thread_projection import drain_pending, pending_thread_uids
 
     thread_uids = pending_thread_uids(store.vault)
-    scheduler_uids = _normalize_uids(list(hygiene_dirty) + leftover_dirty + tailed_uids + thread_uids)
+    # Apply loop dirty set is this run's source UIDs (passed via source
+    # reports), hygiene, leftover serving-index dirty, and pending threads.
+    # The warehouse ingestion_log is a historical ledger. Unioning it here
+    # rematerialized 1.39 million cards on the living seed.
+    processor_tail = [] if apply_loop else tailed_uids
+    if apply_loop and tailed_uids:
+        logger.info(
+            "maintain apply_loop omitting ingestion_log tail from processors uids=%s",
+            len(tailed_uids),
+        )
+    scheduler_uids = _normalize_uids(list(hygiene_dirty) + leftover_dirty + processor_tail + thread_uids)
+    logger.info(
+        "maintain processor dirty hygiene=%s leftover=%s tail=%s threads=%s scheduled=%s apply_loop=%s",
+        len(hygiene_dirty),
+        len(leftover_dirty),
+        len(processor_tail),
+        len(thread_uids),
+        len(scheduler_uids),
+        apply_loop,
+    )
     should_run_processors = bool(run_processors) or bool(scheduler_uids) or bool(dirty_uids_path)
     # Explicit --run-processors honours --apply-processors. Legacy ingestion-log
     # maintain (no processor flags) still applies unless this is a dry-run.

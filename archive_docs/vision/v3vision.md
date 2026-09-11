@@ -1,5 +1,7 @@
 # PPA v3 Vision — Self-Hosted Multi-User
 
+**Living status:** [STATUS.md](../STATUS.md). This file is the next product increment (independent install). Analytics, bursts, RRF, AccessContext, and fixture `ppa setup` already landed in v2.5 via PR 29. Do not treat them as v3 leftovers.
+
 ---
 
 ## The Core Thesis

@@ -1,6 +1,6 @@
 # Maintain living loop
 
-**Status:** A–G implemented and isolated-proven. H not run. Nightly still unloaded. This document does not run living-seed maintain, load nightly, bounce HTTP MCP, or touch the living seed.  
+**Status:** A–G implemented. Rematerialize scope fixed: apply loop does not tail the whole ingestion ledger. Proven on seed (`scheduled=2516`, published `1788997214192`). Gmail April–July 2026 backfill in progress. Nightly still unloaded. Receipt: [reports/maintain-living-loop.md](../reports/maintain-living-loop.md).  
 **Owner increment:** late v2.5 ops. Not v3. Not `production_proven`.  
 **Branch when work starts:** a new `fix/maintain-living-loop` (or similar). Do not stack this on stranger-install work.  
 **Living status:** [STATUS.md](../STATUS.md).

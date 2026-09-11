@@ -486,6 +486,11 @@ def get_serving_index_max_rss_mb() -> int:
     return max(_ppa_env_int("PPA_SERVING_INDEX_MAX_RSS_MB", default=8192), 256)
 
 
+def get_serving_warm_poll_seconds() -> float:
+    """How often a long-lived serve process checks ACTIVE for a new generation."""
+    return max(_ppa_env_float("PPA_SERVING_WARM_POLL_SECONDS", default=2.0), 0.2)
+
+
 def get_serving_nlist() -> int | None:
     """Optional serving IVF list count. None means ``sqrt(N)`` clamped to 4096."""
     raw = _ppa_env("PPA_SERVING_NLIST")

@@ -1,13 +1,32 @@
 ---
 description: >-
-  Long-running PPA jobs — structured logging, progress, ETA, file retention. Always follow for slice-seed,
-  rebuild-indexes, benchmark, embed-pending, migrate, Make targets, and agent shell pipelines.
+  Long-running PPA jobs must launch detached (setsid, PPID 1, non-managed
+  terminal) plus structured logging. Always follow for maintain, slice-seed,
+  rebuild-indexes, benchmark, embed-pending, enrich-emails, extract-emails,
+  Gmail catch-up, migrate, and agent shell pipelines.
 alwaysApply: true
 ---
 
-# Long-running PPA jobs — logging & visibility
+# Long-running PPA jobs: detach first, then log
 
-**Always apply** when editing `ppa/`, running agents against PPA, or executing commands that can exceed **~2 minutes**.
+ALWAYS run long running operations on non-managed terminal sessions in a
+detached state (`setsid`, stdin from `/dev/null`, PPID 1). Cursor-managed
+shells, including `block_until_ms: 0` background jobs, die when the chat
+compacts or ends. That SIGTERM left living-seed `maintain` runs with no
+Python traceback. `--log-file` does not keep a child of the agent shell
+alive.
+
+Before you start a job that can exceed a couple of minutes, read
+`.cursor/skills/long-running-jobs/SKILL.md`.
+
+```bash
+setsid .venv/bin/python -m archive_cli --log-file logs/JOB.log SUBCOMMAND ARGS \
+  </dev/null >logs/JOB.stdio 2>&1 &
+```
+
+Confirm `ps -p PID -o ppid` is 1. Watch `logs/JOB.log`. Do not AwaitShell
+the launcher. Do not start a second writer against the same vault while one
+is running. Do not kill HTTP MCP or Cursor stdio MCP.
 
 ## Implementation standards (match the code)
 
@@ -20,16 +39,20 @@ alwaysApply: true
    - **Copy** phase: `files=i/n (pct%)`, elapsed, ETA, `rate_files_per_s`.
    - CLI: `--progress-every N`, `--target-percent`, `--cluster-cap`. Smoke: `archive_tests/slice_config.smoke.json`, `make test-slice-smoke` → `logs/ppa-slice-smoke.log`.
 5. **`rebuild-indexes`** — Step `k/6` logs, materialize/load reporters, `--progress-every`; use `--log-file` via global flag: `python -m archive_cli --log-file logs/rebuild.log rebuild-indexes`.
-6. **Agents** — Prefer `make test-slice-smoke` before full slice; always **`--log-file`** or **`tee`** for jobs that may outlive the session; quote paths with spaces.
+6. **Agents** — Prefer `make test-slice-smoke` before full slice. Launch the
+   real job with `setsid` as above, never a Cursor-managed terminal.
+   `--log-file` is required. `tee` is not a substitute for detach. Quote
+   paths with spaces.
 
 ## Rough duration
 
-| Job                          | Notes                                                                                                      |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `slice-seed`                 | Two directory walks (count + read) + read every note; large seeds → **tens of minutes**+ dominated by I/O. |
-| `slice-seed` smoke           | Same full vault read; smaller **output** slice only.                                                       |
-| `rebuild-indexes`            | Minutes–hours; checkpoint resume; `--progress-every`.                                                      |
-| `benchmark`, `embed-pending` | Use `--log-file`; embedding is often API-rate-limited.                                                     |
+| Job                                         | Notes                                                                                                      |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `slice-seed`                                | Two directory walks (count + read) + read every note; large seeds → **tens of minutes**+ dominated by I/O. |
+| `slice-seed` smoke                          | Same full vault read; smaller **output** slice only.                                                       |
+| `rebuild-indexes`                           | Minutes–hours; checkpoint resume; `--progress-every`.                                                      |
+| `benchmark`, `embed-pending`                | Detach + `--log-file`; embedding is often API-rate-limited.                                                |
+| `maintain`, Gmail catch-up, `enrich-emails` | Detach + `--log-file`. One writer per vault. Can run past a chat.                                          |
 
 ## Anti-patterns
 
@@ -37,3 +60,5 @@ alwaysApply: true
 - Status only on stdout (breaks JSON consumers).
 - `%` complete without a defined denominator.
 - Putting `--log-file` after the subcommand (it is a **parent** parser flag).
+- Starting `maintain` / rebuild / embed / Gmail / enrich as a Cursor-owned
+  shell (`block_until_ms: 0`, foreground wait, or any PPID that is not 1).

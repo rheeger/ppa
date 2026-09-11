@@ -124,7 +124,7 @@ Warehouse `edges` have no `method` / `confidence` / `evidence_uids`. Serving gra
 
 ### Instance health
 
-`ppa status` / `ppa instance-status` / `ppa readiness` evaluate the **current instance**. Missing source or provider capability is `pending` / `unavailable`. Stale or down sources stay visible. Formal `ready: true` is not a product claim. Analytics CLI/MCP are pending (P10). `production_proven=false` until a long soak.
+`ppa status` / `ppa instance-status` / `ppa readiness` evaluate the **current instance**. Missing source or provider capability is `pending` / `unavailable`. Stale or down sources stay visible. Formal `ready: true` is not a product claim. `ppa analytics` / `archive_analytics` are shipped. `production_proven=false` until a long soak. See [STATUS.md](STATUS.md).
 
 ## Operational Invariants
 

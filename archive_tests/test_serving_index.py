@@ -119,9 +119,11 @@ def test_dirty_publish_and_status(tmp_path, monkeypatch) -> None:
 
 def test_warm_handle_remaps_when_generation_changes(tmp_path, monkeypatch) -> None:
     from archive_cli import serving_index as si
+    from archive_cli.serving_index import wait_serving_handle
 
     si._HANDLE = None
     si._HANDLES.clear()
+    si._WARMING.clear()
     root = tmp_path / "rust-search-index"
     monkeypatch.setenv("PPA_SERVING_INDEX_PATH", str(root))
     first_gid = _publish_mini(root, "gen-warm-1")
@@ -130,11 +132,45 @@ def test_warm_handle_remaps_when_generation_changes(tmp_path, monkeypatch) -> No
     rows1 = handle1.search("Jane", limit=5)
     assert any(r.get("card_uid") == "hfa-person-aaaabbbbcccc" for r in rows1)
     second_gid = _publish_mini(root, "gen-warm-2")
-    handle2 = get_serving_handle(tmp_path)
+    during = get_serving_handle(tmp_path)
+    assert during.generation_id == first_gid
+    rows_during = during.search("Jane", limit=5)
+    assert any(r.get("card_uid") == "hfa-person-aaaabbbbcccc" for r in rows_during)
+    handle2 = wait_serving_handle(tmp_path, generation_id=second_gid, timeout=15)
     assert handle2.generation_id == second_gid
     assert handle2.generation_id != first_gid
     rows2 = handle2.search("Jane", limit=5)
     assert any(r.get("card_uid") == "hfa-person-aaaabbbbcccc" for r in rows2)
+
+
+def test_generation_flip_returns_old_handle_without_blocking(tmp_path, monkeypatch) -> None:
+    import archive_crate
+
+    from archive_cli import serving_index as si
+
+    si._HANDLE = None
+    si._HANDLES.clear()
+    si._WARMING.clear()
+    root = tmp_path / "rust-search-index"
+    monkeypatch.setenv("PPA_SERVING_INDEX_PATH", str(root))
+    first_gid = _publish_mini(root, "gen-block-1")
+    handle1 = get_serving_handle(tmp_path)
+    assert handle1.generation_id == first_gid
+    real_open = archive_crate.serving_index_open
+
+    def slow_open(path: str):
+        time.sleep(0.4)
+        return real_open(path)
+
+    monkeypatch.setattr(archive_crate, "serving_index_open", slow_open)
+    _publish_mini(root, "gen-block-2")
+    started = time.monotonic()
+    during = get_serving_handle(tmp_path)
+    elapsed = time.monotonic() - started
+    assert during.generation_id == first_gid
+    assert elapsed < 0.2
+    rows = during.search("Jane", limit=5)
+    assert any(r.get("card_uid") == "hfa-person-aaaabbbbcccc" for r in rows)
 
 
 def test_search_query_hybrid_on_mini_index(tmp_path, monkeypatch) -> None:

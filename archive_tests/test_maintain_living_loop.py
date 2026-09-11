@@ -368,6 +368,101 @@ def test_apply_loop_passes_dirty_uids_and_not_broad_llm(
     assert "hfa-purchase-derived" in rep.publish_uids
 
 
+def test_apply_loop_does_not_schedule_ingestion_log_tail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = mock.MagicMock()
+    conn = mock.MagicMock()
+    ledger = [
+        {
+            "card_uid": f"hfa-ledger-{i}",
+            "action": "created",
+            "source_adapter": "gmail",
+            "logged_at": "2026-01-02T00:00:00Z",
+        }
+        for i in range(4000)
+    ]
+
+    def exec_side(sql, params=None):
+        m = mock.MagicMock()
+        s = str(sql)
+        if "last_maintenance_at" in s:
+            m.fetchone.return_value = {"value": "2020-01-01T00:00:00Z"}
+        elif "ingestion_log" in s:
+            m.fetchall.return_value = ledger
+            m.fetchone.return_value = None
+        elif "enrichment_queue" in s:
+            m.fetchone.return_value = {"c": 0}
+        elif "retrieval_gaps" in s:
+            m.fetchone.return_value = {"c": 0}
+        else:
+            m.fetchone.return_value = None
+            m.fetchall.return_value = []
+        return m
+
+    conn.execute.side_effect = exec_side
+    store.index.schema = "ppa"
+    store.index._connect.return_value = _connect_ctx(conn)
+    store.vault = tmp_path
+    captured: dict[str, Any] = {}
+
+    def fake_updaters(*_a, **_k):
+        return (
+            1,
+            [{"source_key": "gmail-messages:me@example.com", "status": "success", "dirty_card_uids": ["hfa-email-dirty"]}],
+            False,
+        )
+
+    def fake_processors(*_a, **kwargs):
+        captured["extra"] = list(kwargs.get("extra_dirty_uids") or [])
+        captured["source_reports"] = kwargs.get("source_updater_reports")
+        return (0, [], 0)
+
+    monkeypatch.setattr("archive_cli.commands.maintain._run_source_updaters", fake_updaters)
+    monkeypatch.setattr("archive_cli.commands.maintain._run_processors", fake_processors)
+    monkeypatch.setattr(
+        "archive_cli.commands.maintain._run_file_hygiene",
+        lambda *a, **k: ({"purged": 0}, {"cards_linked": 0, "cards_scanned": 0}, []),
+    )
+    _ready_apply(monkeypatch)
+    run_maintenance(store=store, logger=logging.getLogger("t"), dry_run=False, apply_loop=True)
+    from archive_sync.processors.dirty_io import dirty_uids_from_source_reports
+
+    assert "hfa-email-dirty" in dirty_uids_from_source_reports(captured["source_reports"] or [])
+    assert not any(str(uid).startswith("hfa-ledger-") for uid in captured["extra"])
+    assert len(captured["extra"]) < 50
+
+
+def test_empty_maintenance_watermark_does_not_scan_ingestion_log() -> None:
+    conn = mock.MagicMock()
+    from archive_cli.commands.maintain import _tail_ingestion_log
+
+    rows = _tail_ingestion_log(conn, "ppa", "")
+    assert rows == []
+    conn.execute.assert_not_called()
+
+
+def test_dirty_uids_path_is_published(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    uids_path = tmp_path / "dirty.jsonl"
+    uids_path.write_text("hfa-email-message-new1\nhfa-email-thread-new2\n", encoding="utf-8")
+    store = _empty_store(tmp_path)
+    monkeypatch.setattr(
+        "archive_cli.commands.maintain._run_file_hygiene",
+        lambda *a, **k: ({"purged": 0}, {"cards_linked": 0, "cards_scanned": 0}, []),
+    )
+    monkeypatch.setattr("archive_cli.commands.maintain._run_processors", lambda *a, **k: (0, [], 0))
+    _ready_apply(monkeypatch)
+    report = run_maintenance(
+        store=store,
+        logger=logging.getLogger("t"),
+        dry_run=True,
+        run_processors=True,
+        dirty_uids_path=str(uids_path),
+    )
+    assert "hfa-email-message-new1" in report.publish_uids
+    assert "hfa-email-thread-new2" in report.publish_uids
+
+
 def test_dirty_email_extracts_derived_card(tmp_path: Path) -> None:
     from archive_cli.index_config import get_rebuild_workers
     from archive_sync.extractors.amazon import AmazonExtractor

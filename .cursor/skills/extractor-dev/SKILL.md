@@ -15,6 +15,10 @@ description: >-
 - Rebuilding an existing extractor after quality report flags
 - Expanding coverage to new template eras for an existing provider
 
+Full-seed census, template sampling, and extract walks are long jobs. Launch
+them detached per `.cursor/skills/long-running-jobs/SKILL.md`. Never a
+Cursor-managed terminal.
+
 ## The five phases (sequential, gated)
 
 ### Phase 1: Census

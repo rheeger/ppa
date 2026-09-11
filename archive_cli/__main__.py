@@ -839,6 +839,16 @@ def main() -> None:
         help="Skip Stage 1 LLM classify — only extract threads matching the domain gate (faster, fewer cards)",
     )
     enrich_parser.add_argument(
+        "--since",
+        default="",
+        help="Only threads with a message on or after YYYY-MM-DD (vault cards, not a Gmail walk)",
+    )
+    enrich_parser.add_argument(
+        "--classify-only",
+        action="store_true",
+        help="Write classify_index then stop — no Stage 2 extract (use before corpus-hygiene)",
+    )
+    enrich_parser.add_argument(
         "--classify-index-db",
         default="_artifacts/_classify_index.db",
         help="Persistent thread classification index path (stores classify results for reuse)",
@@ -1838,6 +1848,8 @@ def main() -> None:
                 no_gate=bool(getattr(args, "no_gate", False)),
                 skip_classify=bool(getattr(args, "skip_classify", False)),
                 classify_index_db=str(getattr(args, "classify_index_db", "") or "").strip() or None,
+                since=str(getattr(args, "since", "") or "").strip(),
+                classify_only=bool(getattr(args, "classify_only", False)),
             )
             metrics = runner.run()
             _print_json(metrics.to_dict())
@@ -2927,6 +2939,14 @@ def main() -> None:
         "true",
         "yes",
     }
+    if args.command == "serve":
+        try:
+            from .commands._resolve import resolve_vault
+            from .serving_index import start_serving_generation_watcher
+
+            start_serving_generation_watcher(resolve_vault())
+        except Exception:
+            logging.getLogger("ppa.cli").exception("serving_index_watch_start_failed")
     if args.command == "serve" and want_http:
         from .http_serve import DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT, resolve_http_auth_token, run_http
 

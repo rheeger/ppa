@@ -423,7 +423,9 @@ def test_gmail_catch_up_resets_cursor_and_keeps_promotion_gate(tmp_path: Path) -
     assert adapter.ingest_kwargs.get("gmail_promotion_gate") is True
     assert adapter.ingest_kwargs.get("catch_up") is True
     assert adapter.ingest_kwargs.get("quick_update") is True
-    assert "max_threads" not in adapter.ingest_kwargs
+    assert adapter.ingest_kwargs.get("max_threads") is None
+    assert adapter.ingest_kwargs.get("max_messages") is None
+    assert adapter.ingest_kwargs.get("max_attachments") is None
     assert "catch_up: gmail page cursor reset" in " ".join(result.report.warnings)
     assert "gmail_promotion_gate=true" in result.report.warnings
 
@@ -434,6 +436,9 @@ def test_gmail_uncapped_catch_up_does_not_disable_promotion_gate() -> None:
     assert kwargs["gmail_promotion_gate"] is True
     assert kwargs["catch_up"] is True
     assert kwargs["quick_update"] is True
+    assert kwargs["max_threads"] is None
+    assert kwargs["max_messages"] is None
+    assert kwargs["max_attachments"] is None
 
 
 def test_gmail_catch_up_with_max_items_still_bounds_and_keeps_gate(tmp_path: Path) -> None:
