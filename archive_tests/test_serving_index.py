@@ -173,6 +173,29 @@ def test_generation_flip_returns_old_handle_without_blocking(tmp_path, monkeypat
     assert any(r.get("card_uid") == "hfa-person-aaaabbbbcccc" for r in rows)
 
 
+def test_get_serving_handle_reuses_cache_when_legacy_slot_cleared(tmp_path, monkeypatch) -> None:
+    import archive_crate
+
+    from archive_cli import serving_index as si
+
+    si._HANDLE = None
+    si._HANDLES.clear()
+    si._WARMING.clear()
+    root = tmp_path / "rust-search-index"
+    monkeypatch.setenv("PPA_SERVING_INDEX_PATH", str(root))
+    gid = _publish_mini(root, "gen-reuse-1")
+    handle1 = get_serving_handle(tmp_path)
+    assert handle1.generation_id == gid
+    si._HANDLE = None
+
+    def fail_open(_path: str):
+        raise AssertionError("warm handle should be reused without reopening")
+
+    monkeypatch.setattr(archive_crate, "serving_index_open", fail_open)
+    handle2 = get_serving_handle(tmp_path)
+    assert handle2 is handle1
+
+
 def test_search_query_hybrid_on_mini_index(tmp_path, monkeypatch) -> None:
     from archive_cli import serving_index as si
 

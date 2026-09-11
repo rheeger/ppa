@@ -804,6 +804,7 @@ class EmbedderMixin:
 
         self.ensure_ready()
         with self._connect() as conn:
+            conn.execute("SET statement_timeout = 0")
             cur = conn.execute(
                 f"""
                 UPDATE {self.schema}.embeddings e
@@ -979,6 +980,92 @@ class EmbedderMixin:
                 queued -= len(keys)
                 logger.info(
                     "embeddings_duplicate_gc_batch deleted=%s total_deleted=%s remaining=%s batch=%s",
+                    n,
+                    deleted_total,
+                    queued,
+                    batches,
+                )
+                if max_batches is not None and batches >= max_batches:
+                    break
+        return deleted_total
+
+    def delete_unknown_leftover_embeddings(
+        self,
+        *,
+        embedding_model: str,
+        embedding_version: int,
+        batch_size: int | None = None,
+        max_batches: int | None = None,
+    ) -> int:
+        """Delete leftovers with no content_hash. Live keys stay."""
+
+        batch = max(int(batch_size or get_embed_gc_batch_size()), 1)
+        deleted_total = 0
+        batches = 0
+        with self._connect() as conn:
+            conn.execute("SET statement_timeout = 0")
+            conn.execute(
+                f"""
+                CREATE UNLOGGED TABLE IF NOT EXISTS {self.schema}.embedding_unknown_gc (
+                    chunk_key TEXT PRIMARY KEY
+                )
+                """
+            )
+            conn.commit()
+            conn.execute(f"TRUNCATE {self.schema}.embedding_unknown_gc")
+            loaded = conn.execute(
+                f"""
+                INSERT INTO {self.schema}.embedding_unknown_gc (chunk_key)
+                SELECT e.chunk_key
+                FROM {self.schema}.embeddings e
+                WHERE e.embedding_model = %s
+                  AND e.embedding_version = %s
+                  AND e.content_hash = ''
+                  AND NOT EXISTS (
+                    SELECT 1 FROM {self.schema}.chunks c WHERE c.chunk_key = e.chunk_key
+                  )
+                ON CONFLICT DO NOTHING
+                """,
+                (embedding_model, embedding_version),
+            )
+            conn.commit()
+            queued = int(loaded.rowcount or 0)
+            logger.info("embeddings_unknown_gc_queued keys=%s", queued)
+            while queued > 0:
+                self._require_warehouse_free_space()
+                keys = [
+                    str(row["chunk_key"] if isinstance(row, dict) else row[0])
+                    for row in conn.execute(
+                        f"SELECT chunk_key FROM {self.schema}.embedding_unknown_gc LIMIT %s",
+                        (batch,),
+                    ).fetchall()
+                ]
+                if not keys:
+                    break
+                cur = conn.execute(
+                    f"""
+                    DELETE FROM {self.schema}.embeddings e
+                    WHERE e.chunk_key = ANY(%s)
+                      AND e.embedding_model = %s
+                      AND e.embedding_version = %s
+                      AND e.content_hash = ''
+                      AND NOT EXISTS (
+                        SELECT 1 FROM {self.schema}.chunks c WHERE c.chunk_key = e.chunk_key
+                      )
+                    """,
+                    (keys, embedding_model, embedding_version),
+                )
+                n = int(cur.rowcount or 0)
+                conn.execute(
+                    f"DELETE FROM {self.schema}.embedding_unknown_gc WHERE chunk_key = ANY(%s)",
+                    (keys,),
+                )
+                conn.commit()
+                deleted_total += n
+                batches += 1
+                queued -= len(keys)
+                logger.info(
+                    "embeddings_unknown_gc_batch deleted=%s total_deleted=%s remaining=%s batch=%s",
                     n,
                     deleted_total,
                     queued,

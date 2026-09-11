@@ -245,7 +245,7 @@ def main() -> None:
     embed_estimate_parser.add_argument("--embedding-version", type=int, default=0)
     embed_gc_parser = subparsers.add_parser(
         "embed-gc",
-        help="GC unused-hash orphans only. Keeps rematerialize reuse corpus.",
+        help="GC leftover embeddings. Default unused-hash. Live keys stay.",
     )
     embed_gc_parser.add_argument(
         "--apply",
@@ -258,11 +258,18 @@ def main() -> None:
         help="Delete leftover keys whose content identity already has a live list.",
     )
     embed_gc_parser.add_argument(
+        "--unknown",
+        action="store_true",
+        help="Delete leftovers with an empty content_hash. Re-embed later if needed.",
+    )
+    embed_gc_parser.add_argument(
         "--batch-size",
         type=int,
         default=2000,
         help="Rows per DELETE batch for leftover cleanup (default 2000).",
     )
+    embed_gc_parser.add_argument("--embedding-model", default="")
+    embed_gc_parser.add_argument("--embedding-version", type=int, default=0)
     embed_reuse_parser = subparsers.add_parser(
         "embed-reuse",
         help="Copy existing vectors onto new chunk_keys that share content_hash.",
@@ -291,6 +298,11 @@ def main() -> None:
     )
     embed_remap_parser.add_argument("--embedding-model", default="")
     embed_remap_parser.add_argument("--embedding-version", type=int, default=0)
+    embed_remap_parser.add_argument(
+        "--no-gc",
+        action="store_true",
+        help="Skip leftover embed-gc after remap/reuse.",
+    )
     embed_remap_schema_parser = subparsers.add_parser(
         "embed-remap-schema",
         help="Remap orphan vectors by recomputing pre-bump chunk_keys from live content.",
@@ -307,6 +319,11 @@ def main() -> None:
         type=int,
         default=0,
         help="Matched pairs per toast INSERT (default PPA_EMBED_REUSE_BATCH_SIZE or 2000).",
+    )
+    embed_remap_schema_parser.add_argument(
+        "--no-gc",
+        action="store_true",
+        help="Skip leftover embed-gc after remap/reuse.",
     )
     embed_batch_submit_parser = subparsers.add_parser(
         "embed-batch-submit",
@@ -2426,7 +2443,10 @@ def main() -> None:
                 logger=_cli_log,
                 dry_run=not bool(getattr(args, "apply", False)),
                 duplicates=bool(getattr(args, "duplicates", False)),
+                unknown=bool(getattr(args, "unknown", False)),
                 batch_size=int(getattr(args, "batch_size", 10000) or 10000),
+                embedding_model=str(getattr(args, "embedding_model", "") or ""),
+                embedding_version=int(getattr(args, "embedding_version", 0) or 0),
             )
             _print_cli_result(result)
         except PpaError as exc:
@@ -2456,6 +2476,7 @@ def main() -> None:
                 chunks_jsonl=str(getattr(args, "chunks_jsonl", "") or ""),
                 embedding_model=str(getattr(args, "embedding_model", "") or ""),
                 embedding_version=int(getattr(args, "embedding_version", 0) or 0),
+                gc=not bool(getattr(args, "no_gc", False)),
             )
             _print_cli_result(result)
         except PpaError as exc:
@@ -2473,6 +2494,7 @@ def main() -> None:
                 embedding_model=str(getattr(args, "embedding_model", "") or ""),
                 embedding_version=int(getattr(args, "embedding_version", 0) or 0),
                 batch_size=int(getattr(args, "batch_size", 0) or 0),
+                gc=not bool(getattr(args, "no_gc", False)),
             )
             _print_cli_result(result)
         except PpaError as exc:

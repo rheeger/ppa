@@ -1789,7 +1789,7 @@ class GmailMessagesAdapter(BaseAdapter):
 
         raise ValueError(f"Unsupported Gmail record kind: {kind}")
 
-    def merge_card(self, vault_path, rel_path, card, body, provenance) -> None:
+    def merge_card(self, vault_path, rel_path, card, body, provenance) -> bool:
         from archive_sync.attachment_list import preserve_message_attachments_section
         from archive_vault.schema import validate_card_permissive
         from archive_vault.vault import read_note
@@ -1807,7 +1807,7 @@ class GmailMessagesAdapter(BaseAdapter):
                 card.extracted_text_sha = str(getattr(existing_card, "extracted_text_sha", "") or "")
             if not str(body or "").strip():
                 body = existing_body
-        self._replace_generic_card(vault_path, rel_path, card, body, provenance)
+        return self._replace_generic_card(vault_path, rel_path, card, body, provenance)
 
     def after_card_write(self, vault_path, card, rel_path, *, raw_item, action, **kwargs) -> None:
         if getattr(card, "type", "") != "email_attachment":

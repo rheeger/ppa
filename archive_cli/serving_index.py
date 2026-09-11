@@ -980,13 +980,7 @@ def get_serving_handle(vault: Path) -> ServingIndexHandle:
     gid, root, _status = _active_generation(vault)
     key = _vault_handle_key(vault)
     with _LOCK:
-        if _HANDLE is None:
-            stale = _HANDLES.pop(key, None)
-            if stale is not None:
-                stale.close()
-            existing = None
-        else:
-            existing = _HANDLES.get(key)
+        existing = _HANDLES.get(key)
         if existing is not None and existing.index_root.resolve() == root.resolve() and existing.generation_id == gid:
             _HANDLE = existing
             return existing

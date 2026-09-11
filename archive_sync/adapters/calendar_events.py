@@ -340,9 +340,11 @@ class CalendarEventsAdapter(BaseAdapter):
                 continue
             if normalized_account and str(frontmatter.get("account_email") or "").strip().lower() != normalized_account:
                 continue
+            stored_calendar_id = str(frontmatter.get("calendar_id") or "").strip().lower()
             if (
                 normalized_calendar_id
-                and str(frontmatter.get("calendar_id") or "").strip().lower() != normalized_calendar_id
+                and normalized_calendar_id != "primary"
+                and stored_calendar_id != normalized_calendar_id
             ):
                 continue
             event_id = str(frontmatter.get("event_id") or "").strip()
@@ -460,7 +462,8 @@ class CalendarEventsAdapter(BaseAdapter):
                 event_etag = str(event.get("etag", "")).strip()
                 if quick_update_enabled:
                     existing = existing_event_state.get(event_id, {})
-                    if event_etag and event_etag == str(existing.get("event_etag", "")).strip():
+                    stored_etag = str(existing.get("event_etag", "")).strip()
+                    if event_etag and stored_etag and event_etag == stored_etag:
                         skipped_unchanged_events += 1
                         self._last_fetch_skipped_count += 1
                         self._last_fetch_skip_details["skipped_unchanged_events"] = skipped_unchanged_events
@@ -526,6 +529,15 @@ class CalendarEventsAdapter(BaseAdapter):
                         "all_day": bool(start.get("date") and not start.get("dateTime")),
                     }
                 )
+                if quick_update_enabled:
+                    existing = existing_event_state.get(event_id, {})
+                    stored_etag = str(existing.get("event_etag", "")).strip()
+                    stored_sha = str(existing.get("event_body_sha", "")).strip()
+                    if not stored_etag and event_body_sha and event_body_sha == stored_sha:
+                        skipped_unchanged_events += 1
+                        self._last_fetch_skipped_count += 1
+                        self._last_fetch_skip_details["skipped_unchanged_events"] = skipped_unchanged_events
+                        continue
                 items.append(
                     {
                         "event_id": event_id,
@@ -626,5 +638,5 @@ class CalendarEventsAdapter(BaseAdapter):
         provenance = deterministic_provenance(card, EVENT_SOURCE)
         return card, provenance, ""
 
-    def merge_card(self, vault_path, rel_path, card, body, provenance) -> None:
-        self._replace_generic_card(vault_path, rel_path, card, body, provenance)
+    def merge_card(self, vault_path, rel_path, card, body, provenance) -> bool:
+        return self._replace_generic_card(vault_path, rel_path, card, body, provenance)

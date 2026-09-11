@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from archive_cli.commands.admin import embed_gc as embed_gc_cmd
+from archive_cli.commands.admin import embed_gc_after_reunify
 from archive_cli.embedder import EmbedderMixin
 from archive_cli.index_config import _vector_literal
 from archive_cli.index_store import PostgresArchiveIndex
@@ -230,6 +231,82 @@ def test_embed_gc_keeps_reusable_and_unknown_orphans(
             str(row["chunk_key"]) for row in conn.execute(f"SELECT chunk_key FROM {index.schema}.embeddings").fetchall()
         }
     assert keys == {"live", "unknown", "reusable"}
+
+
+@pytest.mark.integration
+def test_embed_gc_unknown_deletes_empty_hash_leftovers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pgvector_dsn: str
+) -> None:
+    index = _bootstrap(tmp_path, monkeypatch, pgvector_dsn)
+    with index._connect() as conn:
+        _insert_chunk(conn, index.schema, key="live", uid="card-live", index=0, content_hash="keep-hash")
+        _insert_embedding(
+            conn,
+            index.schema,
+            key="live",
+            dim=8,
+            fill=0.1,
+            content_hash="keep-hash",
+            uid="card-live",
+        )
+        _insert_embedding(conn, index.schema, key="unknown", dim=8, fill=0.2)
+        _insert_embedding(conn, index.schema, key="reusable", dim=8, fill=0.3, content_hash="keep-hash")
+        conn.commit()
+    store = DefaultArchiveStore(vault=tmp_path, index=index)
+    import logging
+
+    result = embed_gc_cmd(
+        store=store,
+        logger=logging.getLogger("test"),
+        dry_run=False,
+        unknown=True,
+        embedding_model="reuse-hash",
+        embedding_version=1,
+    )
+    assert result["deleted"] == 1
+    with index._connect() as conn:
+        keys = {
+            str(row["chunk_key"]) for row in conn.execute(f"SELECT chunk_key FROM {index.schema}.embeddings").fetchall()
+        }
+    assert keys == {"live", "reusable"}
+
+
+@pytest.mark.integration
+def test_embed_gc_after_reunify_deletes_duplicates_and_unused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pgvector_dsn: str
+) -> None:
+    index = _bootstrap(tmp_path, monkeypatch, pgvector_dsn)
+    with index._connect() as conn:
+        _insert_chunk(conn, index.schema, key="live", uid="card-live", index=0, content_hash="keep-hash")
+        _insert_embedding(
+            conn,
+            index.schema,
+            key="live",
+            dim=8,
+            fill=0.1,
+            content_hash="keep-hash",
+            uid="card-live",
+        )
+        _insert_embedding(conn, index.schema, key="unknown", dim=8, fill=0.2)
+        _insert_embedding(conn, index.schema, key="duplicate", dim=8, fill=0.3, content_hash="keep-hash")
+        _insert_embedding(conn, index.schema, key="dead", dim=8, fill=0.4, content_hash="unused-hash")
+        conn.commit()
+    store = DefaultArchiveStore(vault=tmp_path, index=index)
+    import logging
+
+    result = embed_gc_after_reunify(
+        store=store,
+        logger=logging.getLogger("test"),
+        embedding_model="reuse-hash",
+        embedding_version=1,
+    )
+    assert result["duplicates"]["deleted"] == 1
+    assert result["unused_hash"]["deleted"] == 1
+    with index._connect() as conn:
+        keys = {
+            str(row["chunk_key"]) for row in conn.execute(f"SELECT chunk_key FROM {index.schema}.embeddings").fetchall()
+        }
+    assert keys == {"live", "unknown"}
 
 
 def _write_generation(dest: Path, *, chunks: list[str], keys: list[str], namespace: str) -> None:

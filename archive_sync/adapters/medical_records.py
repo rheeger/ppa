@@ -1202,5 +1202,5 @@ class MedicalRecordsAdapter(BaseAdapter):
         provenance = deterministic_provenance(card, provenance_source, field_sources=field_sources)
         return card, provenance, _render_medical_body(item)
 
-    def merge_card(self, vault_path, rel_path, card, body, provenance) -> None:
-        self._replace_generic_card(vault_path, rel_path, card, body, provenance)
+    def merge_card(self, vault_path, rel_path, card, body, provenance) -> bool:
+        return self._replace_generic_card(vault_path, rel_path, card, body, provenance)

@@ -134,13 +134,17 @@ def embed_gc(
     logger: logging.Logger,
     dry_run: bool = True,
     duplicates: bool = False,
+    unknown: bool = False,
     batch_size: int = 10_000,
+    embedding_model: str = "",
+    embedding_version: int = 0,
 ) -> dict[str, Any]:
     """Prune leftover embeddings after rematerialize attach.
 
     Default: delete orphans whose ``content_hash`` is unused by every live chunk.
     ``duplicates=True``: delete leftovers whose identity already has a live list.
-    Empty-hash leftovers stay until they can be identified.
+    ``unknown=True``: delete leftovers with an empty ``content_hash``.
+    Live keys stay. Re-embed later if a remint needs a vector.
     """
     schema = store.index.schema
 
@@ -170,20 +174,30 @@ def embed_gc(
         )
         """
 
+    def _unknown_sql(alias: str) -> str:
+        return f"""
+        NOT EXISTS (SELECT 1 FROM {schema}.chunks c WHERE c.chunk_key = {alias}.chunk_key)
+        AND {alias}.content_hash = ''
+        """
+
     unused_sql = _unused_sql("e")
     duplicate_sql = _duplicate_sql("e")
+    unknown_sql = _unknown_sql("e")
     from archive_cli.index_config import (
         get_default_embedding_model,
         get_default_embedding_version,
         get_embed_gc_batch_size,
     )
 
+    model = embedding_model.strip() or get_default_embedding_model()
+    version = embedding_version or get_default_embedding_version()
     batch = max(int(batch_size or get_embed_gc_batch_size()), 1)
     deleted = 0
     total_count = 0
     orphan_count = 0
     unused_count = 0
     duplicate_count = 0
+    unknown_count = 0
     if dry_run:
         with store.index._connect() as conn:  # noqa: SLF001
             conn.execute("SET statement_timeout = 0")
@@ -196,23 +210,35 @@ def embed_gc(
             ).fetchone()
             unused = conn.execute(f"SELECT COUNT(*) FROM {schema}.embeddings e WHERE {unused_sql}").fetchone()
             duplicate = conn.execute(f"SELECT COUNT(*) FROM {schema}.embeddings e WHERE {duplicate_sql}").fetchone()
+            unnamed = conn.execute(f"SELECT COUNT(*) FROM {schema}.embeddings e WHERE {unknown_sql}").fetchone()
             total_count = int(total[0] if not isinstance(total, dict) else next(iter(total.values())))
             orphan_count = int(orphan[0] if not isinstance(orphan, dict) else next(iter(orphan.values())))
             unused_count = int(unused[0] if not isinstance(unused, dict) else next(iter(unused.values())))
             duplicate_count = int(duplicate[0] if not isinstance(duplicate, dict) else next(iter(duplicate.values())))
+            unknown_count = int(unnamed[0] if not isinstance(unnamed, dict) else next(iter(unnamed.values())))
+        mode = "unknown" if unknown else "duplicates" if duplicates else "unused_hash"
         logger.info(
-            "embed_gc_scan total=%d orphan=%d unused_hash=%d duplicates=%d mode=%s dry_run=%s",
+            "embed_gc_scan total=%d orphan=%d unused_hash=%d duplicates=%d unknown=%d mode=%s dry_run=%s",
             total_count,
             orphan_count,
             unused_count,
             duplicate_count,
-            "duplicates" if duplicates else "unused_hash",
+            unknown_count,
+            mode,
             True,
         )
+    elif unknown:
+        deleted = store.index.delete_unknown_leftover_embeddings(
+            embedding_model=model,
+            embedding_version=version,
+            batch_size=batch,
+            max_batches=None,
+        )
+        logger.info("embed_gc_unknown_done deleted=%d", deleted)
     elif duplicates:
         deleted = store.index.delete_duplicate_leftover_embeddings(
-            embedding_model=get_default_embedding_model(),
-            embedding_version=get_default_embedding_version(),
+            embedding_model=model,
+            embedding_version=version,
             batch_size=batch,
             max_batches=None,
         )
@@ -232,10 +258,51 @@ def embed_gc(
         "orphan_embeddings": orphan_count,
         "unused_hash_embeddings": unused_count,
         "duplicate_embeddings": duplicate_count,
+        "unknown_embeddings": unknown_count,
         "deleted": deleted,
         "dry_run": dry_run,
         "duplicates": duplicates,
+        "unknown": unknown,
+        "embedding_model": model,
+        "embedding_version": version,
     }
+
+
+def embed_gc_after_reunify(
+    *,
+    store: DefaultArchiveStore,
+    logger: logging.Logger,
+    embedding_model: str = "",
+    embedding_version: int = 0,
+    batch_size: int = 0,
+) -> dict[str, Any]:
+    """Delete leftovers after remap/reuse. Empty-hash rows stay."""
+
+    logger.info("embed_gc_after_reunify_start")
+    duplicates = embed_gc(
+        store=store,
+        logger=logger,
+        dry_run=False,
+        duplicates=True,
+        batch_size=batch_size,
+        embedding_model=embedding_model,
+        embedding_version=embedding_version,
+    )
+    unused = embed_gc(
+        store=store,
+        logger=logger,
+        dry_run=False,
+        duplicates=False,
+        batch_size=batch_size,
+        embedding_model=embedding_model,
+        embedding_version=embedding_version,
+    )
+    logger.info(
+        "embed_gc_after_reunify_done duplicates_deleted=%s unused_hash_deleted=%s",
+        duplicates.get("deleted"),
+        unused.get("deleted"),
+    )
+    return {"duplicates": duplicates, "unused_hash": unused}
 
 
 def embed_reuse(
@@ -282,6 +349,7 @@ def embed_remap_slots(
     chunks_jsonl: str,
     embedding_model: str = "",
     embedding_version: int = 0,
+    gc: bool = True,
 ) -> dict[str, Any]:
     """One-time remap of orphan vectors onto current keys by card/type/index."""
     from archive_cli.index_config import get_default_embedding_model, get_default_embedding_version
@@ -292,11 +360,23 @@ def embed_remap_slots(
     loaded = store.index.load_slot_map_from_chunks_jsonl(chunks_jsonl)
     remapped = store.index.remap_embeddings_by_slot(embedding_model=model, embedding_version=version)
     reused = store.index.reuse_embeddings_by_content(embedding_model=model, embedding_version=version)
+    gc_result = (
+        embed_gc_after_reunify(
+            store=store,
+            logger=logger,
+            embedding_model=model,
+            embedding_version=version,
+        )
+        if gc
+        else None
+    )
     logger.info(
-        "embed_remap_slots_done loaded=%s remapped=%s reused=%s",
+        "embed_remap_slots_done loaded=%s remapped=%s reused=%s gc_duplicates=%s gc_unused=%s",
         loaded,
         remapped.get("copied"),
         reused.get("copied"),
+        (gc_result or {}).get("duplicates", {}).get("deleted") if gc_result else None,
+        (gc_result or {}).get("unused_hash", {}).get("deleted") if gc_result else None,
     )
     return {
         "embedding_model": model,
@@ -304,6 +384,7 @@ def embed_remap_slots(
         "slot_map_rows": loaded,
         "remapped": remapped,
         "reused": reused,
+        "gc": gc_result,
     }
 
 
@@ -315,6 +396,7 @@ def embed_remap_schema(
     embedding_model: str = "",
     embedding_version: int = 0,
     batch_size: int = 0,
+    gc: bool = True,
 ) -> dict[str, Any]:
     """Copy vectors from pre-bump chunk_keys onto current keys."""
     from archive_cli.index_config import get_default_embedding_model, get_default_embedding_version
@@ -335,15 +417,29 @@ def embed_remap_schema(
         batch_size=batch_size or None,
     )
     reused = store.index.reuse_embeddings_by_content(embedding_model=model, embedding_version=version)
+    gc_result = (
+        embed_gc_after_reunify(
+            store=store,
+            logger=logger,
+            embedding_model=model,
+            embedding_version=version,
+            batch_size=batch_size,
+        )
+        if gc
+        else None
+    )
     logger.info(
-        "embed_remap_schema_done remapped=%s reused=%s pending_after=%s",
+        "embed_remap_schema_done remapped=%s reused=%s pending_after=%s gc_duplicates=%s gc_unused=%s",
         remapped.get("copied"),
         reused.get("copied"),
         reused.get("pending_after"),
+        (gc_result or {}).get("duplicates", {}).get("deleted") if gc_result else None,
+        (gc_result or {}).get("unused_hash", {}).get("deleted") if gc_result else None,
     )
     return {
         "embedding_model": model,
         "embedding_version": version,
         "remapped": remapped,
         "reused": reused,
+        "gc": gc_result,
     }

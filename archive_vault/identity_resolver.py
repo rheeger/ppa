@@ -783,6 +783,8 @@ def merge_into_existing(
 
     if changed:
         merged_data["updated"] = date.today().isoformat()
+    if not changed:
+        return None
 
     merged_card = validate_card_strict(merged_data)
     merged_prov = dict(existing_provenance)

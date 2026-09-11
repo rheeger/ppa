@@ -399,6 +399,13 @@ def run_file_duplicate_linking(
         uids = [fm["uid"] for _, fm in members]
         for rel, fm in members:
             peers = [wikilink_uid(uid) for uid in uids if uid != fm["uid"]]
+            current_sha = source_sha_from_frontmatter(fm)
+            current_dups = [
+                wikilink_uid(uid_from_wikilink(x)) for x in (fm.get("duplicates") or []) if uid_from_wikilink(x)
+            ]
+            want_dups = merge_duplicate_links(peers, [], self_uid=fm["uid"])
+            if current_sha == sha and current_dups == want_dups:
+                continue
             changed = _write_identity_fields(vault, rel, content_sha=sha, duplicates=peers, dry_run=dry_run)
             if changed:
                 dirty.append(fm["uid"])

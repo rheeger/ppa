@@ -185,13 +185,14 @@ def _after_rebuild(vault: Path) -> Callable[[dict[str, Any], dict[str, Any]], No
         try:
             from archive_engine.changes import acknowledge_materialized
 
-            from .serving_index import close_serving_handles, mark_serving_index_dirty
+            from .serving_index import mark_serving_index_dirty
 
             allowlist = filtered.get("uid_allowlist") or []
             dirty = [str(uid).strip() for uid in allowlist if str(uid).strip()]
             acknowledge_materialized(vault, uids=dirty or None)
             mark_serving_index_dirty(vault, "rebuild", dirty)
-            close_serving_handles(vault=vault)
+            # Rematerialize does not flip ACTIVE. Keep the warm mmap for neighbor
+            # closure and MCP. close_serving_handles belongs on process exit.
         except Exception:
             pass
 
