@@ -864,6 +864,35 @@ class VaultScanCache:
             return None
         return str(row[0])
 
+    def note_for_uid(self, uid: str) -> tuple[str, dict[str, Any], str | None] | None:
+        """Point lookup of rel_path, frontmatter, and body when tier-2 stored it.
+
+        Body is ``None`` on a tier-1 row. Never dumps the notes table.
+        """
+
+        value = str(uid or "").strip()
+        if not value:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT rel_path, frontmatter_json, body_compressed FROM notes WHERE uid = ? LIMIT 1",
+                (value,),
+            ).fetchone()
+        if not row or not row[0]:
+            return None
+        fm: dict[str, Any] = {}
+        if row[1]:
+            try:
+                parsed = json.loads(row[1])
+            except json.JSONDecodeError:
+                parsed = {}
+            if isinstance(parsed, dict):
+                fm = parsed
+        body: str | None = None
+        if row[2] is not None:
+            body = zlib.decompress(row[2]).decode("utf-8")
+        return str(row[0]), fm, body
+
     def uid_for_rel_path(self, rel_path: str) -> str:
         """Point lookup — never dump the notes table."""
 
@@ -878,6 +907,48 @@ class VaultScanCache:
         if not row or not row[0]:
             return ""
         return str(row[0])
+
+    def frontmatter_rows_for_card_types(
+        self,
+        card_types: set[str] | frozenset[str] | list[str],
+    ) -> list[dict[str, Any]]:
+        """One query of uid / rel_path / frontmatter for the given card types."""
+
+        wanted = sorted({str(ct).strip() for ct in card_types if str(ct).strip()})
+        if not wanted:
+            return []
+        out: list[dict[str, Any]] = []
+        placeholders = ",".join("?" * len(wanted))
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT uid, rel_path, card_type, frontmatter_json FROM notes WHERE card_type IN ({placeholders})",
+                wanted,
+            ).fetchall()
+        for uid_raw, rel_raw, _card_type, fj_raw in rows:
+            fm: dict[str, Any] = {}
+            if fj_raw:
+                try:
+                    parsed = json.loads(fj_raw)
+                except json.JSONDecodeError:
+                    parsed = {}
+                if isinstance(parsed, dict):
+                    fm = parsed
+            out.append({"uid": str(uid_raw), "rel_path": str(rel_raw), "frontmatter": fm})
+        return out
+
+    def frontmatter_rows_for_card_type(self, card_type: str) -> list[dict[str, Any]]:
+        return self.frontmatter_rows_for_card_types([card_type])
+
+    def stamp_vault_fingerprint(self, fingerprint: str) -> None:
+        """Write ``vault_fingerprint`` on this connection. Does not open a sidecar."""
+
+        fp = str(fingerprint or "").strip()
+        if not fp:
+            return
+        with self._lock:
+            _meta_set(self._conn, "vault_fingerprint", fp)
+            self._conn.commit()
+            self._vault_fingerprint = fp
 
     def frontmatter_rows_for_uids(self, uids: set[str] | frozenset[str] | list[str]) -> list[dict[str, Any]]:
         """One IN-query dump of uid / rel_path / frontmatter for the given UIDs."""

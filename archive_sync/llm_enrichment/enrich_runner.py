@@ -446,7 +446,6 @@ class LlmEnrichmentRunner:
         registry = build_default_registry()
 
         main_scan_cache = VaultScanCache.build_or_load(self.vault_path, tier=2, progress_every=0)
-        _scan_cache_path = VaultScanCache.cache_path_for_vault(self.vault_path)
 
         stubs = load_email_stubs_for_vault(self.vault_path)
         index = build_thread_index(stubs)
@@ -490,17 +489,9 @@ class LlmEnrichmentRunner:
         _tls = threading.local()
 
         def _get_thread_scan_cache() -> VaultScanCache:
-            if self.workers <= 1:
-                return main_scan_cache
-            sc = getattr(_tls, "scan_cache", None)
-            if sc is None:
-                import sqlite3 as _sqlite3
-
-                conn = _sqlite3.connect(str(_scan_cache_path), timeout=60.0, check_same_thread=False)
-                conn.row_factory = _sqlite3.Row
-                sc = VaultScanCache(conn, tier=2, vault_fingerprint="preloaded", cache_hit=True)
-                _tls.scan_cache = sc
-            return sc
+            # One connection. VaultScanCache serializes reads with RLock.
+            # Sidecar connects on worker threads fight the WAL and raise disk I/O error.
+            return main_scan_cache
 
         # Classify index for persistent storage
         _classify_idx: ClassifyIndex | None = None

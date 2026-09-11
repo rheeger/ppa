@@ -711,6 +711,33 @@ def _execute_linkers(ctx: ExecuteContext, items: list[ProcessorPlanItem]) -> Bat
     return out
 
 
+def _card_types_for_uids(vault: Path | str, uids: list[str]) -> dict[str, str]:
+    """Resolve card types in one cache IN-query. Per-UID read only for leftovers."""
+
+    wanted = [str(uid).strip() for uid in uids if str(uid).strip()]
+    types: dict[str, str] = {}
+    try:
+        from archive_cli.vault_cache_runtime import peek_process_cache
+
+        cache = peek_process_cache(vault)
+    except Exception:
+        cache = None
+    if cache is not None:
+        for row in cache.frontmatter_rows_for_uids(wanted):
+            uid = str(row.get("uid") or "").strip()
+            fm = row.get("frontmatter") or {}
+            if uid:
+                types[uid] = str(fm.get("type") or "")
+    from archive_vault.vault import read_note_by_uid
+
+    for uid in wanted:
+        if uid in types:
+            continue
+        note = read_note_by_uid(vault, uid)
+        types[uid] = str((note[1] if note else {}).get("type") or "")
+    return types
+
+
 def _execute_enrichment(ctx: ExecuteContext, items: list[ProcessorPlanItem]) -> BatchExecuteResult:
     """Thin adapter into ``run_enrichment_for_uids`` on the existing orchestrator."""
 
@@ -724,9 +751,9 @@ def _execute_enrichment(ctx: ExecuteContext, items: list[ProcessorPlanItem]) -> 
 
     derived: list[ProcessorPlanItem] = []
     threads: list[ProcessorPlanItem] = []
+    type_by_uid = _card_types_for_uids(ctx.vault_path, [item.input_uid for item in items])
     for item in items:
-        note = read_note_by_uid(ctx.vault_path, item.input_uid)
-        card_type = str((note[1] if note else {}).get("type") or "")
+        card_type = type_by_uid.get(item.input_uid, "")
         if card_type in DERIVED_ENRICHMENT_TYPES:
             derived.append(item)
         else:

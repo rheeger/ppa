@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import warnings
@@ -30,6 +31,8 @@ from archive_vault.yaml_parser import parse_frontmatter, render_card
 EXCLUDED_DIRS = {"_templates", "Attachments", ".obsidian", "_meta"}
 WIKILINK_RE = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]*)?\]\]")
 _CACHE_FILENAME = "vault-scan-cache.sqlite3"
+_CACHE_LOOKUP_SKIPPED = object()
+logger = logging.getLogger("ppa.vault")
 
 
 def _tier2_cache_path(vault: Path) -> Path | None:
@@ -139,10 +142,12 @@ def iter_parsed_notes_for_card_types(
                     )
                 return
             except (ImportError, Exception) as e:
-                warnings.warn(
-                    f"PPA: falling back to Python for iter_parsed_notes_for_card_types — archive_crate not available: {e}",
-                    stacklevel=2,
+                logger.warning(
+                    "iter_parsed_notes_for_card_types crate failed cache=%s error=%s; not walking vault",
+                    cache_path,
+                    e,
                 )
+                return
 
     for note in _iter_parsed_notes_python_walk(vault):
         if note.frontmatter.get("type") in types_set:
@@ -170,10 +175,12 @@ def iter_notes(vault: str | Path) -> Iterator[tuple[Path, str]]:
                     yield Path(row["rel_path"]), body
                 return
             except (ImportError, Exception) as e:
-                warnings.warn(
-                    f"PPA: falling back to Python for iter_notes — archive_crate not available: {e}",
-                    stacklevel=2,
+                logger.warning(
+                    "iter_notes crate failed cache=%s error=%s; not walking vault",
+                    cache_path,
+                    e,
                 )
+                return
 
     for rel_path in iter_note_paths(vault):
         path = vault / rel_path
@@ -262,10 +269,12 @@ def iter_parsed_notes(vault: str | Path) -> Iterator[ParsedNoteRecord]:
                     )
                 return
             except (ImportError, Exception) as e:
-                warnings.warn(
-                    f"PPA: falling back to Python for iter_parsed_notes — archive_crate not available: {e}",
-                    stacklevel=2,
+                logger.warning(
+                    "iter_parsed_notes crate failed cache=%s error=%s; not walking vault",
+                    cache_path,
+                    e,
                 )
+                return
     yield from _iter_parsed_notes_python_walk(vault)
 
 
@@ -298,10 +307,12 @@ def iter_email_message_notes(vault: str | Path) -> Iterator[ParsedNoteRecord]:
                     )
                 return
             except (ImportError, Exception) as e:
-                warnings.warn(
-                    f"PPA: falling back to Python for iter_email_message_notes — archive_crate not available: {e}",
-                    stacklevel=2,
+                logger.warning(
+                    "iter_email_message_notes crate failed cache=%s error=%s; not walking vault",
+                    cache_path,
+                    e,
                 )
+                return
 
     for rel_path in iter_note_paths(vault):
         if not rel_path.parts or rel_path.parts[0] != "Email":
@@ -327,38 +338,91 @@ def read_note(vault: str | Path, rel_path: str) -> tuple[dict, str, dict[str, Pr
     return parsed.frontmatter, parsed.body, parsed.provenance
 
 
+def _note_from_cache_row(
+    vault: Path,
+    rel_path: str,
+    frontmatter: dict,
+    body: str | None,
+) -> tuple[Path, dict, str, dict[str, ProvenanceEntry]]:
+    if body is None:
+        fm, file_body, provenance = read_note(vault, rel_path)
+        return Path(rel_path), fm, file_body, provenance
+    return Path(rel_path), frontmatter, body, {}
+
+
+def _note_from_warm_or_file_cache(vault: Path, uid: str):
+    """Point-lookup a UID in the vault-scan cache.
+
+    Returns a note tuple, ``None`` (cache answered: uid absent), or
+    ``_CACHE_LOOKUP_SKIPPED`` (no cache to query). Never iterates the vault.
+    """
+
+    try:
+        from archive_cli.vault_cache_runtime import peek_process_cache
+
+        warm = peek_process_cache(vault)
+    except Exception:
+        warm = None
+    if warm is not None:
+        row = warm.note_for_uid(uid)
+        if row is None:
+            return None
+        rel_path, frontmatter, body = row
+        return _note_from_cache_row(vault, rel_path, frontmatter, body)
+
+    cache_path = _tier2_cache_path(vault)
+    if cache_path is None:
+        return _CACHE_LOOKUP_SKIPPED
+
+    import json
+    import sqlite3
+    import zlib
+
+    try:
+        conn = sqlite3.connect(f"file:{cache_path}?mode=ro", uri=True, timeout=5.0)
+        try:
+            row = conn.execute(
+                "SELECT rel_path, frontmatter_json, body_compressed FROM notes WHERE uid = ? LIMIT 1",
+                (uid,),
+            ).fetchone()
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.warning(
+            "read_note_by_uid cache point-lookup failed uid=%s error=%s; not scanning vault",
+            uid,
+            exc,
+        )
+        return None
+    if row is None or not row[0]:
+        return None
+    frontmatter: dict = {}
+    if row[1]:
+        try:
+            parsed = json.loads(row[1])
+        except json.JSONDecodeError:
+            parsed = {}
+        if isinstance(parsed, dict):
+            frontmatter = parsed
+    body = zlib.decompress(row[2]).decode("utf-8") if row[2] is not None else None
+    return _note_from_cache_row(vault, str(row[0]), frontmatter, body)
+
+
 def read_note_by_uid(vault: str | Path, uid: str) -> tuple[Path, dict, str, dict[str, ProvenanceEntry]] | None:
     """Return the first note matching a UID.
 
-    When ``PPA_ENGINE=rust`` and a tier-2 cache exists, uses a direct SQLite UID index lookup.
+    Prefers the warm process vault-scan cache, then a read-only point query.
+    A living vault with a cache file never falls back to a full note scan.
     """
 
     vault = Path(vault)
-    if ppa_engine() == "rust":
-        cache_path = _tier2_cache_path(vault)
-        if cache_path is not None:
-            try:
-                import json
-                import sqlite3
-                import zlib
+    uid = str(uid or "").strip()
+    if not uid:
+        return None
 
-                conn = sqlite3.connect(str(cache_path))
-                row = conn.execute(
-                    "SELECT rel_path, frontmatter_json, body_compressed FROM notes WHERE uid = ? LIMIT 1",
-                    (uid,),
-                ).fetchone()
-                conn.close()
-                if row is not None:
-                    rel_path = Path(row[0])
-                    frontmatter = json.loads(row[1])
-                    body = zlib.decompress(row[2]).decode("utf-8") if row[2] else ""
-                    return rel_path, frontmatter, body, {}
-                return None
-            except (ImportError, Exception) as e:
-                warnings.warn(
-                    f"PPA: falling back to Python for read_note_by_uid — archive_crate not available: {e}",
-                    stacklevel=2,
-                )
+    cached = _note_from_warm_or_file_cache(vault, uid)
+    if cached is not _CACHE_LOOKUP_SKIPPED:
+        return cached  # type: ignore[return-value]
 
     for note in iter_parsed_notes(vault):
         if note.frontmatter.get("uid") == uid:

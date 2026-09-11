@@ -14,6 +14,7 @@ from archive_cli.vault_cache_runtime import (
     flush_deferred_vault_written,
     install_process_reuse,
     mark_vault_written,
+    peek_process_cache,
     process_reuse_installed,
     uninstall_process_reuse,
 )
@@ -44,6 +45,9 @@ def test_process_reuse_skips_second_fingerprint(tmp_path: Path, monkeypatch: pyt
     second = VaultScanCache.build_or_load(vault, tier=1, progress_every=0)
     assert walks["n"] == 0
     assert second is first
+    assert peek_process_cache(vault) is first
+    uninstall_process_reuse()
+    assert peek_process_cache(vault) is None
 
 
 def test_mark_written_forces_refresh(tmp_path: Path) -> None:

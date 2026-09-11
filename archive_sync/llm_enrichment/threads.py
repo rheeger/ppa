@@ -146,8 +146,13 @@ def stubs_from_filesystem_walk(vault: Path) -> list[ThreadStub]:
                     if stub:
                         out.append(stub)
                 return out
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "thread-stubs crate failed cache=%s error=%s; not walking Email/",
+                    cache_path,
+                    exc,
+                )
+                return []
 
     out = []
     for rel in iter_note_paths(vault):
@@ -164,13 +169,40 @@ def stubs_from_filesystem_walk(vault: Path) -> list[ThreadStub]:
     return out
 
 
+def _stubs_from_frontmatter_rows(rows: list[dict[str, Any]]) -> list[ThreadStub]:
+    out: list[ThreadStub] = []
+    for row in rows:
+        stub = thread_stub_from_frontmatter(str(row.get("rel_path") or ""), row.get("frontmatter") or {})
+        if stub:
+            out.append(stub)
+    return out
+
+
 def load_email_stubs_for_vault(vault: Path) -> list[ThreadStub]:
-    """Prefer vault scan cache SQLite; fall back to filesystem walk if missing or empty."""
+    """Prefer the warm process cache. Do not open a sidecar SQLite handle beside it."""
 
     vault = Path(vault).resolve()
+    try:
+        from archive_cli.vault_cache_runtime import peek_process_cache
+
+        warm = peek_process_cache(vault)
+    except Exception:
+        warm = None
+    if warm is not None:
+        stubs = _stubs_from_frontmatter_rows(warm.frontmatter_rows_for_card_type("email_message"))
+        logger.info("thread-stubs from warm vault-scan-cache count=%d", len(stubs))
+        return stubs
     cache_path = VaultScanCache.cache_path_for_vault(vault)
     if cache_path.exists():
-        stubs = email_message_stubs_from_sqlite(cache_path)
+        try:
+            stubs = email_message_stubs_from_sqlite(cache_path)
+        except Exception as exc:
+            logger.warning(
+                "thread-stubs sidecar cache failed path=%s error=%s; not walking Email/",
+                cache_path,
+                exc,
+            )
+            return []
         if stubs:
             logger.info("thread-stubs from vault-scan-cache path=%s count=%d", cache_path, len(stubs))
             return stubs

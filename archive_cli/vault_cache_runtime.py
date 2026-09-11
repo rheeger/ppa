@@ -199,6 +199,15 @@ def process_reuse_installed() -> bool:
     return _INSTALLED
 
 
+def peek_process_cache(vault: Path | str) -> VaultScanCache | None:
+    """Return the warm in-process cache, or ``None`` if reuse is off or not loaded."""
+
+    if not _INSTALLED:
+        return None
+    with _LOCK:
+        return _CACHES.get(_vault_key(vault))
+
+
 def _refresh_known_writes(
     cache: VaultScanCache,
     vault: Path,
