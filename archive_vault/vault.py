@@ -26,7 +26,7 @@ from archive_vault.provenance import (
     write_provenance,
 )
 from archive_vault.schema import BaseCard, card_to_frontmatter, validate_card_strict
-from archive_vault.yaml_parser import parse_frontmatter, render_card
+from archive_vault.yaml_parser import parse_frontmatter, render_card, split_frontmatter_text
 
 EXCLUDED_DIRS = {"_templates", "Attachments", ".obsidian", "_meta"}
 WIKILINK_RE = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]*)?\]\]")
@@ -514,19 +514,22 @@ def update_frontmatter_fields(vault_root: Path | str, rel_path: str, updates: di
     if not full_path.is_file():
         raise FileNotFoundError(f"Card not found: {rel_path}")
     text = full_path.read_text(encoding="utf-8")
-    parts = text.split("---", 2)
-    if len(parts) < 3:
+    split = split_frontmatter_text(text)
+    if split is None:
         raise ValueError(f"No YAML frontmatter found in {rel_path}")
+    frontmatter_text, suffix = split
     yaml = YAML()
     yaml.preserve_quotes = True
-    frontmatter = yaml.load(parts[1])
+    yaml.allow_unicode = True
+    yaml.width = 10_000
+    frontmatter = yaml.load(frontmatter_text)
     if frontmatter is None:
         frontmatter = {}
     for key, value in updates.items():
         frontmatter[key] = value
     sio = StringIO()
     yaml.dump(frontmatter, sio)
-    payload = f"---\n{sio.getvalue()}---{parts[2]}".encode("utf-8")
+    payload = f"---\n{sio.getvalue()}---{suffix}".encode("utf-8")
     uid = str(frontmatter.get("uid") or "").strip()
     if not uid:
         raise ValueError(f"Card uid missing in {rel_path}")

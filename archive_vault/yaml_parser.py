@@ -11,6 +11,9 @@ from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n?(.*)$", re.DOTALL)
+# Line-only fences. Do not use \\s after the closing ---; that swallows blank
+# lines that update_frontmatter_fields must put back unchanged.
+_FRONTMATTER_RAW_RE = re.compile(r"^---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(\r?\n.*)?$", re.DOTALL)
 _yaml_state = local()
 
 
@@ -37,6 +40,21 @@ def _flowify(value: Any) -> Any:
         seq.fa.set_flow_style()
         return seq
     return value
+
+
+def split_frontmatter_text(content: str) -> tuple[str, str] | None:
+    """Split a card into YAML text and the exact suffix after the closing fence.
+
+    The closing fence must sit on its own line. ``---`` inside a quoted
+    frontmatter value (Gmail snippets such as ``----- Original Message -----``)
+    does not close the block. The suffix keeps the newline and any blank
+    lines after the fence so writers can put the body back unchanged.
+    """
+
+    match = _FRONTMATTER_RAW_RE.match(content)
+    if not match:
+        return None
+    return match.group(1), match.group(2) or ""
 
 
 def parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:

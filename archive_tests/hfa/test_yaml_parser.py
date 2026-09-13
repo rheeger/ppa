@@ -1,4 +1,4 @@
-from archive_vault.yaml_parser import parse_frontmatter, render_card, render_frontmatter
+from archive_vault.yaml_parser import parse_frontmatter, render_card, render_frontmatter, split_frontmatter_text
 
 
 def test_parse_frontmatter_handles_arrays_and_colons():
@@ -20,6 +20,22 @@ def test_render_frontmatter_omits_empty_strings_but_keeps_arrays():
     assert "description" not in rendered
     assert "tags: [a, b]" in rendered
     assert "phones: []" in rendered
+
+
+def test_split_frontmatter_text_ignores_dashes_inside_quoted_snippet():
+    content = (
+        "---\n"
+        "uid: hfa-email-message-reply\n"
+        "snippet: 'Robbie ----- Original Message ----- From: Jim'\n"
+        "---\n"
+        "\n"
+        "body\n"
+    )
+    split = split_frontmatter_text(content)
+    assert split is not None
+    frontmatter_text, body = split
+    assert "----- Original Message -----" in frontmatter_text
+    assert body == "\n\nbody\n"
 
 
 def test_render_card_roundtrips():

@@ -78,3 +78,56 @@ def test_update_frontmatter_fields_preserves_yaml_formatting(tmp_path: Path) -> 
     text = p.read_text(encoding="utf-8")
     assert "tags:" in text
     assert "latitude: 3.0" in text
+
+
+def test_update_frontmatter_fields_allows_dashes_inside_quoted_snippet(tmp_path: Path) -> None:
+    """Quoted snippet values may contain --- without ending the frontmatter block."""
+    p = tmp_path / "Email" / "2004-09" / "hfa-email-message-reply.md"
+    p.parent.mkdir(parents=True)
+    p.write_text(
+        "---\n"
+        "uid: hfa-email-message-reply\n"
+        "type: email_message\n"
+        "people: ['[[robbie-heeger]]']\n"
+        "snippet: 'SEE IF IT STARTS haha Robbie ----- Original Message ----- From: Jim'\n"
+        "---\n"
+        "\n"
+        "SEE IF IT STARTS\n",
+        encoding="utf-8",
+    )
+    update_frontmatter_fields(
+        tmp_path,
+        "Email/2004-09/hfa-email-message-reply.md",
+        {"people": ["[[robbie-heeger]]", "[[jim-heeger]]"]},
+    )
+    text = p.read_text(encoding="utf-8")
+    assert "[[jim-heeger]]" in text
+    assert "----- Original Message -----" in text
+    assert text.endswith("SEE IF IT STARTS\n")
+
+
+def test_update_frontmatter_fields_allows_decorative_dash_snippet(tmp_path: Path) -> None:
+    """A snippet of dashes (STOPzilla-style) must not truncate YAML before the fence."""
+    p = tmp_path / "Email" / "note.md"
+    p.parent.mkdir(parents=True)
+    snippet = "------------------------------------------------ STOPzilla! v3.2.0.4 - CONFIRMATION -----------------"
+    p.write_text(
+        "---\n"
+        "uid: hfa-email-message-stopzilla\n"
+        "type: email_message\n"
+        "people: ['[[robbie-heeger]]']\n"
+        f"snippet: '{snippet}'\n"
+        "---\n"
+        "\n"
+        "body\n",
+        encoding="utf-8",
+    )
+    update_frontmatter_fields(
+        tmp_path,
+        "Email/note.md",
+        {"people": ["[[robbie-heeger]]", "[[stopzilla]]"]},
+    )
+    text = p.read_text(encoding="utf-8")
+    assert "[[stopzilla]]" in text
+    assert snippet in text
+    assert text.endswith("body\n")
