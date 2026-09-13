@@ -1,8 +1,10 @@
-# Archive Superpowers: What Changes With HFA Online
+# What changes when an agent has PPA
 
-This document demonstrates what becomes possible with the Heeger-Friedman Archives (HFA) indexed and embedded — compared to what an AI assistant can do without it.
+Worked examples for the questions in [README.md](../README.md). Without PPA the model only has that product's memory or the public web. With PPA it opens a card and cites it.
 
-**Archive stats:** 1,837,313 cards · 6,714,789 embedded chunks · 16,799,640 edges · 22 source types · 18 years of data
+The numbers below come from one living archive (the Heeger-Friedman seed). They are an existence proof, not a default for `ppa setup`. New archives start empty and report their own health.
+
+**That seed, when this page was written:** 1,837,313 cards · 6,714,789 embedded chunks · 16,799,640 edges · 22 source types · 18 years of data
 
 ---
 
@@ -223,9 +225,9 @@ _"code review feedback on pull request"_ → surfaces actual PR review comments,
 
 ---
 
-## Summary: What the Archive Unlocks
+## Summary: what an agent can do
 
-| Capability              | Without Archive             | With Archive                                               |
+| Capability              | Agent without PPA           | Agent with PPA                                             |
 | ----------------------- | --------------------------- | ---------------------------------------------------------- |
 | **Medical records**     | "Check your patient portal" | Exact dates, vaccine codes, vitals, provider names         |
 | **Old emails**          | Can't access                | 461K emails, full text, threaded, 2007–present             |
@@ -240,4 +242,4 @@ _"code review feedback on pull request"_ → surfaces actual PR review comments,
 | **Message history**     | Can't access                | 660K iMessages + 24K Beeper messages, threaded             |
 | **Semantic search**     | N/A                         | 6.7M chunks embedded with context (type, people, time)     |
 
-The archive doesn't replace existing tools — it makes them queryable by meaning, across time, across sources, all at once.
+PPA does not replace Gmail, Photos, or GitHub. It makes those records queryable by meaning, across time and sources, from any agent you attach, while the files stay yours.

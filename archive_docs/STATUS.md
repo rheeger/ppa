@@ -6,19 +6,7 @@ This page is the current product state. When a vision file, rebase, or older rep
 
 `production_proven` is still **false**. Isolated acceptance is not a long soak.
 
-## What PPA is now
-
-A private evidence archive. Cards in a Markdown vault are the truth. A Rust serving index answers query. Postgres is a derived warehouse. Agents retrieve through MCP. They do not get a living profile or a chatbot that answers for them.
-
-v2.5-done is this machine’s canonical seed as the living high-signal corpus. The work after that close-out (PRs 24–33, including the ten-plan hardening in [PR 29](https://github.com/rheeger/ppa/pull/29)) made that corpus usable at seed scale.
-
-## What you can ask
-
-- Find a receipt, flight, thread, or charge with lexical, hybrid, or vector search that returns instead of timing out.
-- Open the card before you treat a hit as a fact.
-- Identify a person by name, slug, email, or phone. Shared household phones stay `ambiguous`. An alias-only hit is not the person.
-- Ask what subscriptions you pay for, what a trip cost, or what changed since a checkpoint through `ppa analytics` / `archive_analytics`. Those workflows return facts, coverage, and freshness. They do not advise. A later cancel is not a current subscription. Currencies do not convert.
-- Ask from a remote client (Arnold on this tailnet) over HTTP MCP. The vault and index stay on the machine that owns them.
+v2.5-done is this machine’s canonical seed as the living high-signal corpus. The work after that close-out (PRs 24–33, including the ten-plan hardening in [PR 29](https://github.com/rheeger/ppa/pull/29)) made that corpus usable at seed scale. What you can ask is in [README.md](../README.md). Arnold on this tailnet can ask the same questions over HTTP MCP. The vault and index stay on the machine that owns them.
 
 ## Ten-plan product hardening (PR 29)
 
@@ -43,21 +31,21 @@ Model rerank stays optional and off. Million-vector train at 1536-d on an 8 GB c
 
 - One phone / email / handle canon so the same person is findable across iMessage and email.
 - `archive_person` resolves phone and email, not only slug.
-- Person lookup returns `unique` / `ambiguous` / `unresolved`. It does not pick a household winner.
 - Embeddings are keyed by chunk text. Rematerialize reuses paid vectors instead of orphaning them.
 
 ## Ops on this machine
 
-| Fact                                      | Status                                                                                                                                                                                                                                         |
-| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Living vault                              | `/Users/rheeger/Archive/seed/hf-archives-seed-20260307-235127`, schema `ppa`                                                                                                                                                                   |
-| Query                                     | Rust serving index. Postgres is warehouse-only.                                                                                                                                                                                                |
-| Arnold                                    | Remote HTTP MCP client of Ginger. Not the home of the corpus. Do not copy the seed there.                                                                                                                                                      |
+| Fact                                      | Status                                                                                                                                                                                                                                                                                                                 |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Living vault                              | `/Users/rheeger/Archive/seed/hf-archives-seed-20260307-235127`, schema `ppa`                                                                                                                                                                                                                                           |
+| Query                                     | Rust serving index. Postgres is warehouse-only.                                                                                                                                                                                                                                                                        |
+| Arnold                                    | Remote HTTP MCP client of Ginger. Not the home of the corpus. Do not copy the seed there.                                                                                                                                                                                                                              |
 | Nightly `ppa maintain`                    | Apply loop no longer tails the whole ingestion ledger. A follow-up apply rematerialized 2,516 dirty cards (not 1.39 million) and published generation `1788997214192`. LaunchAgent `com.rheeger.ppa.maintain-nightly` stays **unloaded**. Receipt: [reports/maintain-living-loop.md](reports/maintain-living-loop.md). |
-| HTTP MCP                                  | `com.rheeger.ppa.mcp-http` on the current Tailscale address, read-only profile. Pin the `ppa-http-mcp` worktree to current main and bounce after a deploy.                                                                                     |
-| Photos, Apple Health, `--catch-up`        | Parked                                                                                                                                                                                                                                         |
-| Knowledge cache / 46-facet living profile | Empty. `archive_knowledge` falls back to search.                                                                                                                                                                                               |
-| New archives                              | Fail closed on their own instance. They do not inherit `local_seed_living_corpus`.                                                                                                                                                             |
+| HTTP MCP                                  | `com.rheeger.ppa.mcp-http` on the current Tailscale address, read-only profile. Pin the `ppa-http-mcp` worktree to current main and bounce after a deploy.                                                                                                                                                             |
+| Photos, Apple Health, `--catch-up`        | Parked                                                                                                                                                                                                                                                                                                                 |
+| Apple Contacts                            | Live nightly key `contacts:apple` (before iMessage and Beeper). First living-vault catch-up is the operator sequence in [runbooks/apple-contacts-catchup.md](runbooks/apple-contacts-catchup.md), not a calendar nightly.                                                                                              |
+| Knowledge cache / 46-facet living profile | Empty. `archive_knowledge` falls back to search.                                                                                                                                                                                                                                                                       |
+| New archives                              | Fail closed on their own instance. They do not inherit `local_seed_living_corpus`.                                                                                                                                                                                                                                     |
 
 Ask living-archive questions through the already-running MCP. Do not cold-open `archive_cli` once per question.
 

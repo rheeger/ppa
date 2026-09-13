@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
-import glob
+import hashlib
 import json
+import logging
 import os
 import re
+import subprocess
+import tempfile
 import urllib.parse
 import urllib.request
 from datetime import date, datetime
+from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger("ppa.contacts")
 
 from archive_vault.schema import PersonCard
 from archive_vault.uid import generate_uid
@@ -55,6 +61,163 @@ def _normalize_partial_date(value: str) -> str:
     return ""
 
 
+def _vcf_prop(upper: str, name: str) -> bool:
+    return upper == name or upper.startswith(f"{name}:") or upper.startswith(f"{name};")
+
+
+_CONTACTS_PERMISSION_MARKERS = (
+    "not authorized",
+    "not allowed",
+    "permission",
+    "(-1743)",
+    "errAEPrivilegeError",
+    "access not allowed",
+    "osascript is not allowed",
+)
+
+
+class AppleContactsPermissionError(PermissionError):
+    """Contacts.app refused the dump (TCC / Automation)."""
+
+
+def _is_contacts_permission_error(message: str) -> bool:
+    lowered = message.lower()
+    return any(marker in lowered for marker in _CONTACTS_PERMISSION_MARKERS)
+
+
+def _contact_content_hash(row: dict[str, Any]) -> str:
+    payload = {
+        "name": row.get("name") or "",
+        "first_name": row.get("first_name") or "",
+        "last_name": row.get("last_name") or "",
+        "emails": row.get("emails") or [],
+        "phones": row.get("phones") or [],
+        "company": row.get("company") or "",
+        "title": row.get("title") or "",
+        "birthday": row.get("birthday") or "",
+        "description": row.get("description") or "",
+        "aliases": row.get("aliases") or [],
+        "websites": row.get("websites") or [],
+        "linkedin": row.get("linkedin") or "",
+        "twitter": row.get("twitter") or "",
+        "github": row.get("github") or "",
+    }
+    encoded = json.dumps(payload, sort_keys=True, ensure_ascii=True)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+# `vcard of every person` returns Apple Event -1741 on a real address book
+# (reply too large). Count and a single vcard succeed. Batches of 50 work.
+APPLE_CONTACTS_DUMP_BATCH = 50
+
+
+def _osascript_error_text(result: subprocess.CompletedProcess[str]) -> str:
+    return ((result.stderr or "") + "\n" + (result.stdout or "")).strip()
+
+
+def _run_osascript(script: str, *, timeout: int) -> str:
+    result = subprocess.run(
+        ["osascript", "-e", script],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    err = _osascript_error_text(result)
+    if result.returncode != 0:
+        if _is_contacts_permission_error(err):
+            raise AppleContactsPermissionError(f"Contacts permission denied: {err}")
+        raise RuntimeError(f"Contacts.app dump failed: {err or result.returncode}")
+    return (result.stdout or "").strip()
+
+
+def _apple_contacts_count() -> int:
+    script = (
+        "with timeout of 60 seconds\n"
+        '  tell application "Contacts"\n'
+        "    count people\n"
+        "  end tell\n"
+        "end timeout\n"
+    )
+    raw = _run_osascript(script, timeout=70)
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"Contacts.app count failed: {raw or 'empty'}") from exc
+
+
+def _write_apple_vcard_range(start: int, end: int, dest: Path) -> None:
+    posix = str(dest)
+    script = (
+        "with timeout of 180 seconds\n"
+        '  tell application "Contacts"\n'
+        f"    set cardList to vcard of people {start} thru {end}\n"
+        "  end tell\n"
+        "end timeout\n"
+        'set text item delimiters to ""\n'
+        "set cardText to cardList as text\n"
+        f'set outFile to POSIX file "{posix}"\n'
+        "set fileRef to open for access outFile with write permission\n"
+        "set eof of fileRef to 0\n"
+        "write cardText to fileRef\n"
+        "close access fileRef\n"
+    )
+    _run_osascript(script, timeout=200)
+    if not dest.is_file() or dest.stat().st_size == 0:
+        raise RuntimeError(f"Contacts.app dump wrote no cards for people {start} thru {end}")
+
+
+def _dump_range_resilient(start: int, end: int, tmp: Path, parts: list[bytes]) -> None:
+    chunk = tmp / f"apple-batch-{start}-{end}.vcf"
+    try:
+        _write_apple_vcard_range(start, end, chunk)
+        parts.append(chunk.read_bytes())
+        return
+    except AppleContactsPermissionError:
+        raise
+    except (RuntimeError, subprocess.TimeoutExpired) as exc:
+        if start == end:
+            logger.warning("apple contacts skip person index=%s: %s", start, exc)
+            return
+        message = str(exc).lower()
+        if "-1741" in message or "-1712" in message or "timed out" in message:
+            mid = (start + end) // 2
+            _dump_range_resilient(start, mid, tmp, parts)
+            _dump_range_resilient(mid + 1, end, tmp, parts)
+            return
+        raise
+    finally:
+        chunk.unlink(missing_ok=True)
+
+
+def dump_apple_contacts_vcf(dest: Path) -> None:
+    """Write unified Contacts.app vCards to dest. Raises on TCC denial."""
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    count = _apple_contacts_count()
+    logger.info(
+        "apple contacts dump start people=%s batch=%s dest=%s",
+        count,
+        APPLE_CONTACTS_DUMP_BATCH,
+        dest,
+    )
+    if count <= 0:
+        dest.write_bytes(b"")
+        return
+    parts: list[bytes] = []
+    with tempfile.TemporaryDirectory(prefix="ppa-apple-contacts-dump-") as tmp:
+        tmp_path = Path(tmp)
+        start = 1
+        while start <= count:
+            end = min(start + APPLE_CONTACTS_DUMP_BATCH - 1, count)
+            logger.info("apple contacts dump batch %s-%s/%s", start, end, count)
+            _dump_range_resilient(start, end, tmp_path, parts)
+            start = end + 1
+    dest.write_bytes(b"".join(parts))
+    if not dest.is_file() or dest.stat().st_size == 0:
+        raise RuntimeError("Contacts.app dump wrote no cards")
+
+
 class ContactsAdapter(BaseAdapter):
     source_id = "contacts"
 
@@ -62,6 +225,8 @@ class ContactsAdapter(BaseAdapter):
         super().__init__()
         self._last_google_sync_token = ""
         self._person_etags: dict[str, str] = {}
+        self._apple_contact_hashes: dict[str, str] = {}
+        self._dump_apple_contacts_vcf = dump_apple_contacts_vcf
 
     def get_cursor_key(self, **kwargs) -> str:
         raw_sources = kwargs.get("sources") or []
@@ -87,14 +252,13 @@ class ContactsAdapter(BaseAdapter):
     ) -> list[dict[str, Any]]:
         selected = {item.strip().lower() for item in (sources or ["apple", "vcf", "google"]) if item.strip()}
         items: list[dict[str, Any]] = []
+        max_items = kwargs.get("max_items")
         if "google" in selected:
-            max_items = kwargs.get("max_items")
             items.extend(self._fetch_google(cursor=cursor, max_items=max_items))
-        if {"apple", "vcf"} & selected:
-            if vcf_paths:
-                items.extend(self._fetch_vcf_files(vcf_paths=vcf_paths))
-            else:
-                items.extend(self._fetch_vcf_files())
+        if "apple" in selected:
+            items.extend(self._fetch_apple(cursor=cursor, vcf_paths=vcf_paths, max_items=max_items))
+        elif "vcf" in selected:
+            items.extend(self._fetch_vcf_files(vcf_paths=vcf_paths))
         return items
 
     def _configured_vcf_paths(self) -> list[str]:
@@ -312,28 +476,93 @@ class ContactsAdapter(BaseAdapter):
             return rows
         return rows
 
+    def cursor_checkpoint(
+        self,
+        item: dict[str, Any],
+        *,
+        card=None,
+        index: int = -1,
+        processed_successfully: int = 0,
+        result=None,
+        **kwargs,
+    ) -> dict[str, Any] | None:
+        uid = str(item.get("apple_uid") or item.get("name") or item.get("source_path") or "").strip()
+        digest = str(item.get("_content_hash") or "").strip()
+        if uid and digest:
+            self._apple_contact_hashes[uid] = digest
+        return super().cursor_checkpoint(
+            item,
+            card=card,
+            index=index,
+            processed_successfully=processed_successfully,
+            result=result,
+            **kwargs,
+        )
+
     def finalize_cursor(self, cursor: dict[str, Any], **kwargs) -> dict[str, Any] | None:
         patch = {"last_sync": datetime.now().isoformat()}
         if self._last_google_sync_token:
             patch["sync_token"] = self._last_google_sync_token
         if self._person_etags:
             patch["person_etags"] = dict(self._person_etags)
+        if self._apple_contact_hashes:
+            patch["contact_hashes"] = dict(self._apple_contact_hashes)
         return patch
 
-    def _fetch_vcf_files(self, *, vcf_paths: list[str] | None = None) -> list[dict[str, Any]]:
-        configured_paths = [path for path in (vcf_paths or self._configured_vcf_paths()) if str(path).strip()]
-        if configured_paths:
-            candidates = configured_paths
+    def _fetch_apple(
+        self,
+        *,
+        cursor: dict[str, Any] | None = None,
+        vcf_paths: list[str] | None = None,
+        max_items: int | None = None,
+    ) -> list[dict[str, Any]]:
+        configured = [path for path in (vcf_paths or self._configured_vcf_paths()) if str(path).strip()]
+        if configured:
+            rows = self._fetch_vcf_files(vcf_paths=configured)
         else:
-            home = os.path.expanduser("~")
-            candidates = [
-                os.path.join(home, "Downloads", "apple-contacts-export.vcf"),
-                os.path.join(home, "Downloads", "vcard-jenny-souza.vcf"),
-                os.path.join(
-                    home, "Documents", "Health & Personal", "01_Documents", "06_Wedding", "Steven B_ Goldfarb.vcf"
-                ),
-            ]
-            candidates.extend(glob.glob(os.path.join(home, "Downloads", "*contacts*.vcf")))
+            rows = self._fetch_apple_live()
+        state = cursor if isinstance(cursor, dict) else {}
+        stored = {
+            str(name).strip(): str(digest).strip()
+            for name, digest in dict(state.get("contact_hashes") or {}).items()
+            if str(name).strip() and str(digest).strip()
+        }
+        self._apple_contact_hashes = dict(stored)
+        remaining = None if max_items in (None, "") else max(0, int(max_items))
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            uid = str(row.get("apple_uid") or row.get("name") or row.get("source_path") or "").strip()
+            digest = _contact_content_hash(row)
+            if uid and stored.get(uid) == digest:
+                self._apple_contact_hashes[uid] = digest
+                continue
+            if uid:
+                row = dict(row)
+                row["_content_hash"] = digest
+            out.append(row)
+            if remaining is not None:
+                remaining -= 1
+                if remaining <= 0:
+                    break
+        return out
+
+    def _fetch_apple_live(self) -> list[dict[str, Any]]:
+        with tempfile.TemporaryDirectory(prefix="ppa-apple-contacts-") as tmp:
+            dest = Path(tmp) / "contacts.vcf"
+            self._dump_apple_contacts_vcf(dest)
+            if not dest.is_file():
+                return []
+            return self._parse_vcf(str(dest))
+
+    def _fetch_vcf_files(
+        self,
+        *,
+        vcf_paths: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        configured_paths = [path for path in (vcf_paths or self._configured_vcf_paths()) if str(path).strip()]
+        if not configured_paths:
+            return []
+        candidates = configured_paths
         rows: list[dict[str, Any]] = []
         for path in sorted(set(candidates)):
             if os.path.isfile(path):
@@ -355,49 +584,70 @@ class ContactsAdapter(BaseAdapter):
             last_name = ""
             emails: list[str] = []
             phones: list[str] = []
+            aliases: list[str] = []
+            websites: list[str] = []
             company = ""
             title = ""
             birthday = ""
+            description = ""
+            apple_uid = ""
             linkedin = ""
             twitter = ""
             github = ""
             show_as_company = False
             for line in block.splitlines():
+                if ":" not in line:
+                    continue
                 upper = line.upper()
-                if upper.startswith("FN"):
-                    _, value = line.split(":", 1)
+                value = line.split(":", 1)[1]
+                if _vcf_prop(upper, "FN"):
                     name = _vcf_unescape(value)
-                elif upper.startswith("N"):
-                    _, value = line.split(":", 1)
+                elif _vcf_prop(upper, "NOTE"):
+                    description = _vcf_unescape(value)
+                elif _vcf_prop(upper, "NICKNAME"):
+                    nick = _vcf_unescape(value)
+                    if nick:
+                        aliases.append(nick)
+                elif _vcf_prop(upper, "N"):
                     first_name, last_name = _split_vcf_name(value)
-                elif upper.startswith("EMAIL"):
+                elif _vcf_prop(upper, "EMAIL"):
                     match = re.search(r"([^:\s;]+@[^:\s;]+)", line)
                     if match:
                         emails.append(match.group(1).lower())
-                elif upper.startswith("TEL"):
-                    _, value = line.split(":", 1)
+                elif _vcf_prop(upper, "TEL"):
                     phones.append(_vcf_unescape(value))
-                elif upper.startswith("ORG"):
-                    _, value = line.split(":", 1)
+                elif _vcf_prop(upper, "ORG"):
                     company = _primary_org(value)
-                elif upper.startswith("TITLE"):
-                    _, value = line.split(":", 1)
+                elif _vcf_prop(upper, "TITLE"):
                     title = _vcf_unescape(value)
-                elif upper.startswith("BDAY"):
-                    _, value = line.split(":", 1)
+                elif _vcf_prop(upper, "BDAY"):
                     birthday = _normalize_partial_date(_vcf_unescape(value))
-                elif upper.startswith("X-ABSHOWAS"):
-                    _, value = line.split(":", 1)
+                elif _vcf_prop(upper, "UID") or _vcf_prop(upper, "X-ABUID"):
+                    uid_value = _vcf_unescape(value).strip()
+                    if uid_value and not apple_uid:
+                        apple_uid = uid_value
+                elif _vcf_prop(upper, "URL"):
+                    url = _vcf_unescape(value).strip()
+                    if url:
+                        websites.append(url)
+                        lower = url.lower()
+                        if "linkedin" in lower and not linkedin:
+                            linkedin = url
+                        elif any(domain in lower for domain in ("twitter.com", "x.com")) and not twitter:
+                            twitter = url
+                        elif "github.com" in lower and not github:
+                            github = url
+                elif _vcf_prop(upper, "X-ABSHOWAS"):
                     show_as_company = value.strip().upper() == "COMPANY"
                 elif "X-SOCIALPROFILE" in upper:
                     lower = line.lower()
-                    value = line.split(":", 1)[-1].strip()
+                    social = line.split(":", 1)[-1].strip()
                     if "linkedin" in lower:
-                        linkedin = value
+                        linkedin = social
                     elif "twitter" in lower or "x.com" in lower:
-                        twitter = value
+                        twitter = social
                     elif "github" in lower:
-                        github = value
+                        github = social
             if show_as_company:
                 continue
             if name or emails or phones:
@@ -409,12 +659,16 @@ class ContactsAdapter(BaseAdapter):
                         "last_name": last_name,
                         "emails": list(dict.fromkeys(emails)),
                         "phones": list(dict.fromkeys(phones)),
+                        "aliases": list(dict.fromkeys(aliases)),
+                        "websites": list(dict.fromkeys(websites)),
                         "company": company,
                         "title": title,
                         "birthday": birthday,
+                        "description": description,
                         "linkedin": linkedin,
                         "twitter": twitter,
                         "github": github,
+                        "apple_uid": apple_uid,
                         "source_path": path,
                     }
                 )
@@ -468,7 +722,7 @@ class ContactsAdapter(BaseAdapter):
         source = str(item.get("source", "contacts.apple"))
         emails = list(item.get("emails", []))
         source_id = (
-            str(item.get("resource_name", "")).strip()
+            str(item.get("apple_uid") or item.get("resource_name") or "").strip()
             or (emails[0] if emails else "")
             or str(item.get("name", "")).strip()
             or f"{source}:{item.get('source_path', 'manual')}"
@@ -496,6 +750,7 @@ class ContactsAdapter(BaseAdapter):
             linkedin=str(item.get("linkedin", "")).strip(),
             twitter=str(item.get("twitter", "")).strip(),
             github=str(item.get("github", "")).strip(),
+            websites=list(item.get("websites", [])),
             description=str(item.get("description", "")).strip(),
         )
         provenance = deterministic_provenance(card, source)

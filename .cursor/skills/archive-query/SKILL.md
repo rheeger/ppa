@@ -9,8 +9,8 @@ description: >-
 
 # Archive query jobs
 
-Cards are truth. Search hits are navigation. Warm MCP only. Never spawn a new
-`archive_cli` process to ask a living-archive question.
+Warm MCP only. Never spawn a new `archive_cli` process to ask a living-archive
+question. Cards are truth. Search hits are navigation.
 
 Pick one job. Read that file before you retrieve. Do not improvise from the
 tool list alone.

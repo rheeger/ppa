@@ -1,12 +1,16 @@
 # PPA MCP setup
 
+Paste the same generated config into Cursor, Claude Desktop, Codex, OpenClaw, or another MCP client. The vault stays on the machine that owns it. Switching clients does not migrate your cards.
+
+Agents should read cards before citing search hits. Job recipes are in `.cursor/skills/archive-query/` and [AGENT_USAGE.md](AGENT_USAGE.md). What those tools can answer is in [README.md](../README.md).
+
 ## Quick start
 
 1. Install with a native `archive_crate` (hashed wheels + Python 3.12, or a developer checkout that builds the crate). `pip install -e .` alone is not the supported retrieval path.
 2. Bind an instance (`ppa setup` or an existing `ppa.json` root). Set `PPA_INDEX_DSN`, `PPA_PATH` / instance dir, `PPA_INDEX_SCHEMA` (see [PPA_RUNTIME_CONTRACT.md](PPA_RUNTIME_CONTRACT.md) §2).
-3. Run `ppa mcp-config` and paste the JSON into your MCP client. Secrets such as `OPENAI_API_KEY` are never printed — add those in the client’s `env` block separately.
+3. Run `ppa mcp-config` and paste the JSON into your MCP client. Secrets such as `OPENAI_API_KEY` are never printed. Add those in the client's `env` block separately.
 
-`ppa analytics` / `archive_analytics` are shipped (subscriptions, trip costs, changes-since, typed query, neighbor context). Coverage is the eligible stored set. `archive_knowledge` is an empty search fallback, not a 46-facet cache. Living status: [STATUS.md](STATUS.md).
+`ppa analytics` / `archive_analytics` are shipped (subscriptions, trip costs, changes-since, typed query, neighbor context). Coverage is the cards you actually have. `archive_knowledge` is an empty search fallback, not a living profile. Living status: [STATUS.md](STATUS.md).
 
 ## Local vs remote
 

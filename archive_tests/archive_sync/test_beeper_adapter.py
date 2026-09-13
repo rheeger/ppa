@@ -361,7 +361,7 @@ def test_ingest_resumes_by_thread_cursor_and_writes_notes(tmp_vault, tmp_path):
         max_threads=1,
         batch_size=1,
     )
-    assert first_result.created == 3
+    assert first_result.created == 2
 
     sync_state = json.loads((tmp_vault / "_meta" / "sync-state.json").read_text(encoding="utf-8"))
     assert (
@@ -376,7 +376,7 @@ def test_ingest_resumes_by_thread_cursor_and_writes_notes(tmp_vault, tmp_path):
         max_threads=1,
         batch_size=1,
     )
-    assert second_result.created == 3
+    assert second_result.created == 2
 
     sync_state = json.loads((tmp_vault / "_meta" / "sync-state.json").read_text(encoding="utf-8"))
     assert (
@@ -389,7 +389,7 @@ def test_ingest_resumes_by_thread_cursor_and_writes_notes(tmp_vault, tmp_path):
     people_files = sorted((tmp_vault / "People").rglob("*.md"))
     assert len(thread_files) == 2
     assert len(message_files) == 2
-    assert len(people_files) == 2
+    assert len(people_files) == 0
 
     thread_frontmatter, _, _ = read_note(tmp_vault, str(thread_files[0].relative_to(tmp_vault)))
     assert thread_frontmatter["type"] == "beeper_thread"
@@ -662,7 +662,7 @@ def _seed_discord_dm(db_path: Path) -> None:
         participant_id="@friend:beeper.local",
         full_name="Beeper Friend",
         is_self=False,
-        identifiers=[("username", "beeperfriend")],
+        identifiers=[("username", "beeperfriend"), ("phone", "+15551234567")],
     )
     _insert_message(
         db_path,
@@ -681,7 +681,7 @@ def _beeper_incoming_person(adapter: BeeperAdapter) -> tuple[PersonCard, Path]:
         participant_id="@friend:beeper.local",
         full_name="Beeper Friend",
         is_self=False,
-        identifiers=[("username", "beeperfriend")],
+        identifiers=[("username", "beeperfriend"), ("phone", "+15551234567")],
     )
     item = adapter._participant_person_item(
         account_id="discordgo",

@@ -40,6 +40,60 @@ def test_resolve_person_batch_rust_matches_python(tmp_path):
         assert sorted(a.reasons) == sorted(b.reasons)
 
 
+def test_resolve_person_batch_household_phone_stays_conflict(tmp_path):
+    import archive_crate
+    from archive_vault.identity import upsert_identity_map
+    from archive_vault.identity_resolver import resolve_person_batch as py_resolve_batch
+    from archive_vault.provenance import ProvenanceEntry
+    from archive_vault.schema import PersonCard
+    from archive_vault.vault import write_card
+
+    vault = tmp_path / "vault"
+    (vault / "People").mkdir(parents=True)
+    card = PersonCard.model_validate(
+        {
+            "uid": "hfa-person-janesmith01",
+            "type": "person",
+            "source": ["contacts.apple"],
+            "source_id": "jane",
+            "created": "2026-01-01",
+            "updated": "2026-01-01",
+            "summary": "Jane Smith",
+            "first_name": "Jane",
+            "last_name": "Smith",
+            "phones": ["+15551234567"],
+        }
+    )
+    write_card(
+        vault,
+        "People/jane-smith.md",
+        card,
+        provenance={
+            "summary": ProvenanceEntry("contacts.apple", "2026-01-01", "deterministic"),
+            "first_name": ProvenanceEntry("contacts.apple", "2026-01-01", "deterministic"),
+            "last_name": ProvenanceEntry("contacts.apple", "2026-01-01", "deterministic"),
+            "phones": ProvenanceEntry("contacts.apple", "2026-01-01", "deterministic"),
+        },
+    )
+    upsert_identity_map(vault, "[[jane-smith]]", {"phones": ["+15551234567"]})
+    ids = [
+        {
+            "summary": "John Doe",
+            "first_name": "John",
+            "last_name": "Doe",
+            "phones": ["+15551234567"],
+        }
+    ]
+    py_out = py_resolve_batch(vault, ids)
+    rs_out = archive_crate.resolve_person_batch(str(vault), ids)
+    assert py_out[0].action == "conflict"
+    assert "name_conflict" in py_out[0].reasons
+    assert rs_out[0].action == "conflict"
+    assert "name_conflict" in rs_out[0].reasons
+    assert "auto_approved" not in py_out[0].reasons
+    assert "auto_approved" not in rs_out[0].reasons
+
+
 _DEFAULT_SLICE = ".slices/1pct"
 
 

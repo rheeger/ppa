@@ -9,6 +9,37 @@ from archive_sync.adapters.notion_people import NotionStaffAdapter
 from archive_vault.vault import read_note
 
 
+def test_contacts_ingest_collapses_duplicate_apple_uids_same_phone(tmp_vault):
+    adapter = ContactsAdapter()
+    adapter.fetch = lambda vault_path, cursor, config=None, **kwargs: [  # type: ignore[method-assign]
+        {
+            "source": "contacts.apple",
+            "name": "Keith Williams",
+            "first_name": "Keith",
+            "last_name": "Williams",
+            "phones": ["+17186845444"],
+            "company": "COMPUDOC",
+            "apple_uid": "94A7FB44-6212-4FE3-BE74-34D43CE7028B",
+        },
+        {
+            "source": "contacts.apple",
+            "name": "Keith Williams",
+            "first_name": "Keith",
+            "last_name": "Williams",
+            "phones": ["+17186845444"],
+            "company": "COMPUDOC",
+            "apple_uid": "14EC4665-CD24-4859-B640-8C70D8B7FA22",
+        },
+    ]
+    result = adapter.ingest(str(tmp_vault), sources=["apple"])
+    assert result.created == 1
+    assert result.merged == 1
+    people = sorted(path.name for path in (tmp_vault / "People").glob("*.md"))
+    assert people == ["keith-williams.md"]
+    payload = json.loads((tmp_vault / "_meta" / "identity-map.json").read_text(encoding="utf-8"))
+    assert payload["phone:+17186845444"] == "[[keith-williams]]"
+
+
 def test_contacts_ingest_indexes_all_aliases(tmp_vault):
     adapter = ContactsAdapter()
     adapter.fetch = lambda vault_path, cursor, config=None, **kwargs: [  # type: ignore[method-assign]

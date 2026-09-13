@@ -1,6 +1,6 @@
 # PPA v2.5 Execution Plans - Agent Handoff
 
-**Living status:** [STATUS.md](../../STATUS.md). This directory is the A–H implementation handoff frozen at local close-out `5980464`. Ten-plan hardening (PR 29) and PRs 24–33 landed after. Do not re-implement A–H. Do not treat “Arnold is down / do not deploy” as a ban on Arnold as an HTTP MCP *client*.
+**Living status:** [STATUS.md](../../STATUS.md). This directory is the A–H implementation handoff frozen at local close-out `5980464`. Ten-plan hardening (PR 29) and PRs 24–33 landed after. Do not re-implement A–H. Do not treat “Arnold is down / do not deploy” as a ban on Arnold as an HTTP MCP _client_.
 
 This directory was the implementation entrypoint for v2.5 sections A–H. A zero-context agent should read [STATUS.md](../../STATUS.md) first, then `../v2.5vision.md`, then these plans only if they are changing hygiene or updater contracts.
 
@@ -27,6 +27,7 @@ python -m archive_cli --log-file logs/ppa-maintain-nightly-YYYYMMDD.log maintain
   --source-updater otter-transcripts:<GOOGLE_ACCOUNT> \
   --source-updater gmail-correspondents:<GOOGLE_ACCOUNT> \
   --source-updater contacts:google \
+  --source-updater contacts:apple \
   --source-updater file-libraries:documents \
   --source-updater beeper:local \
   --source-updater imessage:local \
@@ -168,19 +169,19 @@ Every report must include enough paths to find related artifacts from `ppa statu
 
 ## Per-Section Deliverables
 
-| Section   | Minimum implementation deliverables                           | Status                                                                                  |
-| --------- | ------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| G         | Gate/report framework, refusal rules, engine-mode reporting   | Done                                                                                    |
-| A         | `EmailPromotionPolicy`, fixtures                              | Done                                                                                    |
-| B dry-run | classification reuse, census, samples                         | Done                                                                                    |
-| B apply   | staging apply, rollback, rebuild-safety                       | Done on **this seed** (filename historical)                                             |
-| C         | Gmail classify-before-promotion gate                          | Done for inbound                                                                        |
-| D Phase 1 | declarations, batch shapes, snapshots                         | Done                                                                                    |
-| D Phase 2 | **run adapters**, commit cursors, dirty UIDs, maintain flag   | Live streams SUCCESS on this seed; Photos parked                                        |
-| E Phase 1 | declarations, plan/staleness, snapshots                       | Done                                                                                    |
-| E Phase 2 | **run processors** on dirty UIDs, maintain flag               | **Landed** (Track A + dirty extract); soak ran                                          |
-| F         | JSON/human status, readiness                                  | Surfaces landed; live-key freshness; `ready: false` leftover accepted                   |
-| H         | Seed updater proof, corpus apply, soak                        | **v2.5-local complete.** Do not copy the seed. Do not deploy Arnold.                    |
+| Section   | Minimum implementation deliverables                         | Status                                                                |
+| --------- | ----------------------------------------------------------- | --------------------------------------------------------------------- |
+| G         | Gate/report framework, refusal rules, engine-mode reporting | Done                                                                  |
+| A         | `EmailPromotionPolicy`, fixtures                            | Done                                                                  |
+| B dry-run | classification reuse, census, samples                       | Done                                                                  |
+| B apply   | staging apply, rollback, rebuild-safety                     | Done on **this seed** (filename historical)                           |
+| C         | Gmail classify-before-promotion gate                        | Done for inbound                                                      |
+| D Phase 1 | declarations, batch shapes, snapshots                       | Done                                                                  |
+| D Phase 2 | **run adapters**, commit cursors, dirty UIDs, maintain flag | Live streams SUCCESS on this seed; Photos parked                      |
+| E Phase 1 | declarations, plan/staleness, snapshots                     | Done                                                                  |
+| E Phase 2 | **run processors** on dirty UIDs, maintain flag             | **Landed** (Track A + dirty extract); soak ran                        |
+| F         | JSON/human status, readiness                                | Surfaces landed; live-key freshness; `ready: false` leftover accepted |
+| H         | Seed updater proof, corpus apply, soak                      | **v2.5-local complete.** Do not copy the seed. Do not deploy Arnold.  |
 
 No section is complete with code alone. Each section must produce reports/tests proving the relevant gate behavior.
 
@@ -375,19 +376,19 @@ Report shape implementation binding:
 
 ## Validation Matrix
 
-| Gate                                            | Purpose                                  | Required before moving on                                   |
-| ----------------------------------------------- | ---------------------------------------- | ----------------------------------------------------------- |
-| Synthetic fixtures                              | Prove rules in isolation                 | Unit tests pass, no real vault mutation                     |
-| Small slice                                     | Prove corpus hygiene on real examples    | dry-run/apply/rollback/rebuild safety pass                  |
-| Larger slice                                    | Prove runtime/report scale               | bounded runtime, no broad LLM work                          |
-| Local seed dry-run                              | Evaluate full seed without mutation      | report reviewed, classification reuse acceptable            |
-| Local seed staging apply                        | Prove seed-scale apply/rollback safely   | **This machine:** already applied on the canonical seed. Do not copy-and-reapply. Staging-copy / Arnold tail is historical. |
-| **Local seed source updater + processor proof** | Prove live update on this seed           | real updater runs + soak on this seed — **done**            |
-| Arnold code deploy                              | Historical written gate                  | **Not a v2.5 closer.** Arnold is down. Do not deploy.       |
-| **Arnold source updater + processor proof**     | Historical written gate                  | **Not a v2.5 closer.**                                      |
-| Production dry-run                              | Historical written gate                  | **Not a v2.5 closer.** This seed already received apply.    |
-| Production reviewed apply                       | Historical written gate                  | **Not a v2.5 closer.**                                      |
-| Production soak/readiness                       | Historical written gate                  | Local soak ran. Formal `ready: false` leftover accepted.    |
+| Gate                                            | Purpose                                | Required before moving on                                                                                                   |
+| ----------------------------------------------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Synthetic fixtures                              | Prove rules in isolation               | Unit tests pass, no real vault mutation                                                                                     |
+| Small slice                                     | Prove corpus hygiene on real examples  | dry-run/apply/rollback/rebuild safety pass                                                                                  |
+| Larger slice                                    | Prove runtime/report scale             | bounded runtime, no broad LLM work                                                                                          |
+| Local seed dry-run                              | Evaluate full seed without mutation    | report reviewed, classification reuse acceptable                                                                            |
+| Local seed staging apply                        | Prove seed-scale apply/rollback safely | **This machine:** already applied on the canonical seed. Do not copy-and-reapply. Staging-copy / Arnold tail is historical. |
+| **Local seed source updater + processor proof** | Prove live update on this seed         | real updater runs + soak on this seed — **done**                                                                            |
+| Arnold code deploy                              | Historical written gate                | **Not a v2.5 closer.** Arnold is down. Do not deploy.                                                                       |
+| **Arnold source updater + processor proof**     | Historical written gate                | **Not a v2.5 closer.**                                                                                                      |
+| Production dry-run                              | Historical written gate                | **Not a v2.5 closer.** This seed already received apply.                                                                    |
+| Production reviewed apply                       | Historical written gate                | **Not a v2.5 closer.**                                                                                                      |
+| Production soak/readiness                       | Historical written gate                | Local soak ran. Formal `ready: false` leftover accepted.                                                                    |
 
 ## Stop Conditions
 

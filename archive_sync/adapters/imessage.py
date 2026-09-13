@@ -12,7 +12,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from archive_vault.identity import IdentityCache
+from archive_vault.identity import IdentityCache, canonicalize_people_list, load_identity_map
 from archive_vault.provenance import ProvenanceEntry, merge_provenance
 from archive_vault.schema import (
     IMessageAttachmentCard,
@@ -635,15 +635,22 @@ class IMessageAdapter(BaseAdapter):
             "created": _date_bucket(sent_at),
         }
 
-    def _merge_thread_item(self, existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    def _merge_thread_item(
+        self,
+        existing: dict[str, Any],
+        incoming: dict[str, Any],
+        *,
+        identity: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         existing["participant_handles"] = _merge_string_lists(
             list(existing.get("participant_handles", [])),
             list(incoming.get("participant_handles", [])),
         )
-        existing["people"] = _merge_string_lists(
+        people = _merge_string_lists(
             list(existing.get("people", [])),
             list(incoming.get("people", [])),
         )
+        existing["people"] = canonicalize_people_list(identity, people) if identity is not None else people
         existing["messages"] = _merge_string_lists(
             list(existing.get("messages", [])),
             list(incoming.get("messages", [])),
@@ -816,7 +823,10 @@ class IMessageAdapter(BaseAdapter):
                 raw_chat_id = bundle["chat_id"]
                 participant_handles = list(bundle["participant_handles"])
                 sender_handle = bundle["sender_handle"]
-                people_links = self._resolve_people(cache, [sender_handle, *participant_handles])
+                people_links = canonicalize_people_list(
+                    cache.entries,
+                    self._resolve_people(cache, [sender_handle, *participant_handles]),
+                )
                 message_uid = _message_uid(raw_message_id)
                 thread_item = self._thread_item(
                     chat_id=raw_chat_id,
@@ -843,7 +853,9 @@ class IMessageAdapter(BaseAdapter):
                 if existing_thread is None:
                     thread_items_by_chat[raw_chat_id] = thread_item
                 else:
-                    thread_items_by_chat[raw_chat_id] = self._merge_thread_item(existing_thread, thread_item)
+                    thread_items_by_chat[raw_chat_id] = self._merge_thread_item(
+                        existing_thread, thread_item, identity=cache.entries
+                    )
                 message_item = {
                     "kind": "message",
                     "message_id": raw_message_id,
@@ -1008,12 +1020,17 @@ class IMessageAdapter(BaseAdapter):
             incoming = card.model_dump(mode="python")
             changed = False
 
+            identity = getattr(self, "_active_identity_entries", None)
+            if not identity:
+                identity = load_identity_map(vault_path)
             for field_name in ("source", "people", "orgs", "tags", "participant_handles", "messages", "attachments"):
                 existing_values = merged_data.get(field_name, [])
                 incoming_values = incoming.get(field_name, [])
                 if not isinstance(existing_values, list) or not isinstance(incoming_values, list):
                     continue
                 merged_values = _merge_string_lists(existing_values, incoming_values)
+                if field_name == "people":
+                    merged_values = canonicalize_people_list(identity, merged_values)
                 if merged_values != existing_values:
                     merged_data[field_name] = merged_values
                     changed = True

@@ -9,6 +9,7 @@ from typing import Any
 from archive_vault.canon import email as canon_email
 from archive_vault.canon import handle as canon_handle
 from archive_vault.canon import phone as canon_phone
+from archive_vault.canon import wikilink as canon_wikilink
 from archive_vault.change_journal import OPERATION_CREATE, OPERATION_UPDATE, ChangeJournal
 from archive_vault.paths import normalize_vault_rel
 
@@ -53,6 +54,16 @@ def _iter_identifier_pairs(identifiers: dict[str, str | list[str]]) -> list[tupl
         values = value if isinstance(value, list) else [value]
         for item in values:
             if not isinstance(item, str):
+                continue
+            if normalized_prefix == "phone":
+                forms = canon_phone.alias_forms(item)
+                if not forms:
+                    normalized = _normalize_identifier(normalized_prefix, item)
+                    if normalized:
+                        pairs.append((normalized_prefix, normalized))
+                    continue
+                for form in forms:
+                    pairs.append((normalized_prefix, form))
                 continue
             normalized = _normalize_identifier(normalized_prefix, item)
             if normalized:
@@ -136,6 +147,20 @@ def canonicalize_wikilink(entries: dict[str, str], key_or_wikilink: str, *, look
             return current
         current = nxt
     return current
+
+
+def canonicalize_people_list(entries: dict[str, str], links: list[str]) -> list[str]:
+    """Replace stub people wikilinks with their redirect targets, without stacking both."""
+
+    out: list[str] = []
+    for raw in links:
+        parsed = canon_wikilink.person_ref(canon_wikilink.parse(str(raw)))
+        if not parsed:
+            continue
+        redirected = canonicalize_wikilink(entries, parsed, lookup=False) or parsed
+        if redirected not in out:
+            out.append(redirected)
+    return out
 
 
 def redirect_target_uid(vault_path: str | Path, uid: str) -> str | None:

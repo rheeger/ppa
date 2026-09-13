@@ -332,6 +332,12 @@ def test_expand_declarations_includes_required_sources() -> None:
     assert "file-libraries:documents" in keys
     assert "beeper:local" in keys
     assert "contacts:google" in keys
+    assert "contacts:apple" in keys
+    google_idx = [d.source_key for d in decls].index("contacts:google")
+    apple_idx = [d.source_key for d in decls].index("contacts:apple")
+    imessage_idx = [d.source_key for d in decls].index("imessage:local")
+    beeper_idx = [d.source_key for d in decls].index("beeper:local")
+    assert google_idx < apple_idx < imessage_idx < beeper_idx
     assert "github-history:local" in keys
     assert "health:apple-health" in keys
     assert "otter-transcripts:me@example.com" not in keys

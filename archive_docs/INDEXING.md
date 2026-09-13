@@ -1,12 +1,12 @@
-# HFA Indexing
+# PPA Indexing
 
 ## Purpose
 
-HFA is vault-canonical. The markdown vault remains the source of truth. Indexes exist to make retrieval and operations fast, not to redefine what is true.
+The Markdown vault is the source of truth. Indexes exist to make lookup fast, not to redefine what is true. An agent cites cards. It does not cite the index.
 
 ## Current Implementation Slice
 
-The first indexing slice lives in `ppa` and provides:
+This repository provides:
 
 - exact lookup by UID and path
 - structured query over indexed card metadata
