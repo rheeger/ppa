@@ -60,6 +60,9 @@ class SourceUpdaterRunReport:
     decision_run_id: str = ""
     adapter_version: str = ""
     policy_version: str = ""
+    match_outcomes: dict[str, int] = field(default_factory=dict)
+    match_reasons: dict[str, int] = field(default_factory=dict)
+    review_proposals: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -81,6 +84,9 @@ class SourceUpdaterRunReport:
             "decision_run_id": self.decision_run_id,
             "adapter_version": self.adapter_version,
             "policy_version": self.policy_version,
+            "match_outcomes": dict(self.match_outcomes),
+            "match_reasons": dict(self.match_reasons),
+            "review_proposals": self.review_proposals,
         }
 
 

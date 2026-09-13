@@ -13,8 +13,10 @@ from typing import Any
 
 from archive_vault.config import PPAConfig, load_config
 from archive_vault.identity import IdentityCache, _normalize_identifier, resolve_any, upsert_identity_map
-from archive_vault.identity_quality import alias_is_trustworthy, is_shared_mailbox_email
-from archive_vault.provenance import ProvenanceEntry
+from archive_vault.identity_quality import alias_is_trustworthy, is_shared_mailbox_email, looks_like_person_name
+from archive_vault.provenance import PROVENANCE_EXEMPT_FIELDS, ProvenanceEntry
+from pydantic import ValidationError
+
 from archive_vault.schema import validate_card_permissive, validate_card_strict
 from archive_vault.vault import find_note_by_slug, iter_notes, read_note, read_note_by_uid, write_card
 
@@ -33,12 +35,28 @@ except Exception:  # pragma: no cover
     fuzz = _FallbackFuzz()
 
 
+# Close-name and name-conflict rows at or above this score merge without a human.
+# Below it they stay in identity-proposals as open review.
+REVIEW_AUTO_APPROVE_MIN_CONFIDENCE = 80
+
+
 @dataclass
 class ResolveResult:
     action: str
     wikilink: str | None
     confidence: int
     reasons: list[str]
+
+
+def _auto_approve_if_confident(result: ResolveResult) -> ResolveResult:
+    if result.action != "conflict" or not result.wikilink:
+        return result
+    if result.confidence < REVIEW_AUTO_APPROVE_MIN_CONFIDENCE:
+        return result
+    reasons = list(result.reasons)
+    if "auto_approved" not in reasons:
+        reasons.append("auto_approved")
+    return ResolveResult("merge", result.wikilink, result.confidence, reasons)
 
 
 @dataclass(frozen=True)
@@ -87,6 +105,7 @@ class PersonIndex:
         if self._log is not None:
             self._log(f"person index preload start: vault={self.vault_path}")
         loaded = 0
+        skipped = 0
         cache_rows = self._load_people_rows_from_cache()
         if cache_rows is not None:
             if self._log is not None:
@@ -98,7 +117,10 @@ class PersonIndex:
                 fm = dict(row.get("frontmatter") or {})
                 if not fm:
                     continue
-                data = validate_card_permissive(fm).model_dump(mode="python")
+                data = self._person_record_from_frontmatter(rel, fm)
+                if data is None:
+                    skipped += 1
+                    continue
                 self.upsert(f"[[{Path(rel).stem}]]", data)
                 loaded += 1
                 if self._log is not None and self._progress_every and loaded % self._progress_every == 0:
@@ -110,13 +132,24 @@ class PersonIndex:
                 if not rel_path.parts or rel_path.parts[0] != "People":
                     continue
                 frontmatter, _, _ = read_note(self.vault_path, str(rel_path))
-                data = validate_card_permissive(frontmatter).model_dump(mode="python")
+                data = self._person_record_from_frontmatter(str(rel_path), frontmatter)
+                if data is None:
+                    skipped += 1
+                    continue
                 self.upsert(f"[[{rel_path.stem}]]", data)
                 loaded += 1
                 if self._log is not None and self._progress_every and loaded % self._progress_every == 0:
                     self._log(f"person index preload progress: loaded={loaded}")
         if self._log is not None:
-            self._log(f"person index preload done: loaded={loaded}")
+            self._log(f"person index preload done: loaded={loaded} skipped={skipped}")
+
+    def _person_record_from_frontmatter(self, rel: str, frontmatter: dict[str, Any]) -> dict[str, Any] | None:
+        try:
+            return validate_card_permissive(frontmatter).model_dump(mode="python")
+        except ValidationError as exc:
+            if self._log is not None:
+                self._log(f"person index skip invalid card rel={rel} errors={exc.error_count()}")
+            return None
 
     def _remove_indexes(self, wikilink: str) -> None:
         old = self.records.get(wikilink)
@@ -452,6 +485,91 @@ def is_same_person(
     return confidence >= config.conflict_threshold, confidence, reasons
 
 
+def _is_unnamed_stub(data: dict[str, Any]) -> bool:
+    first, last = _name_parts(data)
+    if first or last:
+        return False
+    summary = str(data.get("summary") or data.get("name") or "").strip()
+    if not summary:
+        return True
+    if "@" in summary:
+        return True
+    from archive_vault.canon.phone import canonical as canon_phone
+
+    if canon_phone(summary):
+        return True
+    return not looks_like_person_name(summary)
+
+
+def _names_safe_for_auto_merge(
+    candidate: dict[str, Any],
+    existing: dict[str, Any],
+    nicknames: dict[str, list[str]],
+) -> bool:
+    if _is_unnamed_stub(candidate) or _is_unnamed_stub(existing):
+        return True
+    name_match, name_score = _best_name_match(candidate, existing, nicknames)
+    if name_match and name_score >= 95:
+        return True
+    candidate_first, candidate_last = _name_parts(candidate)
+    existing_first, existing_last = _name_parts(existing)
+    if (
+        candidate_first
+        and existing_first
+        and candidate_last
+        and existing_last
+        and candidate_first == existing_first
+        and candidate_last == existing_last
+    ):
+        return True
+    if candidate_last and existing_last and candidate_last == existing_last and candidate_first and existing_first:
+        if _canonicalize_name(candidate_first, nicknames) == _canonicalize_name(existing_first, nicknames):
+            return True
+    return False
+
+
+def _record_for_wikilink(
+    wikilink: str,
+    *,
+    records: dict[str, dict[str, Any]] | None,
+    candidate_people: list[tuple[str, dict[str, Any]]],
+) -> dict[str, Any] | None:
+    if records and wikilink in records:
+        return records[wikilink]
+    for link, data in candidate_people:
+        if link == wikilink:
+            return data
+    return None
+
+
+def _identifier_auto_merge_or_review(
+    identifiers: dict[str, Any],
+    *,
+    match: str,
+    reason: str,
+    nicknames: dict[str, list[str]],
+    records: dict[str, dict[str, Any]] | None,
+    candidate_people: list[tuple[str, dict[str, Any]]],
+) -> ResolveResult:
+    existing = _record_for_wikilink(match, records=records, candidate_people=candidate_people)
+    if existing is None or _names_safe_for_auto_merge(identifiers, existing, nicknames):
+        return ResolveResult("merge", match, 100, [reason])
+    return _auto_approve_if_confident(ResolveResult("conflict", match, 100, [reason, "name_conflict"]))
+
+
+def _create_or_skip(identifiers: dict[str, Any]) -> ResolveResult:
+    emails = _as_list(identifiers, "emails")
+    phones = _as_list(identifiers, "phones")
+    if not emails and not phones:
+        return ResolveResult("skip", None, 0, ["no_identifier"])
+    summary = str(identifiers.get("summary") or identifiers.get("name") or "").strip()
+    first, last = _name_parts(identifiers)
+    composed = " ".join(part for part in [first, last] if part)
+    if looks_like_person_name(summary) or looks_like_person_name(composed):
+        return ResolveResult("create", None, 0, ["no_match"])
+    return ResolveResult("skip", None, 0, ["implausible_name"])
+
+
 def _resolve_person_from_candidates(
     identifiers: dict[str, Any],
     *,
@@ -459,27 +577,39 @@ def _resolve_person_from_candidates(
     candidate_people: list[tuple[str, dict[str, Any]]],
     nicknames: dict[str, list[str]],
     config: PPAConfig,
+    records: dict[str, dict[str, Any]] | None = None,
 ) -> ResolveResult:
     for email in _as_list(identifiers, "emails"):
         if match := resolver("email", email):
-            return ResolveResult("merge", match, 100, ["exact_email"])
+            return _identifier_auto_merge_or_review(
+                identifiers,
+                match=match,
+                reason="exact_email",
+                nicknames=nicknames,
+                records=records,
+                candidate_people=candidate_people,
+            )
     for phone in _as_list(identifiers, "phones"):
         if match := resolver("phone", phone):
-            return ResolveResult("merge", match, 100, ["exact_phone"])
+            return _identifier_auto_merge_or_review(
+                identifiers,
+                match=match,
+                reason="exact_phone",
+                nicknames=nicknames,
+                records=records,
+                candidate_people=candidate_people,
+            )
     for field in ("linkedin", "github", "twitter", "instagram", "telegram", "discord"):
         for value in _as_list(identifiers, field):
             if match := resolver(field, value):
-                return ResolveResult("merge", match, 100, [f"exact_{field}"])
-
-    for name in _name_candidates(identifiers):
-        normalized_name = normalize_person_name(name)
-        if not normalized_name:
-            continue
-        if match := resolver("name", normalized_name):
-            return ResolveResult("merge", match, 100, ["exact_name"])
-        for variant in _name_variants(name, nicknames):
-            if match := resolver("name", variant):
-                return ResolveResult("merge", match, 95, ["nickname_name"])
+                return _identifier_auto_merge_or_review(
+                    identifiers,
+                    match=match,
+                    reason=f"exact_{field}",
+                    nicknames=nicknames,
+                    records=records,
+                    candidate_people=candidate_people,
+                )
 
     best: ResolveResult | None = None
     for wikilink, existing in candidate_people:
@@ -488,15 +618,15 @@ def _resolve_person_from_candidates(
         is_match, confidence, reasons = is_same_person(identifiers, existing, nicknames, config=config)
         if not is_match and confidence < config.conflict_threshold:
             continue
-        candidate = ResolveResult("merge", wikilink, confidence, reasons)
+        candidate = ResolveResult("conflict", wikilink, confidence, reasons or ["close_name"])
         if best is None or candidate.confidence > best.confidence:
             best = candidate
 
-    if best and best.confidence >= config.merge_threshold:
-        return best
-    if best and config.conflict_threshold <= best.confidence < config.merge_threshold:
-        return ResolveResult("conflict", best.wikilink, best.confidence, best.reasons)
-    return ResolveResult("create", None, 0, ["no_match"])
+    if best and best.confidence >= config.conflict_threshold:
+        if "fuzzy_name" not in best.reasons and "close_name" not in best.reasons:
+            best = ResolveResult("conflict", best.wikilink, best.confidence, [*best.reasons, "close_name"])
+        return _auto_approve_if_confident(best)
+    return _create_or_skip(identifiers)
 
 
 def resolve_person(
@@ -533,6 +663,7 @@ def resolve_person(
         candidate_people=candidate_people,
         nicknames=nicknames,
         config=config,
+        records=people_index.records if people_index is not None else None,
     )
     if result.wikilink:
         from archive_vault.identity import canonicalize_wikilink, load_identity_map
@@ -588,6 +719,7 @@ def resolve_person_snapshot(
         candidate_people=_snapshot_candidates(people_snapshot, identifiers),
         nicknames=nicknames,
         config=config,
+        records=people_snapshot.records,
     )
 
 
@@ -646,6 +778,52 @@ def _clone_provenance(entry: ProvenanceEntry) -> ProvenanceEntry:
         enrichment_version=entry.enrichment_version,
         input_hash=entry.input_hash,
     )
+
+
+def _source_from_incoming(new_data: dict[str, Any]) -> str:
+    source = new_data.get("source")
+    if isinstance(source, list) and source:
+        return str(source[0] or "").strip() or "contacts.apple"
+    if isinstance(source, str) and source.strip():
+        return source.strip()
+    return "contacts.apple"
+
+
+def provenance_from_incoming(new_data: dict[str, Any]) -> dict[str, ProvenanceEntry]:
+    """Build deterministic provenance for non-empty incoming person fields."""
+
+    source = _source_from_incoming(new_data)
+    today = date.today().isoformat()
+    out: dict[str, ProvenanceEntry] = {}
+    for field_name, value in new_data.items():
+        if field_name in PROVENANCE_EXEMPT_FIELDS:
+            continue
+        if value in ("", [], None, 0):
+            continue
+        out[field_name] = ProvenanceEntry(source, today, "deterministic")
+    return out
+
+
+def _backfill_missing_provenance(
+    card_data: dict[str, Any],
+    provenance: dict[str, ProvenanceEntry],
+    new_data: dict[str, Any],
+) -> dict[str, ProvenanceEntry]:
+    """Fill provenance for populated fields so write_card does not reject the merge."""
+
+    filled = dict(provenance)
+    fallback = provenance_from_incoming(new_data)
+    today = date.today().isoformat()
+    source = _source_from_incoming(new_data)
+    for field_name, value in card_data.items():
+        if field_name in PROVENANCE_EXEMPT_FIELDS:
+            continue
+        if value in ("", [], None, 0):
+            continue
+        if field_name in filled:
+            continue
+        filled[field_name] = fallback.get(field_name) or ProvenanceEntry(source, today, "deterministic")
+    return filled
 
 
 def _should_replace_scalar(
@@ -796,6 +974,7 @@ def merge_into_existing(
             merged_prov["aliases"] = _clone_provenance(merged_prov["summary"])
         elif "summary" in new_provenance:
             merged_prov["aliases"] = _clone_provenance(new_provenance["summary"])
+    merged_prov = _backfill_missing_provenance(merged_card.model_dump(mode="python"), merged_prov, new_data)
     write_card(vault_root, str(target.relative_to(vault_root)), merged_card, body=merged_body, provenance=merged_prov)
     aliases = {
         "name": merged_card.summary,
@@ -854,3 +1033,68 @@ def log_conflict(
         except OSError:
             pass
         raise
+
+
+def queue_identity_review(
+    vault_path: str | Path,
+    *,
+    incoming: dict[str, Any],
+    existing_wikilink: str,
+    existing_uid: str,
+    confidence: int,
+    reasons: list[str],
+    would_have_auto_merged: bool = False,
+) -> dict[str, Any]:
+    """Queue a fuzzy or close match for human review in identity-proposals."""
+
+    from archive_engine.journaled_state import (
+        IDENTITY_PROPOSALS_REL,
+        IDENTITY_PROPOSALS_UID,
+        load_json_state,
+        merge_identity_proposals,
+        persist_json_state,
+    )
+    from archive_vault.canon import phone as canon_phone
+    from archive_vault.canon.email import canonical as canon_email
+
+    incoming_uid = str(incoming.get("uid") or "").strip()
+    existing_uid = str(existing_uid or "").strip()
+    proposal = {
+        "uids": [uid for uid in (incoming_uid, existing_uid) if uid],
+        "reason": ",".join(reasons) if reasons else "close_match",
+        "status": "open",
+        "confidence": confidence,
+        "reasons": list(reasons),
+        "existing_wikilink": existing_wikilink,
+        "would_have_auto_merged": bool(would_have_auto_merged),
+        "incoming": {
+            "uid": incoming_uid,
+            "summary": str(incoming.get("summary") or incoming.get("name") or ""),
+            "emails": [canon_email(item) for item in incoming.get("emails") or [] if canon_email(str(item))],
+            "phones": [canon_phone.canonical(str(item)) for item in incoming.get("phones") or [] if canon_phone.canonical(str(item))],
+            "phones_original": [str(item) for item in incoming.get("phones") or []],
+            "company": str(incoming.get("company") or ""),
+        },
+    }
+    if len(proposal["uids"]) < 2:
+        if incoming_uid and existing_wikilink:
+            proposal["uids"] = [incoming_uid, existing_uid or existing_wikilink]
+        else:
+            return proposal
+    vault = Path(vault_path)
+    existing_payload = load_json_state(vault, IDENTITY_PROPOSALS_REL)
+    existing = list(existing_payload.get("proposals") or [])
+    merged = merge_identity_proposals(existing, [proposal])
+    # Keep rich fields from the newest proposal with the same uid pair.
+    by_id = {str(item.get("proposal_id") or ""): item for item in merged}
+    pair = tuple(sorted(proposal["uids"][:2]))
+    key = f"{pair[0]}::{pair[1]}"
+    by_id[key] = {**by_id.get(key, {}), **proposal, "uids": list(pair), "proposal_id": key}
+    persist_json_state(
+        vault,
+        uid=IDENTITY_PROPOSALS_UID,
+        rel=IDENTITY_PROPOSALS_REL,
+        payload={"proposals": list(by_id.values()), "status": "queued"},
+        source="identity-review",
+    )
+    return proposal

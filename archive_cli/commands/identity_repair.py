@@ -13,7 +13,7 @@ from archive_engine.identity_resolution import auto_merge_eligible
 from archive_vault.canon import phone as canon_phone
 from archive_vault.canon import wikilink as canon_wikilink
 from archive_vault.canon.email import canonical as canon_email
-from archive_vault.identity import IdentityCache, load_identity_map
+from archive_vault.identity import IdentityCache, canonicalize_people_list, canonicalize_wikilink, load_identity_map
 from archive_vault.identity_quality import (
     is_shared_mailbox_email,
     looks_like_event_title,
@@ -403,23 +403,57 @@ def canonicalize_people(vault: Path, *, apply: bool) -> dict[str, Any]:
     return {"changed_people": changed, "identity_map_upserts": alias_upserts, "applied": apply}
 
 
+COMMS_PEOPLE_TYPES = (
+    "imessage_thread",
+    "imessage_message",
+    "email_thread",
+    "email_message",
+    "beeper_thread",
+    "beeper_message",
+)
+
+
+def _canonical_people_link(identity: dict[str, str], raw: str) -> str:
+    parsed = canon_wikilink.person_ref(canon_wikilink.parse(str(raw)))
+    if not parsed:
+        return ""
+    redirected = canonicalize_wikilink(identity, parsed, lookup=False)
+    return redirected or parsed
+
+
+def _identity_target(identity: dict[str, str], key: str) -> str:
+    if not key:
+        return ""
+    target = identity.get(key)
+    if not target:
+        return ""
+    return _canonical_people_link(identity, str(target))
+
+
+def _handle_identity_keys(handle: str) -> list[str]:
+    raw = str(handle or "").strip()
+    if not raw:
+        return []
+    if "@" in raw:
+        email = canon_email(raw)
+        return [f"email:{email}"] if email else []
+    forms = canon_phone.alias_forms(raw)
+    if forms:
+        return [f"phone:{form}" for form in forms]
+    phone = canon_phone.canonical(raw)
+    return [f"phone:{phone}"] if phone else []
+
+
 def resolve_people_fields(vault: Path, *, apply: bool) -> dict[str, Any]:
     identity = load_identity_map(vault)
     updated = 0
-    rows = _frontmatter_rows(
-        vault,
-        types=[
-            "imessage_thread",
-            "imessage_message",
-            "email_thread",
-            "email_message",
-            "beeper_thread",
-            "beeper_message",
-        ],
-    )
+    gained_by_type: dict[str, int] = {}
+    replaced_by_type: dict[str, int] = {}
+    rows = _frontmatter_rows(vault, types=list(COMMS_PEOPLE_TYPES))
     for row in rows:
         rel = str(row.get("rel_path") or "")
         fm = dict(row.get("frontmatter") or {})
+        card_type = str(fm.get("type") or "")
         handles = [str(item) for item in (fm.get("participant_handles") or [])]
         sender = str(fm.get("sender_handle") or "")
         if sender:
@@ -430,27 +464,25 @@ def resolve_people_fields(vault: Path, *, apply: bool) -> dict[str, Any]:
             emails.append(from_email)
         resolved: list[str] = []
         for handle in handles:
-            key = f"phone:{canon_phone.canonical(handle)}" if "@" not in handle else f"email:{canon_email(handle)}"
-            if "@" in handle:
-                key = f"email:{canon_email(handle)}"
-            else:
-                phone = canon_phone.canonical(handle)
-                key = f"phone:{phone}" if phone else ""
-            target = identity.get(key) if key else None
-            if target:
-                link = canon_wikilink.person_ref(canon_wikilink.parse(str(target)))
+            for key in _handle_identity_keys(handle):
+                link = _identity_target(identity, key)
                 if link and link not in resolved:
                     resolved.append(link)
         for mail in emails:
-            target = identity.get(f"email:{canon_email(mail)}")
-            if target:
-                link = canon_wikilink.person_ref(canon_wikilink.parse(str(target)))
-                if link and link not in resolved:
-                    resolved.append(link)
+            link = _identity_target(identity, f"email:{canon_email(mail)}")
+            if link and link not in resolved:
+                resolved.append(link)
         existing = [str(item) for item in (fm.get("people") or [])]
-        if not resolved or set(existing) >= set(resolved):
+        canonical_existing = canonicalize_people_list(identity, existing)
+        merged = list(dict.fromkeys([*canonical_existing, *resolved]))
+        if merged == existing:
             continue
-        merged = list(dict.fromkeys(existing + resolved))
+        added = [link for link in merged if link not in existing]
+        replaced = existing != canonical_existing
+        if added:
+            gained_by_type[card_type] = gained_by_type.get(card_type, 0) + 1
+        if replaced:
+            replaced_by_type[card_type] = replaced_by_type.get(card_type, 0) + 1
         updated += 1
         if not apply:
             continue
@@ -460,7 +492,12 @@ def resolve_people_fields(vault: Path, *, apply: bool) -> dict[str, Any]:
             log.warning("resolve-people skip rel=%s err=%s", rel, exc)
             updated -= 1
             continue
-    return {"updated_cards": updated, "applied": apply}
+    return {
+        "updated_cards": updated,
+        "applied": apply,
+        "gained_wikilink_by_type": gained_by_type,
+        "replaced_wikilink_by_type": replaced_by_type,
+    }
 
 
 def rollup_imessage_threads(vault: Path, *, apply: bool) -> dict[str, Any]:
@@ -607,6 +644,210 @@ def emit_same_conversation_edges(vault: Path, *, apply: bool = False) -> dict[st
     }
 
 
+def _review_queue_counts(vault: Path) -> dict[str, int]:
+    from archive_engine.journaled_state import IDENTITY_PROPOSALS_REL, load_json_state
+
+    payload = load_json_state(vault, IDENTITY_PROPOSALS_REL)
+    counts = {"open": 0, "accepted": 0, "rejected": 0, "applied": 0, "other": 0}
+    for item in payload.get("proposals") or []:
+        status = str(item.get("status") or "open").strip().lower() or "open"
+        if status in counts:
+            counts[status] += 1
+        else:
+            counts["other"] += 1
+    counts["total"] = sum(counts.values())
+    return counts
+
+
+def _comms_has_join_key(fm: dict[str, Any]) -> bool:
+    if any(str(item).strip() for item in (fm.get("participant_handles") or [])):
+        return True
+    if any(str(item).strip() for item in (fm.get("participant_emails") or [])):
+        return True
+    if str(fm.get("sender_handle") or "").strip():
+        return True
+    if str(fm.get("from_email") or "").strip():
+        return True
+    return False
+
+
+def discoverability_snapshot(vault: Path) -> dict[str, Any]:
+    """Census people discoverability: empty people lists, missing links, identity-map reach."""
+
+    identity = load_identity_map(vault)
+    empty_people_by_type: dict[str, int] = {card_type: 0 for card_type in COMMS_PEOPLE_TYPES}
+    missing_people_by_type: dict[str, int] = {card_type: 0 for card_type in COMMS_PEOPLE_TYPES}
+    people_with_contacts_apple = 0
+    people_with_phone = 0
+    people_with_email = 0
+    person_count = 0
+    rows = _frontmatter_rows(vault, types=["person", *COMMS_PEOPLE_TYPES])
+    for row in rows:
+        fm = dict(row.get("frontmatter") or {})
+        card_type = str(fm.get("type") or "")
+        if card_type == "person":
+            person_count += 1
+            sources = [str(item) for item in (fm.get("source") or [])]
+            if "contacts.apple" in sources:
+                people_with_contacts_apple += 1
+            if any(canon_phone.canonical(str(item)) for item in (fm.get("phones") or [])):
+                people_with_phone += 1
+            if any(canon_email(str(item)) for item in (fm.get("emails") or [])):
+                people_with_email += 1
+            continue
+        if card_type not in empty_people_by_type:
+            continue
+        people = [str(item) for item in (fm.get("people") or []) if str(item).strip()]
+        if not people:
+            empty_people_by_type[card_type] += 1
+        if _comms_has_join_key(fm) and not people:
+            missing_people_by_type[card_type] += 1
+    phone_keys = sum(1 for key in identity if str(key).startswith("phone:"))
+    email_keys = sum(1 for key in identity if str(key).startswith("email:"))
+    return {
+        "person_count": person_count,
+        "people_with_contacts_apple": people_with_contacts_apple,
+        "people_with_phone": people_with_phone,
+        "people_with_email": people_with_email,
+        "empty_people_by_type": empty_people_by_type,
+        "missing_people_by_type": missing_people_by_type,
+        "missing_people": sum(missing_people_by_type.values()),
+        "identity_phone_keys": phone_keys,
+        "identity_email_keys": email_keys,
+        "review_queue": _review_queue_counts(vault),
+    }
+
+
+def discoverability_report(
+    *,
+    before: dict[str, Any],
+    after: dict[str, Any],
+    match_outcomes: dict[str, int] | None = None,
+    match_reasons: dict[str, int] | None = None,
+    resolve_people: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Before/after discoverability score for an Apple Contacts catch-up."""
+
+    def _delta_map(key: str) -> dict[str, int]:
+        left = dict(before.get(key) or {})
+        right = dict(after.get(key) or {})
+        keys = sorted(set(left) | set(right))
+        return {item: int(right.get(item, 0) or 0) - int(left.get(item, 0) or 0) for item in keys}
+
+    resolve_people = resolve_people or {}
+    return {
+        "before": before,
+        "after": after,
+        "delta": {
+            "person_count": int(after.get("person_count") or 0) - int(before.get("person_count") or 0),
+            "people_with_contacts_apple": int(after.get("people_with_contacts_apple") or 0)
+            - int(before.get("people_with_contacts_apple") or 0),
+            "missing_people": int(after.get("missing_people") or 0) - int(before.get("missing_people") or 0),
+            "identity_phone_keys": int(after.get("identity_phone_keys") or 0)
+            - int(before.get("identity_phone_keys") or 0),
+            "identity_email_keys": int(after.get("identity_email_keys") or 0)
+            - int(before.get("identity_email_keys") or 0),
+            "empty_people_by_type": _delta_map("empty_people_by_type"),
+            "missing_people_by_type": _delta_map("missing_people_by_type"),
+        },
+        "match_outcomes": dict(match_outcomes or {}),
+        "match_reasons": dict(match_reasons or {}),
+        "gained_wikilink_by_type": dict(resolve_people.get("gained_wikilink_by_type") or {}),
+        "replaced_wikilink_by_type": dict(resolve_people.get("replaced_wikilink_by_type") or {}),
+        "review_queue": dict(after.get("review_queue") or {}),
+    }
+
+
+def apply_accepted_reviews(vault: Path, *, apply: bool) -> dict[str, Any]:
+    """Apply human-accepted identity-proposals. Open and rejected rows stay untouched."""
+
+    from archive_engine.journaled_state import (
+        IDENTITY_PROPOSALS_REL,
+        IDENTITY_PROPOSALS_UID,
+        load_json_state,
+        persist_json_state,
+    )
+    from archive_vault.identity_resolver import merge_into_existing, provenance_from_incoming
+
+    payload = load_json_state(vault, IDENTITY_PROPOSALS_REL)
+    proposals = [dict(item) for item in (payload.get("proposals") or [])]
+    accepted = [item for item in proposals if str(item.get("status") or "open").lower() == "accepted"]
+    applied_rows: list[dict[str, str]] = []
+    skipped_rows: list[dict[str, str]] = []
+    people_by_uid: dict[str, dict[str, Any]] = {}
+    if accepted:
+        for row in _iter_person_rows(vault):
+            fm = dict(row.get("frontmatter") or {})
+            uid = str(fm.get("uid") or "").strip()
+            if uid:
+                people_by_uid[uid] = row
+    for proposal in accepted:
+        incoming = dict(proposal.get("incoming") or {})
+        existing_wikilink = str(proposal.get("existing_wikilink") or "").strip()
+        uids = [str(uid).strip() for uid in (proposal.get("uids") or []) if str(uid).strip()]
+        incoming_uid = str(incoming.get("uid") or "").strip()
+        existing_uid = ""
+        for uid in uids:
+            if uid and uid != incoming_uid:
+                existing_uid = uid
+                break
+        if not incoming_uid and uids:
+            incoming_uid = uids[0]
+        if not existing_uid and existing_wikilink:
+            for row in people_by_uid.values():
+                fm = dict(row.get("frontmatter") or {})
+                slug = Path(str(row.get("rel_path") or "")).stem
+                if f"[[{slug}]]" == existing_wikilink:
+                    existing_uid = str(fm.get("uid") or "")
+                    break
+        incoming_row = people_by_uid.get(incoming_uid)
+        existing_row = people_by_uid.get(existing_uid)
+        if incoming_row and existing_row and incoming_uid != existing_uid:
+            if apply:
+                from archive_engine.corrections import CorrectionCommandRequest, merge_identities
+
+                merge_identities(
+                    vault,
+                    CorrectionCommandRequest(
+                        action="merge_identities",
+                        winner_uid=existing_uid,
+                        loser_uid=incoming_uid,
+                        author="identity-review",
+                        reason=str(proposal.get("reason") or "accepted_review"),
+                    ),
+                )
+            applied_rows.append({"mode": "merge_identities", "winner": existing_uid, "loser": incoming_uid})
+            proposal["status"] = "applied"
+            continue
+        if existing_wikilink and incoming:
+            if apply:
+                merge_into_existing(
+                    vault,
+                    existing_wikilink,
+                    incoming,
+                    provenance_from_incoming(incoming),
+                    "",
+                )
+            applied_rows.append({"mode": "merge_into_existing", "existing": existing_wikilink})
+            proposal["status"] = "applied"
+            continue
+        skipped_rows.append({"reason": "no_existing_target", "uids": ",".join(uids)})
+    if apply and accepted:
+        persist_json_state(
+            vault,
+            uid=IDENTITY_PROPOSALS_UID,
+            rel=IDENTITY_PROPOSALS_REL,
+            payload={"proposals": proposals, "status": "queued"},
+            source="identity-review",
+        )
+    return {
+        "accepted": len(accepted),
+        "applied": apply,
+        "applied_rows": applied_rows,
+        "skipped_rows": skipped_rows,
+    }
+
+
 def _report_for_json(result: dict[str, Any]) -> dict[str, Any]:
     """Cap path lists so a living-seed census JSON stays usable."""
 
@@ -645,6 +886,10 @@ def dispatch(args: Any) -> dict[str, Any]:
         result = emit_same_conversation_edges(vault, apply=apply)
     elif action == "alias-hygiene":
         result = alias_hygiene(vault, apply=apply)
+    elif action == "discoverability":
+        result = discoverability_snapshot(vault)
+    elif action == "apply-reviews":
+        result = apply_accepted_reviews(vault, apply=apply)
     else:
         raise SystemExit(f"unknown identity-repair action: {action}")
     result["started_at"] = started

@@ -170,14 +170,27 @@ def _beeper_template(label: str = "local") -> SourceUpdaterDeclaration:
 
 
 def _contacts_template(label: str = "google") -> SourceUpdaterDeclaration:
+    scope = str(label or "google").strip() or "google"
+    if scope.lower() == "apple":
+        return SourceUpdaterDeclaration(
+            source_key="contacts:apple",
+            source_type=SOURCE_TYPE_CONTACTS,
+            adapter_name="ContactsAdapter",
+            adapter_source_id="contacts",
+            cursor_kind=CURSOR_HASH,
+            cursor_kinds=(CURSOR_HASH,),
+            supports_incremental=True,
+            supports_deletes=False,
+            default_active_policy=DEFAULT_ACTIVE_ALL,
+        )
     return SourceUpdaterDeclaration(
-        source_key=f"contacts:{label}",
+        source_key=f"contacts:{scope}",
         source_type=SOURCE_TYPE_CONTACTS,
         adapter_name="ContactsAdapter",
         adapter_source_id="contacts",
         cursor_kind=CURSOR_PAGE_TOKEN,
-        cursor_kinds=(CURSOR_PAGE_TOKEN,),
-        supports_incremental=False,
+        cursor_kinds=(CURSOR_PAGE_TOKEN, CURSOR_ETAG, CURSOR_SYNC_TOKEN),
+        supports_incremental=True,
         supports_deletes=False,
         default_active_policy=DEFAULT_ACTIVE_ALL,
     )
@@ -320,11 +333,14 @@ def expand_declarations(
         acct = account.strip()
         if acct:
             out.append(_gmail_correspondents_template(acct))
+    out.append(_contacts_template("google"))
+    if contacts_label.strip() and contacts_label.strip() not in {"google", "apple"}:
+        out.append(_contacts_template(contacts_label))
+    out.append(_contacts_template("apple"))
     out.append(_imessage_template(imessage_label))
     out.append(_file_libraries_template(file_libraries_label))
     out.append(_photos_template(photos_label))
     out.append(_beeper_template(beeper_label))
-    out.append(_contacts_template(contacts_label))
     out.append(_github_template(github_label))
     out.append(_health_template(health_label))
     return out

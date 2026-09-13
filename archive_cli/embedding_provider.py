@@ -248,9 +248,14 @@ class OpenAIEmbeddingProvider:
 
 
 def get_embedding_provider(model: str = "") -> EmbeddingProvider:
-    from .index_config import _ppa_env
+    from .index_config import _active_serving_embedding_spec, _ppa_env
 
-    provider_name = _ppa_env("PPA_EMBEDDING_PROVIDER", default=DEFAULT_EMBEDDING_PROVIDER).lower()
+    provider_name = _ppa_env("PPA_EMBEDDING_PROVIDER").lower()
+    if not provider_name:
+        spec = _active_serving_embedding_spec()
+        provider_name = str((spec or {}).get("provider_namespace") or "").strip().lower()
+    if not provider_name:
+        provider_name = DEFAULT_EMBEDDING_PROVIDER
     resolved_model = model.strip() or get_default_embedding_model()
     if provider_name == "hash":
         return HashEmbeddingProvider(model=resolved_model)

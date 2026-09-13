@@ -182,7 +182,7 @@ def main() -> None:
     )
     identity_repair_parser = subparsers.add_parser(
         "identity-repair",
-        help="Census and rewrite join-key families (phones, people, thread rollups, hybrid merge, alias hygiene)",
+        help="Census and rewrite join-key families (phones, people, thread rollups, hybrid merge, alias hygiene, discoverability, apply-reviews)",
     )
     identity_repair_parser.add_argument(
         "identity_action",
@@ -195,6 +195,8 @@ def main() -> None:
             "merge",
             "same-conversation",
             "alias-hygiene",
+            "discoverability",
+            "apply-reviews",
         ],
     )
     identity_repair_parser.add_argument("--apply", action="store_true", help="Write vault changes (default dry-run)")
@@ -1345,18 +1347,18 @@ def main() -> None:
 
     sub_maintain = subparsers.add_parser(
         "maintain",
-        help="Bring the living archive up to date: pull connected sources, process dirty cards, publish search",
+        help="Bring the living archive up to date: pull, process, publish search, and clean leftovers",
     )
     sub_maintain.add_argument(
         "--apply",
         action="store_true",
         dest="apply_loop",
-        help="Pull new evidence from connected accounts, process dirty cards, reuse unchanged embeddings, and publish a complete search generation",
+        help="Pull new evidence, process dirty cards, publish search, then delete leftover catalogs and unused embeddings",
     )
     sub_maintain.add_argument(
         "--dry-run",
         action="store_true",
-        help="Print the same pull, process, and publish steps with no writes",
+        help="Print the same pull, process, publish, and cleanup steps with no writes",
     )
     sub_maintain.add_argument(
         "--record-source-status",

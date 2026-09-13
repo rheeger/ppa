@@ -4,7 +4,7 @@ This document is the canonical contract index for card types consumed by `ppa`.
 
 ## Contract Rules
 
-- `hfa` owns the canonical card schema.
+- `archive_vault` owns the canonical card schema (`CARD_TYPES` in `archive_vault/schema.py`).
 - Each card type has one declared path family.
 - Each card type has one declared chunk profile and one edge profile.
 - Each card type has one typed projection target in the derived layer.

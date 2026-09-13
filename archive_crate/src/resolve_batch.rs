@@ -16,6 +16,23 @@ const SOCIAL: &[&str] = &[
     "linkedin", "github", "twitter", "instagram", "telegram", "discord",
 ];
 
+// Close-name and name-conflict rows at or above this score merge without a human.
+const REVIEW_AUTO_APPROVE_MIN_CONFIDENCE: i32 = 80;
+
+fn auto_approve_if_confident(mut out: ResolveOutput) -> ResolveOutput {
+    if out.action != "conflict" || out.wikilink.is_none() {
+        return out;
+    }
+    if out.confidence < REVIEW_AUTO_APPROVE_MIN_CONFIDENCE {
+        return out;
+    }
+    if !out.reasons.iter().any(|r| r == "auto_approved") {
+        out.reasons.push("auto_approved".to_string());
+    }
+    out.action = "merge".to_string();
+    out
+}
+
 #[derive(Clone)]
 pub(crate) struct ResolveConfig {
     pub merge_threshold: i32,
@@ -397,6 +414,133 @@ pub(crate) struct ResolveOutput {
     pub reasons: Vec<String>,
 }
 
+fn is_unnamed_stub_map(data: &Map<String, Value>) -> bool {
+    let (first, last) = person_index::name_parts(data);
+    if !first.is_empty() || !last.is_empty() {
+        return false;
+    }
+    let summary = person_index::string_value(data, "summary");
+    let name = if summary.is_empty() {
+        person_index::string_value(data, "name")
+    } else {
+        summary
+    };
+    name.is_empty() || name.contains('@') || !name.contains(' ')
+}
+
+fn is_unnamed_stub_record(rec: &PersonRecord) -> bool {
+    if !rec.first_name.is_empty() || !rec.last_name.is_empty() {
+        return false;
+    }
+    let summary = rec.names.first().cloned().unwrap_or_default();
+    summary.is_empty() || summary.contains('@') || !summary.contains(' ')
+}
+
+fn names_safe_for_auto_merge(
+    identifiers: &Map<String, Value>,
+    rec: &PersonRecord,
+    nicknames: &HashMap<String, Vec<String>>,
+) -> bool {
+    if is_unnamed_stub_map(identifiers) || is_unnamed_stub_record(rec) {
+        return true;
+    }
+    let existing_fm = person_index::fm_to_map(&rec.raw);
+    let (matched, score) = best_name_match(identifiers, existing_fm, nicknames);
+    if matched && score >= 95.0 {
+        return true;
+    }
+    let (cf, cl) = person_index::name_parts(identifiers);
+    if !cf.is_empty() && !cl.is_empty() && cf == rec.first_name && cl == rec.last_name {
+        return true;
+    }
+    if !cl.is_empty() && cl == rec.last_name && !cf.is_empty() && !rec.first_name.is_empty() {
+        let left = canonicalize_name_tokens(&cf, nicknames);
+        let right = canonicalize_name_tokens(&rec.first_name, nicknames);
+        if !left.is_empty() && left == right {
+            return true;
+        }
+    }
+    false
+}
+
+fn identifier_auto_merge_or_review(
+    identifiers: &Map<String, Value>,
+    index: &PersonResolutionIndexInner,
+    wikilink: String,
+    reason: &str,
+    nicknames: &HashMap<String, Vec<String>>,
+) -> ResolveOutput {
+    if let Some(rec) = index.records.get(&wikilink) {
+        if !names_safe_for_auto_merge(identifiers, rec, nicknames) {
+            return auto_approve_if_confident(ResolveOutput {
+                action: "conflict".to_string(),
+                wikilink: Some(wikilink),
+                confidence: 100,
+                reasons: vec![reason.to_string(), "name_conflict".to_string()],
+            });
+        }
+    }
+    ResolveOutput {
+        action: "merge".to_string(),
+        wikilink: Some(wikilink),
+        confidence: 100,
+        reasons: vec![reason.to_string()],
+    }
+}
+
+fn looks_like_person_name(name: &str) -> bool {
+    let cleaned: Vec<&str> = name.split_whitespace().collect();
+    if cleaned.len() < 2 || cleaned.len() > 4 {
+        return false;
+    }
+    if name.contains('@') || name.contains('&') || name.contains('/') || name.contains(',') {
+        return false;
+    }
+    if name.chars().any(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    true
+}
+
+fn create_or_skip(identifiers: &Map<String, Value>) -> ResolveOutput {
+    let emails = person_index::as_string_list(identifiers, "emails");
+    let phones = person_index::as_string_list(identifiers, "phones");
+    if emails.is_empty() && phones.is_empty() {
+        return ResolveOutput {
+            action: "skip".to_string(),
+            wikilink: None,
+            confidence: 0,
+            reasons: vec!["no_identifier".to_string()],
+        };
+    }
+    let summary = person_index::string_value(identifiers, "summary");
+    let name = if summary.is_empty() {
+        person_index::string_value(identifiers, "name")
+    } else {
+        summary
+    };
+    let (first, last) = person_index::name_parts(identifiers);
+    let composed = [first.as_str(), last.as_str()]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if looks_like_person_name(&name) || looks_like_person_name(&composed) {
+        return ResolveOutput {
+            action: "create".to_string(),
+            wikilink: None,
+            confidence: 0,
+            reasons: vec!["no_match".to_string()],
+        };
+    }
+    ResolveOutput {
+        action: "skip".to_string(),
+        wikilink: None,
+        confidence: 0,
+        reasons: vec!["implausible_name".to_string()],
+    }
+}
+
 fn resolve_one(
     identifiers: &Map<String, Value>,
     index: &PersonResolutionIndexInner,
@@ -406,58 +550,24 @@ fn resolve_one(
 ) -> ResolveOutput {
     for e in person_index::as_string_list(identifiers, "emails") {
         if let Some(w) = identity_lookup(identity, "email", &e) {
-            return ResolveOutput {
-                action: "merge".to_string(),
-                wikilink: Some(w),
-                confidence: 100,
-                reasons: vec!["exact_email".to_string()],
-            };
+            return identifier_auto_merge_or_review(identifiers, index, w, "exact_email", nicknames);
         }
     }
     for p in person_index::as_string_list(identifiers, "phones") {
         if let Some(w) = identity_lookup(identity, "phone", &p) {
-            return ResolveOutput {
-                action: "merge".to_string(),
-                wikilink: Some(w),
-                confidence: 100,
-                reasons: vec!["exact_phone".to_string()],
-            };
+            return identifier_auto_merge_or_review(identifiers, index, w, "exact_phone", nicknames);
         }
     }
     for field in SOCIAL {
         for v in person_index::as_string_list(identifiers, field) {
             if let Some(w) = identity_lookup(identity, field, &v) {
-                return ResolveOutput {
-                    action: "merge".to_string(),
-                    wikilink: Some(w),
-                    confidence: 100,
-                    reasons: vec![format!("exact_{field}")],
-                };
-            }
-        }
-    }
-
-    for name in person_index::name_candidates(identifiers) {
-        let normalized_name = person_index::normalize_person_name(&name);
-        if normalized_name.is_empty() {
-            continue;
-        }
-        if let Some(w) = identity_lookup(identity, "name", &normalized_name) {
-            return ResolveOutput {
-                action: "merge".to_string(),
-                wikilink: Some(w),
-                confidence: 100,
-                reasons: vec!["exact_name".to_string()],
-            };
-        }
-        for variant in name_variants(&name, nicknames) {
-            if let Some(w) = identity_lookup(identity, "name", &variant) {
-                return ResolveOutput {
-                    action: "merge".to_string(),
-                    wikilink: Some(w),
-                    confidence: 95,
-                    reasons: vec!["nickname_name".to_string()],
-                };
+                return identifier_auto_merge_or_review(
+                    identifiers,
+                    index,
+                    w,
+                    &format!("exact_{field}"),
+                    nicknames,
+                );
             }
         }
     }
@@ -476,11 +586,15 @@ fn resolve_one(
         if !is_m && conf < config.conflict_threshold {
             continue;
         }
+        let mut tags = reasons;
+        if !tags.iter().any(|r| r == "fuzzy_name" || r == "close_name") {
+            tags.push("close_name".to_string());
+        }
         let cand = ResolveOutput {
-            action: "merge".to_string(),
+            action: "conflict".to_string(),
             wikilink: Some(w.clone()),
             confidence: conf,
-            reasons,
+            reasons: tags,
         };
         let replace = match &best {
             None => true,
@@ -492,25 +606,12 @@ fn resolve_one(
     }
 
     if let Some(b) = best {
-        if b.confidence >= config.merge_threshold {
-            return b;
-        }
         if b.confidence >= config.conflict_threshold {
-            return ResolveOutput {
-                action: "conflict".to_string(),
-                wikilink: b.wikilink.clone(),
-                confidence: b.confidence,
-                reasons: b.reasons.clone(),
-            };
+            return auto_approve_if_confident(b);
         }
     }
 
-    ResolveOutput {
-        action: "create".to_string(),
-        wikilink: None,
-        confidence: 0,
-        reasons: vec!["no_match".to_string()],
-    }
+    create_or_skip(identifiers)
 }
 
 fn parse_identifiers_list(py: Python<'_>, identifiers_list: &Bound<'_, PyAny>) -> PyResult<Vec<Map<String, Value>>> {

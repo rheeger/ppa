@@ -274,6 +274,7 @@ $ ppa setup
     [x] Google Contacts (same project, no extra setup)
     [ ] Apple Photos (macOS only)
     [ ] iMessage (macOS only, requires Full Disk Access)
+    [ ] Apple Contacts (macOS only, requires Automation permission for Contacts.app; same TCC class as iMessage Full Disk Access)
     [ ] GitHub (paste personal access token)
     [ ] Skip remaining
 

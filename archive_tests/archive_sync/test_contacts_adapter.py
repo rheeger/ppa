@@ -6,7 +6,8 @@ import os
 import sys
 import types
 
-from archive_sync.adapters.contacts import ContactsAdapter
+from archive_sync.adapters.contacts import AppleContactsPermissionError, ContactsAdapter, dump_apple_contacts_vcf
+from archive_sync.source_updaters.runner import classify_run_exception
 from archive_vault.schema import PersonCard
 
 
@@ -222,3 +223,112 @@ def test_fetch_google_skips_matching_etag_and_stores_sync_token(monkeypatch):
     patch = adapter.finalize_cursor({})
     assert patch["sync_token"] == "sync-2"
     assert patch["person_etags"]["people/new"] == "etag-new"
+
+
+_SAMPLE_VCARD = "\n".join(
+    [
+        "BEGIN:VCARD",
+        "VERSION:3.0",
+        "UID:ABUID:ABC-123",
+        "N:Souza;Jenny;;;",
+        "FN:Jenny Souza",
+        "NICKNAME:Jen",
+        "NOTE:Met at Endaoment",
+        "EMAIL;TYPE=HOME:jenny@example.com",
+        "TEL;TYPE=CELL:+1-617-555-1212",
+        "URL:https://endaoment.org",
+        "END:VCARD",
+        "",
+    ]
+)
+
+
+def test_parse_vcf_reads_uid_note_nickname_url(tmp_path):
+    vcf = tmp_path / "uid.vcf"
+    vcf.write_text(_SAMPLE_VCARD, encoding="utf-8")
+    rows = ContactsAdapter()._parse_vcf(str(vcf))
+    assert rows[0]["apple_uid"] == "ABUID:ABC-123"
+    assert rows[0]["description"] == "Met at Endaoment"
+    assert rows[0]["aliases"] == ["Jen"]
+    assert rows[0]["websites"] == ["https://endaoment.org"]
+    card, _prov, _body = ContactsAdapter().to_card(rows[0])
+    assert card.source_id == "ABUID:ABC-123"
+
+
+def test_fetch_apple_uses_mocked_dump_and_skips_unchanged_hash(monkeypatch, tmp_path):
+    monkeypatch.delenv("HFA_CONTACTS_VCF_PATHS", raising=False)
+    adapter = ContactsAdapter()
+
+    def fake_dump(dest):
+        dest.write_text(_SAMPLE_VCARD, encoding="utf-8")
+
+    adapter._dump_apple_contacts_vcf = fake_dump
+    first = adapter.fetch(str(tmp_path), {}, sources=["apple"])
+    assert [row["name"] for row in first] == ["Jenny Souza"]
+    assert first[0]["apple_uid"] == "ABUID:ABC-123"
+    cursor = adapter.finalize_cursor({})
+    assert "ABUID:ABC-123" in cursor["contact_hashes"]
+    second = adapter.fetch(str(tmp_path), cursor, sources=["apple"])
+    assert second == []
+
+
+def test_fetch_apple_permission_error_does_not_fall_through(monkeypatch, tmp_path):
+    monkeypatch.delenv("HFA_CONTACTS_VCF_PATHS", raising=False)
+    adapter = ContactsAdapter()
+
+    def fake_dump(_dest):
+        raise AppleContactsPermissionError("Contacts permission denied: not authorized")
+
+    adapter._dump_apple_contacts_vcf = fake_dump
+    try:
+        adapter.fetch(str(tmp_path), {}, sources=["apple"])
+        raise AssertionError("expected AppleContactsPermissionError")
+    except AppleContactsPermissionError:
+        pass
+    assert classify_run_exception(AppleContactsPermissionError("not authorized")) == "blocked"
+
+
+def test_dump_apple_contacts_vcf_raises_on_permission(monkeypatch, tmp_path):
+    dest = tmp_path / "out.vcf"
+
+    class Result:
+        returncode = 1
+        stderr = "osascript is not allowed to send Apple events to Contacts"
+        stdout = ""
+
+    monkeypatch.setattr("archive_sync.adapters.contacts.subprocess.run", lambda *a, **k: Result())
+    try:
+        dump_apple_contacts_vcf(dest)
+        raise AssertionError("expected AppleContactsPermissionError")
+    except AppleContactsPermissionError:
+        pass
+
+
+def test_dump_apple_contacts_vcf_writes_batches(monkeypatch, tmp_path):
+    writes: list[tuple[int, int]] = []
+    monkeypatch.setattr("archive_sync.adapters.contacts._apple_contacts_count", lambda: 120)
+
+    def fake_range(start, end, dest):
+        writes.append((start, end))
+        dest.write_bytes(f"BEGIN:VCARD\nFN:{start}-{end}\nEND:VCARD\n".encode("utf-8"))
+
+    monkeypatch.setattr("archive_sync.adapters.contacts._write_apple_vcard_range", fake_range)
+    dest = tmp_path / "out.vcf"
+    dump_apple_contacts_vcf(dest)
+    assert writes == [(1, 50), (51, 100), (101, 120)]
+    assert dest.read_text(encoding="utf-8").count("BEGIN:VCARD") == 3
+
+
+def test_dump_apple_contacts_vcf_splits_on_1741(monkeypatch, tmp_path):
+    monkeypatch.setattr("archive_sync.adapters.contacts.APPLE_CONTACTS_DUMP_BATCH", 4)
+    monkeypatch.setattr("archive_sync.adapters.contacts._apple_contacts_count", lambda: 4)
+
+    def fake_range(start, end, dest):
+        if start != end:
+            raise RuntimeError("Contacts.app dump failed: An error of type -1741 has occurred. (-1741)")
+        dest.write_bytes(f"CARD{start}\n".encode("utf-8"))
+
+    monkeypatch.setattr("archive_sync.adapters.contacts._write_apple_vcard_range", fake_range)
+    dest = tmp_path / "out.vcf"
+    dump_apple_contacts_vcf(dest)
+    assert dest.read_text(encoding="utf-8") == "CARD1\nCARD2\nCARD3\nCARD4\n"

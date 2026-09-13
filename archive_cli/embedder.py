@@ -87,6 +87,15 @@ def current_chunk_schema_id() -> str:
     return f"chunk_schema_v{CHUNK_SCHEMA_VERSION}"
 
 
+def normalize_chunk_schema_id(value: str) -> str:
+    """Accept serving ``7`` and embedder ``chunk_schema_v7`` as the same id."""
+
+    raw = str(value or "").strip()
+    if raw.isdigit():
+        return f"chunk_schema_v{raw}"
+    return raw
+
+
 def embedding_spec_matches_index(
     spec: EmbeddingSpec,
     *,
@@ -100,7 +109,7 @@ def embedding_spec_matches_index(
         spec.model == model
         and spec.model_revision == str(version)
         and spec.dimension == dimension
-        and spec.chunk_schema == current_chunk_schema_id()
+        and normalize_chunk_schema_id(spec.chunk_schema) == current_chunk_schema_id()
     )
 
 

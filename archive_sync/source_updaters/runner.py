@@ -229,6 +229,10 @@ def adapter_ingest_kwargs(
         kwargs["exclude_account_prefixes"] = list(IMESSAGE_BEEPER_ACCOUNT_PREFIXES)
         return kwargs
     if adapter_id == "contacts":
+        label = scope.strip().lower()
+        if label == "apple":
+            kwargs["sources"] = ["apple"]
+            return kwargs
         kwargs["sources"] = ["google"]
         if "@" in scope:
             kwargs["account_email"] = scope
@@ -250,6 +254,8 @@ def adapter_ingest_kwargs(
 def classify_run_exception(exc: BaseException) -> str:
     """Return run status for an exception (``blocked`` vs ``failed``)."""
 
+    if type(exc).__name__ == "AppleContactsPermissionError":
+        return RUN_STATUS_BLOCKED
     message = str(exc)
     if _AUTH_BLOCKED_RE.search(message) or _AUTH_BLOCKED_RE.search(type(exc).__name__):
         return RUN_STATUS_BLOCKED
@@ -601,6 +607,9 @@ def run_source_updater(
         decision_run_id=decision_run_id,
         adapter_version=decl.adapter_version or ADAPTER_VERSION_DEFAULT,
         policy_version=decl.promotion_policy_version,
+        match_outcomes=dict(getattr(result, "match_outcomes", {}) or {}),
+        match_reasons=dict(getattr(result, "match_reasons", {}) or {}),
+        review_proposals=len(getattr(result, "review_proposals", []) or []),
     )
     if repo_root is not None:
         write_source_updater_report(repo_root, report)

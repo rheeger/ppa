@@ -15,8 +15,8 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
-from archive_vault.identity import IdentityCache
-from archive_vault.identity_resolver import merge_into_existing
+from archive_vault.identity import IdentityCache, canonicalize_people_list
+from archive_vault.identity_resolver import PersonIndex, merge_into_existing, resolve_person
 from archive_vault.provenance import ProvenanceEntry, compute_input_hash
 from archive_vault.schema import (
     BeeperAttachmentCard,
@@ -531,7 +531,7 @@ class BeeperAdapter(BaseAdapter):
             resolved = self._resolve_participant_person(cache, account_id=account_id, participant=participant)
             if resolved and resolved not in links:
                 links.append(resolved)
-        return links
+        return canonicalize_people_list(cache.entries, links)
 
     def _participant_resolution_candidates(
         self,
@@ -625,16 +625,33 @@ class BeeperAdapter(BaseAdapter):
         return Path("People") / f"{base_slug}-{hash8}.md"
 
     def _prepare_person_write(
-        self, item: dict[str, Any], *, cache: IdentityCache
+        self,
+        item: dict[str, Any],
+        *,
+        cache: IdentityCache,
+        vault_path: str | Path,
+        people_index: PersonIndex | None = None,
     ) -> tuple[PlannedPersonWrite | None, bool]:
         card, provenance, body = self.to_card(item)
         assert isinstance(card, PersonCard)
+        resolve_result = resolve_person(
+            vault_path,
+            self._person_identifiers(card),
+            cache=cache,
+            people_index=people_index,
+        )
+        if resolve_result.action == "merge" and resolve_result.wikilink:
+            cache.upsert(resolve_result.wikilink, self._beeper_person_identity_aliases(card))
+            return None, True
         existing_wikilink = self._resolve_person_card_exact(cache, card)
         if existing_wikilink:
             cache.upsert(existing_wikilink, self._beeper_person_identity_aliases(card))
             return None, True
-
         rel_path = self._beeper_person_rel_path(card)
+        existing_stub = (Path(vault_path) / rel_path).is_file()
+        if resolve_result.action in {"conflict", "skip"} and not existing_stub:
+            return None, True
+
         wikilink = f"[[{rel_path.stem}]]"
         cache.upsert(wikilink, self._beeper_person_identity_aliases(card))
         return (
@@ -1011,6 +1028,8 @@ class BeeperAdapter(BaseAdapter):
         person_items: list[dict[str, Any]],
         *,
         batch_identity: IdentityCache,
+        vault_path: str | Path,
+        people_index: PersonIndex | None = None,
     ) -> tuple[list[PlannedPersonWrite], int]:
         plans: list[PlannedPersonWrite] = []
         matched_existing = 0
@@ -1020,7 +1039,12 @@ class BeeperAdapter(BaseAdapter):
             if source_id in seen_sources:
                 continue
             seen_sources.add(source_id)
-            plan, matched = self._prepare_person_write(item, cache=batch_identity)
+            plan, matched = self._prepare_person_write(
+                item,
+                cache=batch_identity,
+                vault_path=vault_path,
+                people_index=people_index,
+            )
             if matched:
                 matched_existing += 1
                 continue
@@ -1325,6 +1349,7 @@ class BeeperAdapter(BaseAdapter):
         if not isinstance(cursor, dict):
             cursor = {}
         identity_cache = IdentityCache(vault)
+        people_index = PersonIndex(vault, preload=True)
         resolved_db_path = Path(kwargs.get("db_path") or DEFAULT_DB_PATH).expanduser().resolve()
         resolved_media_root = Path(kwargs.get("media_root") or DEFAULT_MEDIA_ROOT).expanduser().resolve()
         normalized_thread_types = _parse_csv(kwargs.get("thread_types"), default=["single"])
@@ -1413,7 +1438,12 @@ class BeeperAdapter(BaseAdapter):
                 messages_by_room = index.messages_for_rooms(room_ids)
                 person_items = self._build_person_items(threads=threads, participants_by_room=participants_by_room)
                 batch_identity = _clone_identity_cache(identity_cache)
-                person_plans, matched_existing = self._plan_person_writes(person_items, batch_identity=batch_identity)
+                person_plans, matched_existing = self._plan_person_writes(
+                    person_items,
+                    batch_identity=batch_identity,
+                    vault_path=vault,
+                    people_index=people_index,
+                )
 
                 def build_thread(thread_row: dict[str, Any]) -> list[dict[str, Any]]:
                     return self._build_thread_items(

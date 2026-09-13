@@ -1,47 +1,54 @@
-# HFA Agent Usage
+# PPA agent usage
+
+PPA is the evidence layer. The agent is the reader. Cards in the vault are the truth. Search hits, snippets, embeddings, and the agent's paraphrase are navigation.
+
+Any MCP client can attach: Cursor, Claude Desktop, Codex, OpenClaw, or another host that speaks the Model Context Protocol. The tools and meanings stay the same when you change clients. The archive does not move.
 
 The live agent contract is two layers:
 
-- Server `instructions` — `archive_cli.mcp_instructions.build_server_instructions()`
-  (safety, type rules, job router, don'ts)
-- Job recipes — `.cursor/skills/archive-query/` (`SKILL.md` plus one file per job)
-- Per-tool recipes — `archive_cli.mcp_instructions.TOOL_DESCRIPTIONS`
+- Server instructions from `archive_cli.mcp_instructions.build_server_instructions()` (safety, type rules, job router, don'ts)
+- Job recipes in `.cursor/skills/archive-query/` (`SKILL.md` plus one file per job)
+- Per-tool recipes in `archive_cli.mcp_instructions.TOOL_DESCRIPTIONS`
 
-Clients receive the MCP layer on initialize / tools/list. Cursor agents must
-open the matching job file before retrieving. Do not fork job recipes into
-AGENTS.md. Edit the skill file, then keep the MCP router in sync.
+Clients receive the MCP layer on initialize and tools/list. Cursor agents must open the matching job file before retrieving. Do not fork job recipes into other instruction files. Edit the skill file, then keep the MCP router in sync.
 
 ## Jobs
 
-1. Identify a person — `identify-person.md`
-2. Census their channels — `census-channels.md`
-3. Read a stack — `read-a-stack.md`
-4. Answer a fact — `answer-a-fact.md`
-5. Reconstruct a story — `reconstruct-a-story.md`
+1. Identify a person: `identify-person.md`
+2. Census their channels: `census-channels.md`
+3. Read a stack: `read-a-stack.md`
+4. Answer a fact: `answer-a-fact.md`
+5. Reconstruct a story: `reconstruct-a-story.md`
+
+A "who is X" or profile write-up is job 1, then job 2, then job 5. A single dated question is job 3 or 4.
 
 ## What agents get automatically
 
-1. High-level system: PPA is a retrieval engine; cards are truth; search is navigation.
-2. Job router with stop tests (candidate person cards, channel census, stolen aliases).
-3. Don'ts (underscore types, people_filter is a name or slug, ground with
-   reads). `archive_person` accepts name, slug, email, or phone.
+1. PPA is a lookup engine. Cards are truth. Search is navigation. Read before you cite.
+2. A job router with stop tests (candidate person cards, channel census, stolen aliases).
+3. Don'ts: types use underscores (`email_message`, not `email-message`); `people_filter` is a name or slug, never an email; ground claims with `archive_read`. `archive_person` accepts name, slug, email, or phone.
 4. Per-tool parameter recipes when the agent inspects a tool.
+
+## What this gives an agent that a provider chat does not
+
+- Typed cards you can filter (`flight`, `meal_order`, `imessage_thread`) instead of a blob of remembered chat.
+- Person lookup that stays `ambiguous` on a shared household phone instead of merging two people.
+- Linked trips, charges, and meetings, so "which hotel was on this trip?" can follow a card link.
+- Honest coverage on subscriptions, trip costs, and changes-since. The agent should not invent a current subscription.
+- A vault the user owns. Switching Muse, Grok, Hermes, Instinct, or OpenClaw does not wipe the evidence.
+
+`archive_knowledge` falls back to ordinary search. It is not a living profile.
 
 ## CLI parity (no MCP)
 
-`ppa search`, `ppa query`, `ppa hybrid-search`, `ppa analytics`, `ppa read`,
-`ppa graph`, `ppa health`, `ppa status` — same retrieval family as the MCP tools.
-They are **not** one command:
-`ppa health` is structural/behavioral checks; `ppa status` / `archive_status_json`
-are current-instance production status; `archive_stats` is corpus counts.
+`ppa search`, `ppa query`, `ppa hybrid-search`, `ppa analytics`, `ppa read`, `ppa evidence`, `ppa graph`, `ppa person`, `ppa health`, and `ppa status` are the same lookup family as the MCP tools. They are not one command:
+
+- `ppa health` is structural and behavioral checks.
+- `ppa status` / `archive_status_json` are current-instance production status.
+- `archive_stats` is corpus counts.
 
 ## Ops tools (not retrieval)
 
-`archive_rebuild_indexes`, `archive_embed_pending`, seed-link tools, and similar are
-operational. Do not use them as a reasoning shortcut. Chunk rows power vector/hybrid
-search; they are not canonical evidence.
+`archive_rebuild_indexes`, `archive_embed_pending`, seed-link tools, and similar are operational. Do not use them as a reasoning shortcut. Chunk rows power vector and hybrid search. They are not canonical evidence.
 
-Long CLI jobs (`maintain`, `rebuild-indexes`, `embed-pending`, `slice-seed`,
-`enrich-emails`, `extract-emails`, Gmail catch-up) must start detached:
-`setsid`, stdin from `/dev/null`, PPID 1, `--log-file` before the subcommand.
-Never a Cursor-managed terminal. See `.cursor/skills/long-running-jobs/SKILL.md`.
+Long CLI jobs (`maintain`, `rebuild-indexes`, `embed-pending`, `slice-seed`, `enrich-emails`, `extract-emails`, Gmail catch-up) must start detached: `setsid`, stdin from `/dev/null`, PPID 1, `--log-file` before the subcommand. Never a Cursor-managed terminal. See `.cursor/skills/long-running-jobs/SKILL.md`.

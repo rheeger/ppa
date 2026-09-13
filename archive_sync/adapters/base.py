@@ -30,6 +30,7 @@ from archive_vault.identity_resolver import (
     load_nicknames,
     log_conflict,
     merge_into_existing,
+    queue_identity_review,
     resolve_person,
     resolve_person_snapshot,
 )
@@ -79,6 +80,9 @@ class IngestResult:
     skipped: int = 0
     skip_details: dict[str, int] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
+    match_outcomes: dict[str, int] = field(default_factory=dict)
+    match_reasons: dict[str, int] = field(default_factory=dict)
+    review_proposals: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -788,6 +792,7 @@ class BaseAdapter(ABC):
                         _after_person_persist(prepared, persisted, rel_path, "merge")
                     person_uid_index[card.uid] = wikilink
                 result.merged += 1
+                result.match_outcomes["merge"] = result.match_outcomes.get("merge", 0) + 1
                 processed_successfully += 1
                 _checkpoint(prepared.raw_item, card, prepared.item_index)
                 return "merge-existing-uid"
@@ -834,20 +839,60 @@ class BaseAdapter(ABC):
                         _after_person_persist(prepared, persisted, rel_path, "merge")
                     person_uid_index[card.uid] = resolve_result.wikilink
                 result.merged += 1
+                result.match_outcomes["merge"] = result.match_outcomes.get("merge", 0) + 1
+                for tag in resolve_result.reasons:
+                    result.match_reasons[tag] = result.match_reasons.get(tag, 0) + 1
                 processed_successfully += 1
                 _checkpoint(prepared.raw_item, card, prepared.item_index)
                 return f"merge-resolved:{resolve_result.wikilink}"
 
+            if resolve_result.action == "skip":
+                reason = resolve_result.reasons[0] if resolve_result.reasons else "skip"
+                result.skipped += 1
+                result.skip_details[reason] = result.skip_details.get(reason, 0) + 1
+                result.match_outcomes["skip"] = result.match_outcomes.get("skip", 0) + 1
+                for tag in resolve_result.reasons:
+                    result.match_reasons[tag] = result.match_reasons.get(tag, 0) + 1
+                processed_successfully += 1
+                _checkpoint(prepared.raw_item, card, prepared.item_index)
+                return f"skip:{reason}"
+
             if resolve_result.action == "conflict" and resolve_result.wikilink:
+                existing_data = people_index.records.get(resolve_result.wikilink) or {}
+                existing_uid = str(existing_data.get("uid") or "").strip()
+                incoming_payload = card.model_dump(mode="python")
+                proposal = {
+                    "incoming": incoming_payload,
+                    "existing_wikilink": resolve_result.wikilink,
+                    "existing_uid": existing_uid,
+                    "confidence": resolve_result.confidence,
+                    "reasons": list(resolve_result.reasons),
+                    "would_have_auto_merged": "name_conflict" in resolve_result.reasons
+                    or "fuzzy_name" in resolve_result.reasons
+                    or "close_name" in resolve_result.reasons,
+                }
+                result.review_proposals.append(proposal)
                 if not dry_run:
                     log_conflict(
                         vault,
-                        card.model_dump(mode="python"),
+                        incoming_payload,
                         resolve_result.wikilink,
                         resolve_result.confidence,
                         resolve_result.reasons,
                     )
+                    queue_identity_review(
+                        vault,
+                        incoming=incoming_payload,
+                        existing_wikilink=resolve_result.wikilink,
+                        existing_uid=existing_uid,
+                        confidence=resolve_result.confidence,
+                        reasons=resolve_result.reasons,
+                        would_have_auto_merged=bool(proposal["would_have_auto_merged"]),
+                    )
                 result.conflicted += 1
+                result.match_outcomes["review"] = result.match_outcomes.get("review", 0) + 1
+                for tag in resolve_result.reasons:
+                    result.match_reasons[tag] = result.match_reasons.get(tag, 0) + 1
                 processed_successfully += 1
                 _checkpoint(prepared.raw_item, card, prepared.item_index)
                 return f"conflict:{resolve_result.wikilink}"
@@ -862,6 +907,9 @@ class BaseAdapter(ABC):
                 person_uid_index[card.uid] = wikilink
                 _after_person_persist(prepared, card, Path(rel_path), "create")
             result.created += 1
+            result.match_outcomes["create"] = result.match_outcomes.get("create", 0) + 1
+            for tag in resolve_result.reasons:
+                result.match_reasons[tag] = result.match_reasons.get(tag, 0) + 1
             processed_successfully += 1
             _checkpoint(prepared.raw_item, card, prepared.item_index)
             return "create"
@@ -1084,14 +1132,17 @@ class BaseAdapter(ABC):
         elapsed = perf_counter() - ingest_started_at
         _log(
             f"ingest done: created={result.created} merged={result.merged} conflicted={result.conflicted} "
-            f"skipped={result.skipped} errors={len(result.errors)} elapsed_s={elapsed:.2f}"
+            f"skipped={result.skipped} match_outcomes={result.match_outcomes} "
+            f"match_reasons={result.match_reasons} errors={len(result.errors)} elapsed_s={elapsed:.2f}"
         )
         logger.info(
-            "adapter ingest done source_id=%s created=%s merged=%s skipped=%s errors=%s elapsed=%.1fs",
+            "adapter ingest done source_id=%s created=%s merged=%s skipped=%s "
+            "match_outcomes=%s errors=%s elapsed=%.1fs",
             self.source_id,
             result.created,
             result.merged,
             result.skipped,
+            result.match_outcomes,
             len(result.errors),
             elapsed,
         )

@@ -486,6 +486,7 @@ _LIVE_ADAPTERS: list[tuple[str, str, str]] = [
     ("photos:apple-photos", "photos", "PhotosAdapter"),
     ("beeper:local", "beeper", "BeeperAdapter"),
     ("contacts:google", "contacts", "ContactsAdapter"),
+    ("contacts:apple", "contacts", "ContactsAdapter"),
     ("github-history:local", "github-history", "GitHubHistoryAdapter"),
     ("gmail-correspondents:me@example.com", "gmail-correspondents", "GmailCorrespondentsAdapter"),
 ]
@@ -509,7 +510,6 @@ def test_live_keys_resolve_and_build_adapter(source_key: str, adapter_source_id:
         "health:apple-health",
         "apple-health:apple-health",
         "medical-records:local",
-        "contacts:apple",
         "contacts:vcf",
         "seed-people:local",
     ],
@@ -559,6 +559,9 @@ def test_adapter_ingest_kwargs_per_live_source(monkeypatch: pytest.MonkeyPatch) 
     assert contacts == {"sources": ["google"]}
     assert "account_email" not in contacts
     assert contacts["sources"] == ["google"]
+
+    apple = adapter_ingest_kwargs(resolve_declaration("contacts:apple"), apply=False)
+    assert apple == {"sources": ["apple"]}
 
     github = adapter_ingest_kwargs(resolve_declaration("github-history:local"), apply=False)
     assert github == {}

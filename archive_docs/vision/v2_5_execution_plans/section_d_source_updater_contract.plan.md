@@ -156,23 +156,23 @@ SourceUpdater responsibility:
 
 Each source updater should declare:
 
-| Field                      | Meaning                                                                         |
-| -------------------------- | ------------------------------------------------------------------------------- |
-| `source_key`               | Stable source/account/scope identity, e.g. `gmail-messages:account@example.com` |
+| Field                      | Meaning                                                                                                                                      |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `source_key`               | Stable source/account/scope identity, e.g. `gmail-messages:account@example.com`                                                              |
 | `source_type`              | `gmail`, `calendar`, `imessage`, `otter`, `documents`, `photos`, `beeper`, `contacts`, `github`, etc. Live types only in the executable set. |
-| `adapter_name`             | Existing adapter implementation                                                 |
-| `adapter_version`          | Version string for fetch/transform logic                                        |
-| `promotion_policy_version` | Policy version if the source has a promotion gate                               |
-| `cursor_kind`              | `history_id`, `sync_token`, `page_token`, `rowid`, `modified_at`, `hash`, etc.  |
-| `supports_incremental`     | Whether incremental sync is supported                                           |
-| `supports_deletes`         | Whether source deletion/tombstone can be detected                               |
-| `supports_webhook`         | Whether external triggers are supported                                         |
-| `requires_polling`         | Whether scheduled polling is required                                           |
-| `default_active_policy`    | `all_active`, `promotion_gated`, `metadata_gated`, etc.                         |
-| `last_success_at`          | Last successful committed sync                                                  |
-| `last_attempt_at`          | Last attempted sync                                                             |
-| `last_error`               | Last failure summary                                                            |
-| `last_cursor`              | Last committed cursor summary                                                   |
+| `adapter_name`             | Existing adapter implementation                                                                                                              |
+| `adapter_version`          | Version string for fetch/transform logic                                                                                                     |
+| `promotion_policy_version` | Policy version if the source has a promotion gate                                                                                            |
+| `cursor_kind`              | `history_id`, `sync_token`, `page_token`, `rowid`, `modified_at`, `hash`, etc.                                                               |
+| `supports_incremental`     | Whether incremental sync is supported                                                                                                        |
+| `supports_deletes`         | Whether source deletion/tombstone can be detected                                                                                            |
+| `supports_webhook`         | Whether external triggers are supported                                                                                                      |
+| `requires_polling`         | Whether scheduled polling is required                                                                                                        |
+| `default_active_policy`    | `all_active`, `promotion_gated`, `metadata_gated`, etc.                                                                                      |
+| `last_success_at`          | Last successful committed sync                                                                                                               |
+| `last_attempt_at`          | Last attempted sync                                                                                                                          |
+| `last_error`               | Last failure summary                                                                                                                         |
+| `last_cursor`              | Last committed cursor summary                                                                                                                |
 
 ## Committed Batch Contract
 
@@ -307,16 +307,17 @@ Deletes:
 
 Same contract as Gmail/Calendar. Added to `EXECUTABLE_ADAPTER_SOURCE_IDS`. **2026-08-26–28 this-seed `--apply`:** SUCCESS for Otter, Documents, Beeper, Google Contacts, Gmail correspondents (vault-first + `after:last_sync` + HTTP/batch), plus iMessage. GitHub FAILED (`--stage-dir` required). Photos not run (parked). Do not re-prove SUCCESS streams. Do not full-mailbox-walk correspondents.
 
-| Stream | Key shape | Cursor / cap | Notes |
-| --- | --- | --- | --- |
-| Otter | `otter-transcripts:{account}` | `page_token` / `max_meetings` | MCP (`OTTER_FETCH_MODE=mcp`): list=`otter_search`, get=`otter_fetch`. OAuth refresh token on disk at `~/.mcporter/credentials.json` (mcporter) and the PPA mirror `~/.config/ppa/otter-mcp/credentials.json`. Override with `OTTER_MCP_CREDENTIALS_PATH` / `OTTER_MCP_PPA_TOKEN_PATH`. Nightly / non-TTY (`PPA_NONINTERACTIVE`) refreshes the access token without a browser and fails Otter (does not block other sources) if refresh is impossible. Re-auth: `mcporter auth otter_meeting_mcp`. |
-| Documents | `file-libraries:documents` | `max_files` | Live FS roots; hash load must use vault cache, not `Documents/` `rglob` |
-| Beeper | `beeper:local` | `max_threads` | Live SQLite; `fetch_batches`. Default-exclude iMessage / BlueBubbles / Helga-Pataki accounts — iMessage snapshot stays source of record. |
-| Google Contacts | `contacts:google` | page / `max_items` | API only — not Apple/VCF import |
-| GitHub | `github-history:local` | stage limits | Live `gh` stage, then ingest — not a zip export |
-| Gmail correspondents | `gmail-correspondents:{account}` | `page_token` | Person cards from API, not Email-vault walk |
+| Stream               | Key shape                        | Cursor / cap                  | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| -------------------- | -------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Otter                | `otter-transcripts:{account}`    | `page_token` / `max_meetings` | MCP (`OTTER_FETCH_MODE=mcp`): list=`otter_search`, get=`otter_fetch`. OAuth refresh token on disk at `~/.mcporter/credentials.json` (mcporter) and the PPA mirror `~/.config/ppa/otter-mcp/credentials.json`. Override with `OTTER_MCP_CREDENTIALS_PATH` / `OTTER_MCP_PPA_TOKEN_PATH`. Nightly / non-TTY (`PPA_NONINTERACTIVE`) refreshes the access token without a browser and fails Otter (does not block other sources) if refresh is impossible. Re-auth: `mcporter auth otter_meeting_mcp`. |
+| Documents            | `file-libraries:documents`       | `max_files`                   | Live FS roots; hash load must use vault cache, not `Documents/` `rglob`                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Beeper               | `beeper:local`                   | `max_threads`                 | Live SQLite; `fetch_batches`. Default-exclude iMessage / BlueBubbles / Helga-Pataki accounts — iMessage snapshot stays source of record.                                                                                                                                                                                                                                                                                                                                                          |
+| Google Contacts      | `contacts:google`                | page / etag / `max_items`     | People API                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Apple Contacts       | `contacts:apple`                 | contact hash / `max_items`    | Unified Contacts.app vCards via `osascript`. TCC Automation grant required. `contacts:vcf` stays export-only.                                                                                                                                                                                                                                                                                                                                                                                     |
+| GitHub               | `github-history:local`           | stage limits                  | Live `gh` stage, then ingest — not a zip export                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Gmail correspondents | `gmail-correspondents:{account}` | `page_token`                  | Person cards from API, not Email-vault walk                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 
-iMessage uses a **copied snapshot** of the live Messages store (`ppa-imessage-snapshot.py`), not `~/Library/Messages/chat.db` and not a vendor zip. GitHub stage is the same idea: live fetch written to disk for ingest.
+iMessage uses a **copied snapshot** of the live Messages store (`ppa-imessage-snapshot.py`), not `~/Library/Messages/chat.db` and not a vendor zip. That snapshot needs Full Disk Access. Apple Contacts is a live `osascript` dump of Contacts.app, not AddressBook SQLite. The Python/`osascript` process (including the launchd GUI agent) needs Automation permission for Contacts, or `contacts:apple` comes back `blocked`. GitHub stage is the same idea as the iMessage snapshot: live fetch written to disk for ingest.
 
 ### Manual exports (no updater)
 
@@ -328,7 +329,7 @@ These adapters stay `python -m archive_sync …` imports. Do not add them to `EX
 - Seed people
 - Apple Health XML
 - Medical FHIR / CCD / Epic EHI / vaccine PDF
-- Apple Contacts / VCF file import
+- Hand-dropped VCF file import (`contacts:vcf`)
 
 A leftover `health:apple-health` declaration template may exist. Treat it as export, not executable.
 
