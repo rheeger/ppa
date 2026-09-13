@@ -2,7 +2,7 @@
 
 ## Purpose
 
-PPA is vault-canonical. The Markdown vault remains the source of truth, including for every agent that attaches over MCP. Indexes exist to make lookup fast, not to redefine what is true. An agent cites cards. It does not cite the index.
+The Markdown vault is the source of truth. Indexes exist to make lookup fast, not to redefine what is true. An agent cites cards. It does not cite the index.
 
 ## Current Implementation Slice
 

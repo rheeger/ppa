@@ -579,6 +579,7 @@ class BaseAdapter(ABC):
             identity_cache = (
                 _run_logged("load identity cache", lambda: IdentityCache(vault)) if enable_person_resolution else None
             )
+        self._active_identity_entries = identity_cache.entries if identity_cache is not None else None
         _log("ingest start")
         preload_started_at = perf_counter()
         if enable_person_resolution:

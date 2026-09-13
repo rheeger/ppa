@@ -2,7 +2,7 @@
 
 ## Overview
 
-PPA is a markdown-first evidence layer for you and any agent you attach. Typed cards with YAML frontmatter, an optional body, and field-level provenance are canonical. You own those files. Adapters and connectors write cards. Doctor and maintain commands keep the vault and derived indexes honest. CLI and MCP query the Rust serving index published under `<vault>/_meta/rust-search-index` (`ACTIVE` generation). Postgres is the derived warehouse and test oracle, not the live query engine. The agent is a client. It is not the archive.
+Typed cards with YAML frontmatter, an optional body, and field-level provenance are canonical. You own those files. Adapters and connectors write cards. Doctor and maintain commands keep the vault and derived indexes honest. CLI and MCP query the Rust serving index published under `<vault>/_meta/rust-search-index` (`ACTIVE` generation). Postgres is the derived warehouse and test oracle, not the live query engine. The agent is a client. It is not the archive. The product story is [README.md](../README.md).
 
 The current packages are `archive_vault`, `archive_sync`, `archive_cli`, `archive_doctor`, `archive_engine`, and `archive_crate`. There is no `skills/hfa/` or `skills/archive-sync/` tree. `ppa/` is this repository, not an external consumer via `HFA_LIB_PATH`.
 

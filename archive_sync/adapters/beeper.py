@@ -643,14 +643,16 @@ class BeeperAdapter(BaseAdapter):
         if resolve_result.action == "merge" and resolve_result.wikilink:
             cache.upsert(resolve_result.wikilink, self._beeper_person_identity_aliases(card))
             return None, True
-        existing_wikilink = self._resolve_person_card_exact(cache, card)
-        if existing_wikilink:
-            cache.upsert(existing_wikilink, self._beeper_person_identity_aliases(card))
-            return None, True
-        rel_path = self._beeper_person_rel_path(card)
-        existing_stub = (Path(vault_path) / rel_path).is_file()
-        if resolve_result.action in {"conflict", "skip"} and not existing_stub:
-            return None, True
+        if resolve_result.action in {"conflict", "skip"}:
+            rel_path = self._beeper_person_rel_path(card)
+            if not (Path(vault_path) / rel_path).is_file():
+                return None, False
+        else:
+            existing_wikilink = self._resolve_person_card_exact(cache, card)
+            if existing_wikilink:
+                cache.upsert(existing_wikilink, self._beeper_person_identity_aliases(card))
+                return None, True
+            rel_path = self._beeper_person_rel_path(card)
 
         wikilink = f"[[{rel_path.stem}]]"
         cache.upsert(wikilink, self._beeper_person_identity_aliases(card))

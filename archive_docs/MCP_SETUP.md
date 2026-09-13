@@ -1,8 +1,8 @@
 # PPA MCP setup
 
-PPA is the evidence layer. MCP is how any agent attaches to it. Paste the same generated config into Cursor, Claude Desktop, Codex, OpenClaw, or another MCP client. The vault stays on the machine that owns it. Switching clients does not migrate your cards.
+Paste the same generated config into Cursor, Claude Desktop, Codex, OpenClaw, or another MCP client. The vault stays on the machine that owns it. Switching clients does not migrate your cards.
 
-Agents should read cards before citing search hits. Job recipes are in `.cursor/skills/archive-query/` and [AGENT_USAGE.md](AGENT_USAGE.md).
+Agents should read cards before citing search hits. Job recipes are in `.cursor/skills/archive-query/` and [AGENT_USAGE.md](AGENT_USAGE.md). What those tools can answer is in [README.md](../README.md).
 
 ## Quick start
 

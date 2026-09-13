@@ -1020,7 +1020,9 @@ class IMessageAdapter(BaseAdapter):
             incoming = card.model_dump(mode="python")
             changed = False
 
-            identity = load_identity_map(vault_path)
+            identity = getattr(self, "_active_identity_entries", None)
+            if not identity:
+                identity = load_identity_map(vault_path)
             for field_name in ("source", "people", "orgs", "tags", "participant_handles", "messages", "attachments"):
                 existing_values = merged_data.get(field_name, [])
                 incoming_values = incoming.get(field_name, [])

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import glob
 import hashlib
 import json
 import logging
@@ -259,7 +258,7 @@ class ContactsAdapter(BaseAdapter):
         if "apple" in selected:
             items.extend(self._fetch_apple(cursor=cursor, vcf_paths=vcf_paths, max_items=max_items))
         elif "vcf" in selected:
-            items.extend(self._fetch_vcf_files(vcf_paths=vcf_paths, allow_download_fallback=True))
+            items.extend(self._fetch_vcf_files(vcf_paths=vcf_paths))
         return items
 
     def _configured_vcf_paths(self) -> list[str]:
@@ -477,6 +476,29 @@ class ContactsAdapter(BaseAdapter):
             return rows
         return rows
 
+    def cursor_checkpoint(
+        self,
+        item: dict[str, Any],
+        *,
+        card=None,
+        index: int = -1,
+        processed_successfully: int = 0,
+        result=None,
+        **kwargs,
+    ) -> dict[str, Any] | None:
+        uid = str(item.get("apple_uid") or item.get("name") or item.get("source_path") or "").strip()
+        digest = str(item.get("_content_hash") or "").strip()
+        if uid and digest:
+            self._apple_contact_hashes[uid] = digest
+        return super().cursor_checkpoint(
+            item,
+            card=card,
+            index=index,
+            processed_successfully=processed_successfully,
+            result=result,
+            **kwargs,
+        )
+
     def finalize_cursor(self, cursor: dict[str, Any], **kwargs) -> dict[str, Any] | None:
         patch = {"last_sync": datetime.now().isoformat()}
         if self._last_google_sync_token:
@@ -496,7 +518,7 @@ class ContactsAdapter(BaseAdapter):
     ) -> list[dict[str, Any]]:
         configured = [path for path in (vcf_paths or self._configured_vcf_paths()) if str(path).strip()]
         if configured:
-            rows = self._fetch_vcf_files(vcf_paths=configured, allow_download_fallback=False)
+            rows = self._fetch_vcf_files(vcf_paths=configured)
         else:
             rows = self._fetch_apple_live()
         state = cursor if isinstance(cursor, dict) else {}
@@ -515,7 +537,8 @@ class ContactsAdapter(BaseAdapter):
                 self._apple_contact_hashes[uid] = digest
                 continue
             if uid:
-                self._apple_contact_hashes[uid] = digest
+                row = dict(row)
+                row["_content_hash"] = digest
             out.append(row)
             if remaining is not None:
                 remaining -= 1
@@ -535,23 +558,11 @@ class ContactsAdapter(BaseAdapter):
         self,
         *,
         vcf_paths: list[str] | None = None,
-        allow_download_fallback: bool = False,
     ) -> list[dict[str, Any]]:
         configured_paths = [path for path in (vcf_paths or self._configured_vcf_paths()) if str(path).strip()]
-        if configured_paths:
-            candidates = configured_paths
-        elif allow_download_fallback:
-            home = os.path.expanduser("~")
-            candidates = [
-                os.path.join(home, "Downloads", "apple-contacts-export.vcf"),
-                os.path.join(home, "Downloads", "vcard-jenny-souza.vcf"),
-                os.path.join(
-                    home, "Documents", "Health & Personal", "01_Documents", "06_Wedding", "Steven B_ Goldfarb.vcf"
-                ),
-            ]
-            candidates.extend(glob.glob(os.path.join(home, "Downloads", "*contacts*.vcf")))
-        else:
+        if not configured_paths:
             return []
+        candidates = configured_paths
         rows: list[dict[str, Any]] = []
         for path in sorted(set(candidates)):
             if os.path.isfile(path):

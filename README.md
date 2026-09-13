@@ -12,16 +12,7 @@ PPA finds cards, ranks them, and shows why they matched. It does not invent a bi
 
 ## Why an agent needs this
 
-Without an archive you own, an agent can only use what you typed into that product, what that product stored for itself, or what it guesses from the public web. That is why it forgets last month, invents a subscription, or merges two people who share a household phone.
-
-With PPA, the same agent can:
-
-- Open the vaccination card, the receipt, or the thread, and cite the card identifier.
-- Filter by type, so a flight is a `flight` and a DoorDash receipt is a `meal_order`.
-- Follow a charge to the purchase it paid for, or a flight to the hotel on the same trip.
-- Say when the archive does not have enough data, instead of filling the gap with a guess.
-
-The model is still the model. The agent becomes more capable because the evidence is typed, linked, local, and yours. Every agent you attach can use that layer. None of them become the source of truth.
+Without PPA, the agent only has what that product stored or what it finds on the public web. With PPA it can open the vaccination card, receipt, or thread and cite the identifier; filter by type (`flight`, `meal_order`); follow a charge to the purchase it paid for; and say when the archive does not have the data. The model is still the model. The cards stay the source of truth.
 
 ## What that feels like
 

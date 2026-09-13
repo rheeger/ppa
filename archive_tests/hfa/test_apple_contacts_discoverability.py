@@ -107,6 +107,37 @@ def test_beeper_does_not_mint_stub_when_apple_owns_phone(
     assert extra == []
 
 
+def test_beeper_name_conflict_is_not_counted_as_existing_match(
+    tmp_vault, sample_person_card, sample_person_provenance
+):
+    payload = sample_person_card.model_dump(mode="python")
+    payload["phones"] = ["+15551234567"]
+    card = PersonCard.model_validate(payload)
+    write_card(tmp_vault, "People/jane-smith.md", card, provenance=sample_person_provenance)
+    upsert_identity_map(tmp_vault, "[[jane-smith]]", {"phones": ["+15551234567"]})
+    adapter = BeeperAdapter()
+    participant = ParticipantRecord(
+        participant_id="@john:beeper.local",
+        full_name="John Doe",
+        is_self=False,
+        identifiers=[("phone", "+15551234567")],
+    )
+    item = adapter._participant_person_item(
+        account_id="imessage",
+        protocol="imessage",
+        participant=participant,
+    )
+    assert item is not None
+    plan, matched = adapter._prepare_person_write(
+        item,
+        cache=IdentityCache(tmp_vault),
+        vault_path=tmp_vault,
+        people_index=PersonIndex(tmp_vault, preload=True),
+    )
+    assert matched is False
+    assert plan is None
+
+
 def test_discoverability_report_shape(tmp_vault, sample_person_card, sample_person_provenance):
     write_card(tmp_vault, "People/jane-smith.md", sample_person_card, provenance=sample_person_provenance)
     upsert_identity_map(tmp_vault, "[[jane-smith]]", {"emails": ["jane@example.com"], "phones": ["+15550123"]})

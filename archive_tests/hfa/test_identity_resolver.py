@@ -219,7 +219,7 @@ def test_resolve_person_fuzzy_name_with_company_support_auto_approves(tmp_vault)
     assert "fuzzy_name" in result.reasons or "close_name" in result.reasons
 
 
-def test_resolve_person_same_name_without_support_auto_approves(tmp_vault):
+def test_resolve_person_same_name_without_support_stays_review(tmp_vault):
     existing = PersonCard(
         uid="hfa-person-existing0002",
         type="person",
@@ -249,9 +249,9 @@ def test_resolve_person_same_name_without_support_auto_approves(tmp_vault):
             "last_name": "Johnson",
         },
     )
-    assert result.action == "merge"
+    assert result.action == "conflict"
     assert result.wikilink == "[[alex-johnson]]"
-    assert "auto_approved" in result.reasons
+    assert "auto_approved" not in result.reasons
 
 
 def test_merge_into_existing_derives_alias_provenance_from_summary(
@@ -350,7 +350,7 @@ def test_resolve_person_canon_phone_formats_merge(tmp_vault, sample_person_card,
     assert "exact_phone" in result.reasons
 
 
-def test_resolve_person_same_phone_conflicting_names_auto_approves(
+def test_resolve_person_same_phone_conflicting_names_stays_review(
     tmp_vault, sample_person_card, sample_person_provenance
 ):
     payload = sample_person_card.model_dump(mode="python")
@@ -362,18 +362,25 @@ def test_resolve_person_same_phone_conflicting_names_auto_approves(
         tmp_vault,
         {"summary": "John Doe", "first_name": "John", "last_name": "Doe", "phones": ["+15551234567"]},
     )
-    assert result.action == "merge"
+    assert result.action == "conflict"
     assert result.wikilink == "[[jane-smith]]"
     assert "name_conflict" in result.reasons
-    assert "auto_approved" in result.reasons
+    assert "auto_approved" not in result.reasons
 
 
-def test_auto_approve_keeps_review_below_eighty():
-    held = _auto_approve_if_confident(ResolveResult("conflict", "[[jane-smith]]", 79, ["close_name"]))
+def test_auto_approve_keeps_review_below_merge_threshold():
+    held = _auto_approve_if_confident(ResolveResult("conflict", "[[jane-smith]]", 89, ["close_name"]))
     assert held.action == "conflict"
-    approved = _auto_approve_if_confident(ResolveResult("conflict", "[[jane-smith]]", 80, ["close_name"]))
+    approved = _auto_approve_if_confident(ResolveResult("conflict", "[[jane-smith]]", 90, ["close_name"]))
     assert approved.action == "merge"
     assert "auto_approved" in approved.reasons
+
+
+def test_person_index_candidates_need_a_last_name(tmp_vault, sample_person_card, sample_person_provenance):
+    write_card(tmp_vault, "People/jane-smith.md", sample_person_card, provenance=sample_person_provenance)
+    index = PersonIndex(tmp_vault, preload=True)
+    assert index.candidates({"phones": ["+15551234567"]}) == []
+    assert index.candidates({"first_name": "Jane", "last_name": "Smith"})
 
 
 def test_resolve_person_name_only_skips_create(tmp_vault):

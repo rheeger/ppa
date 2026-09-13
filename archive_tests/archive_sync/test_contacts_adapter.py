@@ -266,6 +266,10 @@ def test_fetch_apple_uses_mocked_dump_and_skips_unchanged_hash(monkeypatch, tmp_
     first = adapter.fetch(str(tmp_path), {}, sources=["apple"])
     assert [row["name"] for row in first] == ["Jenny Souza"]
     assert first[0]["apple_uid"] == "ABUID:ABC-123"
+    assert first[0]["_content_hash"]
+    before_ingest = adapter.finalize_cursor({})
+    assert "ABUID:ABC-123" not in (before_ingest.get("contact_hashes") or {})
+    adapter.cursor_checkpoint(first[0])
     cursor = adapter.finalize_cursor({})
     assert "ABUID:ABC-123" in cursor["contact_hashes"]
     second = adapter.fetch(str(tmp_path), cursor, sources=["apple"])

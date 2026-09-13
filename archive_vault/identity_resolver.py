@@ -35,11 +35,6 @@ except Exception:  # pragma: no cover
     fuzz = _FallbackFuzz()
 
 
-# Close-name and name-conflict rows at or above this score merge without a human.
-# Below it they stay in identity-proposals as open review.
-REVIEW_AUTO_APPROVE_MIN_CONFIDENCE = 80
-
-
 @dataclass
 class ResolveResult:
     action: str
@@ -48,10 +43,10 @@ class ResolveResult:
     reasons: list[str]
 
 
-def _auto_approve_if_confident(result: ResolveResult) -> ResolveResult:
+def _auto_approve_if_confident(result: ResolveResult, *, merge_threshold: int = 90) -> ResolveResult:
     if result.action != "conflict" or not result.wikilink:
         return result
-    if result.confidence < REVIEW_AUTO_APPROVE_MIN_CONFIDENCE:
+    if result.confidence < merge_threshold:
         return result
     reasons = list(result.reasons)
     if "auto_approved" not in reasons:
@@ -177,8 +172,6 @@ class PersonIndex:
             candidate_links.update(self.by_last_name.get(last, set()))
             if first:
                 candidate_links.update(self.by_first_initial_last.get((last, first[:1]), set()))
-        if not candidate_links:
-            candidate_links = set(self.records)
         return [(wikilink, self.records[wikilink]) for wikilink in candidate_links]
 
     def snapshot(self) -> PersonIndexSnapshot:
@@ -313,8 +306,6 @@ def _snapshot_candidates(
         candidate_links.update(snapshot.by_last_name.get(last, ()))
         if first:
             candidate_links.update(snapshot.by_first_initial_last.get((last, first[:1]), ()))
-    if not candidate_links:
-        candidate_links = set(snapshot.records)
     return [(wikilink, snapshot.records[wikilink]) for wikilink in candidate_links if wikilink in snapshot.records]
 
 
@@ -554,7 +545,7 @@ def _identifier_auto_merge_or_review(
     existing = _record_for_wikilink(match, records=records, candidate_people=candidate_people)
     if existing is None or _names_safe_for_auto_merge(identifiers, existing, nicknames):
         return ResolveResult("merge", match, 100, [reason])
-    return _auto_approve_if_confident(ResolveResult("conflict", match, 100, [reason, "name_conflict"]))
+    return ResolveResult("conflict", match, 100, [reason, "name_conflict"])
 
 
 def _create_or_skip(identifiers: dict[str, Any]) -> ResolveResult:
@@ -625,7 +616,7 @@ def _resolve_person_from_candidates(
     if best and best.confidence >= config.conflict_threshold:
         if "fuzzy_name" not in best.reasons and "close_name" not in best.reasons:
             best = ResolveResult("conflict", best.wikilink, best.confidence, [*best.reasons, "close_name"])
-        return _auto_approve_if_confident(best)
+        return _auto_approve_if_confident(best, merge_threshold=config.merge_threshold)
     return _create_or_skip(identifiers)
 
 
@@ -645,26 +636,42 @@ def resolve_person(
     config = config or load_config(vault_path)
 
     resolver = cache.resolve if cache is not None else lambda prefix, value: resolve_any(vault_path, prefix, value)
-    candidate_people = (
-        people_index.candidates(identifiers)
-        if people_index is not None
-        else [
-            (
-                f"[[{rel_path.stem}]]",
-                validate_card_permissive(read_note(vault_path, str(rel_path))[0]).model_dump(mode="python"),
-            )
-            for rel_path, _ in iter_notes(vault_path)
-            if rel_path.parts and rel_path.parts[0] == "People"
-        ]
-    )
-    result = _resolve_person_from_candidates(
+    records = people_index.records if people_index is not None else None
+    identifier_only = _resolve_person_from_candidates(
         identifiers,
         resolver=resolver,
-        candidate_people=candidate_people,
+        candidate_people=[],
         nicknames=nicknames,
         config=config,
-        records=people_index.records if people_index is not None else None,
+        records=records,
     )
+    if (
+        records is not None
+        and identifier_only.reasons
+        and identifier_only.reasons[0].startswith("exact_")
+    ):
+        result = identifier_only
+    else:
+        candidate_people = (
+            people_index.candidates(identifiers)
+            if people_index is not None
+            else [
+                (
+                    f"[[{rel_path.stem}]]",
+                    validate_card_permissive(read_note(vault_path, str(rel_path))[0]).model_dump(mode="python"),
+                )
+                for rel_path, _ in iter_notes(vault_path)
+                if rel_path.parts and rel_path.parts[0] == "People"
+            ]
+        )
+        result = _resolve_person_from_candidates(
+            identifiers,
+            resolver=resolver,
+            candidate_people=candidate_people,
+            nicknames=nicknames,
+            config=config,
+            records=records,
+        )
     if result.wikilink:
         from archive_vault.identity import canonicalize_wikilink, load_identity_map
 

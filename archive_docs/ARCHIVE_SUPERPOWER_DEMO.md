@@ -1,6 +1,6 @@
 # What changes when an agent has PPA
 
-This page is the with-archive vs without-archive contrast. The same gap shows up in Cursor, Claude, Muse, Grok, Hermes, Instinct, OpenClaw, or any other agent. Without PPA, the model can only use what that product stored or what it finds on the public web. With PPA, it looks up cards you own and cites them.
+Worked examples for the questions in [README.md](../README.md). Without PPA the model only has that product's memory or the public web. With PPA it opens a card and cites it.
 
 The numbers below come from one living archive (the Heeger-Friedman seed). They are an existence proof, not a default for `ppa setup`. New archives start empty and report their own health.
 

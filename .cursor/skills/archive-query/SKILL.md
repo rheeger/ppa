@@ -9,10 +9,8 @@ description: >-
 
 # Archive query jobs
 
-PPA is the evidence layer the user owns. You retrieve and cite cards. You do
-not answer from provider memory. Cards are truth. Search hits are navigation.
 Warm MCP only. Never spawn a new `archive_cli` process to ask a living-archive
-question.
+question. Cards are truth. Search hits are navigation.
 
 Pick one job. Read that file before you retrieve. Do not improvise from the
 tool list alone.

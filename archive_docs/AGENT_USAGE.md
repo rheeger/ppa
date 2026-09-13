@@ -1,8 +1,6 @@
 # PPA agent usage
 
-PPA is the evidence layer. The agent is the reader. Cards in the vault are the truth. Search hits, snippets, embeddings, and the agent's paraphrase are navigation.
-
-Any MCP client can attach: Cursor, Claude Desktop, Codex, OpenClaw, or another host that speaks the Model Context Protocol. The tools and meanings stay the same when you change clients. The archive does not move.
+What you can ask, and what the archive will not invent for you, is in [README.md](../README.md). This page is the retrieval contract: jobs, tool rules, and CLI parity.
 
 The live agent contract is two layers:
 
@@ -28,14 +26,6 @@ A "who is X" or profile write-up is job 1, then job 2, then job 5. A single date
 2. A job router with stop tests (candidate person cards, channel census, stolen aliases).
 3. Don'ts: types use underscores (`email_message`, not `email-message`); `people_filter` is a name or slug, never an email; ground claims with `archive_read`. `archive_person` accepts name, slug, email, or phone.
 4. Per-tool parameter recipes when the agent inspects a tool.
-
-## What this gives an agent that a provider chat does not
-
-- Typed cards you can filter (`flight`, `meal_order`, `imessage_thread`) instead of a blob of remembered chat.
-- Person lookup that stays `ambiguous` on a shared household phone instead of merging two people.
-- Linked trips, charges, and meetings, so "which hotel was on this trip?" can follow a card link.
-- Honest coverage on subscriptions, trip costs, and changes-since. The agent should not invent a current subscription.
-- A vault the user owns. Switching Muse, Grok, Hermes, Instinct, or OpenClaw does not wipe the evidence.
 
 `archive_knowledge` falls back to ordinary search. It is not a living profile.
 

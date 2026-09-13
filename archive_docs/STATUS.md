@@ -6,19 +6,7 @@ This page is the current product state. When a vision file, rebase, or older rep
 
 `production_proven` is still **false**. Isolated acceptance is not a long soak.
 
-## What PPA is now
-
-A private evidence archive. Cards in a Markdown vault are the truth. A Rust serving index answers query. Postgres is a derived warehouse. Any MCP agent (Cursor, Claude Desktop, Codex, OpenClaw, or another client) retrieves through MCP. They do not get a living profile or a chatbot that answers for them. Switching agents does not move the vault.
-
-v2.5-done is this machine’s canonical seed as the living high-signal corpus. The work after that close-out (PRs 24–33, including the ten-plan hardening in [PR 29](https://github.com/rheeger/ppa/pull/29)) made that corpus usable at seed scale.
-
-## What you can ask
-
-- Find a receipt, flight, thread, or charge with lexical, hybrid, or vector search that returns instead of timing out.
-- Open the card before you treat a hit as a fact.
-- Identify a person by name, slug, email, or phone. Shared household phones stay `ambiguous`. An alias-only hit is not the person.
-- Ask what subscriptions you pay for, what a trip cost, or what changed since a checkpoint through `ppa analytics` / `archive_analytics`. Those workflows return facts, coverage, and freshness. They do not advise. A later cancel is not a current subscription. Currencies do not convert.
-- Ask from a remote client (Arnold on this tailnet) over HTTP MCP. The vault and index stay on the machine that owns them.
+v2.5-done is this machine’s canonical seed as the living high-signal corpus. The work after that close-out (PRs 24–33, including the ten-plan hardening in [PR 29](https://github.com/rheeger/ppa/pull/29)) made that corpus usable at seed scale. What you can ask is in [README.md](../README.md). Arnold on this tailnet can ask the same questions over HTTP MCP. The vault and index stay on the machine that owns them.
 
 ## Ten-plan product hardening (PR 29)
 
@@ -43,7 +31,6 @@ Model rerank stays optional and off. Million-vector train at 1536-d on an 8 GB c
 
 - One phone / email / handle canon so the same person is findable across iMessage and email.
 - `archive_person` resolves phone and email, not only slug.
-- Person lookup returns `unique` / `ambiguous` / `unresolved`. It does not pick a household winner.
 - Embeddings are keyed by chunk text. Rematerialize reuses paid vectors instead of orphaning them.
 
 ## Ops on this machine

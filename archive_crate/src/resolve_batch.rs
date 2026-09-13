@@ -16,14 +16,11 @@ const SOCIAL: &[&str] = &[
     "linkedin", "github", "twitter", "instagram", "telegram", "discord",
 ];
 
-// Close-name and name-conflict rows at or above this score merge without a human.
-const REVIEW_AUTO_APPROVE_MIN_CONFIDENCE: i32 = 80;
-
-fn auto_approve_if_confident(mut out: ResolveOutput) -> ResolveOutput {
+fn auto_approve_if_confident(mut out: ResolveOutput, merge_threshold: i32) -> ResolveOutput {
     if out.action != "conflict" || out.wikilink.is_none() {
         return out;
     }
-    if out.confidence < REVIEW_AUTO_APPROVE_MIN_CONFIDENCE {
+    if out.confidence < merge_threshold {
         return out;
     }
     if !out.reasons.iter().any(|r| r == "auto_approved") {
@@ -414,6 +411,21 @@ pub(crate) struct ResolveOutput {
     pub reasons: Vec<String>,
 }
 
+fn looks_like_phone_summary(name: &str) -> bool {
+    let digits: String = name.chars().filter(|c| c.is_ascii_digit()).collect();
+    digits.len() >= 7
+        && name
+            .chars()
+            .all(|c| c.is_ascii_digit() || "+-() .".contains(c))
+}
+
+fn is_unnamed_stub_name(name: &str) -> bool {
+    if name.is_empty() || name.contains('@') || looks_like_phone_summary(name) {
+        return true;
+    }
+    !looks_like_person_name(name)
+}
+
 fn is_unnamed_stub_map(data: &Map<String, Value>) -> bool {
     let (first, last) = person_index::name_parts(data);
     if !first.is_empty() || !last.is_empty() {
@@ -425,7 +437,7 @@ fn is_unnamed_stub_map(data: &Map<String, Value>) -> bool {
     } else {
         summary
     };
-    name.is_empty() || name.contains('@') || !name.contains(' ')
+    is_unnamed_stub_name(&name)
 }
 
 fn is_unnamed_stub_record(rec: &PersonRecord) -> bool {
@@ -433,7 +445,7 @@ fn is_unnamed_stub_record(rec: &PersonRecord) -> bool {
         return false;
     }
     let summary = rec.names.first().cloned().unwrap_or_default();
-    summary.is_empty() || summary.contains('@') || !summary.contains(' ')
+    is_unnamed_stub_name(&summary)
 }
 
 fn names_safe_for_auto_merge(
@@ -472,12 +484,12 @@ fn identifier_auto_merge_or_review(
 ) -> ResolveOutput {
     if let Some(rec) = index.records.get(&wikilink) {
         if !names_safe_for_auto_merge(identifiers, rec, nicknames) {
-            return auto_approve_if_confident(ResolveOutput {
+            return ResolveOutput {
                 action: "conflict".to_string(),
                 wikilink: Some(wikilink),
                 confidence: 100,
                 reasons: vec![reason.to_string(), "name_conflict".to_string()],
-            });
+            };
         }
     }
     ResolveOutput {
@@ -607,7 +619,7 @@ fn resolve_one(
 
     if let Some(b) = best {
         if b.confidence >= config.conflict_threshold {
-            return auto_approve_if_confident(b);
+            return auto_approve_if_confident(b, config.merge_threshold);
         }
     }
 
