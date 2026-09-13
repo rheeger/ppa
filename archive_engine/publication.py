@@ -27,6 +27,7 @@ from archive_cli.index_config import (
     get_publication_min_embed_chunks,
     get_publication_min_embed_coverage,
     get_serving_candidate_budget,
+    get_serving_index_max_rss_mb,
     get_serving_nlist,
     get_serving_nprobe,
     get_serving_train_iters,
@@ -46,6 +47,7 @@ COMPLETE_FILE = "COMPLETE"
 LEASE_LOCK_NAME = "PUBLISHER.lock"
 LEASE_FILE_NAME = "PUBLISHER.lease"
 PINS_DIR_NAME = "pins"
+EXPORT_TMP_DIR_NAME = ".export-tmp"
 PUBLICATION_PHASES = ("lease", "write", "build", "validate", "complete", "promote", "ack")
 
 _PIN_LOCK = threading.Lock()
@@ -446,6 +448,59 @@ def read_active_generation(index_root: Path) -> str:
     return path.read_text(encoding="utf-8").strip()
 
 
+def _path_size_bytes(path: Path) -> int:
+    if path.is_file():
+        try:
+            return int(path.stat().st_size)
+        except OSError:
+            return 0
+    total = 0
+    if not path.is_dir():
+        return 0
+    for dirpath, _dirnames, filenames in os.walk(path):
+        for name in filenames:
+            try:
+                total += int((Path(dirpath) / name).stat().st_size)
+            except OSError:
+                continue
+    return total
+
+
+def reclaim_stale_export_tmp(index_root: Path, *, keep: str = "") -> int:
+    """Delete leftover ``.export-tmp`` generations so the next publish can use that space.
+
+    A full seed export is about 27 GB. Failed publishes used to leave every copy
+    behind, so ``shutil.disk_usage`` reported the host as full even though that
+    scratch is disposable.
+    """
+
+    tmp = Path(index_root) / EXPORT_TMP_DIR_NAME
+    if not tmp.is_dir():
+        return 0
+    reclaimed = 0
+    keep_name = str(keep or "").strip()
+    for child in sorted(tmp.iterdir()):
+        if keep_name and child.name == keep_name:
+            continue
+        size = _path_size_bytes(child)
+        try:
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+        except OSError:
+            logger.warning("publication export-tmp reclaim failed path=%s", child, exc_info=True)
+            continue
+        reclaimed += size
+    if reclaimed:
+        logger.info(
+            "publication export-tmp reclaimed_mb=%.1f keep=%s",
+            reclaimed / (1024 * 1024),
+            keep_name or "-",
+        )
+    return reclaimed
+
+
 def estimate_snapshot_bytes(snapshot: ServingSnapshot) -> int:
     if snapshot.embeddings:
         vectors = sum((len(vec) * 4) + 64 for _key, vec in snapshot.embeddings)
@@ -468,14 +523,214 @@ def check_publication_budget(
     estimated_bytes: int,
     *,
     budget_mb: int | None = None,
+    keep_export_tmp: str = "",
 ) -> None:
     cap = get_publication_disk_budget_mb() if budget_mb is None else int(budget_mb)
-    if cap <= 0 or estimated_bytes > cap * 1024 * 1024:
-        raise IncompatibleStateError("publication_disk_budget")
     Path(index_root).mkdir(parents=True, exist_ok=True)
+    reclaimed = reclaim_stale_export_tmp(index_root, keep=keep_export_tmp)
     free = shutil.disk_usage(index_root).free
-    if estimated_bytes > int(free * 0.9):
+    cap_bytes = cap * 1024 * 1024
+    logger.info(
+        "publication disk budget estimated_mb=%.1f free_mb=%.1f reclaimed_mb=%.1f cap_mb=%s",
+        estimated_bytes / (1024 * 1024),
+        free / (1024 * 1024),
+        reclaimed / (1024 * 1024),
+        cap,
+    )
+    if cap <= 0 or estimated_bytes > cap_bytes:
+        logger.error(
+            "publication_disk_budget estimated_mb=%.1f cap_mb=%s",
+            estimated_bytes / (1024 * 1024),
+            cap,
+        )
         raise IncompatibleStateError("publication_disk_budget")
+    if estimated_bytes > int(free * 0.9):
+        logger.error(
+            "publication_disk_budget estimated_mb=%.1f free_mb=%.1f cap_mb=%s",
+            estimated_bytes / (1024 * 1024),
+            free / (1024 * 1024),
+            cap,
+        )
+        raise IncompatibleStateError("publication_disk_budget")
+
+
+PUBLICATION_DELTA_CHUNKS_PER_CARD = 8
+PUBLICATION_JSONL_BYTES_PER_VECTOR = 256
+PUBLICATION_DISK_FREE_RATIO = 0.9
+PUBLICATION_RAM_PHYSICAL_RATIO = 0.9
+PUBLICATION_RAM_AVAILABLE_RATIO = 0.85
+
+
+@dataclass(frozen=True)
+class PublicationResourcePlan:
+    """RAM and disk needed for one publish, before the export starts."""
+
+    mode: str
+    chain_depth: int
+    live_vectors: int
+    estimated_vectors: int
+    estimated_rss_bytes: int
+    estimated_disk_bytes: int
+    rss_cap_bytes: int
+    disk_cap_bytes: int
+    free_disk_bytes: int
+    available_memory_bytes: int
+    physical_memory_bytes: int
+    reclaimed_export_tmp_bytes: int
+    ok: bool
+    reasons: tuple[str, ...]
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "mode": self.mode,
+            "chain_depth": self.chain_depth,
+            "live_vectors": self.live_vectors,
+            "estimated_vectors": self.estimated_vectors,
+            "estimated_rss_mb": round(self.estimated_rss_bytes / (1024 * 1024), 1),
+            "estimated_disk_mb": round(self.estimated_disk_bytes / (1024 * 1024), 1),
+            "rss_cap_mb": round(self.rss_cap_bytes / (1024 * 1024), 1),
+            "disk_cap_mb": round(self.disk_cap_bytes / (1024 * 1024), 1),
+            "free_disk_mb": round(self.free_disk_bytes / (1024 * 1024), 1),
+            "available_memory_mb": round(self.available_memory_bytes / (1024 * 1024), 1),
+            "physical_memory_mb": round(self.physical_memory_bytes / (1024 * 1024), 1),
+            "reclaimed_export_tmp_mb": round(self.reclaimed_export_tmp_bytes / (1024 * 1024), 1),
+            "ok": self.ok,
+            "reasons": list(self.reasons),
+        }
+
+
+def choose_publication_mode(
+    *,
+    ready: bool,
+    parent_generation: str,
+    dirty_count: int,
+    chain_depth: int,
+    delta_vectors: int = 0,
+    live_vectors: int = 0,
+    force_compact: bool = False,
+) -> str:
+    """``delta``, ``compact``, or ``full``. Empty parent or no live index is a full reprint."""
+
+    if force_compact:
+        return "compact"
+    parent = str(parent_generation or "").strip()
+    if not ready or not parent:
+        return "full"
+    if should_compact(
+        chain_depth=chain_depth,
+        delta_vectors=delta_vectors,
+        live_vectors=live_vectors,
+    ):
+        return "compact"
+    return "delta"
+
+
+def estimate_publication_vectors(*, mode: str, live_vectors: int, dirty_count: int) -> int:
+    if mode in {"compact", "full"}:
+        return max(int(live_vectors or 0), 0)
+    return max(int(dirty_count or 0), 0) * PUBLICATION_DELTA_CHUNKS_PER_CARD
+
+
+def plan_publication_resources(
+    index_root: Path,
+    *,
+    mode: str,
+    live_vectors: int,
+    dirty_count: int,
+    chain_depth: int = 0,
+    dimension: int | None = None,
+    keep_export_tmp: str = "",
+    reclaim: bool = True,
+    rss_cap_mb: int | None = None,
+    disk_budget_mb: int | None = None,
+    free_disk_bytes: int | None = None,
+    available_memory: int | None = None,
+    physical_memory: int | None = None,
+) -> PublicationResourcePlan:
+    """Size RAM and new disk for this publish mode. Reclaims leftover export scratch first."""
+
+    from archive_cli.serving_scale import (
+        available_memory_bytes,
+        estimate_vector_envelope,
+        physical_memory_bytes,
+    )
+
+    root = Path(index_root)
+    if reclaim:
+        root.mkdir(parents=True, exist_ok=True)
+    reclaimed = reclaim_stale_export_tmp(root, keep=keep_export_tmp) if reclaim else 0
+    dim = int(dimension or get_vector_dimension() or 0)
+    estimated_vectors = estimate_publication_vectors(
+        mode=mode, live_vectors=live_vectors, dirty_count=dirty_count
+    )
+    envelope = estimate_vector_envelope(n=max(estimated_vectors, 0), dimension=max(dim, 1))
+    jsonl_bytes = max(estimated_vectors, 0) * PUBLICATION_JSONL_BYTES_PER_VECTOR
+    export_bytes = int(envelope["embeddings_bytes"]) + jsonl_bytes
+    dest_bytes = int(envelope["disk_bytes"]) + jsonl_bytes
+    estimated_disk = export_bytes + dest_bytes
+    if mode in {"compact", "full"}:
+        estimated_rss = int(envelope["train_rss_bytes"])
+    else:
+        estimated_rss = int(envelope["query_rss_bytes"])
+    rss_cap = (get_serving_index_max_rss_mb() if rss_cap_mb is None else int(rss_cap_mb)) * 1024 * 1024
+    disk_cap_mb = get_publication_disk_budget_mb() if disk_budget_mb is None else int(disk_budget_mb)
+    disk_cap = disk_cap_mb * 1024 * 1024
+    if free_disk_bytes is not None:
+        free = int(free_disk_bytes)
+    else:
+        probe = root if root.exists() else (root.parent if root.parent.exists() else Path.cwd())
+        free = int(shutil.disk_usage(probe).free)
+    avail = int(available_memory) if available_memory is not None else int(available_memory_bytes())
+    phys = int(physical_memory) if physical_memory is not None else int(physical_memory_bytes())
+    reasons: list[str] = []
+    compact_like = mode in {"compact", "full"}
+    if disk_cap_mb <= 0 or estimated_disk > disk_cap:
+        reasons.append("disk_cap")
+    if estimated_disk > int(free * PUBLICATION_DISK_FREE_RATIO):
+        reasons.append("disk_short")
+    if compact_like and rss_cap > 0 and estimated_rss > rss_cap:
+        reasons.append("rss_cap")
+    if compact_like and phys > 0 and estimated_rss > int(phys * PUBLICATION_RAM_PHYSICAL_RATIO):
+        reasons.append("ram_physical")
+    if compact_like and avail > 0 and estimated_rss > int(avail * PUBLICATION_RAM_AVAILABLE_RATIO):
+        reasons.append("ram_available")
+    plan = PublicationResourcePlan(
+        mode=mode,
+        chain_depth=int(chain_depth or 0),
+        live_vectors=max(int(live_vectors or 0), 0),
+        estimated_vectors=estimated_vectors,
+        estimated_rss_bytes=estimated_rss,
+        estimated_disk_bytes=estimated_disk,
+        rss_cap_bytes=max(rss_cap, 0),
+        disk_cap_bytes=max(disk_cap, 0),
+        free_disk_bytes=max(free, 0),
+        available_memory_bytes=max(avail, 0),
+        physical_memory_bytes=max(phys, 0),
+        reclaimed_export_tmp_bytes=int(reclaimed),
+        ok=not reasons,
+        reasons=tuple(reasons),
+    )
+    payload = plan.to_payload()
+    log = logger.info if plan.ok else logger.error
+    log(
+        "publication resource plan mode=%s estimated_rss_mb=%.1f estimated_disk_mb=%.1f "
+        "free_mb=%.1f available_ram_mb=%.1f rss_cap_mb=%.1f ok=%s reasons=%s",
+        payload["mode"],
+        payload["estimated_rss_mb"],
+        payload["estimated_disk_mb"],
+        payload["free_disk_mb"],
+        payload["available_memory_mb"],
+        payload["rss_cap_mb"],
+        payload["ok"],
+        ",".join(plan.reasons) or "-",
+    )
+    return plan
+
+
+def check_publication_resources(plan: PublicationResourcePlan) -> None:
+    if plan.ok:
+        return
+    raise IncompatibleStateError("publication_resources:" + ",".join(plan.reasons))
 
 
 def validate_generation(
@@ -947,7 +1202,12 @@ def publish_snapshot(
             rejection_payload = load_json_state(vault, SCAN_REJECTIONS_REL)
             if rejection_payload.get("rejections"):
                 raise IncompatibleStateError("publication_blocked_unresolved_scan_rejections")
-        check_publication_budget(root, estimate_snapshot_bytes(snapshot), budget_mb=disk_budget_mb)
+        check_publication_budget(
+            root,
+            estimate_snapshot_bytes(snapshot),
+            budget_mb=disk_budget_mb,
+            keep_export_tmp=gid,
+        )
         dest.mkdir(parents=True, exist_ok=True)
         parent = str(parent_generation or "").strip()
         chosen = "compact" if force_compact else str(mode or "full")
@@ -1059,7 +1319,12 @@ def publish_snapshot(
         )
         logger.info("serving_index_build done generation=%s", gid)
         _maybe_fault(fault, "build")
-        check_publication_budget(root, estimate_snapshot_bytes(snapshot), budget_mb=disk_budget_mb)
+        check_publication_budget(
+            root,
+            estimate_snapshot_bytes(snapshot),
+            budget_mb=disk_budget_mb,
+            keep_export_tmp=gid,
+        )
         report = validate_generation(dest, snapshot.embedding_spec, require_native_open=True)
         _maybe_fault(fault, "validate")
         write_complete(

@@ -1,9 +1,10 @@
-"""Living-archive maintain: pull, process dirty cards, publish search.
+"""Living-archive maintain: pull, process dirty cards, publish search, clean up.
 
 ``ppa maintain --apply`` is the user loop. It pulls incremental updates from
 connected sources, runs dirty-only processors (extract, enrich, rematerialize,
-reuse leftover embeddings, embed leftovers, incremental links), then publishes
-one complete serving generation. Dry-run prints the same steps with no writes.
+reuse leftover embeddings, embed leftovers, incremental links), publishes one
+complete serving generation, then deletes leftover catalogs and unused embedding
+rows. Dry-run prints the same steps with no writes.
 
 Bare ``ppa maintain`` without ``--apply`` still tails the ingestion ledger for
 compatibility. Nightly is a thin wrapper of ``--apply``, not a second pipeline.
@@ -18,6 +19,7 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -124,7 +126,7 @@ def _retrieval_gaps_since(conn: Any, schema: str, watermark: str) -> int:
     return int(row[0] or 0)
 
 
-APPLY_LOOP_STEPS = ("pull", "process", "publish")
+APPLY_LOOP_STEPS = ("pull", "process", "publish", "cleanup")
 FAILED_SOURCE_STATUSES = frozenset({"failed", "blocked"})
 
 
@@ -142,6 +144,7 @@ class MaintenanceReport:
     source_updater_runs: int = 0
     source_updater_reports: list[dict[str, Any]] = field(default_factory=list)
     source_updater_partial: bool = False
+    people_retarget: dict[str, Any] = field(default_factory=dict)
     processor_status_snapshots: int = 0
     processor_runs: int = 0
     processor_reports: list[dict[str, Any]] = field(default_factory=list)
@@ -174,6 +177,7 @@ class MaintenanceReport:
     pending_embeddings: int = 0
     failed_sources: list[str] = field(default_factory=list)
     provider_reason: str = ""
+    cleanup: dict[str, Any] = field(default_factory=dict)
     ok: bool = True
     human_summary: str = ""
 
@@ -192,7 +196,13 @@ def apply_provider_failure_reason() -> str:
     from archive_cli.embedding_provider import DEFAULT_EMBEDDING_PROVIDER
     from archive_cli.index_config import _ppa_env
 
-    embed_name = (_ppa_env("PPA_EMBEDDING_PROVIDER", default=DEFAULT_EMBEDDING_PROVIDER) or "hash").lower()
+    from archive_cli.index_config import _active_serving_embedding_spec
+
+    embed_name = (_ppa_env("PPA_EMBEDDING_PROVIDER") or "").lower()
+    if not embed_name:
+        embed_name = str((_active_serving_embedding_spec() or {}).get("provider_namespace") or "").strip().lower()
+    if not embed_name:
+        embed_name = DEFAULT_EMBEDDING_PROVIDER
     if embed_name == "openai" and not (os.environ.get("OPENAI_API_KEY") or "").strip():
         return "OPENAI_API_KEY missing; apply cannot embed dirty cards"
     if embed_name not in {"", "hash", "openai"}:
@@ -231,7 +241,10 @@ def format_maintain_human_summary(report: MaintenanceReport) -> str:
     if report.planned_steps:
         lines.append("Steps: " + ", ".join(report.planned_steps) + ".")
     if mode == "dry-run":
-        lines.append("Would pull connected sources, process dirty cards, and publish a complete search generation.")
+        lines.append(
+            "Would pull connected sources, process dirty cards, publish a complete search generation, "
+            "and clean leftover catalogs and unused embeddings."
+        )
         lines.append("No writes.")
         if report.failed_sources:
             lines.append("Failed sources: " + ", ".join(report.failed_sources) + ".")
@@ -256,6 +269,18 @@ def format_maintain_human_summary(report: MaintenanceReport) -> str:
         lines.append(f"Publish failed: {report.publication.get('error')}.")
     else:
         lines.append("No new generation published.")
+    cleanup = report.cleanup or {}
+    pruned = list(cleanup.get("pruned_generations") or [])
+    discarded = list(cleanup.get("export_tmp_discarded") or [])
+    gc = cleanup.get("embed_gc") or {}
+    unused = gc.get("unused_hash") or {}
+    duplicates = gc.get("duplicates") or {}
+    deleted = int(unused.get("deleted") or 0) + int(duplicates.get("deleted") or 0)
+    if pruned or discarded or deleted:
+        lines.append(
+            f"Cleaned {len(pruned)} old catalogs, {len(discarded)} leftover export copies, "
+            f"and {deleted} unused embeddings."
+        )
     lines.append(f"Pending embeddings: {report.pending_embeddings}.")
     if report.provider_reason:
         lines.append(report.provider_reason + ".")
@@ -610,6 +635,60 @@ def eligible_checkpoint_for_report(store: Any, report: MaintenanceReport) -> dic
     }
 
 
+def _cleanup_after_maintain(
+    store: Any, report: MaintenanceReport, logger: logging.Logger, *, dry_run: bool
+) -> None:
+    """Delete leftover catalogs and unused embedding rows after the new index is live."""
+
+    if dry_run:
+        report.skipped_steps.append("serving_index_cleanup (dry-run)")
+        return
+    payload: dict[str, Any] = {
+        "pruned_generations": [],
+        "export_tmp_discarded": [],
+        "embed_gc": {},
+    }
+    try:
+        from archive_cli.index_config import get_serving_index_path
+        from archive_cli.serving_index import discard_export_tmp, prune_retired_serving_generations
+
+        root = get_serving_index_path(getattr(store, "vault", None))
+        discarded = discard_export_tmp(root, log=logger)
+        pruned = prune_retired_serving_generations(getattr(store, "vault", None), logger=logger)
+        payload["export_tmp_discarded"] = discarded
+        payload["pruned_generations"] = pruned
+        logger.info(
+            "maintain cleanup catalogs pruned=%s export_tmp=%s",
+            len(pruned),
+            len(discarded),
+        )
+    except Exception as exc:
+        logger.exception("maintain_serving_cleanup_failed")
+        report.errors.append({"step": "serving_index_cleanup", "error": str(exc)})
+    from archive_cli.index_store import PostgresArchiveIndex
+
+    if not isinstance(getattr(store, "index", None), PostgresArchiveIndex):
+        report.skipped_steps.append("embed_gc (no warehouse)")
+        report.cleanup = payload
+        return
+    try:
+        from archive_cli.commands.admin import embed_gc_after_reunify
+
+        gc = embed_gc_after_reunify(store=store, logger=logger)
+        payload["embed_gc"] = gc
+        unused = (gc.get("unused_hash") or {}).get("deleted") or 0
+        duplicates = (gc.get("duplicates") or {}).get("deleted") or 0
+        logger.info(
+            "maintain cleanup embeddings unused_hash=%s duplicates=%s",
+            unused,
+            duplicates,
+        )
+    except Exception as exc:
+        logger.exception("maintain_embed_gc_failed")
+        report.errors.append({"step": "embed_gc", "error": str(exc)})
+    report.cleanup = payload
+
+
 def _finish_maintain(
     store: Any, report: MaintenanceReport, logger: logging.Logger, *, dry_run: bool
 ) -> MaintenanceReport:
@@ -619,6 +698,7 @@ def _finish_maintain(
         report.publication = {"ok": False, "error": report.provider_reason or "apply_providers"}
     else:
         _publish_serving_index(store, report, logger, dry_run=dry_run)
+    _cleanup_after_maintain(store, report, logger, dry_run=dry_run)
     report.completed_at = datetime.now(timezone.utc).isoformat()
     finalize_living_report(report)
     return report
@@ -1089,8 +1169,6 @@ def run_maintenance(
     report.maintenance_run_id = datetime.now(timezone.utc).strftime("maintain-%Y%m%dT%H%M%S%fZ")
     report.apply_loop = bool(apply_loop)
     if dirty_uids_path:
-        from pathlib import Path
-
         from archive_sync.processors.dirty_io import load_dirty_uids
 
         file_uids = load_dirty_uids(Path(dirty_uids_path))
@@ -1154,6 +1232,25 @@ def run_maintenance(
                     rebuild_vault_cache_after_writes(store.vault, tier=2, progress_every=5000)
                 except Exception:
                     logger.exception("maintain_vault_cache_rebuild_after_updaters_failed")
+                contacts_ok = any(
+                    str(item.get("source_key") or "").startswith("contacts:")
+                    and str(item.get("status") or "") == "success"
+                    for item in payloads
+                )
+                if contacts_ok:
+                    try:
+                        from archive_cli.commands.identity_repair import resolve_people_fields
+
+                        people_retarget = resolve_people_fields(Path(store.vault), apply=True)
+                        report.people_retarget = people_retarget
+                        logger.info(
+                            "maintain people retarget updated=%s gained=%s replaced=%s",
+                            people_retarget.get("updated_cards"),
+                            people_retarget.get("gained_wikilink_by_type"),
+                            people_retarget.get("replaced_wikilink_by_type"),
+                        )
+                    except Exception:
+                        logger.exception("maintain_people_retarget_failed")
             if partial and not source_updater_strict:
                 report.skipped_steps.append("source_updater_hard_fail (partial success; use --strict to fail)")
             elif not apply:
@@ -1218,8 +1315,6 @@ def run_maintenance(
 
     leftover_dirty: list[str] = []
     try:
-        from pathlib import Path
-
         from archive_cli.serving_index import read_dirty_uids
 
         leftover_dirty = read_dirty_uids(Path(store.vault))

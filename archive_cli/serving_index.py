@@ -30,8 +30,11 @@ from archive_engine.contracts import (
 )
 from archive_engine.publication import (
     ServingSnapshot,
+    choose_publication_mode,
     pin_generation,
+    plan_publication_resources,
     publish_snapshot,
+    read_active_generation,
     referenced_generations,
     should_compact,
     unpin_generation,
@@ -82,7 +85,13 @@ class ServingFidelityError(ValueError):
 def serving_embedding_spec() -> EmbeddingSpec:
     """Build the live serving EmbeddingSpec from config. Does not invent model identity."""
 
-    provider = os.environ.get("PPA_EMBEDDING_PROVIDER", "").strip() or "unspecified"
+    provider = os.environ.get("PPA_EMBEDDING_PROVIDER", "").strip()
+    if not provider:
+        from archive_cli.index_config import _active_serving_embedding_spec
+
+        provider = str((_active_serving_embedding_spec() or {}).get("provider_namespace") or "").strip()
+    if not provider:
+        provider = "unspecified"
     spec = EmbeddingSpec(
         provider_namespace=provider,
         model=get_default_embedding_model(),
@@ -676,6 +685,78 @@ def read_dirty_uids(vault: Path | None = None) -> list[str]:
             if text:
                 uids.add(text)
     return sorted(uids)
+
+
+def estimate_live_vectors(index_root: Path, generation_id: str) -> int:
+    """Sum embedding counts along the live chain. Overcounts replacements on purpose."""
+
+    gid = str(generation_id or "").strip()
+    root = Path(index_root)
+    if not gid:
+        return 0
+    try:
+        chain = walk_generation_chain(root, gid)
+    except Exception:
+        dest = root / "generations" / gid
+        return _generation_embedding_count(dest) if dest.is_dir() else 0
+    return sum(_generation_embedding_count(dest) for dest in chain)
+
+
+def chain_depth_after_publish(index_root: Path, generation_id: str) -> int:
+    gid = str(generation_id or "").strip()
+    if not gid:
+        return 1
+    try:
+        return len(walk_generation_chain(Path(index_root), gid)) + 1
+    except Exception:
+        return 2
+
+
+def preflight_serving_publish(
+    vault: Path | None = None,
+    *,
+    index_root: Path | None = None,
+    dirty_uids: list[str] | None = None,
+    uid_floor: int = 0,
+    keep_export_tmp: str = "",
+    reclaim: bool = True,
+) -> Any:
+    """Decide clip vs reprint from the files on disk, then size RAM and new disk.
+
+    Does not open the search mmap. ``uid_floor`` covers nightly work that is not
+    dirty yet (source pull still ahead).
+    """
+
+    from archive_cli.index_config import get_serving_index_path
+
+    root = Path(index_root) if index_root is not None else get_serving_index_path(vault)
+    status = serving_index_status(vault) if vault is not None else {}
+    ready = bool(status.get("serving_index_ready"))
+    active_gid = str(status.get("serving_index_generation") or read_active_generation(root) or "")
+    if vault is not None and dirty_uids is None:
+        concrete = read_dirty_uids(vault)
+    else:
+        concrete = [str(uid).strip() for uid in (dirty_uids or []) if str(uid).strip()]
+    dirty_count = max(len(concrete), int(uid_floor or 0))
+    depth = chain_depth_after_publish(root, active_gid) if active_gid else 1
+    live_vectors = estimate_live_vectors(root, active_gid)
+    mode = choose_publication_mode(
+        ready=ready or bool(active_gid),
+        parent_generation=active_gid,
+        dirty_count=dirty_count,
+        chain_depth=depth,
+        delta_vectors=0,
+        live_vectors=live_vectors,
+    )
+    return plan_publication_resources(
+        root,
+        mode=mode,
+        live_vectors=live_vectors,
+        dirty_count=dirty_count,
+        chain_depth=depth,
+        keep_export_tmp=keep_export_tmp,
+        reclaim=reclaim,
+    )
 
 
 def _generation_embedding_count(generation_dir: Path) -> int:
@@ -1288,6 +1369,38 @@ def _export_embeddings(
     return _EmbeddingExport(items=out, count=count, keys_path=keys_path, bin_path=bin_path)
 
 
+EXPORT_TMP_DIR_NAME = ".export-tmp"
+
+
+def discard_export_tmp(root: Path, *, keep: str = "", log: logging.Logger | None = None) -> list[str]:
+    """Delete export scratch under ``root/.export-tmp`` except ``keep``.
+
+    A full export writes ``embeddings.bin`` here (about 27 GB for the seed) and
+    ``publish_snapshot`` copies it into the generation, so nothing points back at
+    the scratch after publish. Before this sweep, every full export left its copy
+    behind and the disk filled until ``publication_disk_budget`` refused to publish.
+    """
+
+    tmp = Path(root) / EXPORT_TMP_DIR_NAME
+    if not tmp.is_dir():
+        return []
+    removed: list[str] = []
+    for child in sorted(tmp.iterdir()):
+        if keep and child.name == keep:
+            continue
+        try:
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+            removed.append(child.name)
+        except OSError:
+            (log or logger).warning("serving_index_export_tmp_discard_failed path=%s", child, exc_info=True)
+    if removed and log is not None:
+        log.info("serving_index_export_tmp discarded=%s keep=%s", len(removed), keep or "-")
+    return removed
+
+
 def _export_warehouse_snapshot(
     store: Any,
     *,
@@ -1499,6 +1612,62 @@ def _publish_serving_index_locked(
         log.info("serving_index_publish incremental uids=%s generation=%s", len(concrete), gid)
     spec = serving_embedding_spec()
     dim = spec.dimension
+    plan = plan_publication_resources(
+        root,
+        mode=mode,
+        live_vectors=estimate_live_vectors(root, active_gid),
+        dirty_count=len(concrete),
+        chain_depth=chain_depth_after_publish(root, active_gid) if active_gid else 1,
+        dimension=dim,
+        keep_export_tmp=gid,
+    )
+    if not plan.ok:
+        log.error(
+            "serving_index_refresh_failed reason=publication_resources mode=%s reasons=%s",
+            mode,
+            ",".join(plan.reasons),
+        )
+        return {
+            "ok": False,
+            "error": "publication_resources",
+            "reasons": list(plan.reasons),
+            **plan.to_payload(),
+        }
+    discard_export_tmp(root, keep=gid, log=log)
+    try:
+        return _export_and_publish(
+            store,
+            root=root,
+            vault=vault,
+            gid=gid,
+            dim=dim,
+            mode=mode,
+            incremental=incremental,
+            concrete=concrete,
+            active_gid=active_gid,
+            force_compact=force_compact,
+            skip_embeddings=skip_embeddings,
+            log=log,
+        )
+    finally:
+        discard_export_tmp(root, log=log)
+
+
+def _export_and_publish(
+    store: Any,
+    *,
+    root: Path,
+    vault: Path,
+    gid: str,
+    dim: int,
+    mode: str,
+    incremental: bool,
+    concrete: list[str],
+    active_gid: str,
+    force_compact: bool,
+    skip_embeddings: bool,
+    log: logging.Logger,
+) -> dict[str, Any]:
     snapshot = _export_warehouse_snapshot(
         store,
         incremental=incremental,
@@ -1547,6 +1716,7 @@ def _publish_serving_index_locked(
     except Exception:
         logger.debug("publication captured batch unavailable", exc_info=True)
         captured = None
+    discard_export_tmp(root, keep=gid, log=log)
     receipt = publish_snapshot(
         root,
         snapshot,

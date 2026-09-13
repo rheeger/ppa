@@ -8,14 +8,17 @@ Nightly IS ``maintain --apply``:
 
 That sequence already: pulls every executable (non-parked) source → applies new
 data → rematerializes dirty UIDs → dirty-embeds via the embedding processor
-(``store.embed_pending``) → incremental index. ``ppa maintain`` itself also
-skips junk email-attachment cards on Gmail apply, incrementally purges any
-that slipped through, and hash-links document/attachment duplicates
-(``file_identity``). No separate ``embed-pending`` or ``link-file-duplicates``
-step. No ``--catch-up``. No Photos / Apple Health. No ``--allow-full-embedding``
-/ IVFFlat / force-full rebuild. Passes ``--allow-broad-llm`` so dirty
-``email_thread_enrichment`` (Gemini) can run; ``GEMINI_API_KEY`` is loaded at
-runtime from env or ``~/.ppa/gemini_key.txt`` (never hardcoded in the plist).
+(``store.embed_pending``) → incremental or compacted index → leftover catalog
+and unused-embedding cleanup. Before that job starts, this wrapper sizes RAM
+and disk for the publish mode it can already see (a small clip vs a full
+reprint). ``ppa maintain`` itself also skips junk email-attachment cards on
+Gmail apply, incrementally purges any that slipped through, and hash-links
+document/attachment duplicates (``file_identity``). No separate
+``embed-pending`` or ``link-file-duplicates`` step. No ``--catch-up``. No
+Photos / Apple Health. No ``--allow-full-embedding`` / IVFFlat / force-full
+rebuild. Passes ``--allow-broad-llm`` so dirty ``email_thread_enrichment``
+(Gemini) can run; ``GEMINI_API_KEY`` is loaded at runtime from env or
+``~/.ppa/gemini_key.txt`` (never hardcoded in the plist).
 
 Source keys match ``default_maintain_source_keys`` plus GOOGLE_ACCOUNT expansion
 (calendar, contacts, otter, file-libraries, beeper, imessage, gmail-messages,
@@ -32,6 +35,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
@@ -52,6 +56,9 @@ DEFAULT_ENRICHMENT_MODEL = "openai:gpt-4o-mini"
 LAUNCHD_LABEL = "com.rheeger.ppa.maintain-nightly"
 PLIST_NAME = f"{LAUNCHD_LABEL}.plist"
 FAILED_UPDATER_STATUSES = frozenset({"failed", "blocked"})
+# Nightly pull can add work that is not dirty yet. Size an incremental clip
+# against this many cards so a quiet DIRTY file does not under-plan disk.
+NIGHTLY_INCREMENTAL_UID_FLOOR = 50_000
 # launchd gui agents get /usr/bin:/bin:/usr/sbin:/sbin — no Homebrew, no nvm.
 HOMEBREW_BIN = "/opt/homebrew/bin"
 USR_LOCAL_BIN = "/usr/local/bin"
@@ -67,6 +74,7 @@ _SCOPED_LIVE = (
 )
 _FIXED_LIVE = (
     "contacts:google",
+    "contacts:apple",
     "file-libraries:documents",
     "beeper:local",
     "imessage:local",
@@ -272,6 +280,24 @@ def build_maintain_argv(
     return argv
 
 
+def preflight_nightly_publish(
+    *,
+    vault: Path | None = None,
+    reclaim: bool = True,
+) -> dict[str, object]:
+    """Refuse the night before maintain if this host cannot fit the next publish."""
+
+    from archive_cli.serving_index import preflight_serving_publish
+
+    vault_path = Path(vault or os.environ.get("PPA_PATH") or DEFAULT_VAULT)
+    plan = preflight_serving_publish(
+        vault_path,
+        uid_floor=NIGHTLY_INCREMENTAL_UID_FLOOR,
+        reclaim=reclaim,
+    )
+    return plan.to_payload()
+
+
 def maintain_failed(report: dict[str, object], *, strict: bool = False) -> str | None:
     errors = report.get("errors") or []
     if isinstance(errors, list) and errors:
@@ -378,6 +404,9 @@ def apply_runtime_env() -> dict[str, str]:
     os.environ.setdefault("PPA_NONINTERACTIVE", "1")
     os.environ.setdefault("PPA_GITHUB_STAGE_DIR", str(DEFAULT_GITHUB_STAGE))
     os.environ.setdefault("IMESSAGE_SNAPSHOT_DIR", str(DEFAULT_IMESSAGE_SNAPSHOT))
+    # A compacted (full) publish holds every embedding in RAM: 4.7M x 1536 x 4 bytes is
+    # about 27.5 GB. The 8192 default refuses that; the seed contract is 32768.
+    os.environ.setdefault("PPA_SERVING_INDEX_MAX_RSS_MB", "32768")
     os.environ["PPA_INDEX_DSN"] = resolve_dsn()
     key = load_openai_key()
     if key:
@@ -420,6 +449,7 @@ def main(argv: list[str] | None = None) -> int:
     apply_runtime_env()
     log_file = default_log_path(REPO_ROOT)
     configure_wrapper_logging(verbose=args.verbose, log_file=log_file)
+    started = time.monotonic()
     LOG.info("nightly maintain start log_file=%s PATH=%s", log_file, os.environ.get("PATH"))
 
     google_account = (os.environ.get("GOOGLE_ACCOUNT") or DEFAULT_GOOGLE_ACCOUNT).strip()
@@ -441,6 +471,24 @@ def main(argv: list[str] | None = None) -> int:
         ",".join(source_keys),
     )
     LOG.info("nightly maintain command %s", " ".join(maintain_argv))
+
+    try:
+        plan = preflight_nightly_publish(reclaim=not args.dry_run)
+    except Exception:
+        LOG.exception("nightly publish preflight failed")
+        if args.dry_run:
+            LOG.info("dry-run; not invoking maintain. log_file=%s", log_file)
+            return 0
+        return 1
+    LOG.info("nightly publish preflight %s", json.dumps(plan, sort_keys=True))
+    if not plan.get("ok"):
+        LOG.error(
+            "nightly refused: not enough RAM or disk for mode=%s reasons=%s",
+            plan.get("mode"),
+            ",".join(str(item) for item in (plan.get("reasons") or [])),
+        )
+        if not args.dry_run:
+            return 1
 
     if args.dry_run:
         LOG.info("dry-run; not invoking maintain. log_file=%s", log_file)
@@ -469,7 +517,12 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     if proc.returncode != 0:
-        LOG.error("maintain exited rc=%s log_file=%s", proc.returncode, log_file)
+        LOG.error(
+            "maintain exited rc=%s elapsed_s=%.1f log_file=%s",
+            proc.returncode,
+            time.monotonic() - started,
+            log_file,
+        )
         return proc.returncode
 
     report: dict[str, object] = {}
@@ -484,21 +537,39 @@ def main(argv: list[str] | None = None) -> int:
             return 1
     reason = maintain_failed(report, strict=False)
     if reason:
-        LOG.error("maintain failed: %s log_file=%s", reason, log_file)
+        LOG.error(
+            "maintain failed: %s elapsed_s=%.1f log_file=%s",
+            reason,
+            time.monotonic() - started,
+            log_file,
+        )
         return 1
     if report.get("source_updater_partial"):
         LOG.warning(
             "nightly maintain partial: some source updaters failed; processors ran on successful dirties log_file=%s",
             log_file,
         )
+    elapsed_s = time.monotonic() - started
+    cleanup = report.get("cleanup") or {}
+    gc = cleanup.get("embed_gc") or {} if isinstance(cleanup, dict) else {}
+    unused = (gc.get("unused_hash") or {}).get("deleted") if isinstance(gc, dict) else 0
+    duplicates = (gc.get("duplicates") or {}).get("deleted") if isinstance(gc, dict) else 0
+    pruned = cleanup.get("pruned_generations") if isinstance(cleanup, dict) else []
+    discarded = cleanup.get("export_tmp_discarded") if isinstance(cleanup, dict) else []
     LOG.info(
         "nightly maintain done nothing_to_do=%s cards_rebuilt=%s updater_runs=%s "
-        "junk_purged=%s file_dups_linked=%s log_file=%s",
+        "junk_purged=%s file_dups_linked=%s pruned_catalogs=%s export_tmp=%s "
+        "embed_gc_unused=%s embed_gc_duplicates=%s elapsed_s=%.1f log_file=%s",
         report.get("nothing_to_do"),
         report.get("cards_rebuilt"),
         report.get("source_updater_runs"),
         report.get("junk_attachments_purged"),
         report.get("file_duplicates_linked"),
+        len(pruned or []),
+        len(discarded or []),
+        unused or 0,
+        duplicates or 0,
+        elapsed_s,
         log_file,
     )
     return 0

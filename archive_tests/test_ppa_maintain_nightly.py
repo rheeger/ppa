@@ -34,6 +34,7 @@ def test_nightly_source_keys_are_live_only() -> None:
         "otter-transcripts:rheeger@gmail.com",
         "gmail-correspondents:rheeger@gmail.com",
         "contacts:google",
+        "contacts:apple",
         "file-libraries:documents",
         "beeper:local",
         "imessage:local",
@@ -68,7 +69,7 @@ def test_build_maintain_argv_flags() -> None:
     assert "--allow-full-embedding" not in argv
     assert "--allow-all-linkers" not in argv
     assert "--allow-broad-llm" in argv
-    assert argv.count("--source-updater") == 9
+    assert argv.count("--source-updater") == 10
 
 
 def test_resolve_dsn_prefers_env_then_port_file(tmp_path: Path) -> None:
@@ -235,6 +236,108 @@ def test_apply_runtime_env_preserves_explicit_enrichment_model(monkeypatch) -> N
     assert env.get("PPA_ENRICHMENT_MODEL") == "ollama:llama3.2:3b"
 
 
+def test_preflight_nightly_publish_refuses_compact_without_disk(tmp_path: Path, monkeypatch) -> None:
+    import json
+    from unittest.mock import MagicMock
+
+    mod = _load_mod()
+    root = tmp_path / "rust-search-index"
+    parent = ""
+    last = ""
+    for idx in range(9):
+        gid = f"gen-{idx}"
+        dest = root / "generations" / gid
+        dest.mkdir(parents=True)
+        (dest / "layout.json").write_text(
+            json.dumps(
+                {
+                    "layout_version": 1,
+                    "mode": "full" if idx == 0 else "delta",
+                    "parent_generation": parent,
+                    "base_generation": "gen-0",
+                    "snapshot_id": gid,
+                    "source_watermark": idx,
+                    "tombstone_uids": [],
+                    "tombstone_chunk_keys": [],
+                    "replaced_uids": [],
+                    "embedding_spec": None,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (dest / "manifest.json").write_text(
+            json.dumps({"embedding_count": 4_000_000 if idx == 0 else 4}) + "\n",
+            encoding="utf-8",
+        )
+        parent = gid
+        last = gid
+    (root / "ACTIVE").write_text(last + "\n", encoding="utf-8")
+    monkeypatch.setenv("PPA_SERVING_INDEX_PATH", str(root))
+    monkeypatch.setenv("PPA_PATH", str(tmp_path))
+    monkeypatch.setattr(
+        "archive_cli.serving_index.serving_index_status",
+        lambda _vault: {
+            "serving_index_ready": True,
+            "serving_index_generation": last,
+            "serving_index_dirty_records": 1,
+            "serving_index_format": 2,
+        },
+    )
+    monkeypatch.setattr(
+        "archive_engine.publication.shutil.disk_usage",
+        lambda _path: MagicMock(free=2 * 1024 * 1024 * 1024),
+    )
+    plan = mod.preflight_nightly_publish(vault=tmp_path, reclaim=False)
+    assert plan["ok"] is False
+    assert plan["mode"] == "compact"
+    assert "disk_short" in plan["reasons"]
+
+
+def test_preflight_nightly_publish_allows_incremental(tmp_path: Path, monkeypatch) -> None:
+    import json
+
+    mod = _load_mod()
+    root = tmp_path / "rust-search-index"
+    dest = root / "generations" / "gen-0"
+    dest.mkdir(parents=True)
+    (dest / "layout.json").write_text(
+        json.dumps(
+            {
+                "layout_version": 1,
+                "mode": "full",
+                "parent_generation": "",
+                "base_generation": "gen-0",
+                "snapshot_id": "gen-0",
+                "source_watermark": 1,
+                "tombstone_uids": [],
+                "tombstone_chunk_keys": [],
+                "replaced_uids": [],
+                "embedding_spec": None,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (dest / "manifest.json").write_text(json.dumps({"embedding_count": 4_000_000}) + "\n", encoding="utf-8")
+    (root / "ACTIVE").write_text("gen-0\n", encoding="utf-8")
+    monkeypatch.setenv("PPA_SERVING_INDEX_PATH", str(root))
+    monkeypatch.setenv("PPA_PATH", str(tmp_path))
+    monkeypatch.setattr(
+        "archive_cli.serving_index.serving_index_status",
+        lambda _vault: {
+            "serving_index_ready": True,
+            "serving_index_generation": "gen-0",
+            "serving_index_dirty_records": 0,
+            "serving_index_format": 2,
+        },
+    )
+    monkeypatch.setattr(mod, "NIGHTLY_INCREMENTAL_UID_FLOOR", 1)
+    plan = mod.preflight_nightly_publish(vault=tmp_path, reclaim=False)
+    assert plan["mode"] == "delta"
+    assert plan["ok"] is True
+
+
 def test_default_maintain_source_keys_excludes_parked() -> None:
     from archive_sync.source_updaters.runner import default_maintain_source_keys
 
@@ -248,3 +351,6 @@ def test_default_maintain_source_keys_excludes_parked() -> None:
     assert "gmail-messages:rheeger@gmail.com" in keys
     assert "otter-transcripts:rheeger@gmail.com" in keys
     assert "github-history:local" in keys
+    assert "contacts:apple" in keys
+    assert keys.index("contacts:apple") < keys.index("imessage:local")
+    assert keys.index("contacts:apple") < keys.index("beeper:local")

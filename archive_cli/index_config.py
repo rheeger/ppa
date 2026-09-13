@@ -153,6 +153,20 @@ def _bound_instance():
     return current_instance_config()
 
 
+def _active_serving_embedding_spec() -> dict[str, Any] | None:
+    """Read ACTIVE generation embedding_spec.json. None if the vault has no serving index."""
+
+    try:
+        root = get_serving_index_path()
+        active = (root / "ACTIVE").read_text(encoding="utf-8").strip()
+        if not active:
+            return None
+        payload = json.loads((root / "generations" / active / "embedding_spec.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 def get_index_dsn() -> str:
     bound = _bound_instance()
     if bound is not None:
@@ -277,7 +291,14 @@ def get_default_embedding_model() -> str:
     bound = _bound_instance()
     if bound is not None:
         return bound.embeddings.model
-    return _ppa_env("PPA_EMBEDDING_MODEL", default=DEFAULT_EMBEDDING_MODEL)
+    env = _ppa_env("PPA_EMBEDDING_MODEL")
+    if env:
+        return env
+    spec = _active_serving_embedding_spec()
+    model = str((spec or {}).get("model") or "").strip()
+    if model:
+        return model
+    return DEFAULT_EMBEDDING_MODEL
 
 
 def get_default_embedding_version() -> int:
@@ -288,8 +309,20 @@ def get_default_embedding_version() -> int:
         except (TypeError, ValueError):
             version = DEFAULT_EMBEDDING_VERSION
         return version if version > 0 else DEFAULT_EMBEDDING_VERSION
-    v = _ppa_env_int("PPA_EMBEDDING_VERSION", default=DEFAULT_EMBEDDING_VERSION)
-    return v if v > 0 else DEFAULT_EMBEDDING_VERSION
+    env = _ppa_env("PPA_EMBEDDING_VERSION")
+    if env:
+        try:
+            version = int(env)
+        except ValueError:
+            version = 0
+        if version > 0:
+            return version
+    spec = _active_serving_embedding_spec()
+    try:
+        version = int(str((spec or {}).get("model_revision") or "").strip() or "0")
+    except ValueError:
+        version = 0
+    return version if version > 0 else DEFAULT_EMBEDDING_VERSION
 
 
 def get_embed_batch_size() -> int:

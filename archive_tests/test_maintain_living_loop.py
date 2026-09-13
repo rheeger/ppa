@@ -78,6 +78,7 @@ def test_maintain_help_describes_apply_loop() -> None:
     assert "--apply" in proc.stdout
     assert "pull" in text
     assert "publish" in text
+    assert "cleanup" in text or "clean leftover" in text
     assert "tail ingestion ledger" not in text
 
 
@@ -107,6 +108,7 @@ def test_apply_loop_dry_run_lists_pull_process_publish(
     assert captured["updater_apply"] is False
     assert captured["processor_apply"] is False
     assert "serving_index_publish (dry-run)" in rep.skipped_steps
+    assert "serving_index_cleanup (dry-run)" in rep.skipped_steps
     assert "pull" in rep.human_summary.lower()
     assert "process" in rep.human_summary.lower()
     assert "publish" in rep.human_summary.lower()
@@ -647,6 +649,36 @@ def test_apply_loop_publish_failure_fails_the_run(
     assert "Result: ok." not in rep.human_summary
 
 
+def test_cleanup_after_maintain_prunes_and_gcs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from archive_cli.commands.maintain import MaintenanceReport, _cleanup_after_maintain
+    from archive_cli.index_store import PostgresArchiveIndex
+
+    store = _empty_store(tmp_path)
+    store.index = object.__new__(PostgresArchiveIndex)
+    store.index.schema = "ppa"
+    report = MaintenanceReport()
+    monkeypatch.setattr(
+        "archive_cli.serving_index.discard_export_tmp",
+        lambda *_a, **_k: ["old-export"],
+    )
+    monkeypatch.setattr(
+        "archive_cli.serving_index.prune_retired_serving_generations",
+        lambda *_a, **_k: ["old-gen"],
+    )
+    monkeypatch.setattr(
+        "archive_cli.commands.admin.embed_gc_after_reunify",
+        lambda **_k: {
+            "duplicates": {"deleted": 2},
+            "unused_hash": {"deleted": 5},
+        },
+    )
+    _cleanup_after_maintain(store, report, logging.getLogger("t"), dry_run=False)
+    assert report.cleanup["pruned_generations"] == ["old-gen"]
+    assert report.cleanup["export_tmp_discarded"] == ["old-export"]
+    assert report.cleanup["embed_gc"]["unused_hash"]["deleted"] == 5
+    assert report.errors == []
+
+
 def test_human_report_contains_living_loop_fields() -> None:
     from archive_cli.commands.maintain import finalize_living_report
 
@@ -702,6 +734,7 @@ def test_human_report_contains_living_loop_fields() -> None:
         "failed_sources",
         "errors",
         "human_summary",
+        "cleanup",
     ):
         assert key in payload
     assert report.cards_pulled == 1

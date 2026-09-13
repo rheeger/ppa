@@ -6,6 +6,7 @@ from archive_cli.serving_scale import (
     MILLION_VECTOR_N,
     PRODUCTION_VECTOR_DIM,
     estimate_vector_envelope,
+    parse_darwin_vm_stat,
     probe_million_vector_scale,
 )
 
@@ -27,3 +28,16 @@ def test_million_vector_default_cap_is_blocked_not_waived() -> None:
     assert report["status"] == "blocked"
     assert report["reasons"]
     assert report["envelope"]["dimension"] == 1536
+
+
+def test_parse_darwin_vm_stat_counts_unused_pages() -> None:
+    text = """
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                               1000.
+Pages active:                             5000.
+Pages inactive:                           2000.
+Pages speculative:                         250.
+Pages wired down:                         3000.
+Pages purgeable:                           125.
+"""
+    assert parse_darwin_vm_stat(text) == (1000 + 2000 + 250 + 125) * 16384

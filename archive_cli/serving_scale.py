@@ -35,6 +35,66 @@ def physical_memory_bytes() -> int:
         return 0
 
 
+def parse_darwin_vm_stat(text: str) -> int:
+    """Estimate unused RAM from ``vm_stat``. Free + inactive + speculative + purgeable."""
+
+    page_size = 4096
+    counts: dict[str, int] = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        lower = line.lower()
+        if "page size of" in lower:
+            parts = lower.replace(".", " ").split()
+            for idx, part in enumerate(parts):
+                if part.isdigit() and idx > 0 and parts[idx - 1] == "of":
+                    page_size = int(part)
+                    break
+            continue
+        if ":" not in line:
+            continue
+        name, value = line.split(":", 1)
+        digits = "".join(ch for ch in value if ch.isdigit())
+        if digits:
+            counts[name.strip().lower()] = int(digits)
+    pages = (
+        counts.get("pages free", 0)
+        + counts.get("pages inactive", 0)
+        + counts.get("pages speculative", 0)
+        + counts.get("pages purgeable", 0)
+    )
+    return pages * page_size
+
+
+def available_memory_bytes() -> int:
+    """Currently unused RAM. 0 means the host did not report a number."""
+
+    meminfo = Path("/proc/meminfo")
+    try:
+        for line in meminfo.read_text(encoding="utf-8").splitlines():
+            if line.startswith("MemAvailable:"):
+                parts = line.split()
+                if len(parts) >= 2:
+                    return int(parts[1]) * 1024
+    except (OSError, ValueError):
+        pass
+    if sys.platform == "darwin":
+        try:
+            text = subprocess.check_output(["vm_stat"], text=True)
+        except (OSError, subprocess.CalledProcessError):
+            text = ""
+        parsed = parse_darwin_vm_stat(text) if text else 0
+        if parsed:
+            return parsed
+    try:
+        page_size = int(os.sysconf("SC_PAGE_SIZE"))
+        available_pages = int(os.sysconf("SC_AVPHYS_PAGES"))
+    except (AttributeError, OSError, TypeError, ValueError):
+        return 0
+    if page_size <= 0 or available_pages <= 0:
+        return 0
+    return page_size * available_pages
+
+
 def estimate_vector_envelope(*, n: int, dimension: int) -> dict[str, Any]:
     """Byte envelope for embeddings + IVF artifacts. No latency/recall claims."""
 

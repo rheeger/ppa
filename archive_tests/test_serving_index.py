@@ -522,3 +522,22 @@ def test_warehouse_store_fails_closed_without_active(tmp_path, monkeypatch) -> N
     store = DefaultArchiveStore(vault=tmp_path, index=idx)
     with pytest.raises(ServingIndexUnavailableError):
         store.search("hello")
+
+
+def test_discard_export_tmp_keeps_current_and_removes_stale(tmp_path) -> None:
+    from archive_cli.serving_index import EXPORT_TMP_DIR_NAME, discard_export_tmp
+
+    root = tmp_path / "rust-search-index"
+    tmp = root / EXPORT_TMP_DIR_NAME
+    for gid in ("100", "200", "300"):
+        (tmp / gid).mkdir(parents=True)
+        (tmp / gid / "embeddings.bin").write_bytes(b"\0" * 16)
+    (tmp / "stray.txt").write_text("x")
+
+    removed = discard_export_tmp(root, keep="300")
+
+    assert removed == ["100", "200", "stray.txt"]
+    assert sorted(p.name for p in tmp.iterdir()) == ["300"]
+    assert discard_export_tmp(root) == ["300"]
+    assert list(tmp.iterdir()) == []
+    assert discard_export_tmp(tmp_path / "missing") == []

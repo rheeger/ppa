@@ -10,8 +10,10 @@ from archive_engine.changes import CONSUMER_PUBLICATION, consume_batch
 from archive_engine.errors import IncompatibleStateError
 from archive_engine.publication import (
     COMPLETE_FILE,
+    EXPORT_TMP_DIR_NAME,
     PublicationFault,
     PublicationFaultHook,
+    check_publication_budget,
     publish_snapshot,
     read_active_generation,
     recover_publication,
@@ -154,6 +156,21 @@ def test_disk_budget_fails_closed_before_promotion(tmp_path: Path) -> None:
         )
     assert read_active_generation(root) == "gen-base"
     assert not (root / "generations" / "gen-budget" / COMPLETE_FILE).exists()
+
+
+def test_check_publication_budget_reclaims_stale_export_tmp(tmp_path: Path) -> None:
+    root = tmp_path / "idx"
+    stale = root / EXPORT_TMP_DIR_NAME / "old-gen"
+    stale.mkdir(parents=True)
+    (stale / "embeddings.bin").write_bytes(b"x" * 64)
+    current = root / EXPORT_TMP_DIR_NAME / "new-gen"
+    current.mkdir(parents=True)
+    (current / "embeddings.bin").write_bytes(b"y" * 8)
+
+    check_publication_budget(root, 1_048_576, keep_export_tmp="new-gen")
+
+    assert not stale.exists()
+    assert current.exists()
 
 
 def test_append_during_build_is_not_acked(tmp_path: Path) -> None:
