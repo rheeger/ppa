@@ -143,6 +143,19 @@ def test_default_log_path_uses_local_date() -> None:
     assert path == REPO_ROOT / "logs" / "ppa-maintain-nightly-20260830.log"
 
 
+def test_apply_runtime_env_puts_repo_on_sys_path(monkeypatch) -> None:
+    import sys
+
+    mod = _load_mod()
+    monkeypatch.setenv("PPA_INDEX_DSN", "postgresql://archive:archive@127.0.0.1:50731/archive")
+    repo = str(mod.REPO_ROOT)
+    if repo in sys.path:
+        sys.path.remove(repo)
+    env = mod.apply_runtime_env()
+    assert repo in sys.path
+    assert str(mod.REPO_ROOT) in (env.get("PYTHONPATH") or "")
+
+
 def test_apply_runtime_env_sets_noninteractive(monkeypatch) -> None:
     mod = _load_mod()
     monkeypatch.setenv("PPA_INDEX_DSN", "postgresql://archive:archive@127.0.0.1:50731/archive")

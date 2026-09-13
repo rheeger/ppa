@@ -415,6 +415,9 @@ def apply_runtime_env() -> dict[str, str]:
     if gemini_key:
         os.environ["GEMINI_API_KEY"] = gemini_key
     os.environ["PYTHONPATH"] = _pythonpath()
+    repo = str(REPO_ROOT)
+    if repo not in sys.path:
+        sys.path.insert(0, repo)
     # Prepend Homebrew + mcporter; keep a richer login-shell PATH if already set.
     os.environ["PATH"] = nightly_tool_path(existing=os.environ.get("PATH"))
     return os.environ
