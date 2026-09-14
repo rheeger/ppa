@@ -1,28 +1,19 @@
-# Data boundaries
+# Where PPA stores and sends data
 
-P05-C inventory of where archive data lives and what PPA actually does
-with it. This is not an encryption specification.
+A local archive gives its owner a copy of records across services. Keeping control of that copy requires knowing where content is stored, which providers process it, and what a client receives. This inventory describes those boundaries for contributors and operators.
 
-**PPA does not encrypt vault files, attachments, Postgres, journals,
-caches, serving generations, temp files, or backups.** File permissions
-and operator-managed disk encryption (FileVault, LUKS, a host volume)
-are outside this engine. Arnold / Hey Arnold runbooks and vision docs
-that describe LUKS volumes, FileVault, or `archive_cli/encryption.py`
-are host procedures or future product ideas — they are not implemented
-capabilities of this tree and must not be cited as PPA at-rest
-encryption.
+PPA does not encrypt live vault files, attachments, Postgres, journals, caches, serving generations, or temporary files at rest. The backup workflow uses external encryption tooling. Host permissions and disk encryption are operator choices, not engine guarantees.
 
-Same-user process compromise is out of scope: an attacker running as
-the PPA OS user can read whatever that user can read.
+Code running as the same operating-system user can read what that user can read. Retrieval policy and provider checks do not create an operating-system sandbox. See the [security model](SECURITY_MODEL.md) for the full scope.
 
 ## Durable store
 
 | Location | Kind | Typical contents | PPA encryption | Notes |
 | --- | --- | --- | --- | --- |
-| Vault markdown (`*.md`) | source of truth | frontmatter + card bodies | none | Canonical archive. OS perms only. |
+| Vault markdown (`*.md`) | source of truth | frontmatter + card bodies | none | Readable records protected by host permissions and any host encryption. |
 | Vault attachments / binaries | source of truth | original files, OCR inputs | none | Extracted text is written back onto attachment cards, not into email `message_body`. |
 | Postgres warehouse | derived index | cards, chunks, edges, embeddings, checkpoints | none | DSN may contain a password. Never log the DSN. |
-| Publication journal | derived | change batches / receipts | none | Can name UIDs and sources. |
+| Publication journal | decision state | change batches / receipts | none | Can name UIDs and sources. |
 | Serving generations | derived | JSONL / native serving export | none | May include titles, snippets, neighbor lists. Treat as sensitive. |
 | `_meta/` next to the vault | derived / config | scan cache, query-embed cache, LLM config | none | Not a secret store. |
 
@@ -34,8 +25,8 @@ the PPA OS user can read whatever that user can read.
 | `vault/_meta/query-embed-cache.sqlite` | cache | query text keys + vectors | none | Keys include `policy_identity` so principals do not share entries. |
 | Inference cache (SQLite) | cache | prompt/response JSON keyed by content hash + model + versions | none | May contain card excerpts sent to a provider. |
 | Extract / anydoc cache | cache | attachment markdown | none | Local OCR first; hosted Firecrawl is remote egress. |
-| Process temp / contained work dirs | temp | extract staging, COPY buffers | none | Must stay inside owned directories (P05-A). |
-| Operator backups | operator | vault and/or PGDATA copies | none by PPA | Encryption, if any, is the backup tool's job. |
+| Process temp / contained work dirs | temp | extract staging, COPY buffers | none | Must stay inside directories controlled by the operation. |
+| Backup artifacts | backup | vault bundle and recovery metadata | external OpenSSL for the encrypted bundle | The recovery manifest is a separate metadata file. Other backup copies depend on their backup tool. |
 
 ## Secrets on disk (not archive content)
 
@@ -59,7 +50,7 @@ source to ingest it.
 | `gemini` | HTTP | remote | `archive_vault.llm_provider` |
 | `firecrawl` | HTTP | remote | `archive_sync.anydoc_ocr` hosted retry |
 | `openclaw` | none | n/a | stub; no transport |
-| unknown | — | — | **deny** |
+| unknown | unspecified | unspecified | deny |
 
 Policy lives in `archive_engine.egress` and is attached to
 `runtime.providers`. `PPA_EGRESS_MODE=local-only` cannot use remote
@@ -84,19 +75,13 @@ vault paths. Tests use synthetic sentinels only.
 
 ## Threat boundary
 
-P05 defends public engine, MCP, HTTP, and provider interfaces. It does
-not claim protection against arbitrary code running as the same OS
-user, and it does not claim encrypted-at-rest deployment.
+These checks apply at the engine, MCP, HTTP, and routed provider interfaces. Code with independent access to the files remains subject to host permissions. Returning content to a remote client is a separate disclosure from storing it locally.
 
-## P09 configuration requirements
+## Configuration requirements
 
-P09-B should expose, without inventing a second provider registry:
+Instance configuration should make these choices explicit without adding another provider registry:
 
-1. Explicit egress mode: `unrestricted` (trusted-local) vs `local-only`
-   vs source-restricted `AccessContext`.
-2. Secret references (env / 1Password / `0600` files) — never plaintext
-   keys in committed config.
-3. Confirmation that hosted OCR / cloud embeddings are a consent step,
-   not a silent fallback from a local failure.
-4. Honest at-rest language: PPA stores plaintext; host encryption is
-   optional and operator-owned.
+1. Select the provider policy: `unrestricted` for trusted local access, `local-only`, or a source-restricted `AccessContext`.
+2. Use secret references (environment, 1Password, or `0600` files) and keep plaintext keys out of committed config.
+3. Make hosted OCR and cloud embedding choices explicit; a local failure must not silently change the destination.
+4. Describe live storage as plaintext unless the operator has configured host encryption.

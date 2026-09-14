@@ -1,210 +1,40 @@
-# HFA Security Model
+# PPA security model
 
-## Scope
+A personal archive keeps history outside the services that originally held it. Its owner also decides which clients may see that combined history. PPA provides checks at its file, retrieval, and provider interfaces; the operator supplies the host's storage protection and network controls.
 
-**Historical host model.** This document describes the HFA vault on the Hey Arnold VM, the passkey gate, and remote access from one creator machine. Independent instances use instance-bound config, contained I/O, and `AccessContext` (P05). Do not treat Arnold as the product home.
+## What PPA controls
 
-It assumes:
+| Boundary | Implemented behavior |
+| --- | --- |
+| Vault paths | Contained reads reject paths outside the vault; writes reject symlink escapes |
+| Tool access | MCP profiles select available operations; invalid profiles deny access |
+| Record access | `AccessContext` limits eligible records before ranking, counting, reading, and expanding relationships |
+| Provider requests | Routed providers check destination and source policy; unknown destinations fail closed |
+| Diagnostics | Redaction removes supported credential patterns and raw card payloads from PPA logs and errors |
+| Restore | Recovery validates required state and restores into a separate root before activation |
 
-- the canonical vault lives on encrypted parity-backed storage
-- `ppa` stays local-only on the VM
-- public remote access terminates at the passkey gate
-- no plaintext archive content is uploaded to cloud backup destinations
+The [privacy contract](PRIVACY_CONTRACT.md) defines the interface checks. The [data inventory](DATA_BOUNDARIES.md) identifies files, caches, and outbound paths.
 
-## Trust Boundaries
+## What the operator controls
 
-### Trusted
+Vault files, attachments, warehouse data, caches, and serving generations can contain private content. PPA does not encrypt those stores at rest. Configure host permissions, disk encryption, and backups according to the deployment, and protect copies of derived data as well as the original cards.
 
-- the encrypted storage boundary on the server and VM
-- the passkey gate as the public TLS termination and policy enforcement point
-- the dedicated archive runtime identity
-- the dedicated 1Password gate service account for archive-adjacent secrets
+A process running as the same operating-system user can read what that user can read. PPA's retrieval filters do not sandbox arbitrary code with file access. An agent that should only query the archive should connect through the intended retrieval interface without independent access to the vault.
 
-### Not Trusted By Default
+HTTP MCP adds a network boundary. Configure its authentication and transport on the archive host. The [MCP guide](MCP_SETUP.md) covers connection choices; local stdio does not require exposing a network endpoint.
 
-- OpenClaw agent code execution on the VM
-- general shell access inside the `arnold` runtime context
-- localhost assumptions for archive data access
-- cloud backup destinations beyond receipt of encrypted artifacts
+## Local storage and outbound content
 
-## Threat Model
+Importing records from a source, sending text for processing, and returning records to a client are separate actions. A cloud agent receives tool results. A remote embedding, enrichment, or OCR provider receives the text sent to that provider.
 
-### Primary adversary
+`PPA_EGRESS_MODE=local-only` blocks remote destinations on the routed provider interface. It is not a machine-wide network firewall, and it does not control what a connected client does with returned records. Some source ingest and operator tools have separate outbound paths. See [provider egress](DATA_BOUNDARIES.md#provider-egress).
 
-A compromised or misaligned OpenClaw agent with code execution on the Hey Arnold VM.
+PPA does not silently substitute another provider when an authorized provider fails. Contributors must preserve that behavior when adding a new processing path.
 
-### Secondary adversary
+## Independent archives and sharing
 
-Theft of a remote archive client credential from Robbie's Mac or from a 1Password item.
+Separate instances keep distinct roots, identities, warehouse schemas, serving generations, and checkpoints. Saved scopes are reusable filters within the instance's access policy. They cannot grant access to records that policy denies. Separate histories through instance and record-access configuration.
 
-### Tertiary adversary
+## Historical deployments
 
-Accidental or malicious plaintext replication into parity-backed backup paths, cloud-synced folders, or host-visible staging directories.
-
-## Security Objectives
-
-- Keep raw archive contents encrypted at rest on parity-backed storage.
-- Force public archive access through the gate.
-- Keep `ppa` and Postgres off the public network.
-- Separate archive read, sensitive read, admin, and public remote-read capabilities.
-- Ensure OpenClaw cannot directly read raw vault files from the mounted archive path.
-- Restrict cloud backups to encrypted artifacts only.
-
-## Non-Goals
-
-- No direct public `ppa` exposure.
-- No plaintext mirrors on Unraid, Google Drive, iCloud, or any other remote destination.
-- No claim of true end-to-end opaque MCP payload encryption through the gate.
-
-## Access Classes
-
-### `mcp.archive.read`
-
-Low-risk structured retrieval.
-
-- `archive_search`
-- `archive_query`
-- `archive_timeline`
-- `archive_stats`
-- `archive_vector_search`
-- `archive_hybrid_search`
-
-Tier target: `0`
-
-### `mcp.archive.sensitive`
-
-Retrieval paths that can expose dense personal content or direct note bodies.
-
-- `archive_read`
-- `archive_person`
-- `archive_graph`
-
-Tier target: `1`
-
-### `mcp.archive.admin`
-
-Maintenance and index lifecycle operations.
-
-- `archive_validate`
-- `archive_duplicates`
-- `archive_bootstrap_postgres`
-- `archive_rebuild_indexes`
-- `archive_index_status`
-- `archive_embedding_status`
-- `archive_embedding_backlog`
-- `archive_embed_pending`
-
-Tier target: `2`
-
-### `mcp.archive.remote.read`
-
-Dedicated public-client scope for Robbie's Mac.
-
-Initial target surface:
-
-- `archive_search`
-- `archive_query`
-- `archive_timeline`
-- `archive_stats`
-
-This intentionally excludes raw note reads and admin/index operations.
-
-## Transport Model
-
-### Feasible secure model
-
-- `Mac -> HTTPS/TLS -> passkey-gate`
-- `passkey-gate -> local-only transport -> ppa`
-- `ppa -> local vault mount + localhost Postgres`
-
-### Why TLS terminates at the gate
-
-The gate must:
-
-- authenticate the remote archive client
-- enforce tool policy
-- issue scoped tickets
-- audit requests
-
-That means the gate is trusted to inspect archive request metadata and content for authorized calls. True end-to-end encrypted MCP payloads that remain opaque to the gate are not compatible with this first design.
-
-### Local transport preference
-
-Prefer a Unix domain socket or equivalent host-local transport between the gate-side MCP execution path and `ppa`. Loopback TCP is acceptable if socket transport is impractical.
-
-## Identity And Runtime Isolation
-
-### `arnold`
-
-- runs OpenClaw
-- runs the passkey gate
-- may request archive access through approved paths
-- should not own or directly read the mounted vault tree
-
-### `archive`
-
-- runs `ppa`
-- owns the mounted vault and archive index paths
-- is the primary runtime identity for canonical archive reads
-
-### `postgres`
-
-- optional dedicated identity if Postgres is split from `archive`
-- should read only encrypted-mounted Postgres data paths
-
-## Storage Model
-
-### Preferred
-
-An encrypted container file stored on parity-backed server storage and opened on the VM at boot/unlock time.
-
-Example:
-
-- storage root: `/mnt/user/archive-secure/`
-- encrypted artifact: `/mnt/user/archive-secure/hfa-vault.img`
-- mount root: `/srv/hfa-secure/`
-- canonical vault: `/srv/hfa-secure/vault`
-- Postgres data: `/srv/hfa-secure/postgres`
-
-### Invariants
-
-- plaintext archive data exists only inside the mounted unlocked runtime path
-- unlock secrets are resolved remotely or from dedicated secret paths, never committed in repo
-- services fail closed when the encrypted mount is unavailable
-
-## Backup Model
-
-### Canonical durability
-
-- parity-backed encrypted archive volume on Orthanc/Unraid
-
-### Secondary backups
-
-- encrypted backup artifacts only
-- local parity-backed backup destination
-- optional encrypted upload targets for Google Drive and iCloud
-
-### Hard rule
-
-No plaintext archive content may be uploaded to cloud or copied to remote backup destinations.
-
-## Archive Containment Inside `hey-arnold`
-
-`hey-arnold` is the dedicated archive tree. Containment should come from:
-
-- archive-prefixed Make targets
-- archive-prefixed scripts
-- archive-prefixed systemd units
-- archive-scoped docs and runbooks
-- a stable `ppa` runtime contract
-
-This avoids inventing a second archive tree while still keeping the service operable and extractable later.
-
-## Future Extraction Seam
-
-If `ppa` later becomes its own repo:
-
-- preserve the `python -m archive_cli serve` entrypoint
-- preserve the archive env contract
-- move archive-specific deploy assets with minimal renaming
-- package shared HFA code rather than relying forever on ad hoc relative path imports
+The earlier [Arnold security design](runbooks/historical-arnold-security.md) describes one deployment with an encrypted volume, passkey gate, and separate runtime identities. Those host controls are not built-in PPA guarantees or prerequisites for every installation.

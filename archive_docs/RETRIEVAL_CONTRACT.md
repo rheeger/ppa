@@ -1,104 +1,30 @@
-# Retrieval Contract
+# Retrieval contract
 
-This document defines the retrieval modes that `ppa` must keep distinct.
+People approach their history with different questions. Sometimes they know an exact identifier; sometimes they remember only a topic or a nearby event. PPA offers several retrieval modes over the same catalog so the client can choose the method that fits.
 
-## Retrieval Modes
+## Retrieval modes
 
-### Exact Read
+| Mode | Use it to… | Evidence rule |
+| --- | --- | --- |
+| Exact read | Open a card by path or UID | Canonical Markdown supplies the stored record |
+| Structured query | Filter by type, source, person, organization, date, or supported fields | Results come from the derived index; read cards for factual claims |
+| Lexical search | Find terms and phrases | Ranked hits locate evidence |
+| Semantic search | Find related meaning in derived chunks | Vector similarity is not proof of a fact or relationship |
+| Hybrid search | Combine lexical, vector, graph, type, and provenance signals | Read the saved records before citing facts |
+| Graph expansion | Follow related records | Edges derive from card references and approved link paths; preserve evidence kind |
+| Timeline and neighbors | Recover activity and surrounding context | Nearby records do not establish causation |
+| Evidence and analytics | Read a bounded evidence set or compute a supported total | Report completeness, coverage, freshness, and conflicts |
 
-Purpose:
+Live retrieval uses the published Rust index, so searching imported history does not require the original providers to be online. Semantic search requires configured embeddings. Allowlisted analytical aggregates can use the Postgres warehouse under the [evidence query contract](EVIDENCE_QUERY_CONTRACT.md). Do not treat a partial search page as a full-set analytical result.
 
-- fetch one canonical card by path or UID
+## Explain the match
 
-Truth rule:
+The retrieval response should identify the matched modes, score components, provenance bias, graph contribution, and typed projection names associated with the card type.
 
-- canonical markdown is the answer source
+Minimum explain fields are `query`, `mode`, and, for each result, `card_uid`, `rel_path`, `matched_by`, `score_components`, and `context`. See [the explain schema](RETRIEVAL_EXPLAIN_SCHEMA.md) for the payload contract.
 
-### Structured Query
+## Attach context from the records
 
-Purpose:
+Context includes `card_type`, `source_labels`, `people`, `orgs`, `time_span`, `provenance_bias`, `graph_neighbor_types`, and `typed_projection_names`. Derive it from canonical cards or the generic derived index. Do not maintain a separate hand-written version of what a card means.
 
-- filter cards by deterministic fields such as type, source, people, or org
-
-Truth rule:
-
-- query results come from the generic derived substrate
-- final claims still require canonical grounding if used in an answer
-
-### Lexical Search
-
-Purpose:
-
-- fast term/phrase recall over `cards.search_text`
-
-Truth rule:
-
-- lexical hits are retrieval aids, not canonical truth
-
-### Semantic Search
-
-Purpose:
-
-- vector retrieval over derived `chunks`
-
-Truth rule:
-
-- embeddings are lossy artifacts
-- vector hits must be grounded back to canonical cards
-
-### Hybrid Search
-
-Purpose:
-
-- combine lexical, vector, graph, type, and provenance-aware ranking
-
-Truth rule:
-
-- hybrid ranking is optimized retrieval, not canonical truth
-
-### Graph Expansion
-
-Purpose:
-
-- expand neighboring evidence around a card
-
-Truth rule:
-
-- graph edges are derived from canonical references plus approved derived link surfaces
-
-## Explainability Requirements
-
-The retrieval system should be able to explain:
-
-- matched mode(s)
-- score components
-- provenance bias
-- graph contribution
-- typed projection names associated with the matched card type
-
-Minimum explain payload fields:
-
-- `query`
-- `mode`
-- `results[].card_uid`
-- `results[].rel_path`
-- `results[].matched_by`
-- `results[].score_components`
-- `results[].context`
-
-## Archive Context
-
-Archive context is derived metadata attached to retrieval results so agents can reason better about matches.
-
-Minimum context fields:
-
-- `card_type`
-- `source_labels`
-- `people`
-- `orgs`
-- `time_span`
-- `provenance_bias`
-- `graph_neighbor_types`
-- `typed_projection_names`
-
-This context must be derived from canonical or generic substrate data, not manually curated as a second truth source.
+Access limits apply before ranking, counting, or expanding neighbors. Conflicts, missing fields, and incomplete coverage must remain visible to the client. See [agent usage](AGENT_USAGE.md) for how those distinctions become a sourced answer.

@@ -1,44 +1,56 @@
-# PPA agent usage
+# Using PPA from an agent
 
-What you can ask, and what the archive will not invent for you, is in [README.md](../README.md). This page is the retrieval contract: jobs, tool rules, and CLI parity.
+PPA lets an agent investigate the user's history across imported services. A question can begin with a person, a partial recollection, or an event. The shared catalog supplies search, relationships, and stored evidence without requiring the user to identify the original account.
 
-The live agent contract is two layers:
+Choose retrieval methods for the question. Finding a recommendation may require search and nearby messages. Calculating a total requires the full eligible set of records. A relationship summary requires resolving the person and checking their available channels before writing a narrative.
 
-- Server instructions from `archive_cli.mcp_instructions.build_server_instructions()` (safety, type rules, job router, don'ts)
-- Job recipes in `.cursor/skills/archive-query/` (`SKILL.md` plus one file per job)
-- Per-tool recipes in `archive_cli.mcp_instructions.TOOL_DESCRIPTIONS`
+## Retrieval jobs
 
-Clients receive the MCP layer on initialize and tools/list. Cursor agents must open the matching job file before retrieving. Do not fork job recipes into other instruction files. Edit the skill file, then keep the MCP router in sync.
+The [archive-query instructions](../.cursor/skills/archive-query/SKILL.md) and job files define the retrieval workflow:
 
-## Jobs
+1. [Identify a person](../.cursor/skills/archive-query/identify-person.md) by name, email, phone, or other evidence.
+2. [Find their available channels](../.cursor/skills/archive-query/census-channels.md) before assuming one thread represents the relationship.
+3. [Read a set of records](../.cursor/skills/archive-query/read-a-stack.md) in context.
+4. [Answer a fact](../.cursor/skills/archive-query/answer-a-fact.md) with source support.
+5. [Reconstruct a story](../.cursor/skills/archive-query/reconstruct-a-story.md) from the relevant records and dates.
 
-1. Identify a person: `identify-person.md`
-2. Census their channels: `census-channels.md`
-3. Read a stack: `read-a-stack.md`
-4. Answer a fact: `answer-a-fact.md`
-5. Reconstruct a story: `reconstruct-a-story.md`
+A person profile usually needs jobs 1, 2, then 5. Cursor agents must open the matching job file before retrieving. Other clients receive the MCP server instructions and per-tool recipes on initialization and tool discovery.
 
-A "who is X" or profile write-up is job 1, then job 2, then job 5. A single dated question is job 3 or 4.
+## Choose the right tool
 
-## What agents get automatically
+| The question needs… | MCP | CLI |
+| --- | --- | --- |
+| Exact words | `archive_search` | `ppa search` |
+| Meaning or a partial recollection | `archive_vector_search`, `archive_hybrid_search` | `ppa vector-search`, `ppa hybrid-search` |
+| Records by type, source, person, or date | `archive_query` | `ppa query` |
+| A person by name, slug, email, or phone | `archive_person` | `ppa person` |
+| Related records | `archive_graph` | `ppa graph` |
+| Activity in a time window | `archive_timeline`, `archive_temporal_neighbors` | `ppa timeline`, `ppa temporal-neighbors` |
+| A compact set of dated evidence | `archive_evidence` | `ppa evidence` |
+| Totals, subscriptions, or trip costs | `archive_analytics` | `ppa analytics` |
+| The underlying source card | `archive_read`, `archive_read_many` | `ppa read`, `ppa read-many` |
+| Current instance status | `archive_status_json` | `ppa status` |
 
-1. PPA is a lookup engine. Cards are truth. Search is navigation. Read before you cite.
-2. A job router with stop tests (candidate person cards, channel census, stolen aliases).
-3. Don'ts: types use underscores (`email_message`, not `email-message`); `people_filter` is a name or slug, never an email; ground claims with `archive_read`. `archive_person` accepts name, slug, email, or phone.
-4. Per-tool parameter recipes when the agent inspects a tool.
+For a large archive, reuse the running MCP server. Starting a new CLI process for each question can repeatedly open a large index. CLI examples describe equivalent operations; they are not a reason to restart retrieval for every lookup.
 
-`archive_knowledge` falls back to ordinary search. It is not a living profile.
+## Make the answer traceable
 
-## CLI parity (no MCP)
+Read the stored records, called canonical cards, before citing a factual claim. These remain available even when the original service is inaccessible. Search hits, embeddings, and summaries help locate evidence; cite the saved content and preserve any conflicts or uncertainty.
 
-`ppa search`, `ppa query`, `ppa hybrid-search`, `ppa analytics`, `ppa read`, `ppa evidence`, `ppa graph`, `ppa person`, `ppa health`, and `ppa status` are the same lookup family as the MCP tools. They are not one command:
+Use underscore-separated type names such as `email_message`. `people_filter` takes a name or slug, not an email address. `archive_person` accepts names, slugs, emails, and phones, and returns `unique`, `ambiguous`, or `unresolved`. An alias-only match needs confirmation before a person narrative.
 
-- `ppa health` is structural and behavioral checks.
-- `ppa status` / `archive_status_json` are current-instance production status.
-- `archive_stats` is corpus counts.
+For a count or total, check completeness, source coverage, and freshness. An exact count of stored records does not establish that every real-world event was imported. Do not calculate a total from one ranked page or silently combine currencies. The [evidence query contract](EVIDENCE_QUERY_CONTRACT.md) defines these fields.
 
-## Ops tools (not retrieval)
+`archive_knowledge` falls back to ordinary search when no fresh knowledge cards exist. It is not a precomputed personal profile. PPA supplies records and bounded analytical workflows; the agent writes the answer.
 
-`archive_rebuild_indexes`, `archive_embed_pending`, seed-link tools, and similar are operational. Do not use them as a reasoning shortcut. Chunk rows power vector and hybrid search. They are not canonical evidence.
+## Keep retrieval and maintenance separate
 
-Long CLI jobs (`maintain`, `rebuild-indexes`, `embed-pending`, `slice-seed`, `enrich-emails`, `extract-emails`, Gmail catch-up) must start detached: `setsid`, stdin from `/dev/null`, PPID 1, `--log-file` before the subcommand. Never a Cursor-managed terminal. See `.cursor/skills/long-running-jobs/SKILL.md`.
+`archive_stats` reports corpus counts. `ppa health` performs structural and behavioral checks. `ppa status` and `archive_status_json` report the current instance's operating state.
+
+Rebuild, embedding, and linker operations change the archive or its derived state. Do not invoke them as a shortcut while answering a question. Long maintenance jobs follow the [detached-job instructions](../.cursor/skills/long-running-jobs/SKILL.md), with one writer per vault.
+
+## Change the agent instructions in one place
+
+The shared instructions live in `archive_cli.mcp_instructions.build_server_instructions()`, the job files above, and `TOOL_DESCRIPTIONS` in the same module. Edit the relevant job recipe and keep the MCP router in sync. Avoid copying a separate version of the workflow into each client's configuration.
+
+See the [MCP reference](MCP_SETUP.md) for connection and access settings.

@@ -1,13 +1,13 @@
 # Retrieval explain payload (v2)
 
-Stable JSON shape returned by `DefaultArchiveStore.retrieval_explain()` when `retrieval.explain.enabled` is true (default).
+When search misses the record a user expects, contributors need to see how the result was selected. This page defines the JSON returned by `DefaultArchiveStore.retrieval_explain()` when `retrieval.explain.enabled` is true (the default).
 
 ## Top-level fields
 
 | Field                  | Type    | Description                                                                              |
 | ---------------------- | ------- | ---------------------------------------------------------------------------------------- |
 | `schema`               | string  | Always `archive_retrieval_explain_v2`.                                                   |
-| `pipeline_version`     | string  | Retrieval pipeline revision (ties to `archive_mcp.retrieval_pipeline.PIPELINE_VERSION`). |
+| `pipeline_version`     | string  | Retrieval pipeline revision (ties to `archive_cli.retrieval_pipeline.PIPELINE_VERSION`). |
 | `query`                | string  | Original query text.                                                                     |
 | `mode`                 | string  | `hybrid` or `vector`.                                                                    |
 | `query_plan`           | object  | Planner output: `planner_provider`, `queries[]`, `inferred` filters/hints.               |
@@ -33,4 +33,4 @@ Stable JSON shape returned by `DefaultArchiveStore.retrieval_explain()` when `re
 
 ## Contract
 
-Explain output is derived-only: it describes ranking over the index, not canonical truth. Ground answers with `archive_read` / canonical card content.
+Explain output describes why the index ranked a result. Use it to diagnose retrieval, then read the saved record with `archive_read` before citing a factual claim.

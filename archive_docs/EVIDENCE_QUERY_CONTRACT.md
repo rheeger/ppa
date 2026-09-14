@@ -1,15 +1,14 @@
-# Evidence query contract (P10-A / P10-B / P10-C / P10-D)
+# Evidence and analytical query contract
 
-**Version:** `p10d.1`  
-**Owner:** P10 evidence-query. Client registration is installed. This document is the contract; P09 public docs stay P09-owned.
+A person asking for a total needs to know whether the answer includes every eligible stored record. PPA's typed queries and analytical workflows return completeness, coverage, freshness, and source references so a client can distinguish a supported result from a partial view.
 
-This is the first product surface that can read a **full eligible set** (or say that it did not). Clients synthesize answers from the returned rows. The archive does not answer for you.
+The contract version is `p10d.1`. The client interprets and explains the returned facts; PPA performs the bounded retrieval and arithmetic.
 
 ## Execution
 
-Typed queries go through `archive_engine.query.execute_typed_query` and an explicit `AccessContext`. Retrieval uses `runtime.retrieval` / `runtime.query`. Native serving implements filter + keyset pagination over registered metadata fields. Postgres is a **read-only warehouse analytical adapter** for allowlisted aggregates, not a semantic-search fallback.
+Typed queries go through `archive_engine.query.execute_typed_query` and an explicit `AccessContext`. Retrieval uses `runtime.retrieval` / `runtime.query`. The native index filters and paginates registered metadata fields. Postgres supplies a read-only analytical adapter for allowed aggregates. Live semantic search uses the native index.
 
-Saved scopes resolve through `archive_engine.scopes.resolve_effective_scope`. A named preset is looked up in the instance/fixture catalog. Unknown names fail closed (`QueryValidationError`). Request filters replace the same preset dimension. AccessContext is an upper bound and is never widened. An empty intersection is `empty_scope` with zero rows — never unscoped search.
+Saved scopes resolve through `archive_engine.scopes.resolve_effective_scope`. A named preset is looked up in the instance/fixture catalog. Unknown names fail closed (`QueryValidationError`). Request filters replace the same preset dimension. AccessContext is an upper bound and is never widened. An empty intersection is `empty_scope` with zero rows and does not widen into unscoped search.
 
 ## Typed request
 
@@ -45,7 +44,7 @@ Changing filter, policy, or generation invalidates the cursor. Tampered or expir
 - `matched_total` + `total_status` (`exact` or `unknown`)
 - `complete` / `truncated`
 - `snapshot` vs `warehouse_checkpoint` (do not combine them as one consistent result without reconciliation)
-- `coverage` = `eligible_stored` — never “every real-world event”
+- `coverage` is `eligible_stored`, which covers stored records rather than every real-world event.
 - `freshness` independent of coverage
 
 Counts and sums are computed over the **full eligible set after AccessContext**, or marked `unknown`. They are never derived from the current page alone. Restricted scopes are applied **before** totals.
@@ -58,19 +57,19 @@ Counts and sums are computed over the **full eligible set after AccessContext**,
 
 `archive_cli/commands/query.py` maps existing type/source/people/org filters onto this contract. Simple query row membership is preserved. `ppa analytics` and `archive_analytics` share `archive_cli/commands/analytics.py`.
 
-## Neighbor context (P10-B)
+## Neighbor context
 
 After ranking, `archive_engine.context.expand_neighbors` adds at most one preceding and one following unit on the same thread / section / burst lane. Matched units and expansion units are separate lists with reasons (`ranked_hit`, `preceding_message`, `following_message`, `adjacent_chunk`).
 
-Every unit cites UID, chunk/message IDs, revision hash, and a half-open UTF-8 `SourceSpan`. Token estimates use the CLI whitespace-split bound (defaults: 2k per hit, 8k total). Overlapping expansions are dropped. Citations are never stripped to fit a budget — extra context units are skipped instead.
+Every unit cites UID, chunk/message IDs, revision hash, and a half-open UTF-8 `SourceSpan`. Token estimates use the CLI whitespace-split bound (defaults: 2k per hit, 8k total). Overlapping expansions are dropped. When the budget is exhausted, the engine skips extra context units and preserves citations on the units it returns.
 
 If generation offsets no longer match the canonical file revision, the result is `stale-context/refresh-required` and no mismatched text is quoted. `span_unavailable` fails a span-required request even when the UID was retrieved. Denied and mixed-source neighbors are absent, not redacted. No `authorized=true` field is emitted.
 
-## Bounded graph (P10-B)
+## Bounded graph
 
 `serving_index_graph_bounded` enforces depth (default 1, public max 2), max nodes/edges, elapsed budget, and optional relation-type filters **during** native BFS. High-degree hubs return a partial graph with `truncated`, `truncation_reason`, `frontier`, and surviving edge citations (`method`, `evidence_uids`). Denied neighbors are never entered.
 
-## Deterministic workflows (P10-C)
+## Deterministic workflows
 
 `archive_engine.analytics` exposes three finite workflows over the full eligible set after AccessContext. They return facts, arithmetic, and ambiguity. They do not advise and they do not invent a current subscription.
 
@@ -80,14 +79,14 @@ If generation offsets no longer match the canonical file revision, the result is
 
 Evidence kinds remain `source_reported`, `derived`, `proposed_link`, or `unknown`. Proposed observations cannot become source facts. Totals refuse a truncated page.
 
-## Installed clients (P10-D)
+## CLI and MCP clients
 
 CLI `ppa analytics {query,context,subscriptions,trip-costs,changes-since}` and MCP `archive_analytics` return the same JSON contract (`client_contract_version=p10d.1`):
 
 - rows / hits, citations, totals (`matched_total`, `total_status`)
 - effective / saved scope payload
 - completeness: `complete`, `truncated`, `coverage=eligible_stored` (or `empty_scope`), `freshness`
-- `served_checkpoint` vs `materialized_checkpoint` — divergence is `stale`, not silently mixed
+- `served_checkpoint` and `materialized_checkpoint` remain distinct; divergence is reported as `stale`.
 - evidence kinds: `source_reported` / `derived` / `proposed_link` / `unknown`
 - `production_proven=false`
 
@@ -95,4 +94,4 @@ CLI `ppa analytics {query,context,subscriptions,trip-costs,changes-since}` and M
 
 These clients do not convert currency, do not emit financial or health advice, and do not invent a current subscription.
 
-Capability deltas for P09/P04 matrices live in `archive_docs/reports/p10-runtime-capability-delta.md`. P09 owns README / ARCHITECTURE / MCP_SETUP / runtime-contract rewrites.
+Implementation evidence is recorded in [the client validation report](reports/p10-runtime-capability-delta.md). Changes to this contract should update [agent usage](AGENT_USAGE.md) and the [runtime contract](PPA_RUNTIME_CONTRACT.md).

@@ -1,192 +1,38 @@
-# PPA Backup and Restore Runbook
+# Back up and restore a PPA archive
 
-> **Historical host ops.** This runbook describes the HFA instance on Arnold (192.168.50.27).
-> It is not the independent-instance restore path. Product restore is P07
-> (`archive_cli/commands/recovery.py`, openssl + `ppa-backup-encrypt.sh`).
-> **Updated**: 2026-03-23 (banner 2026-09-06)
+A personal archive lets you keep history after its original account or service is gone. A backup needs to preserve the records you may no longer be able to import, along with identity corrections and other saved decisions. A search index cannot recreate those records or decisions.
 
-## What Gets Backed Up
+## Decide what to retain
 
-The HFA PPA has two independent data stores that must both be recoverable:
+| Data | Recovery treatment |
+| --- | --- |
+| Canonical Markdown and attachments | Preserve the bytes; an index cannot recreate missing source content |
+| Identity maps, corrections, and other decision state | Retain required state so a restore preserves the same interpretation |
+| Warehouse, chunks, embeddings, and serving generations | Rebuild when necessary; retain compatible caches when their recovery path supports reuse |
+| Credentials and decryption secrets | Store separately through the deployment's secret-management process |
 
-| Store                          | Location on Arnold                         | Size                                 | Backup method                       |
-| ------------------------------ | ------------------------------------------ | ------------------------------------ | ----------------------------------- |
-| **Vault** (canonical markdown) | `/srv/hfa-secure/vault`                    | ~11G, ~1.85M files                   | tar + AES-256-CBC encryption        |
-| **Index** (derived Postgres)   | `/srv/hfa-secure/postgres` (Docker volume) | ~82G (208G on disk with indexes/WAL) | `pg_dump -Fc -Z4` (~12G compressed) |
+Use the [recovery state inventory](RECOVERY_STATE_INVENTORY.md) for exact paths and classifications. The [manifest contract](RECOVERY_CONTRACT.md) requires checks for missing, corrupt, unknown, or incompatible state. A backup with required state missing must not be reported as a complete restore.
 
-The vault is the canonical source of truth. The index is derived and can be rebuilt from the vault (though rebuilding takes hours and may OOM on Arnold -- prefer dump-restore).
+A vault bundle does not automatically export warehouse-only suppression decisions or human linker reviews. The state inventory identifies these separately. Preserve them through a verified export or database recovery path before describing a restore as complete.
 
-## Backup Locations
+## Recovery workflow
 
-| Artifact                | Path                                                               | Retention      |
-| ----------------------- | ------------------------------------------------------------------ | -------------- |
-| Vault encrypted archive | `/mnt/user/backups/hfa-encrypted/artifacts/<timestamp>/`           | 30 days        |
-| Vault latest symlink    | `/mnt/user/backups/hfa-encrypted/latest/`                          | Always current |
-| Postgres dump           | `/mnt/user/backups/hfa-encrypted/pg/archive_seed.<timestamp>.dump` | 7 days         |
-| Postgres latest symlink | `/mnt/user/backups/hfa-encrypted/pg/archive_seed.latest.dump`      | Always current |
+1. Bind the archive you intend to protect and inventory its canonical and required decision state.
+2. Create and verify a backup using the configured recovery tooling. Keep the decryption secret recoverable separately from the backup.
+3. Restore into a new root. Validate the manifest, file hashes, and required versions before activation.
+4. Bind a separate warehouse schema and rebuild the derived indexes for the restored instance.
+5. Read known cards and verify representative searches and corrected identities before relying on the restored archive.
 
-## Encryption
+The engine implementation is in `archive_engine/recovery.py`; command adapters are in `archive_cli/commands/recovery.py`, with registration in `archive_cli/command_registry.py`. Inspect `ppa backup --help` and `ppa restore --help` for installed command options. Missing encryption or warehouse dependencies must remain visible as unavailable capabilities.
 
-The vault backup is encrypted with AES-256-CBC using a passphrase stored at:
+A checksum confirms the stored bytes. Retrieval checks establish whether the restored archive still supports the expected answers. The strongest fixture check restores a corrected record and then verifies that exact reads and retrieval still support the same facts.
 
-```
-/home/arnold/.openclaw/credentials/hfa-archive-backup-passphrase
-```
+## Storage protection
 
-**CRITICAL**: This passphrase must also be stored in 1Password (or equivalent) for disaster recovery. If the passphrase is lost, the encrypted vault backup is unrecoverable.
+PPA's backup workflow uses external encryption tooling. That does not encrypt the live vault, warehouse, caches, or temporary files. The operator owns storage protection and backup destinations. See [data boundaries](DATA_BOUNDARIES.md) for what each location may contain.
 
-The Postgres dump is NOT encrypted separately -- it lives on the Unraid share alongside the encrypted vault artifacts. For off-site backups, both should be included in the encrypted upload flow.
+Run long backup, restore, and rebuild jobs using the [detached-job instructions](../.cursor/skills/long-running-jobs/SKILL.md). A restored archive needs its own instance binding before any operation that writes to a warehouse.
 
-## Running Backups
+## Deployment-specific instructions
 
-### Vault backup (manual)
-
-```bash
-ssh arnold@192.168.50.27
-set -a; . /home/arnold/openclaw/.env; set +a
-cd /home/arnold/.openclaw/worktrees/hfa
-sudo -E bash scripts/hfa-backup.sh
-```
-
-Or via Make (from the `hey-arnold` repo on Mac):
-
-```bash
-make hfa-backup-encrypt
-```
-
-The systemd service runs as `User=root` so it can read the `archive`-owned vault.
-
-### Postgres backup (manual)
-
-```bash
-ssh arnold@192.168.50.27
-bash /home/arnold/.openclaw/worktrees/hfa/scripts/ppa-pg-backup.sh
-```
-
-Expected runtime: 5-15 minutes. Output: ~12G compressed dump.
-
-### Automatic backups
-
-Daily backups are scheduled via the Unraid User Scripts plugin on Orthanc (192.168.50.11), not via Arnold's systemd timer. The Orthanc script SSHs to Arnold and runs both vault and Postgres backups in sequence.
-
-- **Script**: `/boot/config/plugins/user.scripts/scripts/hfa-ppa-backup/script` on Orthanc
-- **Schedule**: daily at 03:00 UTC (`0 3 * * *`)
-- **Scheduling authority**: Orthanc cron (Arnold's `hfa-backup.timer` is disabled)
-
-To check or manage the schedule, use the Unraid UI at `http://192.168.50.11/Settings/Userscripts` or SSH to Orthanc:
-
-```bash
-ssh root@192.168.50.11
-crontab -l | grep ppa
-cat /boot/config/plugins/user.scripts/schedule.json | grep -A5 ppa
-```
-
-## Restore Procedures
-
-### Restore the vault
-
-If the vault is lost or corrupted, restore from the encrypted backup:
-
-```bash
-ssh arnold@192.168.50.27
-
-# Verify the encrypted artifact
-set -a; . /home/arnold/openclaw/.env; set +a
-cd /home/arnold/.openclaw/worktrees/hfa
-
-# Restore to a temp directory first (never overwrite production directly)
-sudo -E HFA_ARCHIVE_RESTORE_DIR=/tmp/hfa-vault-restore bash scripts/hfa-backup-restore.sh
-
-# Verify the restore
-ls /tmp/hfa-vault-restore/ | head -20
-find /tmp/hfa-vault-restore/ -name '*.md' | wc -l  # should be ~1.85M
-
-# If verified, swap into production (stop MCP first)
-sudo systemctl stop hfa-ppa.service
-sudo rsync -a --delete /tmp/hfa-vault-restore/ /srv/hfa-secure/vault/
-sudo chown -R archive:archive /srv/hfa-secure/vault/
-sudo chmod -R 700 /srv/hfa-secure/vault/
-sudo systemctl start hfa-ppa.service
-
-# Clean up temp restore
-sudo rm -rf /tmp/hfa-vault-restore
-```
-
-### Restore the Postgres index
-
-If the Postgres data is lost or corrupted:
-
-```bash
-ssh arnold@192.168.50.27
-
-# Stop the existing container
-sudo systemctl stop hfa-archive-postgres.service
-
-# Clear the existing data (if corrupted)
-# WARNING: This destroys the current database
-sudo rm -rf /srv/hfa-secure/postgres/*
-
-# Restart Postgres (creates fresh data directory)
-sudo systemctl start hfa-archive-postgres.service
-
-# Wait for Postgres to be ready
-sleep 5
-sudo docker exec hfa-archive-postgres pg_isready -U archive
-
-# Restore from dump
-sudo docker run --rm \
-  -v /mnt/user/backups/hfa-encrypted/pg:/backups \
-  --network container:hfa-archive-postgres \
-  pgvector/pgvector:pg17 \
-  pg_restore -U archive -d archive --clean --if-exists \
-  /backups/archive_seed.latest.dump
-
-# Verify
-sudo docker exec hfa-archive-postgres psql -U archive -d archive \
-  -c "SELECT count(*) AS cards FROM archive_seed.cards;"
-# Expected: ~1,837,313
-
-# Restart MCP
-sudo systemctl restart hfa-ppa.service
-```
-
-**Alternative**: If no Postgres dump exists but the vault is intact, you can rebuild the index from the vault. However, this takes hours and may OOM on Arnold. Prefer rebuilding locally and doing a fresh dump-restore:
-
-```bash
-# On Mac (local):
-# 1. Start local Docker Postgres
-# 2. Run rebuild-indexes locally
-# 3. pg_dump to directory format
-# 4. rsync + pg_restore to Arnold
-```
-
-### Full disaster recovery (both vault and index lost)
-
-1. Restore the vault first (from encrypted backup)
-2. Restore the Postgres index (from pg_dump, or rebuild from restored vault)
-3. Verify with the health check: `bash scripts/ppa-health.sh`
-4. Re-enable MCP: `sudo systemctl start hfa-ppa.service`
-
-## Retention Policy
-
-| Artifact                 | Retention | Rationale                                                                                                         |
-| ------------------------ | --------- | ----------------------------------------------------------------------------------------------------------------- |
-| Vault encrypted archives | 30 days   | One archive is ~11G encrypted. 30 days = ~330G on Unraid (9.9T free).                                             |
-| Postgres dumps           | 7 days    | One dump is ~12G. 7 days = ~84G. Longer retention is unnecessary because the index can be rebuilt from the vault. |
-
-## Verification Checklist
-
-After any backup or restore:
-
-- [ ] `archive_seed.cards` count matches expected (~1,837,313)
-- [ ] Index count matches: 179 indexes
-- [ ] MCP service responds
-- [ ] Health check passes: `bash scripts/ppa-health.sh`
-- [ ] Vault file count matches: ~1,847,087 files
-
-## Known Issues
-
-1. ~~Vault backup timer runs as arnold~~ **Fixed**: service runs as `User=root`.
-2. ~~No Postgres backup timer~~ **Fixed**: Orthanc user script runs both vault and Postgres backups daily at 03:00 UTC.
-3. ~~Backup passphrase not in 1Password~~ **Fixed**: stored in `Arnold-Passkey-Gate` vault as `HFA_ARCHIVE_BACKUP_PASSPHRASE`.
-4. **Arnold root partition was at 100%** due to a leftover dump artifact. Cleaned up (now 50% used). Monitor root partition usage via the health check (`root_disk` metric).
+The [historical Arnold backup runbook](runbooks/historical-arnold-backup.md) records that host's paths, schedules, sizes, and commands. The [local archive recovery runbook](runbooks/local-archive-recovery.md) describes the maintainer's later host. Neither establishes that another instance has a working backup.

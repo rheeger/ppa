@@ -1,39 +1,24 @@
-# PPA MCP setup
+# MCP connection reference
 
-Paste the same generated config into Cursor, Claude Desktop, Codex, OpenClaw, or another MCP client. The vault stays on the machine that owns it. Switching clients does not migrate your cards.
+The Model Context Protocol (MCP) lets compatible agents query the same PPA archive. Changing clients keeps the stored records and prepared catalog in place. This reference describes connection and access behavior in development deployments. The [specification](SPECIFICATION.md#queries) defines available operations.
 
-Agents should read cards before citing search hits. Job recipes are in `.cursor/skills/archive-query/` and [AGENT_USAGE.md](AGENT_USAGE.md). What those tools can answer is in [README.md](../README.md).
+## Connection methods
 
-## Quick start
+| Method | Behavior |
+| --- | --- |
+| Local stdio | The client launches PPA against the configured local archive |
+| HTTP MCP | The archive host runs retrieval and returns results to a remote client |
 
-1. Install with a native `archive_crate` (hashed wheels + Python 3.12, or a developer checkout that builds the crate). `pip install -e .` alone is not the supported retrieval path.
-2. Bind an instance (`ppa setup` or an existing `ppa.json` root). Set `PPA_INDEX_DSN`, `PPA_PATH` / instance dir, `PPA_INDEX_SCHEMA` (see [PPA_RUNTIME_CONTRACT.md](PPA_RUNTIME_CONTRACT.md) §2).
-3. Run `ppa mcp-config` and paste the JSON into your MCP client. Secrets such as `OPENAI_API_KEY` are never printed. Add those in the client's `env` block separately.
+Both use the same archive runtime. HTTP authentication and network transport are deployment settings. A Postgres SSH tunnel only forwards warehouse access; it does not provide a remote vault or search index.
 
-`ppa analytics` / `archive_analytics` are shipped (subscriptions, trip costs, changes-since, typed query, neighbor context). Coverage is the cards you actually have. `archive_knowledge` is an empty search fallback, not a living profile. Living status: [STATUS.md](STATUS.md).
+## Access
 
-## Local vs remote
+Tool profiles select available operations. `read-only` includes retrieval and raw card reads; `remote-read` exposes a smaller set without raw reads. `full` includes maintenance and is the default when the profile is unset. Invalid profiles deny operations.
 
-- **Local stdio (current product):** Postgres on this machine (Docker or native); `PPA_INDEX_DSN` points at `127.0.0.1`. The MCP process binds the current instance vault and serving index.
-- **Remote Postgres (optional):** SSH tunnel to another host's Postgres. `ppa serve --tunnel user@host`.
-- **HTTP MCP:** An instance choice on the machine that owns the vault. It is not a required topology.
+Record access is separate from tool access. Source and domain restrictions apply before search, counts, and relationship expansion. A cloud client receives the content returned by its authorized calls. See [privacy](PRIVACY_CONTRACT.md) and [data boundaries](DATA_BOUNDARIES.md).
 
-### Historical Arnold / Ginger topology
+## Configuration
 
-The following was one creator-machine deployment. It is **not** the canonical product architecture and is **not** a second-instance prerequisite.
+`ppa mcp-config` emits a client configuration from the current environment. Clients may require a different configuration format or an absolute executable path. The command omits secret-named variables, but a password embedded in a warehouse connection string can still appear.
 
-```
-Arnold --tailnet--> http://ginger-m4-max.tail0c38c5.ts.net:8765/mcp
-                 Authorization: Bearer <PPA_MCP_TOKEN>
-```
-
-`archive_scripts/install-mcp-http-launchd.sh` and `run-http-mcp.sh` remain host helpers for that machine. See the template [ppa.mcp-example.json](examples/ppa.mcp-example.json) for stdio patterns.
-
-## Optional env for generated config
-
-| Variable                     | Effect                                                                   |
-| ---------------------------- | ------------------------------------------------------------------------ |
-| `PPA_MCP_CONFIG_SERVER_NAME` | Name of the server block (default `ppa`)                                 |
-| `PPA_MCP_TUNNEL_HOST`        | If set, `ppa mcp-config` adds `"args": ["serve", "--tunnel", "<value>"]` |
-| `PPA_MCP_HTTP_URL`           | If set, `ppa mcp-config` emits a URL + bearer-header client block        |
-| `PPA_MCP_HTTP=1`             | `ppa mcp-config` adds `"args": ["serve", "--http"]`                      |
+The [runtime contract](PPA_RUNTIME_CONTRACT.md) defines configuration fields. The [agent reference](AGENT_USAGE.md) covers retrieval and source checks.

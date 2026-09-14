@@ -1,122 +1,57 @@
-# Contributing a Linker
+# Contributing a linker
 
-A linker finds relationships between two existing cards in your archive.
-Connectors bring data in, extractors turn emails into structured cards,
-and linkers wire those cards together — finding that this Amazon charge
-corresponds to that Amazon order, that this flight and this hotel are part
-of the same trip, that this transcript records that calendar event.
+A linker helps someone follow a record to the evidence around it. It can connect a charge to a purchase, a flight to an accommodation, or a meeting to its transcript. Those connections make questions across services easier to answer without repeatedly matching records inside a chat.
 
-This guide assumes you've read `archive_docs/LINKER_ARCHITECTURE.md`.
+A wrong link can attach a charge to the wrong trip or attribute a conversation to the wrong person. Start with a relationship that has structural evidence, and test the similar-looking records that should stay separate. Read the [linker architecture](LINKER_ARCHITECTURE.md) before implementing a module.
 
-## When to write a linker
+## Decide whether a linker is needed
 
-Before writing code, answer these four questions:
+1. Check whether the records already contain the relationship. If a `DeclEdgeRule` in `archive_cli/card_registry.py` should materialize it, fix that path first.
+2. Identify a shared identifier or a set of corroborating fields. Booking codes, account identity, amounts, and bounded dates can support a relationship; topic similarity alone does not establish one.
+3. Confirm that you are linking existing cards. New records derived from source material generally belong in an extractor.
+4. Write a short tier table that explains each match rule, its bounds, and a plausible false positive.
 
-1. **Is this an edge or a new card?** Linkers produce edges between existing
-   cards. If your work creates entirely new cards, that's an extractor.
-2. **Is there a structural fingerprint?** Linkers succeed when source and
-   target share a deterministic identifier (amount, date, IATA code, ical_uid,
-   confirmation code). Topical bridges ("documents about X" ↔ "transcripts
-   about X") are a knowledge-cache concern, not a linker concern — see the
-   Phase 6 Tier 3 retirement rationale in `runbooks/linker-retirement-protocol.md`.
-3. **Do existing DeclEdgeRules cover it?** Check `archive_cli/card_registry.py`
-   for a `DeclEdgeRule` on the relationship field you want to materialize. If
-   yes, fix the materializer, don't write a linker.
-4. **Can you express the tier ladder in ≤5 rows?** If not, your predicate is
-   too complex. Redesign.
+## Implement and register
 
-## The contribution workflow
+1. Create a module under `archive_cli/linker_modules/`. The existing scaffold command can write a starting file:
 
-```
-1. Scaffold a new module file:
-   archive_cli/linker_modules/{your_name}.py
+   ```bash
+   ppa linker scaffold --module exampleLinker --source-types purchase --emits example_relation
+   ```
 
-2. Implement:
-   - generator(catalog, source) -> list[SeedLinkCandidate]
-   - scoring_fn(features) -> (det, lex, graph, emb, risk)
-   - CatalogIndexSpec declarations for any module-specific indexes
-   - LinkSurfacePolicy for new link types
-   - register_linker(LinkerSpec(...)) at module bottom
+2. Implement the candidate generator, scoring function, any `CatalogIndexSpec` indexes, and `LinkSurfacePolicy` rules.
+3. Register a `LinkerSpec` at module import and import the module from `archive_cli/linker_modules/__init__.py`.
+4. Add synthetic tests with a positive and negative case for each tier, plus unrelated records that yield no candidates.
+5. Verify registration with `ppa linker info --module exampleLinker` and `ppa linker list --json`.
 
-3. Import from archive_cli/linker_modules/__init__.py
+The scaffold names above are placeholders. Choose a relation whose meaning you can define and support with evidence. Keep account and provider identity in the match rule where it affects uniqueness.
 
-4. Unit tests: archive_tests/test_{your_name}_linker.py
-   - One positive + one negative per tier
-   - Negative control (unrelated fixtures -> 0 candidates)
+## Check match accuracy
 
-5. Calibration:
-   ppa linker calibrate --module yourCamelLinker --scope ppa_1pct
-   ppa linker replay   --module yourCamelLinker --cache <path>
+Start in a disposable vault that contains the relevant synthetic records:
 
-6. Per-module DoD (X.1-X.5):
-   X.1 Implement
-   X.2 Preview (--limit 25)
-   X.3 Full 1pct dry-run
-   X.4 Threshold iteration (offline)
-   X.5 Comparison report + human gate (PROCEED / TIGHTEN / NARROW / SKIP-MODULE)
+```bash
+ppa linker calibrate --module exampleLinker --mode vault --vault /tmp/ppa-linker-fixture --limit 25
 ```
 
-The reusable plan template at `.cursor/plans/_templates/linker.plan.md` has
-the step-by-step DoD structure pre-baked.
+The preview checks generator behavior and tier distribution. A small synthetic fixture is not production precision evidence. Before automatic promotion on a real archive, follow the [quality gates](runbooks/linker-quality-gates.md), including a stratified sample of at least 30 candidates per tier and at least 95% precision.
 
-## Tier ladder design
+Automatic promotion needs a deterministic identity match or the required independent signals within tight bounds. Two-signal agreement remains review-only; similarity or one weak signal cannot establish the relationship. An upstream model-written reference needs independent corroboration.
 
-Structure predicates in decreasing precision:
+After generating a calibration cache, iterate thresholds offline:
 
-```
-TIER_A (1.00):  strongest structural fingerprint (e.g. exact primary-key)
-TIER_B (0.90):  amount + date + fuzzy merchant
-TIER_C (0.78):  amount + looser date + secondary signal (thread id)
-TIER_D (0.55):  amount + date only  (review-only, retirable)
+```bash
+ppa linker replay --cache /path/to/candidates.jsonl
 ```
 
-Every candidate stores its tier in `features["tier"]`, its score in
-`features["deterministic_score"]`, and its risk penalty in
-`features["risk_penalty"]`. The scoring_fn returns the 5-tuple from those.
+Regenerate when feature extraction changes. Index-mode calibration uses `--mode index --scope <schema>` and can enqueue work, so bind an owned test instance and follow the [detached-job instructions](../.cursor/skills/long-running-jobs/SKILL.md) for long runs.
 
-Short-circuit: the first tier that matches a `(source, target)` pair wins;
-lower tiers skip that pair for that target.
+## Submit a reviewable contribution
 
-## Calibration discipline
+Include the module, synthetic tests, and a description of each tier's evidence and bounds. Include calibration results when the change affects promotion. Keep private source records and credentials out of committed artifacts; use redacted examples or aggregate verdicts where necessary.
 
-- Run `--limit 25` first to catch crashes and verify tier distribution.
-- Full 1pct dry-run writes `candidates-{date}.jsonl`. Iterate thresholds
-  offline with `ppa linker replay` — no regen unless feature extraction
-  changed.
-- Spot-check 30 per band:
-  - HIGH (auto-promote): 30/30 correct. No exceptions.
-  - MEDIUM (auto-promote): ≥28/30 correct.
-  - LOW (review-only): ≥24/30 correct; retire the tier if below.
-- `ppa linker calibrate --module X --report` generates the markdown the
-  human reviews.
+Explain the user-visible question the new relationship helps answer. Report false positives as well as matches. Show how the rule avoids attaching unrelated events to the user's history.
 
-## Submission
+## Retire a rule that cannot meet the standard
 
-Your PR should include:
-
-- The module file under `archive_cli/linker_modules/`.
-- Unit tests under `archive_tests/`.
-- A calibration cache JSONL + report under `_artifacts/_linkers/{module}/`.
-- A plan file under `.cursor/plans/` following the template at
-  `.cursor/plans/_templates/linker.plan.md`.
-
-CI runs (future `linker-ci.yml`):
-
-- All unit tests pass.
-- `ppa linker info --module X` returns the registered spec (i.e. the
-  `register_linker` call fires at import time without errors).
-- `ppa linker list --json` includes your module with the expected fields.
-- Retrofit-invariant check: all seven legacy modules' snapshot tests still
-  pass (you haven't accidentally changed shared infrastructure).
-
-## Retirement
-
-If calibration shows your linker can't meet the HIGH-band precision bar
-after iteration, that's fine — retire it. Flip `lifecycle_state="retired"`
-in the LinkerSpec registration, document the retirement in
-`archive_docs/runbooks/linker-retirement-protocol.md` appendix, and leave
-the code in place for future revival. The `retired` state is visible in
-`ppa linker list` so future operators see the history.
-
-See the Phase 6 Tier 3 (`MODULE_SEMANTIC`) entry in the retirement protocol
-for a worked example.
+Tighten a failing rule, lower it to review-only, or retire it. `lifecycle_state="retired"` keeps the module visible without scheduling it. Record the reason in the [retirement protocol](runbooks/linker-retirement-protocol.md) so another contributor can understand the evidence before reviving it.

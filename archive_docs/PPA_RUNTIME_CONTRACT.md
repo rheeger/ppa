@@ -1,14 +1,10 @@
-# PPA Runtime Contract
+# PPA runtime contract
 
-> **Status**: Serving cutover and nightly `maintain` changed the contract after Phase 2.9.
-> Live query is the Rust serving index. Postgres is the warehouse. Instance config
-> is CLI > env > instance file > defaults (`ppa.json` / `ppa.yml` / `ppa.yaml`).
-> Arnold host vars and storage paths below are **historical** unless labeled current.
-> Any breaking change requires an explicit migration step.
+PPA exposes the same archive through a command line and MCP, so a person can change clients without changing the stored history. This contract defines entrypoints, configuration, retrieval behavior, and compatibility requirements for contributors who change those interfaces.
 
----
+Live retrieval uses the Rust serving index; Postgres is the derived warehouse. Instance configuration resolves through explicit overrides, environment, instance file, and defaults. Breaking changes require an explicit migration path.
 
-## 1. CLI Entrypoint
+## 1. Command-line entrypoints
 
 The canonical entrypoints are:
 
@@ -16,53 +12,59 @@ The canonical entrypoints are:
 python -m archive_cli serve
 ```
 
-and, after `pip install -e .`, the console script:
+and, after installing PPA and its native extension, the console script:
 
 ```
 ppa serve
 ```
 
-Both invoke `archive_mcp.__main__:main`. This starts the MCP server using stdio transport when `serve` is used. When no subcommand is given, `serve` is the default.
+Both invoke `archive_cli.__main__:main`. This starts the MCP server using stdio transport when `serve` is used. When no subcommand is given, `serve` is the default.
 
-### CLI subcommands (frozen)
+### CLI subcommands
 
-| Subcommand                 | Purpose                                                                                   | Safety on production |
-| -------------------------- | ----------------------------------------------------------------------------------------- | -------------------- |
-| `serve`                    | Start MCP server (stdio); optional `--tunnel USER@HOST` spawns SSH to `PPA_TUNNEL_PORT`   | Safe                 |
-| `mcp-config`               | Print paste-ready MCP JSON from current `PPA_*` env (secrets omitted)                     | Safe                 |
-| `search <query>`           | Full-text search (JSON on stdout)                                                         | Safe                 |
-| `read <path_or_uid>`       | Read one note (JSON)                                                                      | Safe                 |
-| `read-many <uid> …`        | Read multiple notes (JSON)                                                                | Safe                 |
-| `query`                    | Structured query with `--type` / `--source` / etc. (JSON)                                 | Safe                 |
-| `graph <note_path>`        | Wikilink graph from a note (JSON)                                                         | Safe                 |
-| `person <name>`            | Person profile by slug (JSON)                                                             | Safe                 |
-| `timeline`                 | Notes in date range (JSON)                                                                | Safe                 |
-| `stats`                    | Vault/index stats (JSON)                                                                  | Safe                 |
-| `validate`                 | Validate all vault cards (JSON)                                                           | Safe                 |
-| `duplicates`               | Dedup candidates from `_meta` (JSON)                                                      | Safe                 |
-| `vector-search <query>`    | Semantic search (JSON)                                                                    | Safe                 |
-| `hybrid-search <query>`    | Hybrid lexical + vector (JSON)                                                            | Safe                 |
-| `explain <query>`          | Retrieval explain payload (JSON)                                                          | Safe                 |
-| `embedding-status`         | Embedding coverage (JSON)                                                                 | Safe                 |
-| `embedding-backlog`        | Pending embedding chunks (JSON)                                                           | Safe                 |
-| `status`                   | Current-instance production status (Section F). Never claims fresh from a manifest.       | Safe                 |
-| `instance-status`          | Native/warehouse/auth/backup capability. `fresh` is always false for a manifest.          | Safe                 |
-| `readiness`                | Fail-closed current-instance readiness. `local_seed_living_corpus` does not transfer.     | Safe                 |
-| `setup`                    | Fixture-only independent archive (`sample.fixture`). Does not overwrite an existing root. | Safe on empty root   |
-| `maintain`                 | Incremental maintain + serving publish                                                    | Safe                 |
-| `rebuild-indexes`          | Truncate and rebuild all index tables from vault                                          | **DESTRUCTIVE**      |
-| `index-status`             | Report index health (human-readable text, MCP parity)                                     | Slow, may OOM        |
-| `bootstrap-postgres`       | Create extensions and base schema layout                                                  | Safe on fresh DB     |
-| `embed-pending`            | Process embedding backlog                                                                 | Safe                 |
-| `migrate`                  | Apply pending SQL schema migrations                                                       | Safe                 |
-| `migration-status`         | Report migration history and pending count                                                | Safe                 |
-| `health`                   | Check vault, DB, embeddings, migrations                                                   | Safe                 |
-| `projection-inventory`     | List registered typed projections                                                         | Safe                 |
-| `projection-status`        | Show projection coverage                                                                  | Safe                 |
-| `projection-explain <uid>` | Explain projection for a card                                                             | Safe                 |
-| `duplicate-uids`           | Find duplicate UIDs                                                                       | Safe                 |
-| `build-benchmark-sample`   | Build a benchmark vault sample                                                            | Safe                 |
-| `benchmark-rebuild`        | Benchmark rebuild performance                                                             | Safe                 |
+| Subcommand | Purpose |
+| --- | --- |
+| `serve` | Start MCP server (stdio); optional `--tunnel USER@HOST` spawns SSH to `PPA_TUNNEL_PORT` |
+| `mcp-config` | Print MCP JSON from current `PPA_*` env; see [config handling](MCP_SETUP.md#configuration) |
+| `search <query>` | Full-text search (JSON on stdout) |
+| `read <path_or_uid>` | Read one note (JSON) |
+| `read-many <uid> …` | Read multiple notes (JSON) |
+| `query` | Structured query with `--type` / `--source` / etc. (JSON) |
+| `graph <note_path>` | Wikilink graph from a note (JSON) |
+| `person <name>` | Person lookup by name, slug, email, or phone (JSON) |
+| `timeline` | Notes in date range (JSON) |
+| `stats` | Vault/index stats (JSON) |
+| `validate` | Validate all vault cards (JSON) |
+| `duplicates` | Dedup candidates from `_meta` (JSON) |
+| `vector-search <query>` | Semantic search (JSON) |
+| `hybrid-search <query>` | Hybrid lexical + vector (JSON) |
+| `explain <query>` | Retrieval explain payload (JSON) |
+| `embedding-status` | Embedding coverage (JSON) |
+| `embedding-backlog` | Pending embedding chunks (JSON) |
+| `status` | Report source and publication state for the current instance |
+| `instance-status` | Report native, warehouse, authentication, and backup capabilities; configuration alone does not prove freshness |
+| `readiness` | Check readiness for the current instance; another deployment's results do not transfer |
+| `setup` | Fixture-only independent archive (`sample.fixture`). Does not overwrite an existing root. |
+| `maintain` | Incremental maintain + serving publish |
+| `rebuild-indexes` | Replace derived index data with a rebuild from the vault |
+| `index-status` | Report index health (human-readable text, MCP parity) |
+| `bootstrap-postgres` | Create extensions and base schema layout |
+| `embed-pending` | Process embedding backlog |
+| `migrate` | Apply pending SQL schema migrations |
+| `migration-status` | Report migration history and pending count |
+| `health` | Check vault, DB, embeddings, migrations |
+| `projection-inventory` | List registered typed projections |
+| `projection-status` | Show projection coverage |
+| `projection-explain <uid>` | Explain projection for a card |
+| `duplicate-uids` | Find duplicate UIDs |
+| `build-benchmark-sample` | Build a benchmark vault sample |
+| `benchmark-rebuild` | Benchmark rebuild performance |
+| `evidence` | Retrieve a compact chronological set of source references |
+| `temporal-neighbors` | Find records near a timestamp |
+| `analytics` | Run typed queries, context expansion, subscription history, trip-cost, and change queries |
+| `backup` / `verify-backup` | Create encrypted backup artifacts or verify an existing bundle |
+| `restore` | Write a restored archive into a new root |
+| `activate-restore` | Rebuild the restored archive's warehouse and serving index |
 
 Seed-link subcommands (`seed-link-*`, `link-*`, `review-link-candidate`, `benchmark-seed-links`) are gated by `PPA_SEED_LINKS_ENABLED` and exit with a message when disabled.
 
@@ -74,12 +76,12 @@ MCP tools whose names end in `_json` (for example `archive_search_json`, `archiv
 
 ### 2.1 Resolution rule
 
-Instance resolution is **CLI override > environment > instance file > defaults**.
+Instance resolution uses the precedence below.
 `instance_dir` / an explicit vault path is CLI-equivalent for `storage.vault_path`.
-Bound instances skip CWD `ppa.yml` discovery so a leftover `PPA_PATH` cannot steal the root.
+Bound instances skip working-directory `ppa.yml` discovery, so unrelated configuration cannot redirect the archive root.
 
 `_ppa_env()` is the getter for `PPA_*` in feature code. Historical `ARCHIVE_*` aliases
-still exist on some launcher seams; do not treat them as the instance contract.
+still exist in some launchers; do not treat them as the instance contract.
 
 1. CLI overrides / bound instance directory
 2. **`PPA_*`** env var
@@ -91,7 +93,7 @@ still exist on some launcher seams; do not treat them as the instance contract.
 | Variable                 | Purpose                    | Default                   |
 | ------------------------ | -------------------------- | ------------------------- |
 | `PPA_INDEX_DSN`          | Postgres connection string | _(required)_              |
-| `PPA_INDEX_SCHEMA`       | Postgres schema name       | `archive_mcp`             |
+| `PPA_INDEX_SCHEMA`       | Postgres schema name       | `ppa`                     |
 | `PPA_PATH`               | Vault root directory       | `~/Archive/vault`         |
 | `PPA_EMBEDDING_PROVIDER` | Embedding provider         | `hash`                    |
 | `PPA_EMBEDDING_MODEL`    | Embedding model            | `default-embedding-model` |
@@ -137,9 +139,9 @@ These control rebuild, embedding, and flush behavior.
 | `PPA_STATEMENT_TIMEOUT_MS`         | `30000`                              |
 | `PPA_CONNECT_TIMEOUT`              | `5`                                  |
 
-### 2.4 Historical Arnold integration environment variables
+### 2.4 Legacy launcher variables
 
-These belonged to one historical host. They are **not** the independent-instance contract and are not required for fixture setup or a second archive.
+These variables support older deployment launchers. Their names remain relevant when maintaining those launchers; independent instances use the current configuration contract.
 
 | Variable                              | Purpose                                  |
 | ------------------------------------- | ---------------------------------------- |
@@ -148,13 +150,13 @@ These belonged to one historical host. They are **not** the independent-instance
 | `PPA_OP_SERVICE_ACCOUNT_TOKEN_FILE`   | Historical service-account token file    |
 | `PPA_OP_SERVICE_ACCOUNT_TOKEN_OP_REF` | Historical service-account OP ref        |
 
-Some launchers still accept `ARCHIVE_*` spellings of the same names. New instances should set `PPA_INDEX_DSN`, `PPA_PATH` / instance dir, `PPA_INDEX_SCHEMA`, and embedding refs only.
+Some launchers still accept `ARCHIVE_*` spellings of the same names. Use current instance configuration for new deployments.
 
 ### 2.5 Removed environment variables
 
 | Variable       | Status      | Notes                                        |
 | -------------- | ----------- | -------------------------------------------- |
-| `HFA_LIB_PATH` | **Removed** | `hfa` is now an installed package dependency |
+| `HFA_LIB_PATH` | **Removed** | Current code imports `archive_vault`; no external HFA checkout is required |
 
 ---
 
@@ -168,40 +170,33 @@ Some launchers still accept `ARCHIVE_*` spellings of the same names. New instanc
 
 Config files are optional. CLI and env beat the file. Secrets are never printed by `config explain`.
 
-### Config precedence
-
-1. CLI overrides / bound instance directory
-2. Environment variables
-3. Instance config file
-4. Code defaults
-
 ---
 
 ## 4. Tool Profiles
 
-Tool profiles gate which MCP tools are exposed. Set via `PPA_MCP_TOOL_PROFILE` (or `ARCHIVE_MCP_TOOL_PROFILE`).
+Tool profiles gate which MCP tools are exposed. Set `PPA_MCP_TOOL_PROFILE`. The [privacy contract](PRIVACY_CONTRACT.md) defines accepted values and handling of invalid profiles. Membership is defined in `archive_engine/access.py`; record restrictions apply separately from tool selection.
 
 ### `full` (default)
 
-All tools exposed. Used for local development on the current instance. Historical Arnold access used this profile; it is not a second-instance default.
+All tools are exposed when this profile is selected or the variable is unset. Set `read-only` explicitly for a client that should only retrieve records.
 
 ### `read-only`
 
 Read and search tools only. No admin, write, or index-lifecycle tools.
 
-Tools: `archive_search`, `archive_read`, `archive_query`, `archive_graph`, `archive_person`, `archive_timeline`, `archive_stats`, `archive_vector_search`, `archive_hybrid_search`, `archive_search_json`, `archive_hybrid_search_json`, `archive_read_many`, `archive_status_json`, `archive_retrieval_explain_json`
+Tools: `archive_analytics`, `archive_evidence`, `archive_graph`, `archive_hybrid_search`, `archive_hybrid_search_json`, `archive_knowledge`, `archive_person`, `archive_query`, `archive_read`, `archive_read_many`, `archive_retrieval_explain_json`, `archive_search`, `archive_search_json`, `archive_stats`, `archive_status_json`, `archive_temporal_neighbors`, `archive_timeline`, `archive_vector_search`.
 
 ### `remote-read`
 
-Minimal subset for passkey-gated remote access. Excludes raw note reads and admin operations.
+Minimal retrieval subset that excludes raw card reads and admin operations. Authentication is configured separately by the deployment.
 
-Tools: `archive_search`, `archive_query`, `archive_timeline`, `archive_stats`, `archive_search_json`
+Tools: `archive_analytics`, `archive_evidence`, `archive_query`, `archive_search`, `archive_search_json`, `archive_stats`, `archive_timeline`.
 
 ### `admin-only`
 
 Maintenance and index-lifecycle tools. Not for general retrieval.
 
-Tools: `archive_validate`, `archive_duplicates`, `archive_duplicate_uids`, `archive_rebuild_indexes`, `archive_bootstrap_postgres`, `archive_index_status`, `archive_projection_inventory`, `archive_projection_status`, `archive_projection_explain`, `archive_retrieval_explain`, `archive_embedding_status`, `archive_embedding_backlog`, `archive_embed_pending`, seed-link tools
+Tools: `archive_bootstrap_postgres`, `archive_duplicate_uids`, `archive_duplicates`, `archive_embed_estimate`, `archive_embed_pending`, `archive_embedding_backlog`, `archive_embedding_status`, `archive_index_status`, `archive_link_candidate`, `archive_link_candidates`, `archive_link_quality_gate`, `archive_projection_explain`, `archive_projection_inventory`, `archive_projection_status`, `archive_rebuild_indexes`, `archive_retrieval_explain`, `archive_review_link_candidate`, `archive_seed_link_backfill`, `archive_seed_link_enqueue`, `archive_seed_link_promote`, `archive_seed_link_refresh`, `archive_seed_link_report`, `archive_seed_link_surface`, `archive_seed_link_worker`, `archive_status_json`, `archive_validate`.
 
 ---
 
@@ -210,12 +205,11 @@ Tools: `archive_validate`, `archive_duplicates`, `archive_duplicate_uids`, `arch
 Agent-facing wording (safety, job router, type-filter recipes) is generated from
 `archive_cli/mcp_instructions.py` and served as MCP `instructions` plus tool
 descriptions. Job recipes live in `.cursor/skills/archive-query/`. Update both
-when teaching agents how to query. The frozen rules below are the semantic
-contract those descriptions must stay compatible with.
+when teaching agents how to query. Those descriptions must preserve the retrieval and evidence rules below.
 
-### Retrieval order (frozen)
+### Choose and expand retrieval
 
-Agents should use retrieval methods in this order:
+Start with the most specific information the question provides, then expand as needed:
 
 1. **Exact lookup** for UID, path, email, phone, handle, and provider IDs
 2. **Structured query** for type, source, person, org, and date filters
@@ -225,231 +219,87 @@ Agents should use retrieval methods in this order:
 6. **Graph expansion** to collect neighboring evidence
 7. **Canonical card reads** before final answers
 
-### Grounding rules (frozen)
+### Source evidence
 
 - Read canonical cards before making factual claims
 - Do not treat search hits or embeddings as canonical truth
 - Prefer deterministic fields over inferred summaries when they disagree
-- If evidence conflicts, surface the conflict instead of collapsing it silently
+- Report conflicting evidence and identify the records that disagree.
 - If retrieval confidence is low, ask a follow-up or narrow the scope
 - If exact reads and search disagree, prefer canonical and treat the index as stale
 
-### Retrieval modes (frozen)
+### Retrieval modes
 
-| Mode             | Purpose                                                | Truth rule                                                         |
-| ---------------- | ------------------------------------------------------ | ------------------------------------------------------------------ |
-| Exact read       | Fetch one canonical card by path or UID                | Canonical markdown is the answer source                            |
-| Structured query | Filter by deterministic fields                         | Results from derived substrate; claims require canonical grounding |
-| Lexical search   | Term/phrase recall over `cards.search_text`            | Retrieval aid, not canonical truth                                 |
-| Semantic search  | Vector retrieval over derived chunks                   | Embeddings are lossy; must ground back to canonical cards          |
-| Hybrid search    | Combined lexical + vector + graph + provenance ranking | Optimized retrieval, not canonical truth                           |
-| Graph expansion  | Expand neighboring evidence                            | Edges derived from canonical references + approved link surfaces   |
+The [retrieval contract](RETRIEVAL_CONTRACT.md) defines the modes and their evidence rules. The [analytical query contract](EVIDENCE_QUERY_CONTRACT.md) adds completeness, coverage, and freshness requirements for totals and dated evidence.
 
 ---
 
 ## 6. Remote-Read Boundary
 
-The remote-read path is passkey-gated and token-authenticated. It provides a read-only subset of the MCP surface.
+HTTP MCP can serve an archive from the host that owns the vault. Configure authentication and network transport for that deployment. The files stay on the host, while returned records travel to the client.
 
-### Transport model
+The `remote-read` profile provides a smaller retrieval set without raw card reads. It does not configure a passkey gate or encryption. The earlier [Arnold security design](runbooks/historical-arnold-security.md) describes those host-specific controls.
 
-```
-Client -> HTTPS/TLS -> passkey-gate -> local-only transport -> archive-mcp -> vault + Postgres
-```
-
-TLS terminates at the gate. The gate authenticates, enforces tool policy, issues scoped tickets, and audits requests.
-
-### Access classes
-
-| Class                     | Scope                                                                          | Tier   |
-| ------------------------- | ------------------------------------------------------------------------------ | ------ |
-| `mcp.archive.read`        | Low-risk structured retrieval (search, query, timeline, stats, vector, hybrid) | 0      |
-| `mcp.archive.sensitive`   | Dense personal content (read, person, graph)                                   | 1      |
-| `mcp.archive.admin`       | Maintenance and index lifecycle                                                | 2      |
-| `mcp.archive.remote.read` | Public-client scope (search, query, timeline, stats)                           | Remote |
-
-### Security invariants
-
-- `archive-mcp` and Postgres stay off the public network
-- Raw vault files are not directly accessible to the `arnold` runtime identity
-- Cloud backups contain only encrypted artifacts
-- Plaintext archive content exists only inside the mounted unlocked runtime path
-
----
+[MCP setup](MCP_SETUP.md) covers connection options. [Data boundaries](DATA_BOUNDARIES.md) explains the separate provider and client paths.
 
 ## 7. Python Package Surface
 
-### Module structure (post-2.1 refactoring)
+### Current packages
 
-| Module              | Lines | Role                                                                                                      |
-| ------------------- | ----- | --------------------------------------------------------------------------------------------------------- |
-| `index_config.py`   | ~330  | Constants, env getters (`_ppa_env`), utility functions                                                    |
-| `chunk_builders.py` | ~720  | Type-aware chunk building for each card type                                                              |
-| `scanner.py`        | ~330  | Vault scanning, canonical row building, manifest diffing                                                  |
-| `materializer.py`   | ~470  | Row materialization, edge building, person lookup                                                         |
-| `loader.py`         | ~1200 | Rebuild orchestration, data loading, manifest management                                                  |
-| `schema_ddl.py`     | ~460  | DDL, table creation, index management, migration integration                                              |
-| `index_query.py`    | ~690  | Search, query, graph traversal                                                                            |
-| `embedder.py`       | ~520  | Embedding pipeline                                                                                        |
-| `index_store.py`    | ~255  | Thin coordinator, `BaseArchiveIndex`, `PostgresArchiveIndex`                                              |
-| `card_registry.py`  | —     | Unified `CardTypeRegistration` entries for all 22 card types                                              |
-| `migrate.py`        | —     | `MigrationRunner`: applies numbered SQL migrations                                                        |
-| `config.py`         | —     | Config loading with `PPA_*` / `ARCHIVE_*` dual-lookup                                                     |
-| `contracts.py`      | —     | Shared dataclasses and protocols                                                                          |
-| `errors.py`         | —     | `PpaError` hierarchy for commands vs. string errors                                                       |
-| `commands/`         | —     | Shared command layer: search, read, query, graph, status, admin, explain, seed_links; used by MCP and CLI |
-| `server.py`         | —     | MCP tool wrappers, tool-profile gating, string formatting                                                 |
-| `store.py`          | —     | `ArchiveStore` service boundary                                                                           |
+| Package | Responsibility |
+| --- | --- |
+| `archive_cli` | CLI and MCP adapters, store integration, warehouse operations, and maintenance |
+| `archive_engine` | Shared runtime contracts, configuration, identity, access, publication, and analytics |
+| `archive_vault` | Card models, provenance, identity helpers, and contained file I/O |
+| `archive_sync` | Source connectors, adapters, extractors, and processing |
+| `archive_crate` | Native scanning, materialization, chunking, validation, and retrieval |
+| `archive_doctor` | Validation, duplicate detection, and archive quality |
+| `archive_auth` | Source authentication helpers |
 
-### Import paths (frozen during transition)
+### Shared interfaces
 
-| Package          | Role                                 | Future name  |
-| ---------------- | ------------------------------------ | ------------ |
-| `archive_mcp`    | MCP server, index, retrieval         | `ppa`        |
-| `hfa`            | Shared schema, vault I/O, provenance | `ppa_core`   |
-| `archive_sync`   | Source adapters                      | `ppa_sync`   |
-| `archive_doctor` | Vault validation and repair          | `ppa_doctor` |
+CLI and MCP route through `ArchiveStore` in `archive_cli.store` and the shared engine contracts. `PostgresArchiveIndex` in `archive_cli.index_store` supports warehouse operations. It is not the live query engine.
 
-These import names are preserved through the Phase 2 split. The `ppa` Python namespace is adopted later with `archive_mcp` as a backward-compatible alias.
-
-### Public API
-
-The public API is `PostgresArchiveIndex` from `archive_mcp.index_store`, consumed by `ArchiveStore` from `archive_mcp.store`. This is the MCP's service boundary.
-
-`PostgresArchiveIndex` MRO: `SchemaDDLMixin` → `EmbedderMixin` → `QueryMixin` → `LoaderMixin` → `BaseArchiveIndex`
+Core engine modules must not import `archive_cli.commands` or `archive_cli.server`. See the [engine contract](ENGINE_CONTRACT.md) for shared types and the [architecture](ARCHITECTURE.md) for runtime composition.
 
 ### Schema evolution
 
-Schema changes are handled by numbered SQL migrations in `archive_cli/migrations/`. `_create_schema()` remains the fresh-install path; migrations handle the delta path. The `schema_migrations` table tracks applied versions.
+Numbered SQL migrations live in `archive_cli/migrations/`. Fresh bootstrap and upgrades must produce compatible schemas; `schema_migrations` tracks applied versions.
 
-### Card-type registry
+A card type needs its model in `archive_vault/schema.py`, metadata in `archive_vault/card_contracts.py`, and derived registration in `archive_cli/card_registry.py` and the projection registry. Update [card type contracts](CARD_TYPE_CONTRACTS.md) and focused tests in the same change.
 
-Adding a card type is a two-file change:
+### Seed links
 
-1. `hfa/schema.py` — add Pydantic model + `CARD_TYPES` entry
-2. `archive_cli/card_registry.py` — add `CardTypeRegistration` entry
+Seed-link operations remain opt-in through `PPA_SEED_LINKS_ENABLED`. Keep inferred relationships distinguishable from source fields and preserve the [linker quality gates](runbooks/linker-quality-gates.md).
 
-Typed projection tables, edge rules, chunk dispatch, and person-edge labelling are derived automatically from the registry.
+## 8. Archive identity and storage
 
-### Seed-links subsystem
+Each independent instance owns its vault root, archive identity, warehouse schema, serving generation, and journal checkpoint. Two instances may contain the same external provider IDs without sharing records or access.
 
-The seed-links subsystem (8 tables, 11 MCP tools, 3,373 lines) is opt-in, gated by `PPA_SEED_LINKS_ENABLED`. When disabled, tables are not created and tools return a clear message.
+`archive_id` comes from explicit configuration or a hash of the canonical root and schema binding. Keep that identity consistent when opening the archive through different clients. The [recovery contract](RECOVERY_CONTRACT.md) defines how backups retain the archive identity and checkpoint.
 
----
+Readable records belong to the vault. The warehouse and serving index support queries and can be rebuilt with the required records and saved decisions. A source account need not remain accessible for clients to read what has already been imported.
 
-## 8. Runtime Identities and Storage Layout
+## 9. Deployment bindings
 
-### Identities (current)
+Local stdio clients can launch `ppa serve` with the intended instance configuration. HTTP MCP runs on the archive host and sends authorized results to connected clients. Authentication and network transport belong to the deployment.
 
-Each independent instance owns its vault root, derived `archive_id` (hash of canonical root + schema binding, or `PPA_ARCHIVE_ID`), warehouse schema, serving generation, and journal checkpoint. Two instances may share external card IDs.
+`ppa serve --tunnel USER@HOST` can start an SSH forward as a child of the MCP process. The forward stops with the server. `PPA_TUNNEL_PORT` defaults to `5433`, and `PPA_TUNNEL_REMOTE_PORT` defaults to `5432`. This forwards Postgres access; the client still needs the vault and native search index locally unless it queries the archive host through HTTP MCP.
 
-### Historical identities (Arnold host ops)
-
-| Identity   | Owns                                    | Runs                              |
-| ---------- | --------------------------------------- | --------------------------------- |
-| `archive`  | Mounted vault tree, archive index paths | `archive-mcp`                     |
-| `arnold`   | OpenClaw, passkey gate                  | General agent, does not own vault |
-| `postgres` | Postgres data paths (inside Docker)     | Postgres container                |
-
-### Historical storage layout (Arnold)
-
-| Path                              | Contents                   |
-| --------------------------------- | -------------------------- |
-| `/srv/hfa-secure/`                | Encrypted mount root       |
-| `/srv/hfa-secure/vault`           | Canonical markdown vault   |
-| `/srv/hfa-secure/postgres`        | Postgres data directory    |
-| `/mnt/user/backups/hfa-encrypted` | Encrypted backup artifacts |
-
-Do not copy this layout as the independent-instance default. See `archive_docs/runbooks/install-independent-archive.md` and P07 restore.
-
----
-
-## 9. Historical Arnold Integration Seam
-
-Arnold was a thin consumer of one instance. That host is **not** the product home and is **not** a readiness prerequisite. The historical seam consisted of:
-
-### What Arnold provides
-
-- **Secrets**: 1Password-resolved OpenAI API key, service account tokens
-- **Env setup**: `PPA_INDEX_DSN`, `PPA_PATH`, `PPA_INDEX_SCHEMA`, `PPA_EMBEDDING_*` via launcher script
-- **Tunnel**: `ppa serve --tunnel arnold@…` can replace a manually managed `ppa-tunnel.sh` — the SSH forward is a child of the MCP process and exits when the client stops the server. `PPA_TUNNEL_PORT` (default `5433`) and `PPA_TUNNEL_REMOTE_PORT` (default `5432`) tune the forward.
-- **Portable MCP**: clients may use `"command": "ppa", "args": ["serve"]` with `env` instead of absolute paths to shell scripts; `ppa mcp-config` emits a block from the current environment.
-- **Encrypted storage**: LUKS-encrypted volume at `/srv/hfa-secure`
-- **Docker Postgres**: `hfa-archive-postgres` container with data on the encrypted volume
-- **Systemd units**: `hfa-archive-mcp.service`, `hfa-archive-postgres.service` (transitional names; renamed to `ppa-*` in Phase 2.8)
-- **Passkey gate**: Authentication and tool-profile enforcement for remote access
-- **Backup scheduling**: Orthanc cron job running vault + Postgres backups daily at 03:00 UTC
-
-### What Arnold expects from the PPA
-
-- `python -m archive_cli serve` starts the MCP via stdio
-- All `PPA_*` env vars are accepted (with `ARCHIVE_*` / `HFA_*` aliases)
-- Config file discovery works from CWD
-- `ArchiveStore` remains the service boundary
-- Tool profiles gate the same tool sets
-- Retrieval semantics produce consistent results
-
-### What must not change without migration
-
-- CLI entrypoint and subcommand names
-- Env var resolution (canonical + alias)
-- Config file discovery paths
-- Tool profile names and membership
-- `ArchiveStore` and `PostgresArchiveIndex` as public classes
-- Schema migration runner interface
-- MCP tool names (all `archive_*` prefixed)
-
----
+The [historical security design](runbooks/historical-arnold-security.md) and [backup runbook](runbooks/historical-arnold-backup.md) preserve earlier host-specific paths and services. The [MCP reference](MCP_SETUP.md) defines current connection choices.
 
 ## 10. Compatibility Policy
 
-### Launcher scripts
+A change to commands, environment resolution, tool names, fields, or configuration can break a working archive or client. Preserve existing behavior unless the change includes an explicit migration step and relevant compatibility tests.
 
-`archive_scripts/run-local-seed-mcp.sh` and `archive_scripts/run-arnold-mcp.sh` are **convenience wrappers** around `python -m archive_cli` / `ppa`; they set env and exec the same `main()`. They are not required when using `"command": "ppa"` in MCP clients.
+New code uses the current `archive_*` packages and `PPA_*` configuration. Older `ARCHIVE_*` and `HFA_*` names may exist at historical launcher boundaries; inspect the affected launcher rather than assuming every alias is accepted in current feature code.
 
-### Alias support timeline
+Deprecation notices belong in logs, not on MCP stdout. Keep `ppa serve` and `python -m archive_cli serve` consistent, preserve source record IDs, and retain the distinction between canonical records and derived indexes during migrations.
 
-`ARCHIVE_*` and `HFA_*` env var aliases are **supported indefinitely** during the `archive_mcp` Python package era. They will be deprecated (with warnings) only when the Python package is renamed to `ppa`, which is a separate phase after the boundary split is confirmed stable.
+## 11. Contributor checks
 
-### Breaking change definition
-
-A **breaking change** is any modification that would cause an existing deployment using only `ARCHIVE_*` / `HFA_*` env vars and `archive-mcp.yml` config files to stop working or produce different behavior.
-
-### Migration policy
-
-1. No breaking changes without at least one release where both old and new names work
-2. Deprecation warnings are added before removal (logged at startup, not printed to stdout)
-3. `PPA_*` canonical names always take precedence when both are set
-4. Config file auto-discovery checks both `archive-mcp.*` and `ppa.*` filenames
-5. Make targets retain `ARCHIVE_*` variable names during transition (they pass through to Python where aliases are resolved)
-
-### What is frozen
-
-| Surface                | Frozen? | Notes                                                  |
-| ---------------------- | ------- | ------------------------------------------------------ |
-| CLI subcommand names   | Yes     | No renames during transition                           |
-| Env var aliases        | Yes     | Supported until `ppa` package rename                   |
-| Config file discovery  | Yes     | Both `archive-mcp.*` and `ppa.*` checked               |
-| Tool profile names     | Yes     | `full`, `read-only`, `remote-read`, `admin-only`       |
-| MCP tool names         | Yes     | All `archive_*` prefixed                               |
-| Retrieval semantics    | Yes     | Order, grounding rules, modes                          |
-| Python import paths    | Yes     | `archive_mcp`, `hfa`, `archive_sync`, `archive_doctor` |
-| Public API classes     | Yes     | `PostgresArchiveIndex`, `ArchiveStore`                 |
-| Schema migration table | Yes     | `schema_migrations` in the configured schema           |
-
----
-
-## 11. What Must Not Break During The Split
-
-1. `python -m archive_cli serve` starts the MCP
-2. The env contract resolves correctly (with `PPA_*` canonical and `ARCHIVE_*`/`HFA_*` aliases)
-3. Config file discovery works the same way
-4. Tool profiles gate the same tool sets
-5. Retrieval order and grounding rules produce the same behavior
-6. The remote-read boundary enforces the same policy
-7. `ArchiveStore` remains the MCP's service boundary
-8. Schema migrations apply correctly on existing databases
-9. Card-type registry produces the same materialized output
-10. Seed-link gating behavior is preserved
-11. `hfa` is consumed as an installed package, not via `sys.path` hacks
-12. Existing systemd units continue to work until explicitly renamed to `ppa-*` in Phase 2.8
+1. Verify equivalent CLI and MCP behavior where the interface is shared.
+2. Preserve instance identity, configuration precedence, and access limits.
+3. Keep stdout valid for the command's output format and send diagnostics to stderr or configured logs.
+4. Update this contract and the relevant setup or agent guide when user-visible behavior changes.
+5. Provide an upgrade or recovery path for incompatible schema, index, or configuration changes.
