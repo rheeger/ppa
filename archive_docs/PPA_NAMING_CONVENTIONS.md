@@ -1,98 +1,40 @@
-# PPA Naming Conventions
+# PPA names and terminology
 
-> **Status**: Locked as of Phase 2 (2026-03-23).
-> PPA code reads `PPA_*` env vars exclusively. Integration layers (e.g. the hey-arnold Makefile) translate their own variable names to `PPA_*` when invoking PPA subprocesses.
+PPA means Personal Private Archives. It is the software in this repository. An archive instance is the collection and configuration that a person or organization operates.
 
-## Product Name
+Use these names consistently so a reader can tell which software, records, or running instance a document describes.
 
-**PPA** (Personal Private Archives) — a semantic memory engine that indexes a personal digital life. Markdown vault as canonical truth, Postgres as derived index, MCP as query interface.
+## Product terms
 
-## Engine vs. Instance
+| Term | Meaning |
+| --- | --- |
+| PPA | The archive software, including import, processing, query, and maintenance |
+| Archive instance | One root, archive identity, configuration, warehouse schema, and serving state |
+| Vault | Canonical Markdown cards and associated files |
+| Card | A typed record with structured fields, optional body, and field provenance |
+| Catalog | Searchable fields, passages, and relationships prepared for queries across sources |
+| Serving index | The published Rust index used for live retrieval |
+| Warehouse | Postgres data derived from the vault for materialization, embedding work, and supported analytics |
+| Connector or adapter | Code that brings source records into an archive |
+| Extractor | Code that derives a typed record from source material, such as a flight from an email |
+| Linker | Code that proposes relationships between records |
 
-| Layer    | Name                           | Scope                                                                  |
-| -------- | ------------------------------ | ---------------------------------------------------------------------- |
-| Engine   | PPA                            | Universal protocol, MCP server, index, projections, retrieval pipeline |
-| Instance | HFA (Heeger-Friedman Archives) | One family's vault, seed material, instance configuration              |
+HFA means Heeger-Friedman Archives, the maintainer's archive instance. Older reports also mention Arnold and Ginger, names of machines in that deployment. None is a required host name, path, or instance identity for PPA.
 
-## Repo and Package Names
+## Packages and entrypoints
 
-| Artifact              | Canonical        | Current (transitional)                   |
-| --------------------- | ---------------- | ---------------------------------------- |
-| MCP server repo       | `ppa`            | `ppa` (split complete)                   |
-| Source sync module    | `ppa-sync`       | `archive_sync` (in `ppa/`)              |
-| Vault repair module   | `ppa-doctor`     | `archive_doctor` (in `ppa/`)            |
-| Shared schema library | `ppa-core`       | `hfa` (in `ppa/`)                       |
-| Arnold integration    | `hey-arnold`     | `hey-arnold` (thin consumer after split) |
+Current packages are `archive_vault`, `archive_sync`, `archive_cli`, `archive_engine`, `archive_crate`, `archive_doctor`, and `archive_auth`. Use those names when pointing to code. Earlier `hfa` and `archive_mcp` package names in historical plans are not current import paths.
 
-## Python Import Paths
+The command line is `ppa`, with `python -m archive_cli` as the module entrypoint. MCP tools use the `archive_` prefix. Examples include `ppa read` / `archive_read`, `ppa graph` / `archive_graph`, and `ppa analytics` / `archive_analytics`.
 
-Frozen during the transition. Renamed to `ppa` namespace after the split is confirmed stable.
+## Identifiers and configuration
 
-| Package          | Role                                 | Future name  |
-| ---------------- | ------------------------------------ | ------------ |
-| `archive_mcp`    | MCP server, index, retrieval         | `ppa`        |
-| `hfa`            | Shared schema, vault I/O, provenance | `ppa_core`   |
-| `archive_sync`   | Source adapters                      | `ppa_sync`   |
-| `archive_doctor` | Vault validation and repair          | `ppa_doctor` |
+Existing card UIDs use the `hfa-` prefix. Preserve those stable IDs even though the product is called PPA. Card types use underscores, such as `email_message` and `meal_order`.
 
-## Environment Variables
+New product configuration uses `PPA_*` environment variables and the instance configuration file. Historical launchers may translate older variable names. The [runtime contract](PPA_RUNTIME_CONTRACT.md) defines current precedence and supported settings.
 
-Canonical prefix: `PPA_`. No aliases in PPA code. Integration layers (e.g. the hey-arnold Makefile) are responsible for translation.
+## Documentation
 
-See [PPA_RUNTIME_CONTRACT.md](PPA_RUNTIME_CONTRACT.md) for the full env contract.
+Use the [documentation index](README.md) to place new guides. A general guide should work with an independent archive. Name any host or account assumption in an operational runbook, and date reports that describe a particular run.
 
-## Service and Timer Names
-
-Canonical prefix: `ppa-`. Systemd unit renames are complete.
-
-| Canonical                   | Status    |
-| --------------------------- | --------- |
-| `ppa-mcp.service`           | Deployed  |
-| `ppa-postgres.service`      | Deployed  |
-| `ppa-health-audit.service`  | Planned   |
-| `ppa-index-refresh.service` | Planned   |
-| `ppa-embed-pending.service` | Planned   |
-| `ppa-sync@.service`         | Planned   |
-| `ppa-sync@.timer`           | Planned   |
-
-Instance timer examples: `ppa-sync@gmail-messages.timer`, `ppa-sync@calendar-events.timer`.
-
-## Job and State Naming
-
-| Concern          | Pattern                                      |
-| ---------------- | -------------------------------------------- |
-| Job family       | `ppa-sync-`                                  |
-| State root       | `state/ppa/`                                 |
-| Per-source state | `state/ppa/sources/<source_id>.json`         |
-| Run ledger       | `state/ppa/runs/<job_name>/<timestamp>.json` |
-| Lock files       | `state/ppa/locks/<job_name>.lock`            |
-
-## Documentation Naming
-
-| Scope             | Pattern              |
-| ----------------- | -------------------- |
-| Architecture docs | `PPA_*.md`           |
-| Runbooks          | `ppa-*.md`           |
-| Arnold-only docs  | `arnold-ppa-*.md`    |
-| Migration docs    | `ppa-migration-*.md` |
-
-## Make Targets
-
-Canonical prefix: `ppa-`. Rename from `hfa-archive-*` is complete.
-
-Safe targets (no Python invocation on Arnold):
-
-- `make ppa-health`
-- `make ppa-pg-backup`
-- `make ppa-mcp-status`
-
-## CLI Commands
-
-The canonical CLI entrypoint remains `python -m archive_cli` during transition, evolving to `ppa` after the split.
-
-| Command      | Action                       |
-| ------------ | ---------------------------- |
-| `ppa search` | Semantic/lexical search      |
-| `ppa trace`  | Graph edge traversal         |
-| `ppa recall` | Read a specific card by UID  |
-| `ppa status` | Health and embedding backlog |
+Keep existing document paths stable when rewriting them so earlier links still work. Do not rename a code package, command, or UID to match a prose edit.

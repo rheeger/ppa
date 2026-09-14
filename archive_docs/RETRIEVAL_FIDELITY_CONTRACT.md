@@ -1,9 +1,8 @@
-# Retrieval Fidelity Contract (P01-A)
+# Retrieval fidelity contract
 
-This document records the **actual warehouse → serving export** mapping. Serving
-field names are not warehouse column names. There is no warehouse `trust`
-column; export must not invent one and then treat the invented value as source
-truth.
+A query across services needs to preserve what each source established and which connections PPA inferred. This contract maps warehouse fields into the native search index. Export must retain those distinctions, including missing evidence.
+
+Serving fields and warehouse columns have different names. For example, the warehouse has no `trust` column; an export must not invent one and present it as a source fact.
 
 Shared record types (`EmbeddingSpec`, `ServingEdge`, `EvidenceEnvelope`,
 `ChunkEvidenceRef`, …) are imported from `archive_engine.contracts`. Consumers
@@ -43,7 +42,7 @@ must not redefine them.
 | `aliases` | `people.aliases_json` (person typed projection) | `[]` when table/row absent |
 | `emails` | `people.emails_json` (person typed projection) | `[]` when table/row absent |
 | `external_ids` | `external_ids.external_id` (normalized unique strings) | `[]` |
-| `corpus_state` | `card_corpus_state.corpus_state` | `unknown` — **never** `COALESCE` to `active` |
+| `corpus_state` | `card_corpus_state.corpus_state` | `unknown`; never `COALESCE` to `active` |
 | `retrieval_weight` | derived only from a **known** corpus state | `null` when state is unknown |
 | `provenance_summary` | no card-level warehouse provenance table | `unknown` |
 
@@ -75,7 +74,7 @@ Promoted inferred links live on `link_candidates` + `link_decisions` +
 | `edge_type` | `edges.edge_type` | `link_candidates.proposed_link_type` | skip empty |
 | `field_name` | `edges.field_name` | `promotion_queue.target_field_name` | `""` |
 | `direction` | always `forward` (source → target) | always `forward` | kept even when traversal also discovers the reverse |
-| `confidence` | `1.0` via the existing edge-confidence contract (`index_query._graph_neighbor_uids`) | `link_decisions.final_confidence` | omitted / `null` — not `1.0` |
+| `confidence` | `1.0` via the existing edge-confidence contract (`index_query._graph_neighbor_uids`) | `link_decisions.final_confidence` | omitted or `null`, not `1.0` |
 | `method` | `unknown` (no method column) | `inferred` (row origin is the derived-link surface) | `unknown` |
 | `evidence_uids` | not in `edges` | `link_evidence` is feature rows, not card UIDs | `[]` |
 | `trust` | **derived** from `confidence` for old readers | **derived** from `confidence` only when present | omitted; never default `1.0` |
@@ -87,7 +86,7 @@ unknown (no graph boost).
 
 ## Exact identifier retrieval
 
-Supported identifiers, 100% coverage on exported live (non-suppressed) cards:
+Exact identifier lookup must cover these fields on exported live (non-suppressed) cards:
 
 - `cards.uid` (exact)
 - `cards.slug` (case-insensitive)
@@ -96,8 +95,7 @@ Supported identifiers, 100% coverage on exported live (non-suppressed) cards:
 - `cards.rel_path`
 
 Hits cite `card_uid`, `source_revision` (`content_hash`), `serving_generation`,
-and `match_channel=exact`. Stale span quotes are out of scope until P01-B
-freezes `ChunkEvidenceRef`.
+and `match_channel=exact`. The shared `ChunkEvidenceRef` contract identifies the revision and source span used for quoted passages.
 
 ## Embedding spec
 
@@ -112,7 +110,7 @@ freezes `ChunkEvidenceRef`.
 - `chunk_schema` ← `CHUNK_SCHEMA_VERSION`
 
 `QueryEmbedCache` may reuse a vector only under the same spec identity.
-P01-B owns ANN artifact layout and must not reopen this mapping.
+The vector artifact layout must preserve the same embedding identity.
 
 ## Compatibility
 
@@ -127,8 +125,6 @@ emit `method` / `confidence` / `evidence_uids` / `direction` additively.
 
 ## Ranking version
 
-P01-A did **not** bump `SERVING_INDEX_FORMAT_VERSION`. P01-B freezes ANN
-format at version `2` (`ivf_centroids_v2`): centroids, assignments, checksum,
-and `EmbeddingSpec` are required. Old modulo-IVF generations fail closed.
-Ranking/pipeline identity remains `2026.09.06.p01a`. Quarantine weight is
-`0.35`, not the previous native `0.15`. Card/edge field mapping is unchanged.
+The native serving format is version `2`, with vector implementation `ivf_centroids_v2`. Centroids, assignments, checksums, and `EmbeddingSpec` are required. Older modulo-IVF generations are rejected and need a rebuild.
+
+Native ranking uses `p01b2-rrf-1`; the Python retrieval pipeline identifies itself as `2026.09.06.p01b2`. The quarantine weight is `0.35`. These values are defined in `archive_crate/src/serving_index/schema.rs` and `archive_cli/retrieval_pipeline.py`.

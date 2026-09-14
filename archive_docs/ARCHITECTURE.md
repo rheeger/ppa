@@ -1,137 +1,56 @@
-# PPA Architecture
+# How PPA works
 
-## Overview
+PPA prepares records across services before an agent asks a question. Imports preserve source content in readable files. Processing gives those records common fields, searchable passages, and relationships that later questions can reuse.
 
-Typed cards with YAML frontmatter, an optional body, and field-level provenance are canonical. You own those files. Adapters and connectors write cards. Doctor and maintain commands keep the vault and derived indexes honest. CLI and MCP query the Rust serving index published under `<vault>/_meta/rust-search-index` (`ACTIVE` generation). Postgres is the derived warehouse and test oracle, not the live query engine. The agent is a client. It is not the archive. The product story is [README.md](../README.md).
+The archive and the search catalog have different jobs. The archive keeps the history you own; the catalog makes it practical to work with that history across providers and years of activity.
 
-The current packages are `archive_vault`, `archive_sync`, `archive_cli`, `archive_doctor`, `archive_engine`, and `archive_crate`. There is no `skills/hfa/` or `skills/archive-sync/` tree. `ppa/` is this repository, not an external consumer via `HFA_LIB_PATH`.
-
-## Core Design Principles
-
-1. Markdown is the storage format, not a derived export.
-2. Every meaningful field on disk is schema-validated.
-3. Every non-empty field written by the system has provenance.
-4. Deterministic data stays deterministic. LLMs can enrich, not invent protected fields.
-5. Imports are idempotent and safe to re-run.
-6. Vault behavior is configurable via a versioned instance file (`ppa.json`) plus `PPA_*` env. CWD discovery is a legacy adapter, not the scheduled-job contract.
-7. Each archive instance has its own root, archive ID, warehouse schema, serving generation, and checkpoints. Saved scopes are reusable **filters**, not tenancy.
-
-## Main Components
-
-### `archive_vault`
-
-Card schema (`CARD_TYPES`, 36 keys), vault I/O, provenance, UID, and path containment.
-
-### `archive_sync`
-
-Source adapters, extractors, enrichment, connectors (`sample.fixture`, SDK-migrated `gmail-messages` / `calendar-events`, remaining legacy adapters). Live Google is not implied by a fixture setup.
-
-### `archive_cli`
-
-CLI, MCP server, warehouse load, maintain/publish, status/readiness, setup/config/connect/backup adapters.
-
-### `archive_engine`
-
-Instance config, `ArchiveIdentity`, `AccessContext`, saved scopes, runtime ports.
-
-### `archive_crate`
-
-Rust walk, cache, materialize, chunk, person-batch, validator, and serving-index search/query/vector/hybrid/graph/timeline/neighbors. Incremental Rust remains (ANN fidelity, publication). A greenfield rewrite of scanner / FTS / MCP is not a current TODO.
-
-### `archive_doctor`
-
-Validate, dedupe, stats, vault quality.
-
-## Serving vs warehouse
-
-| Layer                   | Role                                                                         |
-| ----------------------- | ---------------------------------------------------------------------------- |
-| Vault Markdown          | Canonical. `read` grounds here.                                              |
-| Rust serving index      | Live MCP/CLI query. Published by `maintain` / `rebuild-indexes`.             |
-| Postgres                | Derived warehouse, embeddings admin path, gate/corpus evidence, test oracle. |
-| pgvector / Postgres FTS | Retired as live retrieval.                                                   |
-
-A config manifest is **not** freshness. Per-source staleness and per-stage watermarks (journal / materialized / published) are the honesty surface.
-
-## Card Anatomy
-
-Every card has three layers:
-
-1. YAML frontmatter — `uid`, `type`, `source`, `summary`, and type-specific fields.
-2. Markdown body — notes that do not belong in schema fields.
-3. Provenance block — hidden HTML comment tracking which step wrote each field.
-
-## Type System
-
-`CARD_TYPES` has **36** keys: `person`, `place`, `organization`, communication (`email_*`, `imessage_*`, `beeper_*`), `calendar_event`, `media_asset`, `document`, `meeting_transcript`, finance/health (`finance`, `medical_record`, `vaccination`), git (`git_repository`, `git_commit`, `git_thread`, `git_message`), derived transactions (`meal_order`, `grocery_order`, `ride`, `flight`, `accommodation`, `car_rental`, `purchase`, `shipment`, `subscription`, `event_ticket`, `payroll`), and system types `knowledge` / `observation`.
-
-`knowledge` and `observation` stay in schema so a later increment can write sourced cards. There is no populated knowledge cache and no 46-facet living profile. `archive_knowledge` falls back to search.
-
-## Vault Layout
-
-An independent instance is a directory that owns `ppa.json` (or `_meta/ppa-instance.json`) plus card trees. Typical families:
-
-```text
-<instance-root>/
-  ppa.json
-  People/
-  Entities/Organizations/
-  Email/YYYY-MM/
-  Calendar/YYYY-MM/
-  _meta/rust-search-index/
+```mermaid
+flowchart LR
+    Sources[Services, libraries, and exports] -->|Import and refresh| Archive[Readable archive files]
+    Archive -->|Index and link| Catalog[Search catalog and relationships]
+    Catalog -->|Retrieve evidence| Clients[CLI and MCP clients]
+    Clients -->|Read saved records| Archive
 ```
 
-The historical HFA sketch (`hf-archives/`, `IMessage/`, seed path) is one instance, not the default for new installs. New instances do not inherit `local_seed_living_corpus`.
+## Why the parts are separate
 
-## Graph
+### Keep records independently of their source
 
-Warehouse `edges` have no `method` / `confidence` / `evidence_uids`. Serving graph stores `trust` (default 1.0). Seed-link confidence is gated.
+Each record is a Markdown file with YAML fields for identity, dates, source references, and relationships. Importers preserve account and provider identifiers so repeated imports can update the same record. The files remain readable when the source account is inaccessible or the owner moves to different software.
 
-## Identity Resolution
+Indexes are derived from those records. Recovery needs the files and saved correction decisions before indexes can be rebuilt. That separation lets retrieval improve while preserving an independent copy of someone's history.
 
-1. Exact aliases in `_meta/identity-map.json`.
-2. Fuzzy resolution over `People/`.
+### Prepare connections once for later questions
 
-## Provenance And Indexing Contract
+A meeting, its transcript, and its follow-up messages arrive in different formats. Normalization gives them shared fields, while linkers use identifiers and corroborating evidence to propose relationships. Accepted links become available to every client querying the archive.
 
-1. Canonical field provenance lives on the markdown card.
-2. Derived indexes may mirror provenance-derived metadata; they do not replace it.
-3. Embeddings are lossy search artifacts, never truth.
-4. Additive schema evolution happens in card models first.
-5. Agent answers must ground themselves in canonical cards.
+Source fields, inferred relationships, and corrections remain distinguishable. Models can classify or enrich eligible fields; protected identifiers and amounts follow deterministic rules. An inferred connection does not rewrite what a source established.
 
-## Anti-Hallucination Architecture
+### Retrieve the amount of context a question needs
 
-1. Strict schema on write via `validate_card_strict()`
-2. Permissive read for forward compatibility
-3. Provenance coverage enforced before writes
-4. `DETERMINISTIC_ONLY` fields blocked from `method="llm"`
-5. LLM outputs schema-validated, provenance-tagged, cached
+Rust serves live retrieval through keyword, semantic, and hybrid search. Chunking makes short passages within long conversations searchable; neighboring messages help an agent read them in context. Structured queries and analytical workflows can operate on eligible stored records without putting the entire archive into a model's conversation.
 
-## Data Flows
+The command line and Model Context Protocol (MCP) expose the same archive operations. Clients can search, follow relationships, and read the saved evidence without calling each original provider. Remote agents receive the results returned to them.
 
-### Import
+### Keep earlier processing useful
 
-`source -> connector/adapter -> write_card()` inside the instance root.
+Maintenance processes changed records and reuses compatible embeddings for unchanged text. It publishes a complete index before making an update available. A failed publication leaves the previous index available to readers.
 
-### Maintain / publish
+Nightly refresh requires a configured schedule and working source access. Each source reports its own freshness, and export imports need a new export to add later activity.
 
-`vault -> processors (optional) -> warehouse materialize -> serving publish ACTIVE`
+## Technologies
 
-### Agent Retrieval
+| Technology | Role |
+| --- | --- |
+| Markdown and YAML | Readable records with structured fields and source provenance |
+| Python and Pydantic | Source integration, processing, and record validation |
+| Rust and Tantivy | Native indexing and keyword retrieval |
+| Embeddings and a trained inverted-file (IVF) vector index | Semantic retrieval across record types |
+| Reciprocal rank fusion (RRF) | Combine keyword and semantic rankings for hybrid search |
+| Postgres and pgvector | Derived warehouse, embedding storage, and supported analytical queries |
+| SQLite | Local change journals and processing caches |
+| Model Context Protocol (MCP) | A common archive interface for compatible agents |
 
-`query -> Rust serving (exact/structured/lexical/vector/hybrid/graph/timeline) -> canonical read`
+The current runtime requires Python 3.10 or newer, the native Rust extension, and Postgres with pgvector. Semantic search requires configured embeddings. Remote embedding or enrichment providers receive the content sent to them under the supported provider controls.
 
-### Instance health
-
-`ppa status` / `ppa instance-status` / `ppa readiness` evaluate the **current instance**. Missing source or provider capability is `pending` / `unavailable`. Stale or down sources stay visible. Formal `ready: true` is not a product claim. `ppa analytics` / `archive_analytics` are shipped. `production_proven=false` until a long soak. See [STATUS.md](STATUS.md).
-
-## Operational Invariants
-
-- `uid` always starts with `hfa-`
-- `source` is always a list
-- writes are atomic
-- the vault remains canonical
-- derived indexes must be rebuildable
-- two instances may share external IDs and still keep distinct archive IDs, roots, schemas, serving paths, and checkpoints
-- Arnold HTTP MCP is a historical host choice, not the product architecture
+The [specification](SPECIFICATION.md) defines source coverage, query behavior, and privacy limits. The [engine contract](ENGINE_CONTRACT.md) describes the shared types and runtime interfaces used to extend PPA.

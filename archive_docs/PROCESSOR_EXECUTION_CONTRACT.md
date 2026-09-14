@@ -1,24 +1,19 @@
-# Processor execution contract (P03-A)
+# Processor execution contract
 
-This is the scheduler and revision-receipt contract. It does not claim
-embedding allowlists (P03-B), dynamic derived outputs (P03-C), or a unified
-`maintain` path (P03-D).
+An archive can contain a newly imported email before its extracted purchase or updated search entry is ready. Processor receipts identify which outputs were produced for which input revision. Publication uses that evidence so a failed step cannot make unfinished records look current.
 
-Query quality here means a later reader can tell whether a derived card was
-actually produced for a specific input revision — or that it stayed blocked —
-instead of trusting a loop that marked every requested UID complete.
+This page defines scheduler states, dependencies, revision receipts, and embedding selection. The [processor validation report](reports/processor-execution-validation.md) records the integrated maintenance checks.
 
-## Import the frozen receipt
+## Shared receipt
 
-P03 fills `OutputReceipt`. Do not redefine it.
+Processors populate the shared `OutputReceipt` type. Import it rather than redefining it.
 
 ```python
 from archive_engine.contracts import OutputReceipt, OutputRevision
 from archive_sync.processors.scheduler import ProcessorScheduler
 ```
 
-`OutputReceipt.outputs` is the compiler artifact later invalidation (P07, a
-future assertion layer) uses: created/changed/deleted UID+revision pairs.
+`OutputReceipt.outputs` lists the identifiers and revisions of records created, changed, or deleted by a processor. Later processing uses those pairs to identify outputs affected by an input change.
 
 ## Unit of completion
 
@@ -54,14 +49,14 @@ Legacy `processor_input_state` rows without a matching receipt are
 Declarations keep `depends_on` as the required-edge shorthand. Explicit edges
 use `ProcessorDependency(processor_key, kind, when)`:
 
-- `required` — failure or block of that prerequisite for this input revision
+- `required`: failure or block of that prerequisite for this input revision
   prevents the descendant from calling its executor
-- `optional` — failure does not block; the digest omits the failed optional
-- `conditional` — applies only when `when` (`field=value`) matches the snapshot
+- `optional`: failure does not block; the digest omits the failed optional dependency
+- `conditional`: applies only when `when` (`field=value`) matches the snapshot
 
 A failed prerequisite blocks **only that input's** descendants. Unrelated
 inputs continue. A processor that is not in the current run does not invent a
-failure; missing receipts are unknown lineage, not a silent complete.
+failure; missing receipts leave the dependency history unknown.
 
 Static cycles and unknown keys in the provided declaration set are rejected
 with visiting/visited DFS (`ProcessorGraphError`).
@@ -77,22 +72,22 @@ Restart retries `pending`, expired `running`, and `retryable_failure`.
 `complete` / `valid_no_output` for the current revision+digest are
 `already_current`.
 
-## Embedding selection (P03-B)
+## Embedding selection
 
 Dirty embed must pass `uid_allowlist` and/or `chunk_key_allowlist` into
 `store.embed_pending`. The predicate is applied in SQL before `limit`, which
 is only a budget on the already-selected pending set. Compatible
 `EmbeddingSpec` cache hits reuse existing rows and do not call the model.
 Provider failure or leftover pending chunk keys leave that card
-`failed`/`pending` — they do not mark it complete.
+`failed` or `pending`; neither state marks it complete.
 
 Unscoped backlog drain is reserved for the existing admin route
 (`ppa embed-pending`, MCP `archive_embed_pending`, maintain's explicit
 `unscoped=True` call).
 
-## What P03-A/B do not change
+## Integration with maintenance
 
-Dynamic enqueue of created/changed UIDs is P03-C. Unified `maintain` is P03-D.
+Maintenance can enqueue newly created or changed records for further processing. Receipts carry their revisions through to publication, so a source update can make its derived records searchable in the same run. The [processor validation report](reports/processor-execution-validation.md) records the integration checks.
 
 ## Schema
 

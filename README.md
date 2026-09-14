@@ -1,284 +1,99 @@
-# PPA - Personal Private Archives
+# PPA
 
-PPA is the evidence layer you own, and that any agent can use.
+PPA (Personal Private Archives) builds a searchable, connected archive of your digital history on your own machine. It brings records from the services you use into one catalog that you control, for you and the agents you choose.
 
-It stores the records your life or organization already creates: email, messages, calendar events, files, photos, health records, financial exports, code history, receipts, travel, and meetings. Those records become typed Markdown cards on disk. You keep the files. You pick the agent. The archive does not move when the agent does.
+You've already created years of useful history through your conversations, purchases, documents, and plans. Finding something later can depend on remembering where it happened and whether that account still holds the record. When an answer spans several services, you also have to put the pieces together.
 
-A cloud agent (Cursor, Claude, Muse, Grok, Hermes, Instinct, OpenClaw, or the next one) can write and reason. It cannot remember your last tetanus shot, which hotel was on the December trip, or what you and Sarah actually said in 2019, unless that evidence lives somewhere you control. Provider memory is their product. It stays in their cloud, in their format, for as long as they keep the account. PPA is your archive.
+PPA imports that history, makes it searchable, and connects records that describe the same people and events. You can return to a conversation with only a rough recollection or reconstruct an earlier decision. Your history remains useful as you change services and agents.
 
-When an agent is connected to PPA, it looks up your cards, reads them, and cites them. You can open the same file and check the cite. When you switch agents, the next one gets the same tools and the same evidence. You do not re-teach it your life.
+## One history across services
 
-PPA finds cards, ranks them, and shows why they matched. It does not invent a biography, and it does not replace the cards with a generated answer.
+A trip leaves a booking in email, plans in messages, an event on a calendar, and charges in a finance export. A refund may arrive weeks later. No single record tells you what the trip cost or how the plans changed.
 
-## Why an agent needs this
+An agent can start with the booking, follow relationships across the archive, and reconcile supported charges and refunds. PPA distinguishes booking estimates from actual charges and keeps currencies separate, with arithmetic and source records you can inspect.
 
-Without PPA, the agent only has what that product stored or what it finds on the public web. With PPA it can open the vaccination card, receipt, or thread and cite the identifier; filter by type (`flight`, `meal_order`); follow a charge to the purchase it paid for; and say when the archive does not have the data. The model is still the model. The cards stay the source of truth.
+Other questions draw on different parts of the same archive:
 
-## What that feels like
+| You want to know | The archive helps an agent bring together |
+| --- | --- |
+| What did we agree before the project started? | Meeting transcripts, calendar events, and follow-up conversations |
+| Who recommended that place, and what did they say? | A matching message, its surrounding conversation, and the sender's contact record |
+| What happened around the time I moved? | Dated conversations, documents, events, and photo metadata |
+| Did I cancel that subscription after the price changed? | Imported billing, renewal, and cancellation records in date order |
 
-You ask in the client you already use. The agent calls PPA over MCP (the Model Context Protocol). You see identifiers you can open as Markdown. If two cards disagree, you see both. If a person lookup is ambiguous, the agent lists candidates instead of picking a household winner.
+Connecting an agent to separate services gives it access to each service's search. PPA prepares a shared catalog before the question arrives. The catalog and its relationships carry forward between tasks and agents. You can ask about the event you remember without first deciding which app to search.
 
-These are the kinds of questions that become answerable, and what you get back:
+## A history you can keep
 
-- "Where did I get that delivery banh mi?" looks across food orders, receipts, finance records, and messages, not one inbox and not the agent's chat history.
-- "What was I doing around December 27?" pulls calendar, travel, photos, purchases, rides, and conversations from the same window.
-- "Which flight, hotel, and rental car were part of this trip?" follows booking codes, airports, cities, and dates, not titles that happen to sound alike.
-- "Which purchase matches this credit-card charge?" reconciles merchant, amount, and date.
-- "Tell me about my relationship with Sarah" combines her person card, threads, calendar events, photos, and related cards. Two people who share a household phone stay separate until you can tell them apart.
-- "What subscriptions am I paying for?" and "What did that trip cost?" read every matching card the archive has, and say when coverage or freshness is incomplete. They do not invent a current subscription or convert currencies.
+Your archive lives in Markdown files with structured fields and source references. You can inspect, copy, back up, and move those files. They remain readable outside PPA.
 
-A folder indexer finds files. A notes app finds notes you wrote. A cloud agent finds what it was allowed to remember. PPA is for records that already live in products that were never meant to work together, turned into something you or any agent can query on purpose, and that you can take with you.
+You can keep querying imported records after an account closes or a provider shuts down. Future imports still depend on available source data, but the copy you already hold stays under your control.
 
-Worked examples of the same "without the archive / with the archive" contrast live in [What changes when an agent has PPA](archive_docs/ARCHIVE_SUPERPOWER_DEMO.md).
+As the years add up, you can revisit an earlier part of your life without keeping every old account active. Changing agents does not require importing that history again or trusting one model to remember it for you.
 
-## What you get
+## What goes into the archive
 
-### One archive across the systems you already use
+PPA starts with records you've already created. The engine supports service connections, local libraries, and exports, with 36 record types across the following areas:
 
-PPA imports from services, exports, and local databases you already have, so an agent is not limited to the last prompt you typed:
+| Area | Current sources and records |
+| --- | --- |
+| Conversations and people | Gmail, iMessage, Beeper, Google and Apple Contacts, LinkedIn and Notion people exports |
+| Meetings and work | Google Calendar, Otter transcripts, local document libraries, GitHub repositories and activity |
+| Money and travel | Copilot finance CSVs; purchases, deliveries, rides, flights, accommodation, and rental cars extracted from supported emails |
+| Photos | Apple Photos metadata and labels |
+| Health | Apple Health exports and supported clinical record imports, including FHIR, CCD, and Epic EHI |
 
-- Communication and meetings come from Gmail (including people found in your mail), iMessage, Beeper, and Otter.ai. Those sources can stay live.
-- Calendar and contacts come from Google Calendar, Google Contacts, and Apple Contacts (Contacts.app). A hand-dropped VCF file is still an export import, not a nightly updater. Apple Contacts needs Automation permission for Contacts, the same class of macOS grant as iMessage Full Disk Access.
-- People directories come from LinkedIn exports, Notion people or staff CSVs, and people files you provide.
-- Files and code come from file libraries and GitHub.
-- Photos can be imported from Apple Photos. Health and medical records can be imported from Apple Health exports, clinical and EHR files, FHIR JSON, CCD/XML, PDFs, and Epic EHI TSVs. Live refresh for Photos and Apple Health is parked. The cards you already imported stay queryable.
-- Finance records come from Copilot transaction CSVs.
+Email extraction turns supported receipts and confirmations into records with dates, amounts, and identifiers that can be matched across services. Original messages remain available as evidence.
 
-Re-running an import updates the same cards instead of duplicating history. You do not re-type your life into each new agent.
+Incremental sources support scheduled refresh, including nightly maintenance. Export imports need new exports to capture later activity. Photos and Health currently use imports without active ongoing refresh. The [specification](archive_docs/SPECIFICATION.md#sources) defines source coverage and update methods.
 
-The same software can represent a person, a household, a company, or another organizational identity. Two archives on one machine stay isolated, so a work archive and a personal archive do not bleed into each other, and an agent attached to one cannot see the other.
+## Ask through the agents you choose
 
-### Cards that name what actually happened
+PPA exposes its archive through the Model Context Protocol (MCP) and a command-line interface. Compatible agents can combine retrieval operations as a question develops:
 
-Each card is a Markdown file with a type. A flight is a `flight`. A DoorDash receipt becomes a `meal_order`. An iMessage conversation is a thread plus its messages. You and an agent can filter by type instead of hoping a keyword hits the right blob of text, or hoping the agent's memory still has last Tuesday.
+- Search by exact words, meaning, or a combination of both, with filters for people, dates, sources, and record types.
+- Resolve a person across contact identifiers, follow relationships, and read the records behind a match.
+- Reconstruct a timeline and retrieve surrounding messages or passages to recover the context of a search result.
+- Count or sum eligible records, reconcile trip costs, and inspect the last observed subscription events.
 
-PPA models cards for:
+An agent retrieves passages and structured results as it needs them, so years of history do not have to fit into a conversation. PPA retrieves evidence and performs defined calculations; the agent interprets the results and writes the answer.
 
-- People, places, and organizations (`person`, `place`, `organization`)
-- Email, iMessage, and Beeper threads, messages, and attachments
-- Calendar events, photos and other media, documents, and meeting transcripts
-- Finance records, medical records, and vaccinations
-- Git repositories, commits, threads, and messages
-- Derived transactions: meals, groceries, rides, flights, stays, car rentals, purchases, shipments, subscriptions, event tickets, and payroll
+Analytical results report coverage, completeness, and freshness, so an agent can explain what a total includes. Unresolved identities and inferred relationships remain distinguishable from source facts. The archive describes what was imported, with its gaps still visible.
 
-A card should represent something that happened, a booking, a request, a transaction, a message, or a person or place. Marketing mail and passive notifications do not become cards unless they contain structured evidence of a real action.
+## How it works
 
-Every meaningful field records which step wrote it (an import, an enrichment pass, or a person). An agent can prefer the card's own fields over a generated summary, exact values over inferred ones, and the card body over a search snippet or a chat recollection.
+PPA separates the records you own from the indexes used to find them:
 
-### Enrichment that fills gaps without becoming the record
-
-Sparse imports get richer before you or an agent search them:
-
-- Email extractors classify threads, skip noise, and write typed cards for receipts, travel, purchases, subscriptions, rides, and payroll.
-- Thread enrichment adds summaries and the names of people and organizations mentioned in email, iMessage, and Beeper conversations.
-- Finance enrichment classifies who you paid (or who paid you) and links charges to people, organizations, purchases, meals, and subscriptions.
-- Document enrichment extracts text from supported files and adds summaries, dates, and names.
-
-Language models help with that work. Their outputs are checked against a schema, tagged with where they came from, cached, and safe to resume. The Markdown card stays the record. The enriching model is not the archive, and neither is the agent that later reads it.
-
-### Links that match how things actually connect
-
-Search by similarity is useful when you only remember the gist. That is also what a cloud agent does when it has no structure. Questions about a specific charge, trip, or meeting need links:
-
-- Finance reconciliation links a charge to the purchase, meal, or subscription it paid for.
-- Trip clustering groups flights, stays, and rental cars from airports, cities, dates, and booking codes.
-- Meeting linking connects a calendar event to the transcript and the email thread about that meeting.
-- Shipment linking connects a tracking notice to the purchase it belongs to.
-- Identity, communication, calendar, and media links connect a person to their messages, events, and photos.
-
-That is why an agent can answer "which hotel was on this trip?" by following a real link, not by hoping two titles sound alike in its context window. Confirmation codes, source emails, amounts, dates, tracking numbers, routes, calendar IDs, and shared participants beat similar-looking titles.
-
-When PPA walks from one card to a related card, the link has a type (paid-for, part-of-trip, same-meeting). Do not treat every related card as equally evidenced. Guessed "maybe related" links stay off unless you turn that path on.
-
-### Several ways to look things up
-
-You and an agent share the same lookup tools. A person uses the `ppa` command. An agent uses the matching MCP tools in Cursor, Claude Desktop, Codex, OpenClaw, or any other MCP client. The meanings are the same. Switching clients is a config paste, not a migration of your life.
-
-| When you or the agent want to                                             | Use                                                                           |
-| ------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| Open the actual card and cite it                                          | `ppa read` / `archive_read` (or `archive_read_many` for a batch)              |
-| Filter by type, source, person, organization, or date                     | `ppa query` / `archive_query`                                                 |
-| Find exact words                                                          | `ppa search` / `archive_search`                                               |
-| Find the meaning when you forgot the phrasing                             | `archive_vector_search`                                                       |
-| Combine words, meaning, and related cards                                 | `ppa hybrid-search` / `archive_hybrid_search`                                 |
-| Get a compact dated stack, with parent and attachment pointers            | `archive_evidence`                                                            |
-| Walk chronology, or ask what else happened around a time                  | `archive_timeline`, `ppa temporal-neighbors` / `archive_temporal_neighbors`   |
-| Identify someone by name, email, or phone                                 | `ppa person` / `archive_person`                                               |
-| See cards linked to one you already have                                  | `ppa graph` / `archive_graph`                                                 |
-| Ask about subscriptions, trip cost, or what changed since a point in time | `ppa analytics` / `archive_analytics`                                         |
-| See why a result ranked where it did                                      | `archive_retrieval_explain`                                                   |
-| Check whether the archive is in a state you should trust                  | `ppa status`, `ppa health`, `archive_status_json`, `archive_embedding_status` |
-
-Search hits, snippets, embeddings, and an agent's paraphrase are navigation. The Markdown card is the cite. After a hybrid hit in a long email or message thread, PPA can include the message before and after so the short answer is not stranded. Sources you have denied do not leak through those related cards.
-
-`archive_person` returns `unique`, `ambiguous`, or `unresolved`. It will not pick a household winner. A name that only appears as someone else's alias is not that person.
-
-`archive_knowledge` exists, but today it falls back to ordinary search. It is not a living profile of you, and it is not a substitute for reading cards.
-
-When results are thin or surprising, PPA records a lookup gap so maintenance can show where the archive needs more data, better extraction, or better linking. That is how the data layer stays honest for every agent you attach later.
-
-### Answers that stay honest
-
-PPA does the lookup. You or the agent do the reasoning. That split is the point. The agent can write. The archive holds the evidence.
-
-Analytics say when coverage or freshness is incomplete. Lookup only sees a finished, published search index, so a half-written rebuild cannot become the live one. If two cards disagree, you see both. A rebuilt index is not a license to invent a missing card.
-
-New mail and new imports land through `ppa maintain`. That command records what it built and publishes only the cards this run actually produced, so what you or an agent can ask matches what just arrived.
-
-### Files you own, on a machine you control
-
-The archive is a folder of Markdown. PPA calls that folder the vault. That is what you back up, copy, and keep when you change agents, laptops, or providers. The search index and the Postgres database are built from those files. If the index disappears, rebuild it from the vault.
-
-Embeddings and enrichment can use a local provider or a cloud API, depending on how you configure the instance. API keys stay in the client environment. Generated MCP config does not print them. A read-only tool profile lets an agent ask questions without changing the archive.
-
-```text
-Gmail, calendar, photos, exports
-  -> Markdown cards you own
-  -> search index (rebuilt from those cards)
-  -> CLI and MCP tools
-  -> you, or any agent you attach
+```mermaid
+flowchart LR
+    Sources[Services, libraries, and exports] -->|Import and refresh| Archive[Readable archive files]
+    Archive -->|Index and link| Catalog[Search catalog and relationships]
+    Catalog -->|Retrieve evidence| Clients[Your agents through MCP or CLI]
+    Clients -->|Read saved records| Archive
 ```
 
-Keeping the files separate from the index, and the archive separate from the agent, is what makes this safe. The archive can grow, the index can be rebuilt, embeddings can be regenerated, and you can change from Muse to Grok to OpenClaw, without surrendering the record.
+| Technology | What it does for the archive |
+| --- | --- |
+| Markdown and YAML | Keep record content, structured fields, and source provenance in readable files |
+| Python and Pydantic | Import source data, normalize records, and validate their structure |
+| Rust, Tantivy, and vector indexes | Serve keyword and semantic retrieval across the catalog |
+| Postgres and pgvector | Store the derived warehouse and embeddings, and support analytical queries |
+| SQLite | Track local changes and cache processing work |
 
-## How you use it
+Hybrid search combines keyword rankings with semantic matches from configured embeddings. Chunking makes short exchanges within long threads searchable; neighboring messages preserve their context. Linkers connect records through source identifiers and corroborating evidence, such as contact details and booking codes.
 
-A person can ask from the command line, which is the same lookup an agent will run:
+Maintenance processes changed records and reuses compatible embeddings for unchanged text, so refreshes do not need to repeat that processing. A failed index publication leaves the previous index available. Indexes are rebuildable from the archive and its saved correction decisions.
 
-```bash
-ppa search "banh mi"
-ppa hybrid-search "that flight to NYC"
-ppa query --type meal_order
-ppa temporal-neighbors "2025-12-27T18:00:00Z"
-ppa person "Sarah"
-ppa analytics subscriptions
-ppa analytics trip-costs
-ppa graph "People/sarah.md"
-ppa read "hfa-email-message-..."
-ppa status
-ppa health
-ppa maintain
-```
+Connector, record, and relationship contracts let developers extend coverage while keeping the same query interface. The [architecture](archive_docs/ARCHITECTURE.md) explains the components and runtime requirements.
 
-`ppa status` and `ppa readiness` describe the archive you are talking to right now. A new archive reports its own health. It does not copy a passing grade from another archive on the same machine. `ppa analytics` reports the cards you actually have, not every real-world event.
+## Control over access and processing
 
-To give any MCP agent the same tools:
+You choose what to collect and which clients may query it. Retrieval restrictions apply across search, reads, relationships, and totals. Separate archive instances can keep distinct histories apart.
 
-```bash
-ppa serve
-ppa mcp-config
-```
+Storage is local; processing depends on your configuration. Remote embedding and enrichment providers receive the text sent to them, and cloud agents receive the records returned to them. PPA has controls for supported provider requests and retrieval access. Encryption at rest remains the responsibility of the system storing the files. The [specification](archive_docs/SPECIFICATION.md#updates-and-control) describes these boundaries.
 
-Paste the generated config into Cursor, Claude Desktop, Codex, OpenClaw, or another MCP client. Details are in [MCP setup](archive_docs/MCP_SETUP.md). Agents should read the card before treating a search hit as a fact. Recipes for identifying a person, counting their channels, reading a dated stack, citing a fact, and reconstructing a story live in `.cursor/skills/archive-query/` and [Agent usage](archive_docs/AGENT_USAGE.md).
+## Development
 
-Admin commands such as `rebuild-indexes`, embedding backfills, and rebuilds of related-card links are in the [runtime contract](archive_docs/PPA_RUNTIME_CONTRACT.md). Restrict those tools with `PPA_MCP_TOOL_PROFILE` so a client that should only ask questions cannot change the index.
+PPA is in development and has not been released for general use. A supported onboarding flow is not available yet.
 
-## Getting started
-
-You need Python 3.10 or newer, and Postgres with the pgvector extension (used to store embeddings in the warehouse). Live lookup uses the Rust search index built from the vault, not Postgres full-text search. For meaning-based search, set an embeddings provider. `hash` is enough to test locally without an API. `openai` or a compatible API is what you want for quality.
-
-Supported search needs the native `archive_crate` library. Until that library is built, lookup tools will not run. A plain `pip install -e .` is not enough.
-
-Clean install (hashed wheels, Python 3.12):
-
-```bash
-python3.12 -m venv .venv
-source .venv/bin/activate
-pip install --require-hashes -r requirements/runtime-py312.lock
-python archive_scripts/build_release.py
-pip install --no-deps dist/ppa-*.whl
-ppa setup --non-interactive --from spec.json --apply
-```
-
-Developer checkout (you must build the native library):
-
-```bash
-git clone https://github.com/rheeger/ppa.git
-cd ppa
-python3.12 -m venv .venv
-source .venv/bin/activate
-pip install -e .
-# build archive_crate with maturin against this interpreter (see the install runbook)
-```
-
-See [install-independent-archive](archive_docs/runbooks/install-independent-archive.md).
-
-Start local Postgres and build the index:
-
-```bash
-cp .env.pgvector.example .env.pgvector
-make pg-up
-make bootstrap-postgres
-make rebuild-indexes
-make embed-pending
-```
-
-Then run `ppa serve` as above. Minimum environment:
-
-```bash
-export PPA_INDEX_DSN="postgresql://archive:archive@127.0.0.1:5432/archive"
-export PPA_INDEX_SCHEMA="archive_seed"
-export PPA_PATH="/path/to/vault"
-export PPA_EMBEDDING_PROVIDER="openai"
-export PPA_EMBEDDING_MODEL="text-embedding-3-small"
-```
-
-Remote Postgres over SSH is supported:
-
-```bash
-ppa serve --tunnel user@host
-```
-
-An agent on another machine can use HTTP MCP against the host that owns the vault. The files stay on that host. Details: [MCP setup](archive_docs/MCP_SETUP.md), [runtime contract](archive_docs/PPA_RUNTIME_CONTRACT.md), and [example MCP config](archive_docs/examples/ppa.mcp-example.json).
-
-## Keeping the archive current
-
-Day to day, you run incremental work so every attached agent sees new evidence without a full rebuild:
-
-1. New imports write vault cards.
-2. Extractors turn new source material into meals, flights, purchases, and the rest.
-3. The same person, place, or organization appearing in more than one source is merged into one card.
-4. Incremental rebuilds update search without reprocessing the whole vault.
-5. `ppa maintain` records that work and publishes only the cards this run built, so lookup sees what just arrived.
-
-A full rebuild is the reset button. The normal operating model is incremental.
-
-Large archives stay usable because walking the vault, building the index, and answering lookups run through a Rust layer. Health checks validate vault structure, embeddings, related-card links, and known question/answer pairs, so a broken lookup shows up as a failed check instead of a confident wrong answer in chat.
-
-## Production notes
-
-- Set `PPA_FORBID_REBUILD=1` around a real production database unless a rebuild is intentional.
-- Prefer a local build, dump, restore, or a written playbook for production index changes.
-- Use a read-only or remote-read MCP tool profile for agents that should never mutate the index.
-- Keep the vault backed up separately from Postgres. The Markdown folder is the record. The index can be rebuilt.
-- Run `ppa health`, `archive_status_json`, and embedding status checks before trusting lookup after imports or maintenance.
-
-Security, backup, and operations: [security model](archive_docs/SECURITY_MODEL.md), [backup and restore](archive_docs/PPA_BACKUP_AND_RESTORE.md), and [runbooks](archive_docs/runbooks/).
-
-## Tests
-
-```bash
-.venv/bin/python -m pytest archive_tests/
-```
-
-The suite covers card schema, adapters, index behavior, MCP and CLI tools, graph and linker behavior, destructive-operation safeguards, migrations, and live warehouse integration when available.
-
-## Documentation
-
-- [Current status](archive_docs/STATUS.md) (what is true today)
-- [Product capability matrix](archive_docs/PRODUCT_CAPABILITY_MATRIX.md)
-- [Archive superpowers](archive_docs/ARCHIVE_SUPERPOWER_DEMO.md) (with-archive vs without-archive)
-- [Architecture](archive_docs/ARCHITECTURE.md)
-- [Indexing](archive_docs/INDEXING.md)
-- [Agent usage](archive_docs/AGENT_USAGE.md)
-- [MCP setup](archive_docs/MCP_SETUP.md)
-- [Contributor playbook](archive_docs/PLAYBOOK.md)
-- [Runtime contract](archive_docs/PPA_RUNTIME_CONTRACT.md)
-- [Card type contracts](archive_docs/CARD_TYPE_CONTRACTS.md)
-- [Retrieval contract](archive_docs/RETRIEVAL_CONTRACT.md)
-- [Linker architecture](archive_docs/LINKER_ARCHITECTURE.md)
-- [Contributing linkers](archive_docs/CONTRIBUTING_LINKERS.md)
-
-## Contributing
-
-PRs are welcome. Run the focused tests for the area you touch, and run `pytest` for changes to card schemas, adapters, index materialization, retrieval, MCP, migrations, linkers, or operational safety. If CLI, environment, or MCP semantics change, update [the runtime contract](archive_docs/PPA_RUNTIME_CONTRACT.md). That file is the automation handshake. How to add a card type, adapter, extractor, or linker is in the [contributor playbook](archive_docs/PLAYBOOK.md).
+The [specification](archive_docs/SPECIFICATION.md) defines current capabilities and limits. The [documentation index](archive_docs/README.md) links to technical contracts for people exploring how to build on PPA.

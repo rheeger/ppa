@@ -1,39 +1,29 @@
 # Connector template
 
-Copy this directory. Do not edit `archive_sync/handler.py` or add a
-source-specific `if` in core dispatch.
+Use this package to bring a new service or export into an independent PPA archive. Its synthetic records let another contributor check identity, field ownership, and replay without live credentials.
 
 ## Files
 
-- `manifest.json` — compatibility contract. Validated before `connector.py` loads.
-- `connector.py` — `fetch` + `normalize` + `register_connector`.
-- `fixtures.json` — synthetic provider page. Include a negative that must not emit.
+| File | Purpose |
+| --- | --- |
+| `manifest.json` | Declares compatibility, source ownership, accounts, and lifecycle behavior |
+| `connector.py` | Implements fetch, normalize, and factory registration |
+| `fixtures.json` | Supplies a synthetic provider page, including a case that must not emit |
 
-No live credentials. No seed vault. No warehouse SQL.
+## Try the template
 
-## Check
+From a configured developer checkout:
 
 ```bash
 unset PPA_TEST_PG_DSN
-.venv/bin/python -m archive_sync.connectors.cli check \
+ppa connector check \
   --package archive_docs/examples/connector-template \
   --vault /tmp/ppa-connector-check \
   --output /tmp/ppa-connector-check/verdict.json
 ```
 
-Compatible means: manifest parses, two accounts with the same provider ID stay
-distinct, replay creates zero extra cards, owned fields are populated, and
-fixture negatives are not promoted onto source fields.
+The check verifies that the manifest parses, two accounts with the same provider ID stay distinct, replay creates no extra cards, and owned fields are populated. Incompatible SDK or engine versions fail before writing.
 
-Incompatible `sdk_version` / engine range fails before any write.
+Copy the directory for your connector, replace the fixture and implementation, then register your factory with `register_connector("your.id", factory)`. Keep source-specific dispatch out of `archive_sync/handler.py` and write through the contained writer.
 
-## Register
-
-`register_connector("your.id", factory)` in your package. That is the only
-registration step. P09 will hang the check command on the product CLI.
-
-## Remaining adapters
-
-`python -m archive_sync.connectors.cli legacy-list` prints the adapters that
-still use the pre-SDK ingest path. Only `gmail-messages` and `calendar-events`
-are migrated through the adapter bridge. Do not claim the rest have moved.
+The [connector SDK guide](../../CONNECTOR_SDK.md) defines the full contract. Use `ppa connector legacy-list` to inspect adapters still waiting for migration.

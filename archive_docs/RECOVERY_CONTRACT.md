@@ -1,12 +1,8 @@
-# Recovery Contract
+# Recovery contract
 
-This document is the P07-A recoverability contract. It describes the versioned
-archive manifest and the fail-closed rules for enumerating a synthetic archive.
-It does not claim that a live seed backup exists.
+Restoring a personal archive should recover the records and the decisions that shaped them, including identity corrections. The recovery manifest inventories required state and verifies its integrity before a restored archive can become active.
 
-Canonical markdown remains the source of meaning. The manifest is an inventory
-and integrity record so a later restore can tell whether the same story is still
-queryable.
+Canonical Markdown remains authoritative for record contents. The manifest describes what must survive and what can be rebuilt. A manifest records the state of the archive it inventories; it does not establish that a separate deployment has a verified backup. See [backup and restore](PPA_BACKUP_AND_RESTORE.md) for the operating workflow.
 
 ## Format
 
@@ -16,7 +12,7 @@ queryable.
 | `format_version` | `1` |
 | `required_versions.recovery_manifest` | must equal `1` |
 | `missing_state_policy` | `reject_required` |
-| `archive_id` | P02 binding via `archive_engine.changes.recovery_checkpoint_binding` when `_meta/change-journal.sqlite3` exists; otherwise `{status: unavailable, reason: awaiting_p02_journal_integration, value: null}` |
+| `archive_id` | Binding via `archive_engine.changes.recovery_checkpoint_binding` when `_meta/change-journal.sqlite3` exists; otherwise `{status: unavailable, reason: awaiting_p02_journal_integration, value: null}` |
 | `checkpoint` | same binding as `archive_id` |
 
 Readers reject an unknown `format_name`, an unsupported `format_version`, a
@@ -24,19 +20,18 @@ missing `required_versions` map, or a missing-state policy other than
 `reject_required`.
 
 Archive identity and the journal checkpoint are **not** inferred from display
-names, directory names, or file counts. P07-B binds them from the P02 journal
-when that file is present and leaves the P07-A placeholder when it is not.
+names, directory names, or file counts. The manifest binds them from the change journal when it is present and records them as unavailable when it is absent.
 
 ## Artifact records
 
 Each included file has:
 
-- `rel_path` — vault-relative POSIX path
-- `classification` — `canonical`, `decision_critical`, `reconstructible`, `secret_reference`, or `disposable`
-- `presence` — `required` or `optional`
-- `owner_id` — catalog identity from `RECOVERY_STATE_INVENTORY.md`
-- `size` — byte length
-- `sha256` — hex digest of the file bytes
+- `rel_path`: vault-relative POSIX path
+- `classification`: `canonical`, `decision_critical`, `reconstructible`, `secret_reference`, or `disposable`
+- `presence`: `required` or `optional`
+- `owner_id`: catalog identity from `RECOVERY_STATE_INVENTORY.md`
+- `size`: byte length
+- `sha256`: hex digest of the file bytes
 
 Credential material never receives `size` or `sha256`. Exclusions are recorded as:
 
@@ -62,8 +57,7 @@ Logical (Postgres-only) owners appear under `logical_owners` with
 | Exclusion that carries a hash or size | `SecretMaterialError` |
 | Unsupported format/version/policy | `IncompatibleManifestError` |
 
-A later restore must not activate while any of these errors stand. Wrong
-credentials and tamper checks for encrypted envelopes are P07-D.
+A restore must not activate while any of these errors stand. `archive_engine.recovery` also checks the encrypted bundle's checksum and decryption result.
 
 ## Secrets
 
@@ -80,27 +74,20 @@ credentials.
 
 ## Classes
 
-See `RECOVERY_STATE_INVENTORY.md` for the inspected owner matrix.
+The [state inventory](RECOVERY_STATE_INVENTORY.md) lists paths, owners, and recovery strategies.
 
-1. **Canonical** — cards and attachments. Missing files cannot be invented.
-2. **Decision-critical** — identity maps, cursors, config, hygiene rollback preimages, and Postgres-only suppression/review decisions.
-3. **Reconstructible** — warehouse, chunks, embeddings, serving generations, scan caches.
-4. **Secret reference / secret material** — references stay; values do not.
-5. **Disposable** — logs, WAL/SHM, editor metadata, staging.
+1. **Canonical**: cards and attachments. Missing files cannot be invented.
+2. **Decision-critical**: identity maps, cursors, config, hygiene rollback preimages, and Postgres-only suppression/review decisions.
+3. **Reconstructible**: warehouse, chunks, embeddings, serving generations, scan caches.
+4. **Secret reference / secret material**: references stay; values do not.
+5. **Disposable**: logs, WAL/SHM, editor metadata, staging.
 
-Suppression and linker review state currently lives only in Postgres. That is
-**not** reconstructible. P07-B exports it into versioned canonical decision
-records.
+Some suppression and human linker-review decisions live only in Postgres. The manifest inventories those tables as `decision_critical`; it does not export their rows. A vault bundle alone must not be described as a complete copy of that state.
 
-## Seam handed to P07-B / P02
+## Recovery integration
 
-- `archive_id` and `checkpoint` bind through `recovery_checkpoint_binding` when
-  the P02 journal file exists.
-- P07-B writes correction decisions to `_meta/canonical-decisions.json` through
-  that journal; it does not invent a second write protocol.
-- P07-C export `card_corpus_state`, `email_corpus_decisions`, human
-  `link_decisions` / `review_actions`, and any PG cursor that is not a copy of
-  `_meta/sync-state.json`.
-- P07-D adds the encrypted envelope, contained restore, and rebuilt-evidence proof.
+Archive identity and checkpoint bind through `recovery_checkpoint_binding` when the change journal exists. Field corrections and identity decisions recorded in `_meta/canonical-decisions.json` use that journal's write protocol.
 
-Module: `archive_engine/recovery_manifest.py`. No CLI registration in this slice.
+The file manifest is implemented in `archive_engine/recovery_manifest.py`. Encrypted bundles and contained extraction are implemented in `archive_engine/recovery.py`. The CLI registers `backup`, `verify-backup`, `restore`, and `activate-restore` through `archive_cli/command_registry.py`.
+
+A restore writes a new root and validates required files before activation. Activation rebuilds the derived warehouse and search index. The [backup and restore reference](PPA_BACKUP_AND_RESTORE.md) describes how to verify that the restored records remain usable.

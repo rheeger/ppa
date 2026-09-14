@@ -1,11 +1,8 @@
-# Recovery State Inventory
+# Recovery state inventory
 
-Inspected from repository code at the P07-A baseline. **No live seed or private
-vault was read.** Paths and tables below are the owners the code actually
-writes. Every row has a recovery strategy.
+A vault backup needs to retain more than searchable text. Attachments, identity decisions, and corrections can change what a later answer means. This inventory tells contributors which state must survive and which state the engine can reconstruct.
 
-Classification matches `archive_engine/recovery_manifest.py` and
-`RECOVERY_CONTRACT.md`.
+The inventory describes files and tables written by the repository. It classifies recovery needs; a deployment must still verify its own backups. Classifications follow `archive_engine/recovery_manifest.py` and the [recovery contract](RECOVERY_CONTRACT.md).
 
 ## Vault files
 
@@ -27,9 +24,9 @@ Classification matches `archive_engine/recovery_manifest.py` and
 | Source-updater snapshot | `_meta/source-updaters.json` | reconstructible | optional | `archive_cli/source_updaters/cli.py`, `archive_cli/status/aggregate.py` | Status fallback. Cursors are in `sync-state.json`. |
 | Vault scan cache | `_meta/vault-scan-cache.sqlite3` | reconstructible | optional | `archive_cli/vault_cache.py` | Rebuild. Do not copy a live WAL as a checkpoint. |
 | Query embed cache | `_meta/query-embed-cache.sqlite` | reconstructible | optional | `archive_cli/index_config.py` | Rebuild. |
-| Serving index | `_meta/rust-search-index/` | reconstructible | optional | `archive_cli/index_config.py` | Rebuild after P02/P03. Restore must work without it. |
+| Serving index | `_meta/rust-search-index/` | reconstructible | optional | `archive_cli/index_config.py` | Rebuild after restoring required records and decisions. |
 | Canonical decisions | `_meta/canonical-decisions.json` | decision-critical | required **when present** | `archive_vault/decisions.py` | Human field overrides, clear-override, source conflicts. Not reconstructible. |
-| Change journal | `_meta/change-journal.sqlite3` | decision-critical | required **when present** | `archive_vault/change_journal.py` | P02 event spine. Recovery checkpoint binds from this file. |
+| Change journal | `_meta/change-journal.sqlite3` | decision-critical | required **when present** | `archive_vault/change_journal.py` | Committed change journal. Recovery checkpoint binds from this file. |
 | Benchmark sample | `_meta/benchmark-sample.json` | disposable | optional | `archive_cli/benchmark.py` | Disposable. |
 | Hygiene rollback kit | `_artifacts/hygiene-rollback-kit/<run>/` | decision-critical | required **when present** | `archive_cli/corpus_hygiene/apply.py` | Preimages of suppressed cards. Missing directory is fine. |
 | Other `_artifacts/**` | staging | disposable | optional | various | Temp staging. |
@@ -49,17 +46,17 @@ Logical owners. Not hashed from a live database. Inspected from
 | Owner | Table(s) | Class | Strategy |
 | --- | --- | --- | --- |
 | Cards and typed projections | `cards`, `card_sources`, `card_people`, `card_orgs`, `card_classifications`, `external_ids`, `duplicate_uid_rows`, typed projection tables | reconstructible | Rebuild from markdown. |
-| Graph / search substrate | `edges`, `chunks`, `embeddings`, `note_manifest` | reconstructible | Rebuild. Optional dump is acceleration only. |
+| Graph and search data | `edges`, `chunks`, `embeddings`, `note_manifest` | reconstructible | Rebuild. Optional dump is acceleration only. |
 | Rebuild worker | `rebuild_checkpoint` | reconstructible | Instance-local. Do not revive a foreign in-progress run. |
 | Ingest / enrichment queues | `ingestion_log`, `enrichment_queue`, `retrieval_gaps` | reconstructible | Replay from vault + policy. |
 | Schema bookkeeping | `schema_migrations`, `meta` | reconstructible | Recreate on bootstrap. |
-| **Corpus suppression** | `card_corpus_state` (migration 006) | **decision-critical** | **Not reconstructible.** Export to a canonical decision record (P07-B). |
-| **Corpus decision history** | `email_corpus_decisions` (006) | **decision-critical** | Export with `card_corpus_state` (P07-B). |
+| **Corpus suppression** | `card_corpus_state` (migration 006) | **decision-critical** | **Not reconstructible.** Requires a separate export; a file-only backup does not capture this table. |
+| **Corpus decision history** | `email_corpus_decisions` (006) | **decision-critical** | Preserve with `card_corpus_state`. |
 | Linker jobs | `link_jobs`, `link_candidates`, `link_evidence`, `promotion_queue`, `link_review_metrics`, `link_dead_ends` | reconstructible | Requeue; clear leases. Auto scores are recomputable. |
-| **Linker human review** | `link_decisions`, `review_actions` | **decision-critical** | Human overrides are not reconstructible. Export (P07-B). |
+| **Linker human review** | `link_decisions`, `review_actions` | **decision-critical** | Human overrides are not reconstructible. Preserve separately if not already recorded in the vault. |
 | Source updater cursors | `source_updater_state` (007) | **decision-critical** | Vault copy is `sync-state.json`. Export PG `cursor_payload` if it is not that copy. |
 | Source updater history | `source_updater_runs` | reconstructible | History only. |
-| Processor execution | `processor_state`, `processor_runs`, `processor_input_state` (008) | reconstructible | Rebuild via maintain. Clear leases. P03 `OutputReceipt` becomes the invalidation seam for P07-C. |
+| Processor execution | `processor_state`, `processor_runs`, `processor_input_state` (008) | reconstructible | Rebuild via maintain. Clear leases. Use `OutputReceipt` revisions to identify affected outputs. |
 | Embedding batch ops | `embed_batches`, `embed_batch_requests` | reconstructible | Re-submit if needed. |
 
 A warehouse dump is not a canonical checkpoint. An inconsistent dump must not be
@@ -76,19 +73,14 @@ labeled one.
 
 A separate credential recovery export is out of default scope.
 
-## Existing backup scripts (foundations, not a second utility)
+## Backup bundles and remaining decision state
 
-`archive_scripts/ppa-backup.sh` → `ppa-backup-encrypt.sh` tars the whole vault
-and writes a path-count manifest. That older manifest is **not** this contract:
-it has no classification, no per-file hashes, and no secret exclusion. P07-D
-extends those scripts after this inventory. P07-A does not mark a live backup.
+The current engine uses `archive_scripts/ppa-backup-encrypt.sh` for encrypted bundles and writes the versioned recovery manifest alongside the artifacts. The older path-count manifest lacks the classifications and per-file hashes defined by the [recovery contract](RECOVERY_CONTRACT.md).
 
-## Gaps this slice records (not silently classified as reconstructible)
+A file-only backup does not automatically export warehouse-only decisions. Before treating a backup as complete, account for:
 
-1. `card_corpus_state` / `email_corpus_decisions` exist only in Postgres.
-2. Human `review_actions` / override `link_decisions` exist only in Postgres.
-3. `archive_id` and journal checkpoint bind from `_meta/change-journal.sqlite3` (P02-A / P07-B).
-4. Field overrides live in `_meta/canonical-decisions.json` (P07-B). Identity merge/undo is P07-C.
+1. Suppression and quarantine decisions in `card_corpus_state` and `email_corpus_decisions`.
+2. Human review decisions in `review_actions` and `link_decisions` that are not already preserved in the vault.
+3. Postgres source cursors that have no equivalent in `_meta/sync-state.json`.
 
-Those rows keep an explicit export or journal strategy. They are not marked
-reconstructible.
+Field overrides and recorded identity decisions live in `_meta/canonical-decisions.json`. Archive identity and the journal checkpoint bind from `_meta/change-journal.sqlite3`. Preserve both when present; neither is a substitute for exporting warehouse-only decisions.

@@ -1,81 +1,19 @@
-# Install an independent PPA archive
+# Packaging verification
 
-This runbook is the P09-C clean-install path. Python **3.12** is the first explicitly verified packaging profile. The library floor remains `requires-python = ">=3.10"` — do not silently lower it.
+An installed PPA build should read and query its own fixture archive without depending on the source checkout or maintainer's accounts. These checks verify that boundary. The fixture setup command supports development testing; PPA has not shipped a supported onboarding flow.
 
-`production_proven` stays **false** until a later approved production install.
+## Verification scope
 
-## Lock resolver procedure
+| Check | Requirement |
+| --- | --- |
+| Build | Produce the PPA and native Rust wheels from the same revision |
+| Install | Load both wheels from a fresh environment outside the source checkout |
+| Isolate | Use synthetic records, a separate archive root, and an owned warehouse schema |
+| Query | Publish the fixture records, then verify exact read and search through the installed runtime |
+| Report | Record the platform, interpreter, dependencies, results, and missing capabilities |
 
-Locks live in `requirements/` and pin transitive versions **and hashes**.
+The existing packaging profile uses macOS arm64 and Python 3.12. The package declares Python 3.10 or newer; other installed-runtime profiles need their own verification.
 
-1. Use CPython 3.12 (`/opt/homebrew/bin/python3.12` on this host).
-2. Create a throwaway venv: `python3.12 -m venv /tmp/ppa-lock && /tmp/ppa-lock/bin/pip install -U pip pip-tools`.
-3. Compile runtime:  
-   `/tmp/ppa-lock/bin/pip-compile --generate-hashes --resolver=backtracking --output-file requirements/runtime-py312.lock requirements/runtime-py312.in`
-4. Compile dev:  
-   `/tmp/ppa-lock/bin/pip-compile --generate-hashes --resolver=backtracking --output-file requirements/dev-py312.lock requirements/dev-py312.in`
-5. Record the generating Python/OS/arch in the release manifest. Platform-specific wheels (macOS arm64 vs Linux x86_64) must be rebuilt on that platform — do not infer a second platform from one host.
+The build helper is `archive_scripts/build-release.py`. Dependency locks are in `requirements/`. Setup behavior is defined in `archive_cli/commands/setup.py`, and the [acceptance runner](../PRODUCT_VERIFICATION.md) provides isolated integration checks.
 
-## Build wheels from one SHA
-
-```bash
-python archive_scripts/build-release.py --output logs/plans/p09/release
-```
-
-This writes the root `ppa` wheel, the `archive_crate` native wheel, and `release-manifest.json` (compiler, Python, OS, arch, Cargo.lock hash, lock hashes, wheel hashes).
-
-## Fresh venv outside the checkout
-
-```bash
-python3.12 -m venv /tmp/ppa-independent/venv
-/tmp/ppa-independent/venv/bin/pip install --require-hashes -r requirements/runtime-py312.lock
-/tmp/ppa-independent/venv/bin/pip install --no-deps logs/plans/p09/release/ppa-*.whl logs/plans/p09/release/archive_crate-*.whl
-```
-
-Do not use `pip install -e .` as the runtime proof. Confirm:
-
-```bash
-/tmp/ppa-independent/venv/bin/python -c "import archive_crate, pathlib; print(pathlib.Path(archive_crate.__file__).resolve())"
-```
-
-The printed path must not sit inside the source checkout.
-
-## Setup, maintain, first query
-
-Write a fixture-only SPEC (no seed path, no live Google):
-
-```json
-{
-  "root": "/tmp/ppa-independent/vault",
-  "entity_name": "Ada Example",
-  "entity_type": "person",
-  "index_schema": "ppa_fixture",
-  "fixture": "sample.fixture",
-  "embedding_provider": "hash"
-}
-```
-
-```bash
-export PPA_PATH=/tmp/ppa-independent/vault
-export PPA_INDEX_SCHEMA=ppa_fixture
-export PPA_EMBEDDING_PROVIDER=hash
-unset PPA_TEST_PG_DSN
-# PPA_INDEX_DSN must be a loopback warehouse you own, or remain unset (status stays pending)
-
-/tmp/ppa-independent/venv/bin/ppa setup --non-interactive --from spec.json          # review only
-/tmp/ppa-independent/venv/bin/ppa setup --non-interactive --from spec.json --apply  # writes
-/tmp/ppa-independent/venv/bin/ppa instance-status --instance-dir "$PPA_PATH"
-/tmp/ppa-independent/venv/bin/ppa bootstrap-postgres
-/tmp/ppa-independent/venv/bin/ppa maintain
-/tmp/ppa-independent/venv/bin/ppa read hfa-person-p09c-ada
-```
-
-Missing warehouse, native extension, live auth, or backup tools are **pending/unavailable**. Status must not claim fresh because `ppa.json` exists.
-
-## Command risk labels
-
-`ppa setup --help`, `ppa config --help`, `ppa connect --help`, `ppa connector --help`, `ppa backup --help`, and `ppa restore --help` state whether the action writes, calls providers, or needs source credentials. Setup never treats a blank interactive answer as apply. An existing root is not overwritten by default.
-
-## Platform gaps
-
-This host proves **macOS arm64 + CPython 3.12 lock generation**. Linux x86_64 wheels and a 3.12 installed-runtime matrix are recorded as unverified until built on that platform.
+A fixture install does not establish live source authentication, ongoing refresh, recovery, or readiness for general use. The [specification](../SPECIFICATION.md) is the current description of PPA's capabilities.

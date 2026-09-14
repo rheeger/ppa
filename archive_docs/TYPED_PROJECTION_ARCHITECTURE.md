@@ -1,110 +1,29 @@
-# Typed Projection Architecture
+# Typed projections
 
-## Purpose
+Typed projections make structured questions possible across imported services. A purchase amount or calendar date becomes a predictable field, so a client can filter and aggregate records without parsing each provider's original format again.
 
-`ppa` now treats typed projections as a first-class derived layer instead of a collection of special cases.
+A projection is the queryable representation of fields in a stored card. The card remains authoritative, so the projection can be rebuilt without reconnecting the original service.
 
-The architecture has three derived responsibilities:
+## Shared and type-specific tables
 
-- universal generic substrate for every canonical card
-- one typed relational projection for every current canonical card type
-- one introspectable registry that drives schema, materialization, status, and audit output
+The generic tables describe every card: `cards`, `card_sources`, `card_people`, `card_orgs`, `external_ids`, `duplicate_uid_rows`, `edges`, and `chunks`.
 
-## Layers
+Each registered card type also has a typed projection for its own fields. Examples include `people`, `finance_records`, `email_messages`, `calendar_events`, `documents`, and the transaction tables. The complete registrations live in `archive_cli/card_registry.py` and `archive_cli/projections/`; see [card type contracts](CARD_TYPE_CONTRACTS.md).
 
-### Generic Substrate
+## Registry ownership
 
-These tables are universal:
+The registry declares the table name, applicable card type, columns, load and clear order, builder, and explain function. Schema creation, inventory, status, and audit output use that same registration.
 
-- `cards`
-- `card_sources`
-- `card_people`
-- `card_orgs`
-- `external_ids`
-- `duplicate_uid_rows`
-- `edges`
-- `chunks`
+When adding a type, update the card contract and projection registry together. A contributor should not need to discover a second list of special cases before a new record becomes queryable.
 
-### Typed Projections
+## Shared table fields
 
-Each canonical semantic type gets one typed table:
+Each typed table includes `card_uid`, `rel_path`, `card_type`, `summary`, `created`, `updated`, `primary_source`, `source_id`, `activity_at`, `external_ids_json`, `relationships_json`, `typed_projection_version`, `canonical_ready`, and `migration_notes`. Domain tables add their stable type-specific fields.
 
-- `people`
-- `finance_records`
-- `medical_records`
-- `vaccinations`
-- `email_threads`
-- `email_messages`
-- `email_attachments`
-- `imessage_threads`
-- `imessage_messages`
-- `imessage_attachments`
-- `beeper_threads`
-- `beeper_messages`
-- `beeper_attachments`
-- `calendar_events`
-- `media_assets`
-- `documents`
-- `meeting_transcripts`
-- `git_repositories`
-- `git_commits`
-- `git_threads`
-- `git_messages`
+Deterministic scalar fields become typed columns. Stable lists normally become JSONB arrays, while nested or unstable source payloads remain JSONB. `canonical_ready` and `migration_notes` expose migration gaps to the reader of the projection.
 
-## Registry Ownership
+## Inspect a projection
 
-The projection registry now owns:
+`ppa projection-inventory`, `ppa projection-status`, and `ppa projection-explain <uid>` expose registration, coverage, and a card's derived row. Use them when testing a new field or diagnosing why a structured query cannot use it.
 
-- table name
-- applicable canonical card type
-- column definitions
-- load and clear ordering
-- projection builder name
-- projection explain name
-
-The registry is the source of truth for:
-
-- projection inventory
-- projection status
-- typed table creation
-- typed row explainability
-- audit docs
-
-## Shared Typed Table Shape
-
-Every typed table includes shared structural columns:
-
-- `card_uid`
-- `rel_path`
-- `card_type`
-- `summary`
-- `created`
-- `updated`
-- `primary_source`
-- `source_id`
-- `activity_at`
-- `external_ids_json`
-- `relationships_json`
-- `typed_projection_version`
-- `canonical_ready`
-- `migration_notes`
-
-Then each domain table adds its own stable semantic fields.
-
-## Data Rules
-
-- canonical scalar deterministic fields become direct typed columns
-- stable list fields become JSONB arrays unless there is a strong reason to normalize further
-- unstable or nested source payloads remain JSONB
-- typed rows do not create truth; they materialize canonical truth plus readiness metadata
-- `canonical_ready` and `migration_notes` exist so migration gaps are visible in the data plane itself
-
-## Service Surface
-
-Projection inspection is part of the public archive service surface:
-
-- projection inventory
-- projection status
-- projection explain by `card_uid`
-
-That means typed projections are not hidden internal implementation detail anymore.
+The [contributor playbook](PLAYBOOK.md#adding-a-new-card-type) covers the implementation steps.

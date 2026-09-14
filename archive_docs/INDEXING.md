@@ -1,198 +1,65 @@
-# PPA Indexing
+# Indexing a personal archive
 
-## Purpose
+PPA processes imported records ahead of a question so a client can search one catalog across services. The index brings keywords, semantic matches, dates, record types, and relationships into the same query interface. Keeping that work outside an individual chat lets another client use it too.
 
-The Markdown vault is the source of truth. Indexes exist to make lookup fast, not to redefine what is true. An agent cites cards. It does not cite the index.
+The Markdown vault remains authoritative for record contents. Indexes contain derived data and pointers back to those records; an agent reads the cards before citing them.
 
-## Current Implementation Slice
+## Storage roles
 
-This repository provides:
+The Rust serving generation at `<vault>/_meta/rust-search-index` handles live CLI and MCP retrieval. `ACTIVE` selects the complete generation available to readers. Postgres holds the derived warehouse, embedding state, and analytical data. Postgres FTS and pgvector remain test and warehouse paths, not a fallback when serving is unavailable.
 
-- exact lookup by UID and path
-- structured query over indexed card metadata
-- lexical search over indexed card text
-- rebuild-time type-aware chunk materialization from canonical card fields and bodies
-- timeline and stats from derived metadata
-- graph traversal from typed materialized edges and wikilinks
-- semantic retrieval with card-level vector aggregation
-- hybrid retrieval with lexical, semantic, graph, recency, and provenance-aware ranking
+`ppa maintain` publishes ordinary changes. `rebuild-indexes` rebuilds the derived representation when recovery or a schema change requires it. Publication watermarks describe what readers can see; a configured source does not establish that its latest records have been published.
 
-Postgres is the **warehouse** for this derived index layer. Live MCP/CLI query uses the Rust serving generation at `<vault>/_meta/rust-search-index` (`ACTIVE`). Postgres FTS / pgvector is a test oracle, not the live query engine.
+## What gets indexed
 
-## Target End State
+| Record | Purpose |
+| --- | --- |
+| `cards` | UID, path, type, summary, dates, and other searchable metadata |
+| `external_ids` | Provider and account identifiers used to resolve source objects |
+| `edges` | Relationships derived from card fields, references, and approved links |
+| `chunks` | Search units shaped for each card type |
+| `embeddings` | Vectors identified by content, model, and version |
+| Index metadata | Schema versions, counts, checkpoints, and publication information |
 
-- Rust serving index for lexical, vector, hybrid, graph, timeline, and neighbors
-- Postgres for metadata, operational state, embeddings admin, and warehouse COPY
-- normalized external ID and graph tables for multi-provider history
-- `pgvector` remains available in the warehouse; it is not the product query path
+A new field needs a deliberate path into search or a typed projection. Adding text to an index is not a substitute for defining what that field means on a card. See [card type contracts](CARD_TYPE_CONTRACTS.md) and [typed projections](TYPED_PROJECTION_ARCHITECTURE.md).
 
-`maintain` / `rebuild-indexes` publish `ACTIVE`. A config manifest is not freshness.
+## Preserve context when chunking
 
-## Index Contract
+A short answer inside a long email thread can be difficult to find if the entire thread is one search unit. Card-aware chunking keeps subjects, participants, and conversation windows available alongside the message body.
 
-The derived index must follow these rules:
+Current layouts include person profiles, email subjects and invitation context, rolling thread windows, calendar participants, documents, and meeting transcripts. Conversation bursts give short exchanges their own context. Neighbor expansion can return one preceding and one following unit with separate citations.
 
-1. It is rebuildable from canonical cards and deterministic operational state.
-2. It never becomes the source of truth.
-3. It may mirror provenance-derived metadata, but canonical provenance stays on the card.
-4. It must support additive schema evolution without forcing premature canonical hardening.
-5. It must be safe to delete and rebuild.
+Chunk boundaries and source revisions matter. If stored offsets no longer match the card, a client must not quote the wrong passage. The [retrieval fidelity](RETRIEVAL_FIDELITY_CONTRACT.md) and [evidence query](EVIDENCE_QUERY_CONTRACT.md) contracts define those checks.
 
-## Indexed Primitives
+## Materialize relationships
 
-Current and planned primitives:
+Typed edges include message-to-thread, message-to-attachment, event-to-person, and event-to-message relationships. These let a client follow a search hit to the record that explains it.
 
-- `cards`: canonical card metadata such as `uid`, `rel_path`, `slug`, `type`, summary, and key timeline fields
-- `external_ids`: provider and account identifiers that resolve to canonical entities
-- `edges`: normalized relationships derived from card fields and wikilinks, including typed thread/message/event/person links
-- `chunks`: pgvector-ready chunk rows shaped to the semantics of the source card type
-- `embeddings`: pgvector-ready embedding rows keyed by chunk, model, and version
-- search rows: lexical search text and later chunk-level semantic retrieval rows
-- index metadata: schema version, chunk schema version, counts, and rebuild information
+Synthetic external-ID nodes help ranking and navigation. Canonical card-to-card traversal remains the usual path for reading evidence. Link proposals have separate confidence and promotion rules; indexing a proposal must not turn it into a source-reported fact.
 
-## Current Chunking Policy
+## Generate and reuse embeddings
 
-Current rebuilds materialize chunks from card-aware layouts:
+Embeddings support meaning-based retrieval. They are approximate representations used for search, and their identity includes provider, model, revision, dimension, metric, and chunk schema. Cached vectors can only be reused when that identity is compatible.
 
-- `person`: profile, role, context, and body chunks
-- `email_thread`: subject, context, thread summary, rolling conversation windows, and recency window chunks
-- `email_message`: subject, snippet, context, invite context, and body chunks
-- `imessage_thread`: context, summary, rolling conversation windows, and recency window chunks
-- `calendar_event`: title/time, participants, description, source linkage, and body chunks
-- fallback cards: summary/body and selected text fields
+Content-keyed embedding reuse avoids paying to embed unchanged text again after rematerialization. Pending work remains visible through `archive_embedding_status` and `archive_embedding_backlog`; `archive_embed_pending` is an administrative operation.
 
-This policy is still additive and rebuildable, but it is no longer intentionally naive. The goal is stable retrieval units that preserve card semantics before embeddings are generated.
+The built-in `hash` provider supports deterministic fixture tests and local plumbing. It does not provide useful semantic similarity. A semantic provider needs its model and dimensions configured explicitly. Remote providers receive the text sent for embedding, subject to the supported [egress controls](DATA_BOUNDARIES.md#provider-egress).
 
-## Current Edge Policy
+## Keep the catalog current
 
-The derived graph now materializes more than plain wikilinks.
+For normal source updates:
 
-Current typed edges include:
+1. Bind the intended instance and run `ppa maintain` through the [maintenance job workflow](PLAYBOOK.md#running-imports-safely).
+2. Check source results, processor receipts, and the published generation.
+3. Inspect any embedding backlog for the configured model.
+4. Query representative records through the running MCP and read their cards.
 
-- `thread_has_message`
-- `message_in_thread`
-- `message_has_attachment`
-- `thread_has_person`
-- `message_mentions_person`
-- `thread_has_calendar_event`
-- `message_has_calendar_event`
-- `event_has_message`
-- `event_has_thread`
-- `event_has_person`
-- `entity_has_external_id`
+For recovery or an index-contract change, follow [rebuilding the derived index](PLAYBOOK.md#rebuilding-the-derived-index). Bootstrap a fresh warehouse before a rebuild. Keep long jobs detached and logged, with one writer per vault.
 
-Important rule:
+Check `chunk_count` and `chunk_schema_version` when changing chunking. A successful source import alone does not establish that search can see the new records.
 
-- synthetic external-ID nodes help ranking and navigation, but canonical card-to-card traversal remains the default operator path
+## Contribute an indexing change
 
-## Embedding Lifecycle Status
+Preserve rebuildability, source provenance, and additive schema evolution. Add focused tests for the retrieval behavior that changes, including a nearby negative case. Verify native serving behavior and use Postgres integration where warehouse parity matters.
 
-The current slice generates embeddings and tracks lifecycle state per model/version.
-
-Use this to answer:
-
-- how many chunks exist for a given embedding model/version
-- how many chunks have embeddings already
-- how many chunks are still pending
-- which chunks should be embedded next
-
-The current development path includes:
-
-- a built-in deterministic `hash` embedding provider for plumbing, local testing, and lifecycle validation
-- an OpenAI-compatible provider path for production-quality semantic retrieval
-- batch-size controls for embedding runs
-- retry/backoff on failed embed batches and failed OpenAI-compatible requests
-- provider model/dimension consistency checks before writing vectors
-- chunk schema version tracking so retrieval changes are explicit in operational metadata
-
-## Provenance Contract
-
-Provenance remains a canonical-card concern first.
-
-Indexed rows should mirror enough metadata to let retrieval behave safely:
-
-- `card_uid`
-- `rel_path`
-- `card_type`
-- `chunk_type`
-- `chunk_schema_version`
-- `source_fields`
-- `content_hash`
-- `schema_version`
-- embedding model and version once vectors exist
-
-Important rule:
-
-- embeddings are lossy retrieval artifacts, never truth
-
-## Operational Workflow
-
-After imports or source changes:
-
-1. run the import
-2. run doctor validation
-3. rebuild the derived index
-4. confirm index status
-5. fill pending embeddings for the target model/version if semantic retrieval is in scope
-6. smoke-test representative lexical, vector, and hybrid queries
-
-Commands:
-
-```bash
-ARCHIVE_INDEX_DSN=postgresql://archive:archive@localhost:5432/archive \
-python -m archive_cli bootstrap-postgres
-ARCHIVE_INDEX_DSN=postgresql://archive:archive@localhost:5432/archive \
-python -m archive_cli rebuild-indexes
-ARCHIVE_INDEX_DSN=postgresql://archive:archive@localhost:5432/archive \
-python -m archive_cli index-status
-```
-
-Bootstrap first on a fresh Postgres database, then rebuild from the canonical vault.
-
-When validating rebuilds, confirm that `chunk_count` is present in index status.
-When validating chunking/ranking changes, also confirm `chunk_schema_version`.
-
-Use MCP embedding tools to inspect backlog before wiring a real provider:
-
-- `archive_embedding_status`
-- `archive_embedding_backlog`
-- `archive_embed_pending`
-
-Current semantic retrieval tools:
-
-- `archive_vector_search`
-- `archive_hybrid_search`
-
-Current retrieval behavior:
-
-- vector search groups chunk hits back to the card level before ranking
-- hybrid search can use exact lexical anchors, vector similarity, graph proximity, recency, card-type priors, and provenance bias
-- vector and hybrid search both support `type_filter`, `source_filter`, `people_filter`, `start_date`, and `end_date`
-- vector and hybrid responses expose match explanations such as `matched_by`, `score`, `chunk`, `graph_hops`, and `provenance_bias`
-
-Important note:
-
-- with the built-in `hash` provider, semantic behavior is useful for plumbing and deterministic tests, not for production-quality semantic relevance
-- for production, prefer the OpenAI-compatible embedding provider path and track model/version explicitly
-
-## TDD Requirement
-
-Indexing changes should follow a test-first workflow:
-
-1. add or update failing tests for new backend behavior, query behavior, or index contracts
-2. implement the smallest change that makes those tests pass
-3. verify parity against canonical-card behavior where applicable
-
-Retrieval changes should include live backend coverage when possible. In `ppa`, that now means Docker-backed `pgvector` integration tests in addition to fake-index MCP tests.
-
-## Pgvector Next
-
-Adding `pgvector` on top of the current Postgres layer should not change the canonical model.
-
-That migration should preserve:
-
-- the vault-canonical rule
-- rebuildability
-- provenance boundaries
-- additive schema evolution
-- agent grounding on canonical cards
+When ranking changes, inspect `matched_by`, score components, graph contribution, and provenance bias with the [explain payload](RETRIEVAL_EXPLAIN_SCHEMA.md). Measure relevance against known evidence, not just whether a query returns something.

@@ -1,62 +1,52 @@
-# Connector SDK (P08-A through P08-D)
+# Connector SDK reference
 
-A contributor adds a connector by registering a factory. The runtime looks the
-factory up by `connector_id`. Do not add a source-specific `if` / `elif` in
-core dispatch. Do not edit `archive_sync/handler.py`.
+A connector brings a service or export into PPA's shared record format. Once imported, those records can be searched alongside the rest of the archive. This reference defines how a connector preserves account identity, source fields, and progress across repeated imports. The [specification](SPECIFICATION.md#sources) lists supported sources.
 
-Query quality here means a machine can tell which account a source object
-belongs to. The same provider ID in two accounts is two cards.
+## Identity and source ownership
 
-## Status
+Connector identity is `(archive_id, source, account_scope, provider_object_id)`. Two accounts can contain the same provider object ID without describing the same record.
 
-P08-A is the SDK + sample tracer. P08-B runs Gmail and calendar through that
-runtime with synthetic provider responses. P08-C owns cursor lifecycle and
-thread freshness. P08-D is the contributor template and quality/replay command.
+The card's `source_id` is `account_scope:provider_object_id`. Sample and contributor UIDs include `archive_id`; the Gmail and Calendar bridge preserves existing UID recipes so imported cards do not move.
 
-`python -m archive_sync.connectors.cli` is the SDK test command. P09 will
-register it on the product CLI. It is not wired into handler dispatch here.
-
-Locally installed Python connector code is trusted executable code. Manifest
-validation is a compatibility gate, not a sandbox. Remote untrusted packages
-are out of scope until the signed-update design.
-
-## North star
-
-Identity is `(archive_id, source, account_scope, provider_object_id)`.
-
-- `source_id` on the card is `account_scope:provider_object_id`
-- Sample and contributor UIDs include `archive_id`; Gmail/calendar keep their
-  prior recipe so existing cards do not move
-- Two accounts with the same provider object ID stay distinct
-
-Connectors emit sourced facts and provenance. They do not write inferred
-"same person" or "authorized that charge" onto source fields. A provider
-tombstone is not an archive-forget.
+Emit the source's fields with provenance. Do not write an inferred identity or an assertion such as “authorized that charge” into a source-owned field. A provider deletion and a user's decision to forget an archived record are separate lifecycle events.
 
 ## Add a connector
 
-1. Copy `archive_docs/examples/connector-template/`.
-2. Fill `manifest.json`, `connector.py` (`fetch` + `normalize`), and
-   `fixtures.json` (include a negative that must not emit).
-3. Call `register_connector(connector_id, factory)` in the package.
-4. Run the check command:
+1. Copy the [connector template](examples/connector-template/README.md) into a package for your source.
+2. Fill `manifest.json`, implement `fetch` and `normalize` in `connector.py`, and supply `fixtures.json` with valid records and a negative case that must not emit.
+3. Register the factory with `register_connector(connector_id, factory)`.
+4. Run the replay and compatibility check in a disposable vault:
 
-```bash
-unset PPA_TEST_PG_DSN
-.venv/bin/python -m archive_sync.connectors.cli check \
-  --package archive_docs/examples/connector-template \
-  --vault /tmp/ppa-connector-check \
-  --output /tmp/ppa-connector-check/verdict.json
-```
+   ```bash
+   unset PPA_TEST_PG_DSN
+   ppa connector check \
+     --package archive_docs/examples/connector-template \
+     --vault /tmp/ppa-connector-check \
+     --output /tmp/ppa-connector-check/verdict.json
+   ```
 
-The command validates the manifest **before** importing `connector.py`,
-replays the fixture page, checks account-scoped identity, owned-field
-coverage, and false-promotion negatives, then writes a JSON verdict.
+The check validates the manifest before importing the connector, replays the fixture, checks account-scoped identity and owned fields, and writes a JSON verdict. Replaying a page must not create another copy of the same record.
 
-Incompatible `sdk_version` or engine/card range fails before any write.
+The module command `python -m archive_sync.connectors.cli check` is also available. Core dispatch uses the registry; do not add source-specific branches to `archive_sync/handler.py`.
+
+## Manifest contract
+
+The manifest declares compatibility before a write. Required fields cover connector and SDK versions, engine and card-contract ranges, supported sources and accounts, emitted types, deterministic field ownership, and an identity recipe that includes `account_scope`.
+
+It also declares cursor schema and version, delete and retention policy, freshness capability and interval, rate and batch limits, authentication and egress capabilities, and fixture metadata. An optional `event_handler` is recorded, not executed.
+
+`sdk_version` must be `"1"`. Secrets such as tokens, passwords, and API keys are forbidden in the manifest. `freshness_capability` is `polling`, `event-capable`, or `import-only`. An export should not claim live freshness.
+
+Installed connector code is trusted executable Python. Manifest validation checks compatibility; it is not a sandbox for untrusted packages.
+
+## Fetch, normalize, and persist
+
+`fetch` returns an ordered `FetchedBatch`. `normalize` returns typed canonical proposals. A cursor becomes committed only after persistence succeeds.
+
+Import the shared `ArchiveIdentity`, `AccessContext`, `ChangeRecord`, and `OutputReceipt` contracts. Write through the contained writer protocol rather than warehouse SQL or direct file writes:
 
 ```python
-from archive_sync.connectors import execute_connector, register_connector
+from archive_sync.connectors import execute_connector
 from archive_sync.connectors.runtime import ContainedVaultWriter
 
 writer = ContainedVaultWriter(vault)
@@ -69,67 +59,12 @@ result = execute_connector(
 )
 ```
 
-`AccessContext` is required. A deny or archive-id mismatch fails before write.
+This sketch assumes the factory is registered and the caller has supplied the instance, access context, and vault. A deny or archive-ID mismatch must fail before writing.
 
-## Manifest
+## Replay and adapter compatibility
 
-Validated **before** a write. Rejected payloads never reach the writer.
+`archive_sync.connectors.replay` handles cursor migration, expired cursors, duplicate and out-of-order events, thread changes, provider tombstones, and pending context. Missing context resolution leaves freshness unknown.
 
-Required fields include `connector_id`, `connector_version`, `sdk_version`,
-compatible engine/card-contract range, supported sources and account scopes,
-emitted card types, deterministic field ownership, `identity_recipe` (must
-include `account_scope`), cursor schema/version, delete and retention policy,
-freshness capability/interval, rate/batch limits, auth/egress capabilities,
-and fixture metadata. Optional `event_handler` is recorded, not executed.
+`sample.fixture` uses the SDK directly. Gmail messages and Calendar events run through the adapter bridge. Other adapters still use the earlier ingest path; run `ppa connector legacy-list` to inspect them. The [source specification](SPECIFICATION.md#sources) distinguishes incremental updates from export imports and inactive refresh paths.
 
-`sdk_version` must be `"1"`. Secret keys (`token`, `password`, `api_key`, …)
-are forbidden on the manifest. `freshness_capability` is one of `polling`,
-`event-capable`, `import-only`. Do not mark an import-only fixture as live.
-
-## Fetch / normalize / batch
-
-`fetch` returns an ordered `FetchedBatch`. `normalize` returns typed
-canonical proposals. The cursor candidate becomes `committed_cursor` only
-after persist. Replay of the same page yields the same UID and does not
-create a second file.
-
-## Engine contracts
-
-Import these; do not copy them: `ArchiveIdentity`, `AccessContext`,
-`ChangeRecord`, `OutputReceipt`. The writer is a protocol. No warehouse SQL.
-
-## Sample and template
-
-- `sample.fixture` — SDK-native tracer in `archive_sync/connectors/sample.py`
-- `example.contributor` — copyable package under
-  `archive_docs/examples/connector-template/`
-
-Neither talks to live Gmail.
-
-## Migrated vs remaining adapters
-
-Through the adapter bridge today:
-
-- `gmail-messages`
-- `calendar-events`
-
-SDK-native (not a vault adapter): `sample.fixture`
-
-**Still legacy** (pre-SDK ingest). Do not claim these migrated.
-
-Executable: `imessage`, `otter-transcripts`, `file-libraries`, `photos`,
-`beeper`, `contacts`, `github-history`, `gmail-correspondents`.
-
-Export-only: `copilot-finance`, `linkedin`, `notion-people`, `notion-staff`,
-`apple-health`, `medical-records`, `seed-people`.
-
-Stable seam for the next migration: `register_connector` plus
-`archive_sync.connectors.legacy.adapter_for_source`. Print the live list with
-`python -m archive_sync.connectors.cli legacy-list`.
-
-## Lifecycle (P08-C)
-
-`archive_sync.connectors.replay` owns cursor migration, expired-cursor state,
-duplicate/out-of-order events, scoped thread dirty-UIDs, provider tombstone
-versus archive-forget, and pending context scopes. Burst freshness is
-`unknown` until a P01 resolver is attached.
+The next adapter migration should use `register_connector` and `archive_sync.connectors.legacy.adapter_for_source`. Preserve account identity and replay behavior, then show that the new records are readable through the shared query engine.

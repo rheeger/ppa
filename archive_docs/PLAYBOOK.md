@@ -1,10 +1,8 @@
-# PPA contributor playbook
+# Engineering playbook
 
-This page is the current how-to for changing the product. Historical HFA / `hey-arnold` / `HFA_LIB_PATH` steps are retired. `ppa` is this repository. Living product state is [STATUS.md](STATUS.md). The human product story is [README.md](../README.md).
+A new source or record type should become useful throughout the archive: searchable, connected to related records, and readable by existing clients. This playbook describes the code and checks that keep those behaviors aligned. The [specification](SPECIFICATION.md) defines current capabilities.
 
-Every change should leave an agent more able to cite evidence the user owns. Cards stay canonical. Search, warehouse, and MCP stay derived.
-
-Long jobs (`maintain`, `rebuild-indexes`, `embed-pending`, `slice-seed`, extract, enrich, Gmail catch-up) launch detached. Read `.cursor/skills/long-running-jobs/SKILL.md`. Never a Cursor-managed terminal.
+Use an isolated archive for development. Long maintenance jobs follow the [detached-job instructions](../.cursor/skills/long-running-jobs/SKILL.md).
 
 ## Adding a new card type
 
@@ -12,7 +10,7 @@ Long jobs (`maintain`, `rebuild-indexes`, `embed-pending`, `slice-seed`, extract
 2. Give every new field a default value.
 3. Decide which fields are deterministic-only and which are LLM-eligible.
 4. Register the model in `CARD_TYPES`.
-5. Add the path family, chunk profile, edge profile, and projection row to [CARD_TYPE_CONTRACTS.md](CARD_TYPE_CONTRACTS.md) and `archive_cli/card_registry.py` in the same change.
+5. Register the path, chunk, and edge profiles in `archive_vault/card_contracts.py`, then update `archive_cli/card_registry.py`, the projection registry, and [card type contracts](CARD_TYPE_CONTRACTS.md) together.
 6. Define the vault path convention in the writer that emits the card.
 7. Add tests for strict validation, permissive reads, and frontmatter export.
 
@@ -24,6 +22,8 @@ Rules:
 - A card should represent something that happened, a booking, a person, or a durable entity. Do not add types that exist only so an agent can summarize.
 
 ## Adding a new adapter
+
+Use the [connector SDK](CONNECTOR_SDK.md) for a new service integration. The steps below describe the earlier adapter interface, which still supports sources awaiting SDK migration.
 
 1. Create the adapter in `archive_sync/adapters/`.
 2. Implement `fetch()` for raw extraction only.
@@ -37,7 +37,7 @@ Rules:
 
 - Do not write files directly from adapters.
 - Keep source parsing resilient with column fallbacks.
-- Live Photos and Apple Health refresh stay parked unless you are explicitly unparking them. Import-only paths are fine.
+- Apple Photos and Apple Health currently use imports without active ongoing refresh. A change to refresh behavior needs source-specific validation and an update to the specification.
 - One account's mail must not become another archive's evidence.
 
 ## Adding a new field to an existing card
@@ -51,11 +51,11 @@ Rules:
 Rules:
 
 - Never change an existing field type in place.
-- Never rely on unnamed magic defaults.
+- Define defaults explicitly so imports and later reads interpret a missing field consistently.
 
 ## Adding a new extractor
 
-Follow `.cursor/skills/extractor-dev/SKILL.md` (Census, Template Eras, Field Mapping, Implementation, Verification). Extractors live in `archive_sync/extractors/`. They write typed cards (meals, flights, purchases) so an agent can filter by type instead of grepping receipt email.
+Follow the [extractor development instructions](../.cursor/skills/extractor-dev/SKILL.md). Start with a sample of the provider's message formats, map their fields, implement the extractor, and verify both valid transactions and misleading lookalikes. Extractors live in `archive_sync/extractors/`. They make receipts usable as meals, flights, and purchases, so clients can filter and count those records across providers.
 
 ## Adding a new enrichment step
 
@@ -69,7 +69,7 @@ Rules:
 
 - Never write deterministic-only fields with `method="llm"`.
 - Bump `version` when prompts or logic materially change, so the inference cache does not serve a stale answer.
-- Language models enrich. They do not become the record.
+- Keep model-written fields distinguishable from source-reported fields, so a client can tell what the source actually established.
 
 ## Adding a new linker
 
@@ -90,10 +90,10 @@ Rules:
 ## Running imports safely
 
 1. Bind the instance (`ppa.json` / `PPA_PATH`, `PPA_INDEX_DSN`, `PPA_INDEX_SCHEMA`).
-2. Run source work through `ppa maintain` (or a single source updater) so new cards, extractors, and publish stay on one path.
+2. Run source work through `ppa maintain --apply` (or a single source updater) so new cards, extractors, and publish stay on one path.
 3. Launch that job detached with `--log-file` before the subcommand.
 4. Run `ppa validate` and `ppa health` before trusting lookup.
-5. Ask through the already-running MCP. Do not cold-open `archive_cli` once per question against a living vault.
+5. Query through the running MCP server so repeated checks reuse the open archive index.
 
 Rules:
 
@@ -102,6 +102,8 @@ Rules:
 - One writer per vault.
 
 ## Local Postgres smoke test
+
+Bind a disposable fixture vault and a separate warehouse schema before running these commands. Make targets use the current environment and may otherwise select a maintainer-specific default.
 
 1. Copy `.env.pgvector.example` to `.env.pgvector`.
 2. Run `make pg-up`.
@@ -114,7 +116,7 @@ Rules:
 
 - Keep local Postgres bound to `127.0.0.1`.
 - Live MCP and CLI query use the Rust serving index. Postgres is the warehouse.
-- Use a slice (`make test-slice-smoke`, then `make slice-local-1pct`) before touching a large seed.
+- Use synthetic fixtures first. For larger samples, set the source explicitly and follow [slice testing](SLICE_TESTING.md).
 
 ## Rebuilding the derived index
 
@@ -127,7 +129,7 @@ Rules:
 
 Rules:
 
-- Rebuild after imports, source purges, or schema and index field changes.
+- Use incremental maintain and publication for ordinary imports. Rebuild when recovery, a source purge, or a schema/index change requires it.
 - Rebuild after chunking or typed-edge changes, because those affect lookup even if canonical cards are unchanged.
 - Treat the derived index as disposable. If it looks wrong, rebuild it rather than patching it.
 - Agent answers should still read canonical cards before final output.
@@ -147,7 +149,7 @@ Rules:
 
 ## Checking embedding backlog
 
-1. Rebuild or rematerialize first so chunk rows are current.
+1. Confirm that maintain or an intentional rebuild has materialized current chunk rows.
 2. Run `archive_embedding_status` through MCP for the target model.
 3. Run `archive_embedding_backlog` to inspect which chunks remain pending.
 4. Run `archive_embed_pending` or detached `ppa embed-pending` to fill pending chunks.
@@ -168,8 +170,8 @@ Rules:
 Rules:
 
 - Losing the derived index is recoverable.
-- Losing the vault is not. Protect the vault first.
-- A rebuilt index is not a license to invent missing cards.
+- Missing vault records require a backup or another source copy. Protect the vault and required decision state first.
+- Verify the restored source content before relying on answers from the rebuilt index.
 
 ## Operational commands
 
@@ -187,4 +189,4 @@ ppa serve
 ppa mcp-config
 ```
 
-Admin rebuild, embed, and linker operations: [PPA_RUNTIME_CONTRACT.md](PPA_RUNTIME_CONTRACT.md). Living-seed ops notes: [STATUS.md](STATUS.md).
+Admin rebuild, embed, and linker operations: [PPA_RUNTIME_CONTRACT.md](PPA_RUNTIME_CONTRACT.md). Dated operational results: [validation reports](reports/README.md).

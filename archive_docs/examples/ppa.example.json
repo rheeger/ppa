@@ -1,4 +1,30 @@
 {
-  "vault_path": "~/Archive/production/hf-archives",
-  "index_dsn": "postgresql://archive:archive@127.0.0.1:64276/archive"
+  "schema_version": 1,
+  "identity": {},
+  "entity": {
+    "name": "Example Archive",
+    "entity_type": "person"
+  },
+  "storage": {
+    "vault_path": "/path/to/your/vault",
+    "index_schema": "ppa_example",
+    "index_dsn_ref": {
+      "name": "PPA_INDEX_DSN",
+      "provider": "env"
+    }
+  },
+  "engine": {
+    "native": "rust",
+    "format_compatibility": "serving-index-v1"
+  },
+  "embeddings": {
+    "provider": "hash",
+    "model": "archive-hash-dev",
+    "dimension": 8,
+    "model_revision": "1"
+  },
+  "access": {
+    "principal": "local-operator",
+    "profile": "trusted-local"
+  }
 }

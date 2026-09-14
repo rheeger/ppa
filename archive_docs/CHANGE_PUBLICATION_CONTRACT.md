@@ -1,12 +1,8 @@
-# Change publication contract (P02-A)
+# Change publication contract
 
-This is the canonical mutation journal. Search dirty-UIDs are a compatibility
-intake, not the event spine. `ChangeRecord` and `ChangeBatch` live in
-`archive_engine.contracts` and are not redefined here.
+A corrected record should become searchable at the right revision, even if processing or publication stops halfway through. The change journal records file mutations and lets each consumer track its own progress. This keeps the prepared catalog tied to the history the user actually has on disk.
 
-Query quality here means a machine that reads after an edit cites the live
-revision. The journal is how that revision stays discoverable after a crash,
-and how warehouse / publication / later subscribers keep independent cursors.
+`ChangeRecord` and `ChangeBatch` live in `archive_engine.contracts`. Import them rather than defining another record shape. Dirty-UID lists remain a compatibility input; the journal records the mutations.
 
 ## Journal
 
@@ -45,7 +41,7 @@ advances warehouse (or any other cursor).
 
 | Name          | Slot                                         |
 | ------------- | -------------------------------------------- |
-| `publication` | First consumer; serving generations (P02-B+) |
+| `publication` | Serving generations |
 | `warehouse`   | Materialization / snapshot                   |
 | `vectors`     | Chunks + embeddings                          |
 | `graph`       | Edge projection                              |
@@ -56,10 +52,10 @@ advances warehouse (or any other cursor).
 Watermark is the contiguous acked prefix. Out-of-order completions stay in
 `consumer_gaps` until that sequence is acked.
 
-## P07 checkpoint hook
+## Recovery checkpoint hook
 
 `archive_engine.changes.recovery_checkpoint_binding(vault)` returns the same
-`{status, reason, value}` envelope P07-A reserved as unavailable:
+`{status, reason, value}` envelope used by the recovery manifest:
 
 ```python
 {
@@ -79,7 +75,7 @@ Watermark is the contiguous acked prefix. Out-of-order completions stay in
 }
 ```
 
-P07 adopts this hook; this slice does not rewrite `recovery_manifest.py`.
+The recovery manifest uses this hook to bind a backup to its archive and journal checkpoint.
 
 ## Warehouse table (migration 009)
 
@@ -96,16 +92,16 @@ not truncated here. `publish_serving_index` must not call
 `serving_index_truncate_dirty` after a successful publish.
 
 Streamed embedding export finalizes an `ExportReceipt` only after both staged
-files exist, pair, and checksum. Missing staged files fail closed and must
+files exist and pass pair and checksum validation. Missing staged files fail closed and must
 not fall back to empty in-memory vectors. The existing `PublisherLease`
 covers ACTIVE selection through promotion/ack.
 
-## Writer inventory (P02-D)
+## Writer inventory
 
 Covered:
 
 - `archive_vault.vault.write_card` / `update_frontmatter_fields` / `delete_card`
-- `archive_sync.adapters.base` write seam (`_write_canonical_card`)
+- `archive_sync.adapters.base` write path (`_write_canonical_card`)
 - `mark_vault_written` reconcile hook
 - `mark_serving_index_dirty` DIRTY intake (`legacy_dirty`)
 - `archive_cli/loader.py` warehouse materialization → `acknowledge_materialized`
@@ -120,7 +116,7 @@ Adapter subclasses and extractors that call `write_card` still journal
 create/update. Direct `path.write_text` callers must call
 `request_reconciliation` with a cache-built UID map.
 
-P03 publisher port: `archive_engine.publication.publish(eligible_checkpoint, context)
+Processor publication interface: `archive_engine.publication.publish(eligible_checkpoint, context)
 -> PublicationReceipt`.
 
 ## Rollback
@@ -129,11 +125,11 @@ The journal is additive under `_meta`. Removing `009` drops only the
 warehouse cursor table. Legacy DIRTY remains readable. Do not delete
 committed mutation rows to “undo” a card; write a new delete/update.
 
-## Generation layout (P02-B)
+## Generation layout
 
 Each generation is an immutable segment. Incremental publish writes only the
 dirty UID set, replacement chunks/edges, new vectors, and explicit tombstones.
-The reader walks `layout.json` oldest→newest, newest wins, tombstones hide.
+The reader walks `layout.json` from oldest to newest. Later segments replace earlier records, and tombstones remove them from results.
 
 ```json
 {
@@ -172,4 +168,4 @@ Rules:
   `ACTIVE` rename. Publication acks only the captured `ChangeBatch`.
 
 `archive_engine.publication.publish(eligible_checkpoint, context)` is the
-publisher port P03-D calls. `publish_snapshot` remains the generation writer.
+interface called by maintenance. `publish_snapshot` remains the generation writer.
