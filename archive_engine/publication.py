@@ -100,9 +100,10 @@ class PublicationReceipt:
     unresolved_gaps: tuple[int, ...] = ()
     error: str = ""
     eligible_checkpoint: int = 0
+    skipped: str = ""
 
     def to_payload(self) -> dict[str, Any]:
-        return {
+        payload = {
             "generation_id": self.generation_id,
             "mode": self.mode,
             "parent_generation": self.parent_generation,
@@ -123,6 +124,9 @@ class PublicationReceipt:
             "error": self.error,
             "eligible_checkpoint": self.eligible_checkpoint,
         }
+        if self.skipped:
+            payload["skipped"] = self.skipped
+        return payload
 
 
 @dataclass(frozen=True)
@@ -446,6 +450,90 @@ def read_active_generation(index_root: Path) -> str:
     if not path.exists():
         return ""
     return path.read_text(encoding="utf-8").strip()
+
+
+def _manifest_int(data: Mapping[str, Any], key: str) -> int | None:
+    if key not in data:
+        return None
+    try:
+        return int(data.get(key) or 0)
+    except (TypeError, ValueError):
+        return None
+
+
+def generation_leaf_coverage(generation_dir: Path) -> tuple[int, int]:
+    """Leaf ``(cards, embeddings)`` for one generation. Manifest wins when present."""
+
+    dest = Path(generation_dir)
+    cards: int | None = None
+    embeddings: int | None = None
+    manifest = dest / "manifest.json"
+    if manifest.is_file():
+        try:
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            data = {}
+        if isinstance(data, Mapping):
+            cards = _manifest_int(data, "card_count")
+            embeddings = _manifest_int(data, "embedding_count")
+    if cards is None:
+        cards = _count_key_lines(dest / "cards.jsonl")
+    if embeddings is None:
+        embeddings = _count_key_lines(dest / "embedding_keys.txt")
+    return int(cards or 0), int(embeddings or 0)
+
+
+def max_complete_leaf_coverage(index_root: Path) -> tuple[str, int, int]:
+    """Largest COMPLETE generation by embeddings, then cards. Empty if none."""
+
+    gens = Path(index_root) / "generations"
+    best_gid = ""
+    best_cards = 0
+    best_emb = 0
+    if not gens.is_dir():
+        return "", 0, 0
+    for child in gens.iterdir():
+        if not child.is_dir() or not (child / COMPLETE_FILE).exists():
+            continue
+        cards, embeddings = generation_leaf_coverage(child)
+        if (embeddings, cards) > (best_emb, best_cards):
+            best_gid = child.name
+            best_cards = cards
+            best_emb = embeddings
+    return best_gid, best_cards, best_emb
+
+
+def coverage_regression_reason(
+    index_root: Path,
+    *,
+    candidate_cards: int,
+    candidate_embeddings: int,
+    active_gid: str = "",
+) -> str | None:
+    """Refuse a candidate whose leaf coverage is below ACTIVE or any COMPLETE generation.
+
+    A 498-card clip must never replace a 1.4M-card catalog, including when the
+    clip is a delta and a fatter COMPLETE generation still sits on disk.
+    """
+
+    root = Path(index_root)
+    best_gid, best_cards, best_emb = max_complete_leaf_coverage(root)
+    current = str(active_gid or read_active_generation(root) or "").strip()
+    if current:
+        cards, embeddings = generation_leaf_coverage(root / "generations" / current)
+        if (embeddings, cards) > (best_emb, best_cards):
+            best_gid, best_cards, best_emb = current, cards, embeddings
+    if best_emb <= 0 and best_cards <= 0:
+        return None
+    cards = int(candidate_cards or 0)
+    embeddings = int(candidate_embeddings or 0)
+    if embeddings < best_emb or cards < best_cards:
+        return (
+            "publication_coverage_regression "
+            f"candidate_cards={cards} candidate_embeddings={embeddings} "
+            f"kept={best_gid} kept_cards={best_cards} kept_embeddings={best_emb}"
+        )
+    return None
 
 
 def _path_size_bytes(path: Path) -> int:
@@ -997,6 +1085,16 @@ def recover_publication(
     if native is None:
         import archive_crate as native
     if active != generation_id:
+        dest_cards, dest_emb = generation_leaf_coverage(dest)
+        reason = coverage_regression_reason(
+            index_root,
+            candidate_cards=dest_cards,
+            candidate_embeddings=dest_emb,
+            active_gid=active,
+        )
+        if reason:
+            logger.error("%s recover_generation=%s", reason, generation_id)
+            return {"ok": False, "promoted": False, "acked": False, "active": active, "reason": reason}
         native.serving_index_publish(str(index_root), generation_id)
         active = generation_id
     if captured_batch is None and vault is not None:
@@ -1242,6 +1340,17 @@ def publish_snapshot(
         if chosen == "compact":
             parent = ""
 
+        embed_count = int(snapshot.embedding_count or len(snapshot.embeddings) or 0)
+        if chosen in {"full", "compact"}:
+            reason = coverage_regression_reason(
+                root,
+                candidate_cards=len(snapshot.cards),
+                candidate_embeddings=embed_count,
+            )
+            if reason:
+                logger.error("%s generation=%s", reason, gid)
+                raise IncompatibleStateError(reason)
+
         dirty = {str(uid).strip() for uid in snapshot.dirty_uids if str(uid).strip()}
         present = {
             str(row.get("card_uid") or "").strip() for row in snapshot.cards if str(row.get("card_uid") or "").strip()
@@ -1464,6 +1573,29 @@ def publish(eligible_checkpoint: Any, context: Any) -> PublicationReceipt:
                 dirty_uids=list(ctx.dirty_uids) or None,
             )
             payload = dict(raw.get("report") or raw or {})
+            skipped = str(raw.get("skipped") or payload.get("skipped") or "")
+            if skipped:
+                return PublicationReceipt(
+                    generation_id=str(payload.get("generation_id") or raw.get("generation") or ""),
+                    mode=str(payload.get("mode") or ctx.mode),
+                    parent_generation=str(payload.get("parent_generation") or ""),
+                    base_generation=str(payload.get("base_generation") or ""),
+                    snapshot_id=str(payload.get("snapshot_id") or ""),
+                    source_watermark=int(payload.get("source_watermark") or watermark),
+                    cards=int(payload.get("cards") or 0),
+                    chunks=int(payload.get("chunks") or 0),
+                    embeddings=int(payload.get("embeddings") or 0),
+                    tombstone_uids=tuple(payload.get("tombstone_uids") or ()),
+                    replaced_uids=tuple(payload.get("replaced_uids") or ()),
+                    compacted=bool(payload.get("compacted")),
+                    ok=True,
+                    validation_summary=str(payload.get("validation_summary") or skipped),
+                    acked_watermark=0,
+                    unresolved_gaps=gaps,
+                    error=str(raw.get("error") or payload.get("error") or ""),
+                    eligible_checkpoint=watermark,
+                    skipped=skipped,
+                )
             if not raw.get("ok", True):
                 return PublicationReceipt(
                     generation_id=str(payload.get("generation_id") or raw.get("generation") or ""),

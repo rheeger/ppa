@@ -55,6 +55,7 @@ dependencies = [
  "hex",
  "indexmap",
  "jiff",
+ "libc",
  "memmap2",
  "pyo3",
  "pyo3-build-config",

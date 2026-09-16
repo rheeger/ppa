@@ -13,7 +13,8 @@
 #   - Do not call ``docker compose port`` (or any other Docker wait) before exec.
 #   - Docker is optional. Use $PPA_INDEX_DSN, then last-known port, then 50731.
 #   - Status goes to stderr only. stdout is the MCP JSON-RPC stream.
-#   - No lock file — Cursor may spawn several createClient processes at once.
+#   - Do not mmap the serving index here. HTTP ``ppa serve --http`` owns it.
+#     Stdio copies follow that owner (PPA_SERVING_INDEX_FOLLOW_HTTP=1).
 #
 # Python resolution (first executable that can ``import mcp, archive_cli`` wins):
 #   1. $PPA_PYTHON
@@ -34,6 +35,7 @@ export PPA_EMBEDDING_VERSION="1"
 export PPA_USE_ARNOLD_OPENAI_KEY="1"
 
 export PPA_INSTANCE_NAME="Heeger-Friedman Family Archives"
+export PPA_SERVING_INDEX_FOLLOW_HTTP="${PPA_SERVING_INDEX_FOLLOW_HTTP:-1}"
 
 # Hybrid search / embeddings: Cursor may pass OPENAI_API_KEY; otherwise use the
 # local key file (same convention as archive_scripts/ppa-embed-batch-loop.sh).

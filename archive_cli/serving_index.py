@@ -8,6 +8,7 @@ current handle and a background thread opens the new generation, then swaps.
 from __future__ import annotations
 
 import array
+import fcntl
 import json
 import logging
 import math
@@ -31,6 +32,7 @@ from archive_engine.contracts import (
 from archive_engine.publication import (
     ServingSnapshot,
     choose_publication_mode,
+    coverage_regression_reason,
     pin_generation,
     plan_publication_resources,
     publish_snapshot,
@@ -54,8 +56,11 @@ from .index_config import (
     get_rebuild_progress_every,
     get_serving_candidate_budget,
     get_serving_export_batch_size,
+    get_serving_follow_http_owner,
     get_serving_index_max_rss_mb,
+    get_serving_prepare_on_start,
     get_serving_index_path,
+    get_serving_prefault_enabled,
     get_serving_warm_poll_seconds,
     get_serving_nlist,
     get_serving_nprobe,
@@ -431,6 +436,10 @@ _HANDLES: dict[str, ServingIndexHandle] = {}
 _HANDLE: ServingIndexHandle | None = None
 _WARMING: dict[str, str] = {}
 _WARM_THREADS: dict[str, threading.Thread] = {}
+_OPEN_EVENTS: dict[str, threading.Event] = {}
+_OPEN_ERRORS: dict[str, BaseException] = {}
+_PREPARE_THREADS: dict[str, threading.Thread] = {}
+_LOCK_FDS: dict[str, int] = {}
 _WATCH_STOP = threading.Event()
 _WATCH_THREAD: threading.Thread | None = None
 _WATCH_VAULT: Path | None = None
@@ -472,12 +481,22 @@ def _access_req(kwargs: dict[str, Any]) -> dict[str, Any]:
 
 
 class ServingIndexHandle:
-    def __init__(self, vault: Path, index_root: Path, generation_id: str, native: Any):
+    def __init__(
+        self,
+        vault: Path,
+        index_root: Path,
+        generation_id: str,
+        native: Any,
+        *,
+        lock_fd: int | None = None,
+    ):
         self.vault = Path(vault)
         self.index_root = Path(index_root)
         self.generation_id = generation_id
         self._native = native
+        self._lock_fd = lock_fd
         self._closed = False
+        self.vectors_resident = False
         pin_generation(self.index_root, self.generation_id)
 
     def close(self) -> None:
@@ -485,6 +504,7 @@ class ServingIndexHandle:
             return
         self._closed = True
         unpin_generation(self.index_root, self.generation_id)
+        self._lock_fd = None
 
     def search(self, query: str, **kwargs: Any) -> list[dict[str, Any]]:
         req = {
@@ -626,7 +646,104 @@ def serving_index_status(vault: Path | None = None) -> dict[str, Any]:
             warming = next((gid for vault_key, gid in _WARMING.items() if vault_key == key), "")
     payload["serving_index_open_generation"] = str(getattr(handle, "generation_id", "") or "")
     payload["serving_index_warming_generation"] = warming
+    payload["serving_index_vectors_resident"] = bool(getattr(handle, "vectors_resident", False))
+    payload["serving_index_http_owner"] = _http_owner_label()
     return payload
+
+
+def _http_owner_label() -> str:
+    if not get_serving_follow_http_owner():
+        return ""
+    try:
+        from archive_cli.http_serve import http_serving_owner_reachable
+
+        return http_serving_owner_reachable()
+    except Exception:
+        return ""
+
+
+def _open_lock_path(root: Path) -> Path:
+    return Path(root) / "OPEN.lock"
+
+
+def _lock_key(root: Path) -> str:
+    return str(Path(root).resolve())
+
+
+def _acquire_open_lock(root: Path) -> int:
+    """Exclusive flock so only one process mmaps the serving index.
+
+    Same-process generation swaps reuse the fd. A second open() plus
+    ``LOCK_NB`` on macOS/Linux fails even in the same process.
+    """
+
+    key = _lock_key(root)
+    with _LOCK:
+        existing = _LOCK_FDS.get(key)
+        if existing is not None:
+            return existing
+        path = _open_lock_path(root)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            other = _read_lock_pid(path)
+            os.close(fd)
+            if other > 0:
+                raise ServingIndexUnavailableError(f"serving_index_already_open pid={other}") from exc
+            raise ServingIndexUnavailableError("serving_index_already_open") from exc
+        try:
+            os.ftruncate(fd, 0)
+            os.write(fd, f"{os.getpid()}\n".encode("ascii"))
+            os.fsync(fd)
+        except OSError:
+            logger.debug("serving_index_lock write failed path=%s", path, exc_info=True)
+        _LOCK_FDS[key] = fd
+        return fd
+
+
+def _release_open_lock(root: Path | None = None) -> None:
+    with _LOCK:
+        keys = [_lock_key(root)] if root is not None else list(_LOCK_FDS)
+        fds = [(key, _LOCK_FDS.pop(key, None)) for key in keys]
+    for key, fd in fds:
+        del key
+        if fd is None:
+            continue
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError:
+            logger.debug("serving_index_lock unlock failed", exc_info=True)
+        try:
+            os.close(fd)
+        except OSError:
+            logger.debug("serving_index_lock close failed", exc_info=True)
+
+
+def _read_lock_pid(path: Path) -> int:
+    try:
+        raw = path.read_text(encoding="utf-8").strip().splitlines()
+    except OSError:
+        return 0
+    if not raw:
+        return 0
+    try:
+        return int(raw[0])
+    except ValueError:
+        return 0
+
+
+def _refuse_stdio_open() -> None:
+    """Stdio MCP stays thin when the dedicated HTTP process already owns retrieval."""
+
+    if not get_serving_follow_http_owner():
+        return
+    if os.environ.get("PPA_MCP_HTTP", "").strip().lower() in {"1", "true", "yes"}:
+        return
+    owner = _http_owner_label()
+    if owner:
+        raise ServingIndexUnavailableError(f"serving_index_owned_by_http {owner}")
 
 
 def ack_dirty_uids(vault: Path | str | None, uids: list[str] | None) -> int:
@@ -897,19 +1014,27 @@ def close_serving_handles(*, vault: Path | None = None) -> None:
     global _HANDLE
     with _LOCK:
         if vault is None:
+            roots = [handle.index_root for handle in _HANDLES.values()]
             for handle in list(_HANDLES.values()):
                 handle.close()
             _HANDLES.clear()
             _HANDLE = None
             _WARMING.clear()
+            for root in roots:
+                _release_open_lock(root)
+            if not roots:
+                _release_open_lock()
             return
         key = _vault_handle_key(vault)
         handle = _HANDLES.pop(key, None)
         _WARMING.pop(key, None)
+        root = handle.index_root if handle is not None else None
         if handle is not None:
             handle.close()
         if _HANDLE is handle:
             _HANDLE = None
+        if root is not None:
+            _release_open_lock(root)
 
 
 def _active_generation(vault: Path) -> tuple[str, Path, dict[str, Any]]:
@@ -927,9 +1052,96 @@ def _active_generation(vault: Path) -> tuple[str, Path, dict[str, Any]]:
     return gid, root, status
 
 
-def _open_native_handle(vault: Path, root: Path, gid: str) -> ServingIndexHandle:
-    native = _crate().serving_index_open(str(root))
-    return ServingIndexHandle(Path(vault), root, gid, native)
+def _format_bytes(n: int) -> str:
+    value = float(max(n, 0))
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if value < 1024.0 or unit == "TB":
+            if unit == "B":
+                return f"{int(value)}{unit}"
+            return f"{value:.1f}{unit}"
+        value /= 1024.0
+    return f"{n}B"
+
+
+def _prefault_vectors(native: Any, generation_id: str, *, handle: ServingIndexHandle | None = None) -> int:
+    """Fault cold embedding pages once per process per generation.
+
+    Off unless ``PPA_SERVING_PREFAULT=1``. Cursor stdio must never pin the
+    27GB embedding file just because a window spawned another MCP.
+    """
+
+    if not get_serving_prefault_enabled():
+        logger.info("serving_index_prefault skip generation=%s reason=disabled", generation_id)
+        return 0
+    if handle is not None and handle.vectors_resident:
+        logger.info("serving_index_prefault skip generation=%s reason=already_resident", generation_id)
+        return 0
+    crate = _crate()
+    prefault = getattr(crate, "serving_index_prefault", None)
+    if not callable(prefault):
+        logger.warning("serving_index_prefault missing crate generation=%s", generation_id)
+        return 0
+    started = time.monotonic()
+    last_log = [0]
+    last_faulted = [0]
+    logger.info("serving_index_prefault start generation=%s", generation_id)
+
+    def _progress(done: int, total: int, faulted: int = 0) -> None:
+        last_faulted[0] = int(faulted)
+        step = 1 << 30
+        if done < total and done - last_log[0] < step:
+            return
+        last_log[0] = int(done)
+        elapsed = time.monotonic() - started
+        pct = (100.0 * done / total) if total else 100.0
+        logger.info(
+            "serving_index_prefault generation=%s bytes=%s/%s (%.0f%%) faulted=%s elapsed_s=%.1f rss_mb=%.0f",
+            generation_id,
+            _format_bytes(int(done)),
+            _format_bytes(int(total)),
+            pct,
+            _format_bytes(int(faulted)),
+            elapsed,
+            _rss_mb(),
+        )
+
+    touched = int(prefault(native, _progress) or 0)
+    if handle is not None:
+        handle.vectors_resident = True
+    logger.info(
+        "serving_index_prefault done generation=%s bytes=%s faulted=%s elapsed_s=%.1f rss_mb=%.0f",
+        generation_id,
+        _format_bytes(touched),
+        _format_bytes(last_faulted[0]),
+        time.monotonic() - started,
+        _rss_mb(),
+    )
+    return touched
+
+
+def _open_native_handle(vault: Path, root: Path, gid: str, *, prefault: bool = False) -> ServingIndexHandle:
+    _refuse_stdio_open()
+    lock_fd = _acquire_open_lock(root)
+    started = time.monotonic()
+    logger.info("serving_index_open start generation=%s", gid)
+    try:
+        native = _crate().serving_index_open(str(root))
+    except Exception:
+        with _LOCK:
+            unused = all(Path(h.index_root).resolve() != Path(root).resolve() for h in _HANDLES.values())
+        if unused:
+            _release_open_lock(root)
+        raise
+    logger.info(
+        "serving_index_open mmap done generation=%s elapsed_s=%.1f rss_mb=%.0f",
+        gid,
+        time.monotonic() - started,
+        _rss_mb(),
+    )
+    handle = ServingIndexHandle(Path(vault), root, gid, native, lock_fd=lock_fd)
+    if prefault:
+        _prefault_vectors(native, gid, handle=handle)
+    return handle
 
 
 def _install_handle(key: str, handle: ServingIndexHandle, *, previous: ServingIndexHandle | None) -> None:
@@ -965,7 +1177,7 @@ def _schedule_warm(vault: Path, gid: str, root: Path) -> None:
         logger.info("serving_index_warm start generation=%s vault=%s", gid, vault)
         opened: ServingIndexHandle | None = None
         try:
-            opened = _open_native_handle(vault, root, gid)
+            opened = _open_native_handle(vault, root, gid, prefault=get_serving_prefault_enabled())
             with _LOCK:
                 try:
                     live_gid, _, _ = _active_generation(vault)
@@ -1017,6 +1229,78 @@ def wait_serving_handle(vault: Path, *, generation_id: str = "", timeout: float 
             return handle
         time.sleep(0.05)
     raise ServingIndexUnavailableError(f"serving_index_warm_timeout generation={wanted}")
+
+
+def start_mcp_serving_prepare(vault: Path, *, allow_stdio: bool = False) -> None:
+    """Background-open the serving index for the HTTP owner only.
+
+    Stdio MCP must stay thin. Cursor windows and agent workers each spawn
+    their own ``archive_cli``. Prefaulting 27GB in every copy wedged the
+    machine. HTTP serve is the one process allowed to mmap on startup.
+    """
+
+    target = Path(vault)
+    http_owner = os.environ.get("PPA_MCP_HTTP", "").strip().lower() in {"1", "true", "yes"}
+    if not http_owner and not allow_stdio:
+        logger.info("mcp_serving_prepare skip vault=%s reason=stdio", target)
+        return
+    if http_owner and not get_serving_prepare_on_start():
+        logger.info("mcp_serving_prepare skip vault=%s reason=prepare_on_start_off", target)
+        return
+    key = _vault_handle_key(target)
+    thread: threading.Thread | None = None
+    already_open = False
+    with _LOCK:
+        current = _HANDLES.get(key)
+        if current is not None:
+            already_open = True
+        else:
+            living = _PREPARE_THREADS.get(key)
+            if living is not None and living.is_alive():
+                return
+
+            def _run() -> None:
+                try:
+                    prepare_mcp_serving(target)
+                except Exception:
+                    logger.exception("mcp_serving_prepare failed")
+                finally:
+                    with _LOCK:
+                        if _PREPARE_THREADS.get(key) is threading.current_thread():
+                            _PREPARE_THREADS.pop(key, None)
+
+            thread = threading.Thread(target=_run, name="ppa-mcp-serving-prepare", daemon=True)
+            _PREPARE_THREADS[key] = thread
+    if already_open:
+        start_serving_generation_watcher(target)
+        logger.info("mcp_serving_prepare skip vault=%s reason=already_open", target)
+        return
+    if thread is not None:
+        thread.start()
+        logger.info("mcp_serving_prepare scheduled vault=%s", target)
+
+
+def prepare_mcp_serving(vault: Path) -> ServingIndexHandle:
+    """Open ACTIVE once. Prefault only when ``PPA_SERVING_PREFAULT=1``.
+
+    Do not call this on the MCP handshake thread. Stdio serve should not
+    call it at all when HTTP already owns the index.
+    """
+
+    target = Path(vault)
+    started = time.monotonic()
+    logger.info("mcp_serving_prepare start vault=%s", target)
+    handle = get_serving_handle(target)
+    if get_serving_prefault_enabled():
+        _prefault_vectors(handle._native, handle.generation_id, handle=handle)
+    start_serving_generation_watcher(target)
+    logger.info(
+        "mcp_serving_prepare ready generation=%s elapsed_s=%.1f rss_mb=%.0f",
+        handle.generation_id,
+        time.monotonic() - started,
+        _rss_mb(),
+    )
+    return handle
 
 
 def start_serving_generation_watcher(vault: Path) -> None:
@@ -1071,23 +1355,50 @@ def get_serving_handle(vault: Path) -> ServingIndexHandle:
     global _HANDLE
     gid, root, _status = _active_generation(vault)
     key = _vault_handle_key(vault)
-    with _LOCK:
-        existing = _HANDLES.get(key)
-        if existing is not None and existing.index_root.resolve() == root.resolve() and existing.generation_id == gid:
-            _HANDLE = existing
-            return existing
-        if existing is not None:
-            _schedule_warm(vault, gid, root)
-            return existing
-    native_handle = _open_native_handle(vault, root, gid)
-    with _LOCK:
-        current = _HANDLES.get(key)
-        if current is not None and current.generation_id == gid:
-            native_handle.close()
-            _HANDLE = current
-            return current
-        _install_handle(key, native_handle, previous=current)
-        return native_handle
+    while True:
+        with _LOCK:
+            existing = _HANDLES.get(key)
+            if existing is not None and existing.index_root.resolve() == root.resolve() and existing.generation_id == gid:
+                _HANDLE = existing
+                return existing
+            if existing is not None:
+                _schedule_warm(vault, gid, root)
+                return existing
+            waiter = _OPEN_EVENTS.get(key)
+            if waiter is None:
+                waiter = threading.Event()
+                _OPEN_EVENTS[key] = waiter
+                owner = True
+            else:
+                owner = False
+        if not owner:
+            if not waiter.wait(timeout=600):
+                raise ServingIndexUnavailableError("serving_index_open_timeout")
+            with _LOCK:
+                err = _OPEN_ERRORS.pop(key, None)
+                opened = _HANDLES.get(key)
+            if err is not None and opened is None:
+                raise err
+            continue
+        try:
+            native_handle = _open_native_handle(vault, root, gid)
+            with _LOCK:
+                current = _HANDLES.get(key)
+                if current is not None and current.generation_id == gid:
+                    native_handle.close()
+                    _HANDLE = current
+                    return current
+                _install_handle(key, native_handle, previous=current)
+                return native_handle
+        except BaseException as exc:
+            with _LOCK:
+                _OPEN_ERRORS[key] = exc
+            raise
+        finally:
+            with _LOCK:
+                event = _OPEN_EVENTS.pop(key, None)
+            if event is not None:
+                event.set()
 
 
 def _snapshot_binding(vault: Path, gid: str) -> tuple[str, int]:
@@ -1608,6 +1919,24 @@ def _publish_serving_index_locked(
             incremental = False
             mode = "compact"
             force_compact = True
+    if incremental and active_gid:
+        reason = coverage_regression_reason(
+            root,
+            candidate_cards=len(concrete),
+            candidate_embeddings=len(concrete),
+            active_gid=active_gid,
+        )
+        if reason:
+            log.warning("serving_index_publish skip %s keep_generation=%s", reason, active_gid)
+            return {
+                "ok": True,
+                "skipped": "coverage_regression",
+                "generation": active_gid,
+                "error": reason,
+                "cards": 0,
+                "chunks": 0,
+                "embeddings": 0,
+            }
     if incremental:
         log.info("serving_index_publish incremental uids=%s generation=%s", len(concrete), gid)
     spec = serving_embedding_spec()
@@ -1678,6 +2007,26 @@ def _export_and_publish(
     )
     rss_cap = get_serving_index_max_rss_mb()
     embed_n = snapshot.embedding_count or len(snapshot.embeddings)
+    reason = coverage_regression_reason(
+        root,
+        candidate_cards=len(snapshot.cards),
+        candidate_embeddings=int(embed_n or 0),
+        active_gid=active_gid,
+    )
+    if reason:
+        if incremental:
+            log.warning("serving_index_publish skip %s keep_generation=%s", reason, active_gid)
+            return {
+                "ok": True,
+                "skipped": "coverage_regression",
+                "generation": active_gid,
+                "error": reason,
+                "cards": len(snapshot.cards),
+                "chunks": len(snapshot.chunks),
+                "embeddings": int(embed_n or 0),
+            }
+        log.error("serving_index_publish refused %s generation=%s", reason, gid)
+        return {"ok": False, "error": reason, "generation": active_gid}
     est_mb = (embed_n * dim * 4) / (1024 * 1024)
     if est_mb > rss_cap:
         if incremental:

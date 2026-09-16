@@ -519,6 +519,26 @@ def get_serving_index_max_rss_mb() -> int:
     return max(_ppa_env_int("PPA_SERVING_INDEX_MAX_RSS_MB", default=8192), 256)
 
 
+def get_serving_prefault_enabled() -> bool:
+    """Fault every embedding page into RSS. Off unless explicitly requested."""
+    return _ppa_env_bool("PPA_SERVING_PREFAULT")
+
+
+def get_serving_follow_http_owner() -> bool:
+    """Stdio MCP must not mmap when a dedicated HTTP owner is already up."""
+    return _ppa_env_bool("PPA_SERVING_INDEX_FOLLOW_HTTP")
+
+
+def get_serving_prepare_on_start() -> bool:
+    """Open the living serving index during ``serve --http`` startup.
+
+    HTTP ``run-http-mcp.sh`` sets this on so listen waits for one open
+    (~41s / ~25GB RSS on generation 1789310628025, no prefault). Stdio
+    and tests leave it off.
+    """
+    return _ppa_env_bool("PPA_MCP_PREPARE_ON_START")
+
+
 def get_serving_warm_poll_seconds() -> float:
     """How often a long-lived serve process checks ACTIVE for a new generation."""
     return max(_ppa_env_float("PPA_SERVING_WARM_POLL_SECONDS", default=2.0), 0.2)

@@ -1,7 +1,8 @@
 #!/bin/zsh
-# Loopback streamable-HTTP MCP for Arnold (via Tailscale Serve).
+# Singleton streamable-HTTP MCP for every local agent (Cursor, Claude, Codex, Cline).
+# This process is the only one allowed to mmap the living serving index.
 # Token: PPA_MCP_AUTH_TOKEN or ~/.ppa/mcp-http-token
-# Publish: this script also runs `tailscale serve --bg` when PPA_MCP_TAILSCALE_SERVE=1 (default).
+# Tailscale Serve is opt-in (PPA_MCP_TAILSCALE_SERVE=1). Bind the Tailscale IP by default.
 set -euo pipefail
 # launchd PATH is minimal — Tailscale and Homebrew must be explicit.
 export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:${PATH:-}"
@@ -17,6 +18,9 @@ export PPA_MCP_TOOL_PROFILE="${PPA_MCP_TOOL_PROFILE:-read-only}"
 export PPA_STATEMENT_TIMEOUT_MS="${PPA_STATEMENT_TIMEOUT_MS:-180000}"
 export PPA_MCP_HTTP_PORT="${PPA_MCP_HTTP_PORT:-8765}"
 export PPA_MCP_HTTP=1
+export PPA_SERVING_INDEX_FOLLOW_HTTP="${PPA_SERVING_INDEX_FOLLOW_HTTP:-1}"
+# Open the serving index once before /health answers. First retrieval is warm.
+export PPA_MCP_PREPARE_ON_START="${PPA_MCP_PREPARE_ON_START:-1}"
 if [[ -z "${PPA_MCP_HTTP_HOST:-}" ]]; then
   # Prefer the Tailscale address so Arnold can reach us without Tailscale Serve.
   if command -v tailscale >/dev/null 2>&1; then

@@ -48,9 +48,10 @@ process group.
 - Prove work: the `--log-file` gains `ppa.*` lines.
 - Do not start a second writer (`maintain`, rematerialize, publish) against
   the same vault or schema while one is running.
-- Do not kill HTTP MCP (`serve --http`) or Cursor stdio MCP (parent looks
-  like `Cursor Helper: mcp-process`). Those are warm servers, not leftover
-  jobs.
+- Do not kill HTTP MCP (`serve --http`) during maintain, rebuild, or publish.
+  Restart it only when deploying serve code, via
+  `launchctl kickstart -k gui/$(id -u)/com.rheeger.ppa.mcp-http`. See
+  `archive_docs/runbooks/http-mcp-singleton.md`.
 
 ## Never
 

@@ -258,3 +258,62 @@ def test_warehouse_compile_is_parameterized() -> None:
     assert "person" in compiled.params
     assert "SELECT" in compiled.sql
     assert "plan_p10.cards" in compiled.sql
+
+
+class _FakeServing:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+        self.generation_id = "gen-test"
+
+    def typed_query(self, **kwargs):
+        self.calls.append(kwargs)
+        return {
+            "rows": [
+                {
+                    "uid": "hfa-person-a",
+                    "card_uid": "hfa-person-a",
+                    "type": "person",
+                    "activity_at": "2026-01-02T00:00:00Z",
+                    "summary": "Alex Rivera",
+                }
+            ],
+            "matched_total": 13505,
+            "next_after": {
+                "uid": "hfa-person-a",
+                "order_value": "2026-01-02T00:00:00Z",
+                "order_null": False,
+            },
+            "truncated": False,
+        }
+
+
+class _FakeRetrieval:
+    def __init__(self, serving: _FakeServing) -> None:
+        self._serving = serving
+
+    def serving_or_none(self):
+        return self._serving
+
+    def _policy(self) -> dict:
+        return {}
+
+
+class _FakeRuntime:
+    def __init__(self, serving: _FakeServing) -> None:
+        self.retrieval = _FakeRetrieval(serving)
+
+
+def test_serving_typed_query_uses_one_page_and_rust_total() -> None:
+    serving = _FakeServing()
+    request = request_from_simple_filters(access=_access(), type_filter="person", limit=5)
+    page = execute_typed_query(_FakeRuntime(serving), request)
+    assert len(serving.calls) == 1
+    assert serving.calls[0]["page_size"] == 5
+    assert serving.calls[0]["order_field"] == "activity_at"
+    assert serving.calls[0]["order_direction"] == "desc"
+    assert page.matched_total == 13505
+    assert page.aggregate["value"] == 13505
+    assert page.aggregate["over_full_eligible_set"] is True
+    assert len(page.rows) == 1
+    assert page.next_cursor
+    assert page.rows[0]["uid"] == "hfa-person-a"

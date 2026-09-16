@@ -7,8 +7,11 @@ tailnet. HTTP serve refuses to start without a bearer token.
 from __future__ import annotations
 
 import hmac
+import json
 import logging
 import os
+import urllib.error
+import urllib.request
 from collections.abc import Awaitable, Callable, MutableMapping
 from pathlib import Path
 from typing import Any
@@ -24,6 +27,7 @@ _log = logging.getLogger("ppa.http")
 DEFAULT_HTTP_HOST = "127.0.0.1"
 DEFAULT_HTTP_PORT = 8765
 DEFAULT_TOKEN_FILE = Path.home() / ".ppa" / "mcp-http-token"
+DEFAULT_OWNER_FILE = Path.home() / ".ppa" / "mcp-http-owner.json"
 HEALTH_PATHS = frozenset({"/health", "/health/"})
 
 Scope = MutableMapping[str, Any]
@@ -41,6 +45,87 @@ def resolve_http_auth_token() -> str:
     if path.is_file():
         return path.read_text(encoding="utf-8").strip()
     return ""
+
+
+def http_owner_file() -> Path:
+    raw = os.environ.get("PPA_MCP_HTTP_OWNER_FILE", "").strip()
+    return Path(raw) if raw else DEFAULT_OWNER_FILE
+
+
+def write_http_owner(*, host: str, port: int, pid: int | None = None) -> Path:
+    """Record the live HTTP MCP so stdio copies can refuse to mmap the index."""
+
+    dest = http_owner_file()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"pid": int(pid or os.getpid()), "host": str(host).strip(), "port": int(port)}
+    dest.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+    dest.chmod(0o600)
+    return dest
+
+
+def clear_http_owner() -> None:
+    dest = http_owner_file()
+    try:
+        dest.unlink()
+    except FileNotFoundError:
+        return
+
+
+def read_http_owner() -> dict[str, Any] | None:
+    dest = http_owner_file()
+    if not dest.is_file():
+        return None
+    try:
+        payload = json.loads(dest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    host = str(payload.get("host") or "").strip()
+    try:
+        port = int(payload.get("port") or 0)
+    except (TypeError, ValueError):
+        port = 0
+    if not host or port <= 0:
+        return None
+    return payload
+
+
+def http_owner_health_url(owner: dict[str, Any] | None = None) -> str:
+    payload = owner if owner is not None else read_http_owner()
+    if payload:
+        return f"http://{payload['host']}:{int(payload['port'])}/health"
+    env_url = os.environ.get("PPA_MCP_HTTP_URL", "").strip()
+    if env_url:
+        return env_url.rstrip("/").removesuffix("/mcp") + "/health"
+    host = os.environ.get("PPA_MCP_HTTP_HOST", "").strip()
+    if not host:
+        return ""
+    port = int(os.environ.get("PPA_MCP_HTTP_PORT") or DEFAULT_HTTP_PORT)
+    return f"http://{host}:{port}/health"
+
+
+def http_serving_owner_reachable(*, timeout: float = 0.4) -> str:
+    """Return ``host:port`` when the dedicated HTTP MCP answers /health."""
+
+    url = http_owner_health_url()
+    if not url:
+        return ""
+    try:
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if int(getattr(resp, "status", 0) or 0) != 200:
+                return ""
+    except (OSError, urllib.error.URLError, TimeoutError, ValueError):
+        return ""
+    owner = read_http_owner()
+    if owner:
+        return f"{owner['host']}:{int(owner['port'])}"
+    host = os.environ.get("PPA_MCP_HTTP_HOST", "").strip()
+    port = os.environ.get("PPA_MCP_HTTP_PORT") or str(DEFAULT_HTTP_PORT)
+    if host:
+        return f"{host}:{port}"
+    return url
 
 
 def write_http_auth_token(token: str, path: Path | None = None) -> Path:
@@ -140,11 +225,23 @@ def run_http(mcp: Any, *, host: str, port: int, token: str) -> None:
     configure_http_transport(mcp, host=host, port=port)
     inner = mcp.streamable_http_app()
     app = BearerAuthASGI(inner, token=token)
-    _log.info("http_mcp_listen host=%s port=%d path=/mcp health=/health", host, port)
+    owner_path = write_http_owner(host=host, port=port)
+    _log.info(
+        "http_mcp_listen host=%s port=%d path=/mcp health=/health owner=%s",
+        host,
+        port,
+        owner_path,
+    )
 
     async def _serve() -> None:
         config = uvicorn.Config(app, host=host, port=port, log_level="info")
         server = uvicorn.Server(config)
-        await server.serve()
+        try:
+            await server.serve()
+        finally:
+            clear_http_owner()
 
-    anyio.run(_serve)
+    try:
+        anyio.run(_serve)
+    finally:
+        clear_http_owner()

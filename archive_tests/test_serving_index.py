@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import struct
 import time
 from pathlib import Path
@@ -12,8 +13,11 @@ from archive_cli.index_store import PostgresArchiveIndex
 from archive_cli.serving_index import (
     get_serving_handle,
     mark_serving_index_dirty,
+    prepare_mcp_serving,
     schedule_serving_handle_warm,
     serving_index_status,
+    start_mcp_serving_prepare,
+    stop_serving_generation_watcher,
     verify_serving_index,
     wait_serving_handle,
 )
@@ -189,6 +193,225 @@ def test_schedule_serving_handle_warm_opens_active(tmp_path, monkeypatch) -> Non
     assert handle.generation_id == gid
 
 
+def test_prepare_mcp_serving_skips_prefault_by_default(tmp_path, monkeypatch) -> None:
+    from archive_cli import serving_index as si
+
+    si._HANDLE = None
+    si._HANDLES.clear()
+    si._WARMING.clear()
+    stop_serving_generation_watcher()
+    root = tmp_path / "rust-search-index"
+    monkeypatch.setenv("PPA_SERVING_INDEX_PATH", str(root))
+    monkeypatch.delenv("PPA_SERVING_PREFAULT", raising=False)
+    gid = _publish_mini(root, "gen-serve-noprefault")
+    seen: list[tuple[int, int]] = []
+
+    def _prefault(native, progress=None):
+        del native
+        if callable(progress):
+            progress(4, 4)
+            seen.append((4, 4))
+        return 4
+
+    monkeypatch.setattr(archive_crate, "serving_index_prefault", _prefault)
+    try:
+        handle = prepare_mcp_serving(tmp_path)
+        assert handle.generation_id == gid
+        assert handle.vectors_resident is False
+        assert seen == []
+        assert si._WATCH_THREAD is not None
+    finally:
+        stop_serving_generation_watcher()
+        handle.close()
+        si._HANDLES.clear()
+
+
+def test_prepare_mcp_serving_prefaults_before_ready(tmp_path, monkeypatch) -> None:
+    from archive_cli import serving_index as si
+
+    si._HANDLE = None
+    si._HANDLES.clear()
+    si._WARMING.clear()
+    stop_serving_generation_watcher()
+    root = tmp_path / "rust-search-index"
+    monkeypatch.setenv("PPA_SERVING_INDEX_PATH", str(root))
+    monkeypatch.setenv("PPA_SERVING_PREFAULT", "1")
+    gid = _publish_mini(root, "gen-serve-prefault")
+    seen: list[tuple[int, int]] = []
+
+    def _prefault(native, progress=None):
+        del native
+        if callable(progress):
+            progress(4, 4)
+            seen.append((4, 4))
+        return 4
+
+    monkeypatch.setattr(archive_crate, "serving_index_prefault", _prefault)
+    try:
+        handle = prepare_mcp_serving(tmp_path)
+        assert handle.generation_id == gid
+        assert handle.vectors_resident
+        assert seen == [(4, 4)]
+        prepare_mcp_serving(tmp_path)
+        assert seen == [(4, 4)]
+        assert si._WATCH_THREAD is not None
+    finally:
+        stop_serving_generation_watcher()
+        handle.close()
+        si._HANDLES.clear()
+
+
+def test_start_mcp_serving_prepare_skips_stdio(tmp_path, monkeypatch) -> None:
+    from archive_cli import serving_index as si
+
+    si._HANDLE = None
+    si._HANDLES.clear()
+    si._PREPARE_THREADS.clear()
+    stop_serving_generation_watcher()
+    root = tmp_path / "rust-search-index"
+    monkeypatch.setenv("PPA_SERVING_INDEX_PATH", str(root))
+    monkeypatch.delenv("PPA_MCP_HTTP", raising=False)
+    _publish_mini(root, "gen-serve-stdio-skip")
+    opened = []
+
+    def _fail_open(path: str):
+        opened.append(path)
+        raise AssertionError("stdio must not open the serving index on prepare")
+
+    monkeypatch.setattr(archive_crate, "serving_index_open", _fail_open)
+    start_mcp_serving_prepare(tmp_path)
+    assert opened == []
+    assert si._HANDLES.get(si._vault_handle_key(tmp_path)) is None
+
+
+def test_get_serving_handle_refuses_when_http_owner_up(tmp_path, monkeypatch) -> None:
+    from archive_cli import serving_index as si
+    from archive_cli.http_serve import write_http_owner
+
+    si._HANDLE = None
+    si._HANDLES.clear()
+    root = tmp_path / "rust-search-index"
+    owner = tmp_path / "http-owner.json"
+    monkeypatch.setenv("PPA_SERVING_INDEX_PATH", str(root))
+    monkeypatch.setenv("PPA_SERVING_INDEX_FOLLOW_HTTP", "1")
+    monkeypatch.setenv("PPA_MCP_HTTP_OWNER_FILE", str(owner))
+    monkeypatch.delenv("PPA_MCP_HTTP", raising=False)
+    write_http_owner(host="127.0.0.1", port=9, pid=os.getpid())
+    _publish_mini(root, "gen-owned-by-http")
+
+    def _health(_timeout=0.4):
+        return "127.0.0.1:9"
+
+    monkeypatch.setattr("archive_cli.http_serve.http_serving_owner_reachable", _health)
+    with pytest.raises(ServingIndexUnavailableError, match="serving_index_owned_by_http"):
+        get_serving_handle(tmp_path)
+
+
+def test_start_mcp_serving_prepare_returns_before_open(tmp_path, monkeypatch) -> None:
+    import threading
+
+    import archive_crate
+
+    from archive_cli import serving_index as si
+
+    si._HANDLE = None
+    si._HANDLES.clear()
+    si._WARMING.clear()
+    si._PREPARE_THREADS.clear()
+    si._OPEN_EVENTS.clear()
+    si._OPEN_ERRORS.clear()
+    stop_serving_generation_watcher()
+    root = tmp_path / "rust-search-index"
+    monkeypatch.setenv("PPA_SERVING_INDEX_PATH", str(root))
+    gid = _publish_mini(root, "gen-serve-async")
+    release = threading.Event()
+    opened = threading.Event()
+    real_open = archive_crate.serving_index_open
+
+    def _slow_open(path: str):
+        opened.set()
+        release.wait(timeout=5)
+        return real_open(path)
+
+    monkeypatch.setattr(archive_crate, "serving_index_open", _slow_open)
+    try:
+        started = time.monotonic()
+        start_mcp_serving_prepare(tmp_path, allow_stdio=True)
+        assert time.monotonic() - started < 0.5
+        assert opened.wait(timeout=2)
+        assert si._HANDLES.get(si._vault_handle_key(tmp_path)) is None
+        release.set()
+        deadline = time.monotonic() + 5
+        handle = None
+        while time.monotonic() < deadline:
+            handle = si._HANDLES.get(si._vault_handle_key(tmp_path))
+            if handle is not None:
+                break
+            time.sleep(0.05)
+        assert handle is not None
+        assert handle.generation_id == gid
+        assert handle.vectors_resident is False
+    finally:
+        release.set()
+        stop_serving_generation_watcher()
+        current = si._HANDLES.pop(si._vault_handle_key(tmp_path), None)
+        if current is not None:
+            current.close()
+
+
+def test_get_serving_handle_single_flight_open(tmp_path, monkeypatch) -> None:
+    import threading
+
+    import archive_crate
+
+    from archive_cli import serving_index as si
+
+    si._HANDLE = None
+    si._HANDLES.clear()
+    si._WARMING.clear()
+    si._OPEN_EVENTS.clear()
+    si._OPEN_ERRORS.clear()
+    root = tmp_path / "rust-search-index"
+    monkeypatch.setenv("PPA_SERVING_INDEX_PATH", str(root))
+    gid = _publish_mini(root, "gen-single-flight")
+    calls = []
+    gate = threading.Event()
+    real_open = archive_crate.serving_index_open
+
+    def _gated_open(path: str):
+        calls.append(1)
+        gate.wait(timeout=5)
+        return real_open(path)
+
+    monkeypatch.setattr(archive_crate, "serving_index_open", _gated_open)
+    threads = [
+        threading.Thread(target=lambda: get_serving_handle(tmp_path))
+        for _ in range(3)
+    ]
+    for thread in threads:
+        thread.start()
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and len(calls) == 0:
+        time.sleep(0.01)
+    time.sleep(0.05)
+    assert calls == [1]
+    gate.set()
+    for thread in threads:
+        thread.join(timeout=5)
+    handle = get_serving_handle(tmp_path)
+    assert handle.generation_id == gid
+
+
+def test_prepare_mcp_serving_fails_closed_without_index(tmp_path, monkeypatch) -> None:
+    from archive_cli import serving_index as si
+
+    si._HANDLE = None
+    si._HANDLES.clear()
+    monkeypatch.setenv("PPA_SERVING_INDEX_PATH", str(tmp_path / "missing-index"))
+    with pytest.raises(ServingIndexUnavailableError):
+        prepare_mcp_serving(tmp_path)
+
+
 def test_get_serving_handle_reuses_cache_when_legacy_slot_cleared(tmp_path, monkeypatch) -> None:
     import archive_crate
 
@@ -220,10 +443,21 @@ def test_search_query_hybrid_on_mini_index(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("PPA_SERVING_INDEX_PATH", str(root))
     _publish_mini(root)
     handle = get_serving_handle(tmp_path)
+    touched = archive_crate.serving_index_prefault(handle._native)
+    assert int(touched) >= 0
     rows = handle.search("Jane", limit=5)
     assert any(r.get("card_uid") == "hfa-person-aaaabbbbcccc" for r in rows)
     listed = handle.query(type_filter="person", limit=5)
     assert listed and listed[0]["type"] == "person"
+    typed = handle.typed_query(
+        predicate={"op": "eq", "field": "type", "value": "person"},
+        order_field="activity_at",
+        order_direction="desc",
+        page_size=1,
+    )
+    assert typed.get("matched_total") == 1
+    assert typed["rows"][0]["type"] == "person"
+    assert not typed.get("next_after")
     vec_rows = handle.vector([1.0, 0.0, 0.0, 0.0], limit=5)
     assert vec_rows
     assert "score" in vec_rows[0]

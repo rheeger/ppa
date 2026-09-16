@@ -282,7 +282,7 @@ Readable records belong to the vault. The warehouse and serving index support qu
 
 ## 9. Deployment bindings
 
-Local stdio clients can launch `ppa serve` with the intended instance configuration. HTTP MCP runs on the archive host and sends authorized results to connected clients. Authentication and network transport belong to the deployment.
+The living seed is served by one HTTP MCP process on the archive host. Agents connect with a bearer token. They do not each launch `ppa serve`. Local stdio remains valid for fixtures, slices, and a machine that is not the HTTP owner. Authentication and network transport belong to the deployment. See [http-mcp-singleton.md](runbooks/http-mcp-singleton.md).
 
 `ppa serve --tunnel USER@HOST` can start an SSH forward as a child of the MCP process. The forward stops with the server. `PPA_TUNNEL_PORT` defaults to `5433`, and `PPA_TUNNEL_REMOTE_PORT` defaults to `5432`. This forwards Postgres access; the client still needs the vault and native search index locally unless it queries the archive host through HTTP MCP.
 

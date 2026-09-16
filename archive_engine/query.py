@@ -748,6 +748,106 @@ def _sort_eligible(
     return rows
 
 
+def _serving_after_kwargs(cursor: QueryCursor | None) -> dict[str, Any]:
+    if cursor is None:
+        return {}
+    return {
+        "after_uid": cursor.last_uid,
+        "after_value": cursor.last_order_value,
+        "after_null": bool(cursor.last_order_null),
+    }
+
+
+def _page_from_serving(
+    runtime: ArchiveRuntime,
+    request: StructuredQueryRequest,
+    cursor: QueryCursor | None,
+    *,
+    warehouse_checkpoint: str = "",
+    saved_scope: Mapping[str, Any] | None = None,
+) -> QueryPage | None:
+    """One serving typed_query call. Uses Rust matched_total instead of paging the corpus."""
+
+    if request.aggregate == "sum":
+        return None
+    serving = runtime.retrieval.serving_or_none()
+    if serving is None or not hasattr(serving, "typed_query"):
+        return None
+    payload = serving.typed_query(
+        predicate=None if request.predicate is None else request.predicate.to_payload(),
+        order_field=request.order_field,
+        order_direction=request.order_direction,
+        page_size=request.page_size,
+        **_serving_after_kwargs(cursor),
+        **runtime.retrieval._policy(),
+    )
+    if not isinstance(payload, dict) or "matched_total" not in payload:
+        return None
+    rows = [_project(dict(row), request.fields) for row in (payload.get("rows") or [])]
+    for row in rows:
+        if not row.get("uid") and row.get("card_uid"):
+            row["uid"] = row["card_uid"]
+    matched_total = int(payload.get("matched_total") or 0)
+    scan_truncated = bool(payload.get("truncated"))
+    nxt = payload.get("next_after") if isinstance(payload.get("next_after"), Mapping) else None
+    next_token = ""
+    if nxt and not scan_truncated:
+        last = rows[-1] if rows else {}
+        next_token = QueryCursor(
+            version=1,
+            archive_id=request.archive_id,
+            snapshot=request.snapshot,
+            policy_fingerprint=policy_identity(request.access),
+            predicate_fingerprint=predicate_fingerprint(request.predicate, request.filters),
+            order_field=request.order_field,
+            order_direction=request.order_direction,
+            last_order_value=str(nxt.get("order_value") or _order_value(last, request.order_field)),
+            last_uid=str(nxt.get("uid") or _uid_of(last)),
+            last_order_null=bool(nxt.get("order_null")),
+        ).encode()
+    total_status: TotalStatus = "unknown" if scan_truncated else "exact"
+    aggregate = None
+    if request.aggregate == "count":
+        aggregate = {
+            "op": "count",
+            "value": None if scan_truncated else matched_total,
+            "status": total_status,
+            "over_full_eligible_set": not scan_truncated,
+        }
+    evidence = EvidenceEnvelope(
+        generation=request.snapshot,
+        watermark=0,
+        coverage="eligible_stored",
+        freshness="unknown",
+        complete=total_status == "exact",
+        truncated=bool(next_token) or scan_truncated,
+        confidence_reason="typed-predicate-full-eligible" if total_status == "exact" else "typed-predicate-incomplete",
+        method="typed_query",
+        corpus_state="active",
+        provenance="derived",
+        evidence_kind="derived",
+        pipeline_version=QUERY_CONTRACT_VERSION,
+        query=json.dumps(request.predicate.to_payload() if request.predicate else {}, sort_keys=True),
+    )
+    return QueryPage(
+        rows=tuple(rows),
+        next_cursor=next_token,
+        effective_scope=_scope_pairs(request.access, request.filters),
+        matched_total=None if scan_truncated else matched_total,
+        total_status=total_status,
+        snapshot=request.snapshot,
+        coverage="eligible_stored",
+        freshness="unknown",
+        truncated=bool(next_token) or scan_truncated,
+        complete=total_status == "exact",
+        evidence=evidence,
+        aggregate=aggregate,
+        empty_scope=False,
+        warehouse_checkpoint=warehouse_checkpoint,
+        saved_scope=saved_scope,
+    )
+
+
 def _collect_from_runtime(
     runtime: ArchiveRuntime, request: StructuredQueryRequest
 ) -> tuple[list[dict[str, Any]], bool]:
@@ -880,6 +980,15 @@ def execute_typed_query(
         # Injected corpora still apply people eq against the row payload.
         ignore_fields: frozenset[str] = frozenset()
     elif runtime is not None:
+        serving_page = _page_from_serving(
+            runtime,
+            validated,
+            cursor,
+            warehouse_checkpoint=warehouse_checkpoint,
+            saved_scope=None if effective is None else effective.to_payload(),
+        )
+        if serving_page is not None:
+            return serving_page
         collected, scan_truncated = _collect_from_runtime(runtime, validated)
         # Serving typed_query and warehouse query already resolve people_filter
         # (name/slug/UID/email/phone → person UIDs). Re-applying people eq here

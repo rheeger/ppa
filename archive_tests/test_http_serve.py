@@ -14,8 +14,12 @@ from archive_cli.http_serve import (
     DEFAULT_TOKEN_FILE,
     bearer_authorized,
     bind_http_access_context,
+    clear_http_owner,
+    http_owner_health_url,
+    read_http_owner,
     resolve_http_auth_token,
     write_http_auth_token,
+    write_http_owner,
 )
 
 PPA_ROOT = Path(__file__).resolve().parents[1]
@@ -76,6 +80,21 @@ def test_http_serve_exits_without_token() -> None:
     assert "PPA_MCP_AUTH_TOKEN" in proc.stderr
 
 
+def test_http_owner_file_round_trip(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    dest = tmp_path / "owner.json"
+    monkeypatch.setenv("PPA_MCP_HTTP_OWNER_FILE", str(dest))
+    wrote = write_http_owner(host="100.67.41.98", port=8765, pid=1217)
+    assert wrote == dest
+    payload = read_http_owner()
+    assert payload is not None
+    assert payload["host"] == "100.67.41.98"
+    assert payload["port"] == 8765
+    assert payload["pid"] == 1217
+    assert http_owner_health_url(payload) == "http://100.67.41.98:8765/health"
+    clear_http_owner()
+    assert read_http_owner() is None
+
+
 def test_mcp_config_http_url(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PPA_MCP_HTTP_URL", "https://ginger-m4-max.tail0c38c5.ts.net/mcp")
     out = subprocess.check_output(
@@ -86,6 +105,7 @@ def test_mcp_config_http_url(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     data = json.loads(out)
     inner = next(iter(data["mcpServers"].values()))
+    assert inner["type"] == "http"
     assert inner["url"].endswith("/mcp")
     assert "Authorization" in inner["headers"]
     assert DEFAULT_TOKEN_FILE.name == "mcp-http-token"

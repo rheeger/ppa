@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use super::evidence::ChunkEvidenceRef;
 use super::generation;
 use super::graph::EdgeRow;
-use super::metadata::CardMeta;
+use super::metadata::{CardMeta, ChunkAdjacency};
 use super::schema::{LAYOUT_FILE, LAYOUT_VERSION};
 
 pub const MAX_CHAIN_WALK: usize = 64;
@@ -69,7 +69,7 @@ pub struct LiveChunk {
     pub card_uid: String,
     pub chunk_type: String,
     pub chunk_index: i32,
-    pub evidence: Option<serde_json::Value>,
+    pub evidence: Option<ChunkEvidenceRef>,
 }
 
 #[derive(Debug)]
@@ -138,65 +138,69 @@ pub fn walk_chain(index_root: &Path, active_gid: &str) -> PyResult<Vec<(String, 
     ))
 }
 
-fn iter_jsonl(path: &Path) -> PyResult<Vec<serde_json::Value>> {
-    let mut out = Vec::new();
+const JSONL_BUF_BYTES: usize = 1024 * 1024;
+
+fn for_each_jsonl_line(path: &Path, mut visit: impl FnMut(&str) -> PyResult<()>) -> PyResult<()> {
     if !path.exists() {
-        return Ok(out);
+        return Ok(());
     }
-    let f = fs::File::open(path).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
-    for line in BufReader::new(f).lines() {
+    let file = fs::File::open(path).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+    for line in BufReader::with_capacity(JSONL_BUF_BYTES, file).lines() {
         let line = line.map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
         if line.trim().is_empty() {
             continue;
         }
-        let value: serde_json::Value = serde_json::from_str(&line)
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-        out.push(value);
+        visit(&line)?;
     }
-    Ok(out)
+    Ok(())
 }
 
-fn parse_card(value: &serde_json::Value) -> Option<CardMeta> {
-    serde_json::from_value(value.clone()).ok()
+#[derive(Deserialize)]
+struct ChunkLine {
+    #[serde(default)]
+    chunk_key: String,
+    #[serde(default)]
+    card_uid: String,
+    #[serde(default)]
+    chunk_type: String,
+    #[serde(default)]
+    chunk_index: i32,
+    #[serde(default)]
+    evidence: Option<ChunkEvidenceRef>,
 }
 
-fn parse_chunk(value: &serde_json::Value) -> PyResult<Option<LiveChunk>> {
-    let Some(chunk_key) = value.get("chunk_key").and_then(|v| v.as_str()) else {
-        return Ok(None);
-    };
-    if chunk_key.is_empty() {
+fn parse_chunk_line(line: &str) -> PyResult<Option<LiveChunk>> {
+    let parsed: ChunkLine = serde_json::from_str(line)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("chunks.jsonl: {e}")))?;
+    if parsed.chunk_key.is_empty() {
         return Ok(None);
     }
-    let card_uid = value
-        .get("card_uid")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let evidence = if let Some(raw) = value.get("evidence") {
-        let parsed: ChunkEvidenceRef = serde_json::from_value(raw.clone())
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("unsupported ChunkEvidenceRef: {e}")))?;
-        if let Err(msg) = parsed.validate() {
+    if let Some(ref ev) = parsed.evidence {
+        if let Err(msg) = ev.validate() {
             return Err(pyo3::exceptions::PyValueError::new_err(msg));
         }
-        Some(parsed.to_json())
-    } else {
-        None
-    };
+    }
     Ok(Some(LiveChunk {
-        chunk_key: chunk_key.to_string(),
-        card_uid,
-        chunk_type: value
-            .get("chunk_type")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        chunk_index: value.get("chunk_index").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
-        evidence,
+        chunk_key: parsed.chunk_key,
+        card_uid: parsed.card_uid,
+        chunk_type: parsed.chunk_type,
+        chunk_index: parsed.chunk_index,
+        evidence: parsed.evidence,
     }))
 }
 
-fn parse_edge(value: &serde_json::Value) -> Option<EdgeRow> {
-    serde_json::from_value(value.clone()).ok()
+fn manifest_row_hints(dir: &Path) -> (usize, usize, usize) {
+    let Ok(raw) = fs::read_to_string(dir.join("manifest.json")) else {
+        return (0, 0, 0);
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return (0, 0, 0);
+    };
+    (
+        value.get("card_count").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+        value.get("chunk_count").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+        value.get("embedding_count").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+    )
 }
 
 fn edge_key(edge: &EdgeRow) -> (String, String, String, String) {
@@ -276,8 +280,12 @@ pub fn check_spec_compat(
 
 pub fn resolve_live(index_root: &Path, active_gid: &str) -> PyResult<ResolvedLive> {
     let chain = walk_chain(index_root, active_gid)?;
-    let mut cards: HashMap<String, CardMeta> = HashMap::new();
-    let mut chunks: HashMap<String, LiveChunk> = HashMap::new();
+    let (hint_cards, hint_chunks, _) = chain
+        .first()
+        .map(|(_, dir, _)| manifest_row_hints(dir))
+        .unwrap_or((0, 0, 0));
+    let mut cards: HashMap<String, CardMeta> = HashMap::with_capacity(hint_cards);
+    let mut chunks: HashMap<String, LiveChunk> = HashMap::with_capacity(hint_chunks);
     let mut edges: HashMap<(String, String, String, String), EdgeRow> = HashMap::new();
     let mut tombstoned: HashSet<String> = HashSet::new();
     let mut embedding_spec: Option<serde_json::Value> = None;
@@ -313,43 +321,48 @@ pub fn resolve_live(index_root: &Path, active_gid: &str) -> PyResult<ResolvedLiv
             }
         }
 
-        for value in iter_jsonl(&dir.join("cards.jsonl"))? {
-            if let Some(card) = parse_card(&value) {
-                if card.card_uid.is_empty() || tombstoned.contains(&card.card_uid) {
-                    continue;
-                }
-                cards.insert(card.card_uid.clone(), card);
+        for_each_jsonl_line(&dir.join("cards.jsonl"), |line| {
+            let Ok(mut card) = serde_json::from_str::<CardMeta>(line) else {
+                return Ok(());
+            };
+            if card.card_uid.is_empty() || tombstoned.contains(&card.card_uid) {
+                return Ok(());
             }
-        }
-        for value in iter_jsonl(&dir.join("chunks.jsonl"))? {
-            if let Some(chunk) = parse_chunk(&value)? {
-                if tombstoned.contains(&chunk.card_uid) {
-                    continue;
+            // Tantivy already has the body. Drop it so open RSS is metadata, not another 3GB copy.
+            card.search_text.clear();
+            card.search_text.shrink_to_fit();
+            cards.insert(card.card_uid.clone(), card);
+            Ok(())
+        })?;
+        for_each_jsonl_line(&dir.join("chunks.jsonl"), |line| {
+            if let Some(chunk) = parse_chunk_line(line)? {
+                if !tombstoned.contains(&chunk.card_uid) {
+                    chunks.insert(chunk.chunk_key.clone(), chunk);
                 }
-                chunks.insert(chunk.chunk_key.clone(), chunk);
             }
-        }
-        for value in iter_jsonl(&dir.join("edges.jsonl"))? {
-            if let Some(edge) = parse_edge(&value) {
-                if edge.source_uid.is_empty() || edge.target_uid.is_empty() {
-                    continue;
-                }
-                if tombstoned.contains(&edge.source_uid) || tombstoned.contains(&edge.target_uid) {
-                    continue;
-                }
-                edges.insert(edge_key(&edge), edge);
+            Ok(())
+        })?;
+        for_each_jsonl_line(&dir.join("edges.jsonl"), |line| {
+            let Ok(edge) = serde_json::from_str::<EdgeRow>(line) else {
+                return Ok(());
+            };
+            if edge.source_uid.is_empty() || edge.target_uid.is_empty() {
+                return Ok(());
             }
-        }
+            if tombstoned.contains(&edge.source_uid) || tombstoned.contains(&edge.target_uid) {
+                return Ok(());
+            }
+            edges.insert(edge_key(&edge), edge);
+            Ok(())
+        })?;
     }
 
-    let live_uids: HashSet<String> = cards.keys().cloned().collect();
-    let live_chunk_keys: HashSet<String> = chunks.keys().cloned().collect();
     Ok(ResolvedLive {
         cards,
         chunks,
         edges,
-        live_uids,
-        live_chunk_keys,
+        live_uids: HashSet::new(),
+        live_chunk_keys: HashSet::new(),
         tombstone_uids: tombstoned,
         chain: chain_dirs,
         chain_ids,
@@ -358,6 +371,38 @@ pub fn resolve_live(index_root: &Path, active_gid: &str) -> PyResult<ResolvedLiv
 }
 
 impl ResolvedLive {
+    pub fn take_chunk_indexes(
+        &mut self,
+    ) -> (
+        HashMap<String, (String, String, i32)>,
+        ChunkAdjacency,
+        HashMap<String, ChunkEvidenceRef>,
+        HashSet<String>,
+    ) {
+        let chunks = std::mem::take(&mut self.chunks);
+        let n = chunks.len();
+        let mut chunk_to_card = HashMap::with_capacity(n);
+        let mut chunk_adj = ChunkAdjacency::default();
+        let mut chunk_evidence = HashMap::new();
+        let mut live_chunk_keys = HashSet::with_capacity(n);
+        for (key, chunk) in chunks {
+            live_chunk_keys.insert(key.clone());
+            chunk_adj.insert(
+                chunk.card_uid.clone(),
+                chunk.chunk_type.clone(),
+                chunk.chunk_index,
+                key.clone(),
+            );
+            if let Some(ev) = chunk.evidence {
+                chunk_evidence.insert(key.clone(), ev);
+            }
+            chunk_to_card.insert(key, (chunk.card_uid, chunk.chunk_type, chunk.chunk_index));
+        }
+        chunk_adj.finalize();
+        self.live_chunk_keys.clear();
+        (chunk_to_card, chunk_adj, chunk_evidence, live_chunk_keys)
+    }
+
     pub fn chunk_to_card(&self) -> HashMap<String, (String, String, i32)> {
         self.chunks
             .iter()
@@ -373,14 +418,14 @@ impl ResolvedLive {
     pub fn chunk_evidence(&self) -> HashMap<String, serde_json::Value> {
         self.chunks
             .iter()
-            .filter_map(|(key, chunk)| chunk.evidence.clone().map(|ev| (key.clone(), ev)))
+            .filter_map(|(key, chunk)| chunk.evidence.as_ref().map(|ev| (key.clone(), ev.to_json())))
             .collect()
     }
 
     pub fn to_json(&self) -> serde_json::Value {
-        let mut live_uids: Vec<String> = self.live_uids.iter().cloned().collect();
+        let mut live_uids: Vec<String> = self.cards.keys().cloned().collect();
         live_uids.sort();
-        let mut live_chunk_keys: Vec<String> = self.live_chunk_keys.iter().cloned().collect();
+        let mut live_chunk_keys: Vec<String> = self.chunks.keys().cloned().collect();
         live_chunk_keys.sort();
         let mut tombstones: Vec<String> = self.tombstone_uids.iter().cloned().collect();
         tombstones.sort();
@@ -393,7 +438,7 @@ impl ResolvedLive {
                     "card_uid": chunk.card_uid,
                     "chunk_type": chunk.chunk_type,
                     "chunk_index": chunk.chunk_index,
-                    "evidence": chunk.evidence,
+                    "evidence": chunk.evidence.as_ref().map(|ev| ev.to_json()),
                 })
             })
             .collect();
@@ -485,10 +530,10 @@ mod tests {
             "",
         );
         let live = resolve_live(&root, "delta").unwrap();
-        assert!(live.live_uids.contains("keep"));
-        assert!(!live.live_uids.contains("gone"));
-        assert!(live.live_chunk_keys.contains("ck-keep"));
-        assert!(!live.live_chunk_keys.contains("ck-gone"));
+        assert!(live.cards.contains_key("keep"));
+        assert!(!live.cards.contains_key("gone"));
+        assert!(live.chunks.contains_key("ck-keep"));
+        assert!(!live.chunks.contains_key("ck-gone"));
         assert!(live.edges.is_empty());
         let _ = fs::remove_dir_all(&root);
     }
@@ -519,7 +564,10 @@ mod tests {
         );
         let live = resolve_live(&root, "delta").unwrap();
         assert_eq!(live.cards["msg"].summary, "new");
-        assert_eq!(live.live_chunk_keys, HashSet::from(["ck-new".to_string()]));
+        assert_eq!(
+            live.chunks.keys().cloned().collect::<HashSet<_>>(),
+            HashSet::from(["ck-new".to_string()])
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -565,12 +613,12 @@ mod tests {
             "",
         );
         let live = resolve_live(&root, "delta").unwrap();
-        assert!(live.live_uids.contains("keep"));
+        assert!(live.cards.contains_key("keep"));
         assert_eq!(live.cards["gone-0"].summary, "new");
-        assert!(!live.live_uids.contains("gone-1"));
-        assert!(live.live_chunk_keys.contains("ck-keep"));
-        assert!(live.live_chunk_keys.contains("ck-gone-0-new"));
-        assert!(!live.live_chunk_keys.contains("ck-gone-0"));
+        assert!(!live.cards.contains_key("gone-1"));
+        assert!(live.chunks.contains_key("ck-keep"));
+        assert!(live.chunks.contains_key("ck-gone-0-new"));
+        assert!(!live.chunks.contains_key("ck-gone-0"));
         assert_eq!(live.edges.len(), 1);
         assert!(live.edges.contains_key(&(
             "keep".to_string(),
@@ -626,6 +674,28 @@ mod tests {
             "",
         );
         assert!(resolve_live(&root, "delta").is_err());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn invalid_card_lines_are_skipped() {
+        let root = std::env::temp_dir().join(format!("ppa-seg-skip-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        write_gen(
+            &root,
+            "full",
+            r#"{"layout_version":1,"mode":"full"}"#,
+            "{\"card_uid\":\"keep\",\"summary\":\"Keep\"}\nnot-json\n{\"nope\":1}\n",
+            "{\"chunk_key\":\"ck-keep\",\"card_uid\":\"keep\",\"chunk_type\":\"body\",\"chunk_index\":0}\n",
+            "",
+        );
+        let mut live = resolve_live(&root, "full").unwrap();
+        assert!(live.cards.contains_key("keep"));
+        assert_eq!(live.cards.len(), 1);
+        let (chunk_to_card, _, _, live_keys) = live.take_chunk_indexes();
+        assert!(live.chunks.is_empty());
+        assert_eq!(chunk_to_card.len(), 1);
+        assert!(live_keys.contains("ck-keep"));
         let _ = fs::remove_dir_all(&root);
     }
 }

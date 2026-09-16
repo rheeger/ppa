@@ -189,4 +189,7 @@ ppa serve
 ppa mcp-config
 ```
 
+Living-seed agents use the HTTP MCP in [http-mcp-singleton.md](runbooks/http-mcp-singleton.md), not a new `ppa serve` per question.
+
+
 Admin rebuild, embed, and linker operations: [PPA_RUNTIME_CONTRACT.md](PPA_RUNTIME_CONTRACT.md). Dated operational results: [validation reports](reports/README.md).

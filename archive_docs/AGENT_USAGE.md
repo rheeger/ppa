@@ -31,7 +31,7 @@ A person profile usually needs jobs 1, 2, then 5. Cursor agents must open the ma
 | The underlying source card | `archive_read`, `archive_read_many` | `ppa read`, `ppa read-many` |
 | Current instance status | `archive_status_json` | `ppa status` |
 
-For a large archive, reuse the running MCP server. Starting a new CLI process for each question can repeatedly open a large index. CLI examples describe equivalent operations; they are not a reason to restart retrieval for every lookup.
+For the living seed, use the HTTP `archive-local` server. Starting a new CLI process for each question opens the multi-GB index again. CLI examples describe equivalent operations. They are not a reason to launch retrieval for every lookup. See [http-mcp-singleton.md](runbooks/http-mcp-singleton.md).
 
 ## Make the answer traceable
 

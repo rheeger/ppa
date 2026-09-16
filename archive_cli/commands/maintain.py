@@ -789,6 +789,15 @@ def _publish_serving_index(store: Any, report: MaintenanceReport, logger: loggin
             "error": receipt.error,
             **payload,
         }
+        skipped = str(receipt.skipped or payload.get("skipped") or "")
+        if skipped:
+            logger.warning(
+                "serving_index_publish skipped reason=%s keep_generation=%s",
+                skipped,
+                receipt.generation_id,
+            )
+            report.skipped_steps.append(f"serving_index_publish ({skipped})")
+            return
         if not receipt.ok:
             logger.error("serving_index_refresh_failed error=%s", receipt.error)
             report.errors.append(

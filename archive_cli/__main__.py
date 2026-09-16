@@ -89,6 +89,7 @@ def _emit_mcp_config() -> None:
         block = {
             "mcpServers": {
                 server_name: {
+                    "type": "http",
                     "url": http_url,
                     "headers": {"Authorization": "Bearer ${PPA_MCP_AUTH_TOKEN}"},
                 }
@@ -2964,15 +2965,12 @@ def main() -> None:
         "yes",
     }
     if args.command == "serve":
-        try:
-            from .commands._resolve import resolve_vault
-            from .serving_index import start_serving_generation_watcher
-
-            start_serving_generation_watcher(resolve_vault())
-        except Exception:
-            logging.getLogger("ppa.cli").exception("serving_index_watch_start_failed")
+        os.environ.setdefault("PPA_SERVING_INDEX_FOLLOW_HTTP", "1")
     if args.command == "serve" and want_http:
+        from .commands._resolve import resolve_vault
         from .http_serve import DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT, resolve_http_auth_token, run_http
+        from .index_config import get_serving_prepare_on_start
+        from .serving_index import prepare_mcp_serving, start_mcp_serving_prepare
 
         host = str(getattr(args, "bind", "") or "").strip() or os.environ.get("PPA_MCP_HTTP_HOST", DEFAULT_HTTP_HOST)
         port = int(getattr(args, "port", 0) or 0) or int(os.environ.get("PPA_MCP_HTTP_PORT", str(DEFAULT_HTTP_PORT)))
@@ -2983,6 +2981,16 @@ def main() -> None:
                 file=sys.stderr,
             )
             raise SystemExit(2)
+        if get_serving_prepare_on_start():
+            from .errors import ServingIndexUnavailableError
+
+            try:
+                prepare_mcp_serving(resolve_vault())
+            except ServingIndexUnavailableError:
+                logging.getLogger("ppa.cli").exception("mcp_serving_prepare failed")
+                raise SystemExit(2)
+        else:
+            start_mcp_serving_prepare(resolve_vault())
         run_http(mcp, host=host, port=port, token=token)
         return
     mcp.run()

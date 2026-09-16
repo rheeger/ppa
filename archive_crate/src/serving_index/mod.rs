@@ -15,6 +15,7 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::Instant;
 
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule};
@@ -22,6 +23,7 @@ use serde::Serialize;
 
 use crate::serving_index::graph::{GraphBudget, GraphStore, StoredEdge};
 use crate::serving_index::lexical::LexicalIndex;
+use crate::serving_index::evidence::ChunkEvidenceRef;
 use crate::serving_index::metadata::{AccessPolicy, CardMeta, ChunkAdjacency, MetadataStore, TypedPredicate};
 use crate::serving_index::vector::IvfMmapAnn;
 use crate::serving_index::vector_train::TrainConfig;
@@ -38,13 +40,27 @@ pub struct ServingIndex {
     vectors: Vec<IvfMmapAnn>,
     chunk_to_card: HashMap<String, (String, String, i32)>,
     chunk_adj: ChunkAdjacency,
-    chunk_evidence: HashMap<String, serde_json::Value>,
+    chunk_evidence: HashMap<String, ChunkEvidenceRef>,
     live_chunk_keys: HashSet<String>,
     chain_depth: usize,
     embedding_spec: Option<serde_json::Value>,
 }
 
 static OPEN_LOCK: Mutex<()> = Mutex::new(());
+
+fn log_open_phase(phase: &str, started: Instant, extra: &str) {
+    if extra.is_empty() {
+        eprintln!(
+            "serving_index_open_phase phase={phase} elapsed_s={:.1}",
+            started.elapsed().as_secs_f64()
+        );
+        return;
+    }
+    eprintln!(
+        "serving_index_open_phase phase={phase} elapsed_s={:.1} {extra}",
+        started.elapsed().as_secs_f64()
+    );
+}
 
 #[pymethods]
 impl ServingIndex {
@@ -83,15 +99,24 @@ fn open_named_generation(index_root: &Path, gid: &str) -> PyResult<ServingIndex>
             schema::VECTOR_IMPL
         )));
     }
-    let resolved = segments::resolve_live(index_root, &gid)?;
-    let meta = MetadataStore::from_cards(resolved.cards.values().cloned());
-    let graph = GraphStore::from_edges(resolved.edges.values().cloned());
-    let chunk_to_card = resolved.chunk_to_card();
-    let mut chunk_adj = ChunkAdjacency::default();
-    for (chunk_key, (card_uid, chunk_type, chunk_index)) in &chunk_to_card {
-        chunk_adj.insert(card_uid.clone(), chunk_type.clone(), *chunk_index, chunk_key.clone());
-    }
-    chunk_adj.finalize();
+    let started = Instant::now();
+    let mut resolved = segments::resolve_live(index_root, &gid)?;
+    log_open_phase(
+        "resolve_live",
+        started,
+        &format!(
+            "cards={} chunks={} edges={}",
+            resolved.cards.len(),
+            resolved.chunks.len(),
+            resolved.edges.len()
+        ),
+    );
+    let meta = MetadataStore::from_cards(std::mem::take(&mut resolved.cards).into_values());
+    log_open_phase("metadata", started, "");
+    let graph = GraphStore::from_edges(std::mem::take(&mut resolved.edges).into_values());
+    log_open_phase("graph", started, "");
+    let (chunk_to_card, chunk_adj, chunk_evidence, live_chunk_keys) = resolved.take_chunk_indexes();
+    log_open_phase("chunks", started, &format!("live_chunks={}", live_chunk_keys.len()));
     let mut lexical = Vec::new();
     let mut vectors = Vec::new();
     let mut embedding_spec = resolved.embedding_spec.clone();
@@ -107,6 +132,11 @@ fn open_named_generation(index_root: &Path, gid: &str) -> PyResult<ServingIndex>
             vectors.push(ann);
         }
     }
+    log_open_phase(
+        "indexes",
+        started,
+        &format!("lexical={} vectors={}", lexical.len(), vectors.len()),
+    );
     Ok(ServingIndex {
         generation_id: gid.to_string(),
         dir,
@@ -116,8 +146,8 @@ fn open_named_generation(index_root: &Path, gid: &str) -> PyResult<ServingIndex>
         vectors,
         chunk_to_card,
         chunk_adj,
-        chunk_evidence: resolved.chunk_evidence(),
-        live_chunk_keys: resolved.live_chunk_keys,
+        chunk_evidence,
+        live_chunk_keys,
         chain_depth: resolved.chain.len().max(1),
         embedding_spec,
     })
@@ -293,6 +323,39 @@ fn json_to_py(py: Python<'_>, value: serde_json::Value) -> PyResult<PyObject> {
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
     let json_mod = py.import_bound("json")?;
     json_mod.call_method1("loads", (json,)).map(|o| o.unbind())
+}
+
+#[pyfunction]
+#[pyo3(signature = (handle, progress=None))]
+pub fn serving_index_prefault(
+    py: Python<'_>,
+    handle: &Bound<'_, ServingIndex>,
+    progress: Option<Bound<'_, PyAny>>,
+) -> PyResult<u64> {
+    let idx = handle.borrow();
+    for ann in &idx.vectors {
+        ann.advise_resident();
+    }
+    let total: u64 = idx.vectors.iter().map(|ann| ann.mmap_len() as u64).sum();
+    const WINDOW: usize = 64 * 1024 * 1024;
+    let mut done = 0u64;
+    let mut faulted = 0u64;
+    for ann in &idx.vectors {
+        let len = ann.mmap_len();
+        let mut start = 0usize;
+        while start < len {
+            let end = (start + WINDOW).min(len);
+            let (covered, newly_faulted) = py.allow_threads(|| ann.prefault_range(start, end));
+            done += covered;
+            faulted += newly_faulted;
+            if let Some(cb) = &progress {
+                cb.call1((done, total, faulted))?;
+            }
+            start = end;
+        }
+    }
+    let _ = faulted;
+    Ok(total)
 }
 
 #[pyfunction]
@@ -475,25 +538,16 @@ pub fn serving_index_query(
             }),
         );
     }
-    let mut cards: Vec<&CardMeta> = idx
-        .meta
-        .by_uid
-        .values()
-        .filter(|c| {
-            idx.meta.eligible_prepared(
-                c,
-                &policy,
-                &type_filter,
-                &source_filter,
-                &people,
-                &org_filter,
-                &start_date,
-                &end_date,
-            )
-        })
-        .collect();
-    cards.sort_by(|a, b| b.activity_at.cmp(&a.activity_at).then_with(|| a.rel_path.cmp(&b.rel_path)));
-    cards.truncate(limit);
+    let cards = idx.meta.query_filtered(
+        &policy,
+        &type_filter,
+        &source_filter,
+        &people,
+        &org_filter,
+        &start_date,
+        &end_date,
+        limit,
+    );
     let rows: Vec<serde_json::Value> = cards.into_iter().map(|c| card_to_row(c, serde_json::json!({}))).collect();
     json_to_py(py, serde_json::Value::Array(rows))
 }
@@ -769,7 +823,11 @@ pub fn serving_index_vector(
             } else {
                 card.provenance_summary.as_str()
             };
-            let evidence = idx.chunk_evidence.get(&chunk_key).cloned().unwrap_or(serde_json::Value::Null);
+            let evidence = idx
+                .chunk_evidence
+                .get(&chunk_key)
+                .map(ChunkEvidenceRef::to_json)
+                .unwrap_or(serde_json::Value::Null);
             rows.push(card_to_row(
                 card,
                 serde_json::json!({
@@ -1503,7 +1561,7 @@ pub fn serving_index_chunk_evidence(
         py,
         idx.chunk_evidence
             .get(chunk_key)
-            .cloned()
+            .map(ChunkEvidenceRef::to_json)
             .unwrap_or(serde_json::Value::Null),
     )
 }
@@ -1511,6 +1569,7 @@ pub fn serving_index_chunk_evidence(
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ServingIndex>()?;
     m.add_function(wrap_pyfunction!(serving_index_open, m)?)?;
+    m.add_function(wrap_pyfunction!(serving_index_prefault, m)?)?;
     m.add_function(wrap_pyfunction!(serving_index_open_generation, m)?)?;
     m.add_function(wrap_pyfunction!(serving_index_search, m)?)?;
     m.add_function(wrap_pyfunction!(serving_index_query, m)?)?;

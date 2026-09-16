@@ -6,8 +6,9 @@ alwaysApply: true
 # PPA archive usage
 
 Do not spawn `python -m archive_cli` / `ppa <query>` once per question against
-the living archive. That cold-opens the multi-GB search index. Use the already
-running MCP. See `ppa-no-cold-cli-query.mdc`.
+the living archive. That cold-opens the multi-GB search index. Use HTTP
+`archive-local`. See `ppa-no-cold-cli-query.mdc` and
+`archive_docs/runbooks/http-mcp-singleton.md`.
 
 For retrieval, read `.cursor/skills/archive-query/SKILL.md` and open the job
 file for the work in front of you:

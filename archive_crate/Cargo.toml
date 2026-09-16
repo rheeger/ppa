@@ -28,6 +28,7 @@ jiff = "0.2"
 bytecount = "0.6"
 tantivy = "0.22"
 memmap2 = "0.9"
+libc = "0.2"
 # tantivy 0.22 pulls `time`; 0.3.55+ needs rustc 1.88. Pin for CI rustc 1.85.
 time = "=0.3.41"
 
@@ -36,6 +37,12 @@ time = "=0.3.41"
 [features]
 extension-module = ["pyo3/extension-module"]
 default = ["extension-module"]
+
+# rustc `strip = debuginfo` leaves LC_SYMTAB.stroff 4-byte aligned. dyld on
+# macOS 27 rejects that image (`mis-aligned LINKEDIT string pool`) so the
+# PyO3 extension never loads. Keep symbols; the dylib is ~13MB either way.
+[profile.release]
+strip = false
 
 [build-dependencies]
 pyo3-build-config = "0.22"

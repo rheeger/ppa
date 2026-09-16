@@ -3,7 +3,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-use memmap2::Mmap;
+use memmap2::{Advice, Mmap};
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -48,7 +48,8 @@ impl IvfMmapAnn {
         let keys_path = dir.join("embedding_keys.txt");
         let vec_path = dir.join("embeddings.bin");
         let keys = if keys_path.exists() {
-            BufReader::new(
+            BufReader::with_capacity(
+                1024 * 1024,
                 File::open(&keys_path)
                     .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("embedding_keys: {e}")))?,
             )
@@ -190,6 +191,34 @@ impl IvfMmapAnn {
 
     pub fn keys(&self) -> &[String] {
         &self.keys
+    }
+
+    pub fn mmap_len(&self) -> usize {
+        self.mmap.as_ref().map(|mmap| mmap.len()).unwrap_or(0)
+    }
+
+    pub fn advise_resident(&self) {
+        let Some(mmap) = &self.mmap else {
+            return;
+        };
+        let _ = mmap.advise(Advice::Sequential);
+        let _ = mmap.advise(Advice::WillNeed);
+    }
+
+    /// Fault cold pages in ``[start, end)``. Returns ``(covered, faulted)``.
+    pub fn prefault_range(&self, start: usize, end: usize) -> (u64, u64) {
+        let Some(mmap) = &self.mmap else {
+            return (0, 0);
+        };
+        let len = mmap.len();
+        let start = start.min(len);
+        let end = end.min(len);
+        if start >= end {
+            return (0, 0);
+        }
+        let covered = (end - start) as u64;
+        let faulted = fault_cold_pages(&mmap[start..end]);
+        (covered, faulted)
     }
 
     fn read_vec(&self, idx: usize) -> Vec<f32> {
@@ -404,6 +433,62 @@ fn top_k(mut scored: Vec<(f32, usize)>, keys: &[String], k: usize) -> Vec<KnnHit
         .collect()
 }
 
+fn os_page_size() -> usize {
+    #[cfg(unix)]
+    {
+        let sz = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+        if sz >= 4096 {
+            return sz as usize;
+        }
+    }
+    4096
+}
+
+fn fault_cold_pages(bytes: &[u8]) -> u64 {
+    if bytes.is_empty() {
+        return 0;
+    }
+    let page = os_page_size();
+    #[cfg(unix)]
+    {
+        let len = bytes.len();
+        let pages = (len + page - 1) / page;
+        let mut state = vec![0u8; pages];
+        let rc = unsafe {
+            libc::mincore(
+                bytes.as_ptr() as *mut libc::c_void,
+                len,
+                state.as_mut_ptr() as *mut libc::c_char,
+            )
+        };
+        if rc == 0 {
+            let mut acc = 0u8;
+            let mut faulted = 0u64;
+            for (i, flag) in state.iter().enumerate() {
+                if flag & 1 != 0 {
+                    continue;
+                }
+                let off = i * page;
+                if off < len {
+                    acc ^= bytes[off];
+                    faulted += page as u64;
+                }
+            }
+            std::hint::black_box(acc);
+            return faulted.min(len as u64);
+        }
+    }
+    let mut acc = 0u8;
+    let mut off = 0usize;
+    while off < bytes.len() {
+        acc ^= bytes[off];
+        off += page;
+    }
+    acc ^= bytes[bytes.len() - 1];
+    std::hint::black_box(acc);
+    bytes.len() as u64
+}
+
 fn read_f32_vec(mmap: &Mmap, dim: usize, idx: usize) -> Vec<f32> {
     let start = idx * dim * 4;
     let mut out = vec![0.0f32; dim];
@@ -516,5 +601,21 @@ mod tests {
         assert_eq!(meta.skipped_invalid, 1);
         assert_eq!(meta.skipped_zero, 1);
         assert_eq!(meta.valid_count, 1);
+    }
+
+    #[test]
+    fn second_prefault_skips_resident_pages() {
+        let path = std::env::temp_dir().join(format!(
+            "ppa-prefault-mincore-{}.bin",
+            std::process::id()
+        ));
+        std::fs::write(&path, vec![0u8; os_page_size() * 2]).unwrap();
+        let file = std::fs::File::open(&path).unwrap();
+        let mmap = unsafe { memmap2::Mmap::map(&file).unwrap() };
+        let first = fault_cold_pages(&mmap);
+        let second = fault_cold_pages(&mmap);
+        let _ = std::fs::remove_file(&path);
+        assert!(first <= mmap.len() as u64);
+        assert_eq!(second, 0);
     }
 }

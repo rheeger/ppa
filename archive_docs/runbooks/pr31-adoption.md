@@ -8,7 +8,7 @@ Instance: local seed living corpus. Arnold is not in scope.
 | Schema | `ppa` |
 | DSN | `postgresql://archive:archive@127.0.0.1:50731/archive` |
 | Worktree | `/Users/rheeger/Code/rheeger/ppa` on `fix/embedding-content-identity` (stacked on `codex/ppa-pr31-correctness-closeout`) |
-| Warm reads | existing `user-archive-local` MCP only |
+| Warm reads | existing HTTP `archive-local` MCP only |
 | Jobs | new `archive_cli` / `publish-serving-index.py` processes with `--log-file` before the subcommand |
 
 Code deploy, derived-index publish, and canonical identity writes are separate. This runbook authorizes only the commands below.
@@ -179,9 +179,9 @@ Expected receipt:
 
 If publish fails, ACTIVE must remain unchanged. Do not delete `1788716974760`.
 
-### 7. Reload stdio MCP once
+### 7. Reload the HTTP MCP once
 
-After crate rebuild + publish, the Cursor `user-archive-local` stdio process must be restarted so it maps the new generation and the new `resolve_person_card`. Do **not** kill the HTTP MCP. Do **not** start a second cold `archive_cli` query process.
+After crate rebuild + publish, restart LaunchAgent `com.rheeger.ppa.mcp-http` so the singleton maps the new generation. Do not start a second `serve --http`. Do not start a cold `archive_cli` query process. See [http-mcp-singleton.md](http-mcp-singleton.md).
 
 ### 8. Warm MCP canaries
 
@@ -197,7 +197,7 @@ Needles stay out of git. A nonsense name (`Zzzyx Notaperson`) is the unresolved 
 
 1. Stop any in-flight publisher (`kill` only the publish PID, not MCP, not postgres).
 2. Write `1788716974760` to `<vault>/_meta/rust-search-index/ACTIVE` and fsync. Keep COMPLETE on that generation.
-3. Reload stdio MCP.
+3. Restart the HTTP MCP LaunchAgent.
 4. Identity applies are `merge_identities()` receipts. Do not fabricate undo. Owner reviews `logs/pr31-seed-identity-merge-apply.json` if a merge was wrong.
 5. Leave `_meta/identity-proposals.json` in place; it is not an applied merge.
 

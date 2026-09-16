@@ -12,8 +12,11 @@ from archive_engine.errors import IncompatibleStateError
 from archive_engine.publication import (
     check_publication_resources,
     choose_publication_mode,
+    coverage_regression_reason,
     estimate_publication_vectors,
+    generation_leaf_coverage,
     plan_publication_resources,
+    publish_snapshot,
 )
 
 
@@ -203,3 +206,80 @@ def test_publish_refuses_compact_before_warehouse_export(tmp_path: Path, monkeyp
     assert "disk_short" in result["reasons"]
     store.index._connect.assert_not_called()
     assert not (root / "generations" / "gen-blocked").exists()
+
+
+def test_generation_leaf_coverage_prefers_manifest(tmp_path: Path) -> None:
+    dest = tmp_path / "gen"
+    dest.mkdir()
+    (dest / "manifest.json").write_text(
+        json.dumps({"card_count": 12, "embedding_count": 34}),
+        encoding="utf-8",
+    )
+    (dest / "cards.jsonl").write_text("{}\n{}\n", encoding="utf-8")
+    (dest / "embedding_keys.txt").write_text("a\nb\nc\n", encoding="utf-8")
+    assert generation_leaf_coverage(dest) == (12, 34)
+
+
+def test_coverage_regression_reason_keeps_fatter_complete(tmp_path: Path) -> None:
+    root = tmp_path / "idx"
+    fat = root / "generations" / "fat"
+    thin = root / "generations" / "thin"
+    fat.mkdir(parents=True)
+    thin.mkdir()
+    (fat / "manifest.json").write_text(json.dumps({"card_count": 100, "embedding_count": 1000}), encoding="utf-8")
+    (fat / "COMPLETE").write_text("{}\n", encoding="utf-8")
+    (thin / "manifest.json").write_text(json.dumps({"card_count": 5, "embedding_count": 9}), encoding="utf-8")
+    (thin / "COMPLETE").write_text("{}\n", encoding="utf-8")
+    (root / "ACTIVE").write_text("thin\n", encoding="utf-8")
+    reason = coverage_regression_reason(root, candidate_cards=20, candidate_embeddings=40, active_gid="thin")
+    assert reason is not None
+    assert "publication_coverage_regression" in reason
+    assert "kept=fat" in reason
+    assert coverage_regression_reason(root, candidate_cards=100, candidate_embeddings=1000) is None
+
+
+def test_publish_snapshot_refuses_smaller_full(tmp_path: Path) -> None:
+    from archive_engine.contracts import EmbeddingSpec
+    from archive_engine.errors import IncompatibleStateError
+    from archive_engine.publication import ServingSnapshot, read_active_generation
+
+    root = tmp_path / "idx"
+    fat = root / "generations" / "fat"
+    fat.mkdir(parents=True)
+    (fat / "manifest.json").write_text(json.dumps({"card_count": 100, "embedding_count": 100}), encoding="utf-8")
+    (fat / "COMPLETE").write_text("{}\n", encoding="utf-8")
+    (root / "ACTIVE").write_text("fat\n", encoding="utf-8")
+    spec = EmbeddingSpec(
+        provider_namespace="hash",
+        model="t",
+        model_revision="1",
+        dimension=4,
+        metric="ip",
+        normalization="none",
+        chunk_schema="v1",
+    )
+    snapshot = ServingSnapshot(
+        snapshot_id="thin",
+        source_watermark=0,
+        cards=({"card_uid": "only"},),
+        chunks=(),
+        edges=(),
+        embeddings=(("ck-only", (0.0, 0.0, 0.0, 1.0)),),
+        embedding_spec=spec,
+        embedding_count=1,
+    )
+    published: list[str] = []
+
+    class _Crate:
+        @staticmethod
+        def serving_index_build(*_a, **_k):
+            raise AssertionError("must not build a thinner full generation")
+
+        @staticmethod
+        def serving_index_publish(_root, gid):
+            published.append(gid)
+
+    with pytest.raises(IncompatibleStateError, match="publication_coverage_regression"):
+        publish_snapshot(root, snapshot, generation_id="thin", mode="full", crate=_Crate(), acquire_lease=False)
+    assert published == []
+    assert read_active_generation(root) == "fat"

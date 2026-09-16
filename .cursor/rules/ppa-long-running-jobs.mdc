@@ -26,7 +26,7 @@ setsid .venv/bin/python -m archive_cli --log-file logs/JOB.log SUBCOMMAND ARGS \
 
 Confirm `ps -p PID -o ppid` is 1. Watch `logs/JOB.log`. Do not AwaitShell
 the launcher. Do not start a second writer against the same vault while one
-is running. Do not kill HTTP MCP or Cursor stdio MCP.
+is running. Do not kill HTTP MCP during those jobs. Restart it only when deploying serve code (LaunchAgent `com.rheeger.ppa.mcp-http`).
 
 ## Implementation standards (match the code)
 

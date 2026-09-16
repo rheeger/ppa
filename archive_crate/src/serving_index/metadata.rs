@@ -52,6 +52,8 @@ pub struct CardMeta {
     pub phones: Vec<String>,
     #[serde(default)]
     pub external_ids: Vec<String>,
+    /// Body text for Tantivy publish only. Query open clears this so 1.4M cards
+    /// do not keep a second copy of cards.jsonl in RSS.
     #[serde(default)]
     pub search_text: String,
     #[serde(default)]
@@ -231,6 +233,14 @@ pub struct MetadataStore {
     pub by_activity: Vec<ActivityEntry>,
     /// Indexes into `by_activity` for cards that have an interval end.
     pub intervals: Vec<usize>,
+    /// Card UIDs by exact `type`.
+    pub by_type: HashMap<String, Vec<String>>,
+    /// Card UIDs that list a person UID in `people`.
+    pub by_person_ref: HashMap<String, Vec<String>>,
+    /// Card UIDs by exact source label.
+    pub by_source: HashMap<String, Vec<String>>,
+    /// Card UIDs by exact org label.
+    pub by_org: HashMap<String, Vec<String>>,
 }
 
 #[derive(Clone, Debug)]
@@ -321,6 +331,33 @@ impl MetadataStore {
             if !key.is_empty() {
                 self.by_external_id.insert(key.clone(), card.card_uid.clone());
                 self.by_external_id.insert(key.to_lowercase(), card.card_uid.clone());
+            }
+        }
+        if !card.r#type.is_empty() {
+            self.by_type
+                .entry(card.r#type.clone())
+                .or_default()
+                .push(card.card_uid.clone());
+        }
+        for person in &card.people {
+            if !person.is_empty() {
+                self.by_person_ref
+                    .entry(person.clone())
+                    .or_default()
+                    .push(card.card_uid.clone());
+            }
+        }
+        for source in &card.sources {
+            if !source.is_empty() {
+                self.by_source
+                    .entry(source.clone())
+                    .or_default()
+                    .push(card.card_uid.clone());
+            }
+        }
+        for org in &card.orgs {
+            if !org.is_empty() {
+                self.by_org.entry(org.clone()).or_default().push(card.card_uid.clone());
             }
         }
         self.by_uid.insert(card.card_uid.clone(), card);
@@ -1042,6 +1079,55 @@ impl MetadataStore {
         }
     }
 
+    pub fn query_filtered<'a>(
+        &'a self,
+        policy: &AccessPolicy,
+        type_filter: &str,
+        source_filter: &str,
+        people: &PreparedPeopleFilter,
+        org_filter: &str,
+        start_date: &str,
+        end_date: &str,
+        limit: usize,
+    ) -> Vec<&'a CardMeta> {
+        let hints = IndexHints {
+            types: nonempty_type_set(type_filter),
+            people: nonempty_needles(if people.status == "none" {
+                ""
+            } else {
+                people.needle.as_str()
+            }),
+            sources: nonempty_needles(source_filter),
+            orgs: nonempty_needles(org_filter),
+            uids: None,
+        };
+        let candidates = self.candidate_uids(&hints);
+        let page = self.select_page(
+            candidates,
+            policy,
+            None,
+            |card| {
+                self.eligible_prepared(
+                    card,
+                    policy,
+                    type_filter,
+                    source_filter,
+                    people,
+                    org_filter,
+                    start_date,
+                    end_date,
+                )
+            },
+            "activity_at",
+            true,
+            "",
+            "",
+            false,
+            limit.max(1),
+        );
+        page.rows
+    }
+
     pub fn typed_query_page<'a>(
         &'a self,
         policy: &AccessPolicy,
@@ -1063,33 +1149,152 @@ impl MetadataStore {
             validate_typed_predicate(node)?;
         }
         let desc = order_direction == "desc";
-        let mut eligible: Vec<&CardMeta> = self
-            .by_uid
-            .values()
-            .filter(|card| {
-                if !policy.permits(card) || Self::is_suppressed(card) {
-                    return false;
+        let hints = pred.and_then(index_hints_from_predicate).unwrap_or_default();
+        let candidates = self.candidate_uids(&hints);
+        Ok(self.select_page(
+            candidates,
+            policy,
+            pred,
+            |card| match pred {
+                None => true,
+                Some(node) => self.matches_typed_predicate(card, node).unwrap_or(false),
+            },
+            order_field,
+            desc,
+            after_uid,
+            after_value,
+            after_null,
+            page_size.max(1),
+        ))
+    }
+
+    fn candidate_uids(&self, hints: &IndexHints) -> Option<HashSet<String>> {
+        let mut sets: Vec<HashSet<String>> = Vec::new();
+        if let Some(types) = &hints.types {
+            let mut uids = HashSet::new();
+            for type_name in types {
+                if let Some(list) = self.by_type.get(type_name) {
+                    uids.extend(list.iter().cloned());
                 }
-                match pred {
-                    None => true,
-                    Some(node) => self.matches_typed_predicate(card, node).unwrap_or(false),
+            }
+            sets.push(uids);
+        }
+        if let Some(needles) = &hints.people {
+            for needle in needles {
+                let prepared = self.prepare_people_filter(needle);
+                let mut uids = HashSet::new();
+                for person_uid in &prepared.uids {
+                    if let Some(list) = self.by_person_ref.get(person_uid) {
+                        uids.extend(list.iter().cloned());
+                    }
                 }
-            })
-            .collect();
-        eligible.sort_by(|a, b| typed_order_cmp(a, b, order_field, desc));
-        let start = if after_uid.is_empty() {
-            0
-        } else {
-            eligible
-                .iter()
-                .position(|card| typed_after(*card, order_field, desc, after_value, after_uid, after_null))
-                .unwrap_or(eligible.len())
+                sets.push(uids);
+            }
+        }
+        if let Some(sources) = &hints.sources {
+            let mut uids = HashSet::new();
+            for source in sources {
+                self.collect_source_uids(source, &mut uids);
+            }
+            sets.push(uids);
+        }
+        if let Some(orgs) = &hints.orgs {
+            let mut uids = HashSet::new();
+            for org in orgs {
+                self.collect_org_uids(org, &mut uids);
+            }
+            sets.push(uids);
+        }
+        if let Some(uids) = &hints.uids {
+            sets.push(uids.clone());
+        }
+        if sets.is_empty() {
+            return None;
+        }
+        sets.sort_by_key(HashSet::len);
+        let mut acc = sets.remove(0);
+        for other in sets {
+            acc.retain(|uid| other.contains(uid));
+        }
+        Some(acc)
+    }
+
+    fn collect_source_uids(&self, source_filter: &str, into: &mut HashSet<String>) {
+        if source_filter.is_empty() {
+            return;
+        }
+        if let Some(list) = self.by_source.get(source_filter) {
+            into.extend(list.iter().cloned());
+        }
+        for (source, list) in &self.by_source {
+            if source != source_filter && source.contains(source_filter) {
+                into.extend(list.iter().cloned());
+            }
+        }
+    }
+
+    fn collect_org_uids(&self, org_filter: &str, into: &mut HashSet<String>) {
+        if org_filter.is_empty() {
+            return;
+        }
+        let needle = org_filter.to_ascii_lowercase();
+        if let Some(list) = self.by_org.get(org_filter) {
+            into.extend(list.iter().cloned());
+        }
+        for (org, list) in &self.by_org {
+            if org != org_filter && org.to_ascii_lowercase().contains(&needle) {
+                into.extend(list.iter().cloned());
+            }
+        }
+    }
+
+    fn select_page<'a>(
+        &'a self,
+        candidates: Option<HashSet<String>>,
+        policy: &AccessPolicy,
+        pred: Option<&TypedPredicate>,
+        extra_ok: impl Fn(&CardMeta) -> bool,
+        order_field: &str,
+        desc: bool,
+        after_uid: &str,
+        after_value: &str,
+        after_null: bool,
+        page_size: usize,
+    ) -> TypedQueryPage<'a> {
+        let _ = pred;
+        let mut matched_total = 0usize;
+        let mut after_count = 0usize;
+        let mut best: Vec<&CardMeta> = Vec::with_capacity(page_size);
+        let consider = |card: &'a CardMeta,
+                        matched_total: &mut usize,
+                        after_count: &mut usize,
+                        best: &mut Vec<&'a CardMeta>| {
+            if !policy.permits(card) || Self::is_suppressed(card) || !extra_ok(card) {
+                return;
+            }
+            *matched_total += 1;
+            if !after_uid.is_empty()
+                && !typed_after(card, order_field, desc, after_value, after_uid, after_null)
+            {
+                return;
+            }
+            *after_count += 1;
+            insert_page_candidate(best, card, order_field, desc, page_size);
         };
-        let remaining = eligible.len().saturating_sub(start);
-        let take = page_size.min(remaining);
-        let rows = eligible[start..start + take].to_vec();
-        let next = if remaining > page_size {
-            rows.last().map(|card| {
+        if let Some(uids) = candidates {
+            for uid in uids {
+                if let Some(card) = self.by_uid.get(&uid) {
+                    consider(card, &mut matched_total, &mut after_count, &mut best);
+                }
+            }
+        } else {
+            for card in self.by_uid.values() {
+                consider(card, &mut matched_total, &mut after_count, &mut best);
+            }
+        }
+        best.sort_by(|left, right| typed_order_cmp(left, right, order_field, desc));
+        let next = if after_count > best.len() {
+            best.last().map(|card| {
                 let value = order_value(card, order_field);
                 TypedAfter {
                     uid: card.card_uid.clone(),
@@ -1100,12 +1305,12 @@ impl MetadataStore {
         } else {
             None
         };
-        Ok(TypedQueryPage {
-            rows,
-            matched_total: eligible.len(),
+        TypedQueryPage {
+            rows: best,
+            matched_total,
             next,
             truncated: false,
-        })
+        }
     }
 }
 
@@ -1187,6 +1392,148 @@ pub struct TypedQueryPage<'a> {
     pub matched_total: usize,
     pub next: Option<TypedAfter>,
     pub truncated: bool,
+}
+
+#[derive(Debug, Default)]
+struct IndexHints {
+    types: Option<HashSet<String>>,
+    people: Option<Vec<String>>,
+    sources: Option<Vec<String>>,
+    orgs: Option<Vec<String>>,
+    uids: Option<HashSet<String>>,
+}
+
+fn nonempty_type_set(value: &str) -> Option<HashSet<String>> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(HashSet::from([trimmed.to_string()]))
+}
+
+fn nonempty_needles(value: &str) -> Option<Vec<String>> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(vec![trimmed.to_string()])
+}
+
+fn predicate_strings(value: &serde_json::Value) -> Vec<String> {
+    match value {
+        serde_json::Value::Array(items) => items
+            .iter()
+            .map(|item| match item {
+                serde_json::Value::String(text) => text.clone(),
+                other => other.as_str().unwrap_or("").to_string(),
+            })
+            .filter(|text| !text.trim().is_empty())
+            .collect(),
+        serde_json::Value::String(text) if !text.trim().is_empty() => vec![text.clone()],
+        other => {
+            let text = other.as_str().unwrap_or("").to_string();
+            if text.trim().is_empty() {
+                Vec::new()
+            } else {
+                vec![text]
+            }
+        }
+    }
+}
+
+fn merge_hint_sets(left: Option<HashSet<String>>, right: Option<HashSet<String>>) -> Option<HashSet<String>> {
+    match (left, right) {
+        (Some(mut a), Some(b)) => {
+            a.retain(|item| b.contains(item));
+            Some(a)
+        }
+        (Some(a), None) | (None, Some(a)) => Some(a),
+        (None, None) => None,
+    }
+}
+
+fn merge_hint_lists(left: Option<Vec<String>>, right: Option<Vec<String>>) -> Option<Vec<String>> {
+    match (left, right) {
+        (Some(mut a), Some(b)) => {
+            a.extend(b);
+            Some(a)
+        }
+        (Some(a), None) | (None, Some(a)) => Some(a),
+        (None, None) => None,
+    }
+}
+
+fn merge_hints(left: IndexHints, right: IndexHints) -> IndexHints {
+    IndexHints {
+        types: merge_hint_sets(left.types, right.types),
+        people: merge_hint_lists(left.people, right.people),
+        sources: merge_hint_lists(left.sources, right.sources),
+        orgs: merge_hint_lists(left.orgs, right.orgs),
+        uids: merge_hint_sets(left.uids, right.uids),
+    }
+}
+
+fn index_hints_from_predicate(pred: &TypedPredicate) -> Option<IndexHints> {
+    match pred.op.as_str() {
+        "and" => {
+            let mut acc = IndexHints::default();
+            for child in &pred.predicates {
+                acc = merge_hints(acc, index_hints_from_predicate(child)?);
+            }
+            Some(acc)
+        }
+        "or" => None,
+        "eq" | "in" => {
+            let values = predicate_strings(&pred.value);
+            if values.is_empty() {
+                return Some(IndexHints::default());
+            }
+            Some(match pred.field.as_str() {
+                "type" | "card_type" => IndexHints {
+                    types: Some(values.into_iter().collect()),
+                    ..IndexHints::default()
+                },
+                "people" => IndexHints {
+                    people: Some(values),
+                    ..IndexHints::default()
+                },
+                "source" | "sources" => IndexHints {
+                    sources: Some(values),
+                    ..IndexHints::default()
+                },
+                "org" | "orgs" | "organization" => IndexHints {
+                    orgs: Some(values),
+                    ..IndexHints::default()
+                },
+                "uid" | "card_uid" => IndexHints {
+                    uids: Some(values.into_iter().collect()),
+                    ..IndexHints::default()
+                },
+                _ => IndexHints::default(),
+            })
+        }
+        _ => Some(IndexHints::default()),
+    }
+}
+
+fn insert_page_candidate<'a>(
+    best: &mut Vec<&'a CardMeta>,
+    card: &'a CardMeta,
+    order_field: &str,
+    desc: bool,
+    page_size: usize,
+) {
+    if best.len() < page_size {
+        let idx = best.partition_point(|existing| typed_order_cmp(existing, card, order_field, desc).is_le());
+        best.insert(idx, card);
+        return;
+    }
+    if typed_order_cmp(card, best[page_size - 1], order_field, desc) != std::cmp::Ordering::Less {
+        return;
+    }
+    best.pop();
+    let idx = best.partition_point(|existing| typed_order_cmp(existing, card, order_field, desc).is_le());
+    best.insert(idx, card);
 }
 
 fn validate_typed_predicate(pred: &TypedPredicate) -> Result<(), String> {
@@ -1511,6 +1858,99 @@ mod access_tests {
             .typed_query_page(&AccessPolicy::unrestricted(), Some(&pred), "uid", "asc", "", "", false, 10)
             .unwrap_err();
         assert!(err.contains("unknown field"), "{err}");
+    }
+
+    #[test]
+    fn typed_query_uses_type_and_people_indexes() {
+        let sam = person("hfa-person-sam", "Sam Panken");
+        let mut cards = vec![sam.clone()];
+        for i in 0..40 {
+            cards.push(CardMeta {
+                card_uid: format!("hfa-imessage-message-{i:02}"),
+                r#type: "imessage_message".into(),
+                people: vec!["hfa-person-sam".into()],
+                activity_at: format!("2024-01-{:02}T00:00:00Z", (i % 28) + 1),
+                sources: vec!["imessage".into()],
+                corpus_state: "active".into(),
+                ..CardMeta::default()
+            });
+        }
+        for i in 0..12 {
+            cards.push(CardMeta {
+                card_uid: format!("hfa-email-message-{i:02}"),
+                r#type: "email_message".into(),
+                people: vec!["hfa-person-other".into()],
+                activity_at: format!("2025-01-{:02}T00:00:00Z", i + 1),
+                sources: vec!["gmail".into()],
+                corpus_state: "active".into(),
+                ..CardMeta::default()
+            });
+        }
+        let store = MetadataStore::from_cards(cards);
+        assert_eq!(store.by_type.get("imessage_message").map(Vec::len), Some(40));
+        assert_eq!(store.by_person_ref.get("hfa-person-sam").map(Vec::len), Some(40));
+        let pred = TypedPredicate {
+            op: "and".into(),
+            predicates: vec![
+                TypedPredicate {
+                    op: "eq".into(),
+                    field: "type".into(),
+                    value: serde_json::json!("imessage_message"),
+                    ..TypedPredicate::default()
+                },
+                TypedPredicate {
+                    op: "eq".into(),
+                    field: "people".into(),
+                    value: serde_json::json!("Sam Panken"),
+                    ..TypedPredicate::default()
+                },
+            ],
+            ..TypedPredicate::default()
+        };
+        let page = store
+            .typed_query_page(
+                &AccessPolicy::unrestricted(),
+                Some(&pred),
+                "activity_at",
+                "desc",
+                "",
+                "",
+                false,
+                5,
+            )
+            .unwrap();
+        assert_eq!(page.matched_total, 40);
+        assert_eq!(page.rows.len(), 5);
+        assert_eq!(page.rows[0].card_uid, "hfa-imessage-message-27");
+        assert!(page.next.is_some());
+        let after = page.next.expect("next");
+        let second = store
+            .typed_query_page(
+                &AccessPolicy::unrestricted(),
+                Some(&pred),
+                "activity_at",
+                "desc",
+                &after.uid,
+                &after.order_value,
+                after.order_null,
+                5,
+            )
+            .unwrap();
+        assert_eq!(second.matched_total, 40);
+        assert_eq!(second.rows.len(), 5);
+        assert_ne!(second.rows[0].card_uid, page.rows[0].card_uid);
+        let recent = store.query_filtered(
+            &AccessPolicy::unrestricted(),
+            "imessage_message",
+            "",
+            &store.prepare_people_filter("Sam Panken"),
+            "",
+            "",
+            "",
+            3,
+        );
+        assert_eq!(recent.len(), 3);
+        assert_eq!(recent[0].card_uid, page.rows[0].card_uid);
     }
 
     #[test]

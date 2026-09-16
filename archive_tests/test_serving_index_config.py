@@ -12,8 +12,11 @@ from archive_cli.index_config import (
     get_query_embed_cache_path,
     get_query_embed_cache_ram_entries,
     get_serving_export_batch_size,
+    get_serving_follow_http_owner,
     get_serving_index_max_rss_mb,
     get_serving_index_path,
+    get_serving_prefault_enabled,
+    get_serving_prepare_on_start,
 )
 from archive_cli.query_explain import explain_sql
 from archive_cli.serving_index import (
@@ -43,9 +46,15 @@ def test_serving_index_defaults(tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("PPA_SERVING_INDEX_PATH", raising=False)
     monkeypatch.delenv("PPA_QUERY_EMBED_CACHE_PATH", raising=False)
     monkeypatch.delenv("PPA_SERVING_EXPORT_BATCH", raising=False)
+    monkeypatch.delenv("PPA_SERVING_PREFAULT", raising=False)
+    monkeypatch.delenv("PPA_SERVING_INDEX_FOLLOW_HTTP", raising=False)
+    monkeypatch.delenv("PPA_MCP_PREPARE_ON_START", raising=False)
     assert get_serving_index_path(tmp_path) == tmp_path / "_meta" / "rust-search-index"
     assert get_query_embed_cache_path(tmp_path) == tmp_path / "_meta" / "query-embed-cache.sqlite"
     assert get_serving_index_max_rss_mb() >= 256
+    assert get_serving_prefault_enabled() is False
+    assert get_serving_follow_http_owner() is False
+    assert get_serving_prepare_on_start() is False
     assert get_serving_export_batch_size() >= 100
     assert get_query_embed_cache_ram_entries() >= 0
     assert get_query_embed_cache_max_rows() >= 1
@@ -302,6 +311,7 @@ def test_publish_serving_index_incremental_skips_full_export(tmp_path: Path, mon
             return None
 
     monkeypatch.setattr("archive_cli.serving_index._crate", lambda: _Crate())
+    monkeypatch.setattr("archive_cli.serving_index.coverage_regression_reason", lambda *a, **k: None)
     result = publish_serving_index(store, dirty_uids=["uid-new"], dest_generation="gen-new")
     assert result["ok"] is True
     assert result["generation"] == "gen-new"
@@ -381,6 +391,7 @@ def test_publish_serving_index_incremental_does_not_fail_rss_cap(tmp_path: Path,
             return None
 
     monkeypatch.setattr("archive_cli.serving_index._crate", lambda: _Crate())
+    monkeypatch.setattr("archive_cli.serving_index.coverage_regression_reason", lambda *a, **k: None)
     result = publish_serving_index(store, dirty_uids=["uid-new"], dest_generation="gen-rss")
     assert result["ok"] is True
     assert result["generation"] == "gen-rss"
@@ -403,3 +414,49 @@ def test_prune_retired_serving_generations_keeps_only_active(tmp_path: Path, mon
     assert (gens / "live" / "cards.jsonl").exists()
     assert not (gens / "old-a").exists()
     assert not (gens / "old-b").exists()
+
+
+def test_publish_serving_index_skips_smaller_incremental(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "rust-search-index"
+    fat = root / "generations" / "fat"
+    fat.mkdir(parents=True)
+    (fat / "manifest.json").write_text(
+        json.dumps({"card_count": 1_448_016, "embedding_count": 4_691_666}),
+        encoding="utf-8",
+    )
+    (fat / "COMPLETE").write_text("{}\n", encoding="utf-8")
+    (root / "ACTIVE").write_text("fat\n", encoding="utf-8")
+    monkeypatch.setenv("PPA_SERVING_INDEX_PATH", str(root))
+    monkeypatch.setattr(
+        "archive_cli.serving_index.serving_index_status",
+        lambda _vault: {
+            "serving_index_ready": True,
+            "serving_index_generation": "fat",
+            "serving_index_dirty_records": 1,
+            "serving_index_format": 2,
+        },
+    )
+    published: list[str] = []
+
+    class _Crate:
+        @staticmethod
+        def serving_index_build(*_a, **_k):
+            raise AssertionError("must not build a thinner serving generation")
+
+        @staticmethod
+        def serving_index_publish(_root, gid):
+            published.append(gid)
+
+    monkeypatch.setattr("archive_cli.serving_index._crate", lambda: _Crate())
+    store = MagicMock()
+    store.vault = tmp_path
+    store.index.schema = "ppa"
+    result = publish_serving_index(store, dirty_uids=["uid-new"], dest_generation="thin")
+    assert result["ok"] is True
+    assert result["skipped"] == "coverage_regression"
+    assert result["generation"] == "fat"
+    assert "publication_coverage_regression" in str(result.get("error") or "")
+    assert published == []
+    store.index._connect.assert_not_called()
+    assert (root / "ACTIVE").read_text(encoding="utf-8").strip() == "fat"
+    assert not (root / "generations" / "thin").exists()

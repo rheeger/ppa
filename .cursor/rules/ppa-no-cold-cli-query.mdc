@@ -9,9 +9,9 @@ The live search index is tens of GB. The **first** open of `archive_cli` mmaps i
 
 ## Do this
 
-- Ask the living archive through the **already-running** MCP (`archive-local` / `user-archive-local`, or the long-lived `ppa serve` HTTP process).
+- Ask the living archive through HTTP `archive-local` (LaunchAgent `com.rheeger.ppa.mcp-http`). Do not launch `run-local-seed-mcp.sh`.
 - `archive_search`, `archive_hybrid_search`, `archive_query`, `archive_person`, `archive_read`, `archive_evidence`, `archive_graph` — those tools.
-- One long-lived CLI only if MCP is down: **one** `python -m archive_cli` / `ppa serve`, then reuse it. Never a new process per question.
+- If HTTP MCP is down, restart the LaunchAgent. Do not start a second `serve --http`. Never a new process per question.
 
 ## Never do this
 
