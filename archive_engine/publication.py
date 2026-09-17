@@ -503,22 +503,73 @@ def max_complete_leaf_coverage(index_root: Path) -> tuple[str, int, int]:
     return best_gid, best_cards, best_emb
 
 
+def chain_max_leaf_coverage(index_root: Path, generation_id: str) -> tuple[str, int, int]:
+    """Fattest leaf on the parent walk. Empty gid or missing parent raises."""
+
+    best_gid = ""
+    best_cards = 0
+    best_emb = 0
+    gid = str(generation_id or "").strip()
+    if not gid:
+        return "", 0, 0
+    for dest in walk_generation_chain(index_root, gid):
+        cards, embeddings = generation_leaf_coverage(dest)
+        if (embeddings, cards) > (best_emb, best_cards):
+            best_gid = dest.name
+            best_cards = cards
+            best_emb = embeddings
+    return best_gid, best_cards, best_emb
+
+
 def coverage_regression_reason(
     index_root: Path,
     *,
     candidate_cards: int,
     candidate_embeddings: int,
     active_gid: str = "",
+    mode: str = "",
 ) -> str | None:
-    """Refuse a candidate whose leaf coverage is below ACTIVE or any COMPLETE generation.
+    """Refuse a reprint that drops corpus coverage.
 
-    A 498-card clip must never replace a 1.4M-card catalog, including when the
-    clip is a delta and a fatter COMPLETE generation still sits on disk.
+    A delta clip is supposed to be small. The live catalog is that clip stacked
+    on its parent chain. Allow the clip when the parent walk already includes
+    the fattest COMPLETE generation. Refuse a full or compact whose own leaf
+    is thinner than that catalog, and refuse a delta whose parent chain does
+    not include it.
     """
 
     root = Path(index_root)
+    chosen = str(mode or "").strip().lower()
     best_gid, best_cards, best_emb = max_complete_leaf_coverage(root)
     current = str(active_gid or read_active_generation(root) or "").strip()
+    if chosen == "delta":
+        if not current:
+            if best_emb <= 0 and best_cards <= 0:
+                return None
+            return (
+                "publication_coverage_regression "
+                f"delta_without_parent kept={best_gid} kept_cards={best_cards} "
+                f"kept_embeddings={best_emb}"
+            )
+        try:
+            chain_gid, chain_cards, chain_emb = chain_max_leaf_coverage(root, current)
+        except Exception:
+            return (
+                "publication_coverage_regression "
+                f"delta_parent_unreadable parent={current} kept={best_gid} "
+                f"kept_cards={best_cards} kept_embeddings={best_emb}"
+            )
+        if best_emb <= 0 and best_cards <= 0:
+            return None
+        if chain_emb < best_emb or chain_cards < best_cards:
+            return (
+                "publication_coverage_regression "
+                f"delta_parent_missing_corpus parent={current} "
+                f"parent_chain={chain_gid} parent_cards={chain_cards} "
+                f"parent_embeddings={chain_emb} kept={best_gid} "
+                f"kept_cards={best_cards} kept_embeddings={best_emb}"
+            )
+        return None
     if current:
         cards, embeddings = generation_leaf_coverage(root / "generations" / current)
         if (embeddings, cards) > (best_emb, best_cards):
@@ -1091,6 +1142,7 @@ def recover_publication(
             candidate_cards=dest_cards,
             candidate_embeddings=dest_emb,
             active_gid=active,
+            mode=str(read_layout(dest).get("mode") or ""),
         )
         if reason:
             logger.error("%s recover_generation=%s", reason, generation_id)
@@ -1341,15 +1393,16 @@ def publish_snapshot(
             parent = ""
 
         embed_count = int(snapshot.embedding_count or len(snapshot.embeddings) or 0)
-        if chosen in {"full", "compact"}:
-            reason = coverage_regression_reason(
-                root,
-                candidate_cards=len(snapshot.cards),
-                candidate_embeddings=embed_count,
-            )
-            if reason:
-                logger.error("%s generation=%s", reason, gid)
-                raise IncompatibleStateError(reason)
+        reason = coverage_regression_reason(
+            root,
+            candidate_cards=len(snapshot.cards),
+            candidate_embeddings=embed_count,
+            active_gid=parent,
+            mode=chosen,
+        )
+        if reason:
+            logger.error("%s generation=%s", reason, gid)
+            raise IncompatibleStateError(reason)
 
         dirty = {str(uid).strip() for uid in snapshot.dirty_uids if str(uid).strip()}
         present = {

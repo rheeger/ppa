@@ -416,7 +416,7 @@ def test_prune_retired_serving_generations_keeps_only_active(tmp_path: Path, mon
     assert not (gens / "old-b").exists()
 
 
-def test_publish_serving_index_skips_smaller_incremental(tmp_path: Path, monkeypatch) -> None:
+def test_publish_serving_index_stacks_incremental_on_fat(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path / "rust-search-index"
     fat = root / "generations" / "fat"
     fat.mkdir(parents=True)
@@ -436,6 +436,46 @@ def test_publish_serving_index_skips_smaller_incremental(tmp_path: Path, monkeyp
             "serving_index_format": 2,
         },
     )
+    exported: list[str] = []
+
+    def _export(*_a, **kwargs: object) -> dict[str, object]:
+        exported.append(str(kwargs.get("gid") or ""))
+        return {"ok": True, "generation": str(kwargs.get("gid") or "thin"), "cards": 1}
+
+    monkeypatch.setattr("archive_cli.serving_index._export_and_publish", _export)
+    store = MagicMock()
+    store.vault = tmp_path
+    store.index.schema = "ppa"
+    result = publish_serving_index(store, dirty_uids=["uid-new"], dest_generation="thin")
+    assert result["ok"] is True
+    assert result.get("skipped") in (None, "")
+    assert exported == ["thin"]
+    store.index._connect.assert_not_called()
+
+
+def test_publish_serving_index_skips_incremental_on_skinny_parent(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "rust-search-index"
+    fat = root / "generations" / "fat"
+    thin = root / "generations" / "thin-active"
+    fat.mkdir(parents=True)
+    thin.mkdir()
+    (fat / "manifest.json").write_text(
+        json.dumps({"card_count": 1_448_016, "embedding_count": 4_691_666}),
+        encoding="utf-8",
+    )
+    (fat / "COMPLETE").write_text("{}\n", encoding="utf-8")
+    (thin / "manifest.json").write_text(json.dumps({"card_count": 5, "embedding_count": 9}), encoding="utf-8")
+    (root / "ACTIVE").write_text("thin-active\n", encoding="utf-8")
+    monkeypatch.setenv("PPA_SERVING_INDEX_PATH", str(root))
+    monkeypatch.setattr(
+        "archive_cli.serving_index.serving_index_status",
+        lambda _vault: {
+            "serving_index_ready": True,
+            "serving_index_generation": "thin-active",
+            "serving_index_dirty_records": 1,
+            "serving_index_format": 2,
+        },
+    )
     published: list[str] = []
 
     class _Crate:
@@ -451,12 +491,12 @@ def test_publish_serving_index_skips_smaller_incremental(tmp_path: Path, monkeyp
     store = MagicMock()
     store.vault = tmp_path
     store.index.schema = "ppa"
-    result = publish_serving_index(store, dirty_uids=["uid-new"], dest_generation="thin")
+    result = publish_serving_index(store, dirty_uids=["uid-new"], dest_generation="next")
     assert result["ok"] is True
     assert result["skipped"] == "coverage_regression"
-    assert result["generation"] == "fat"
-    assert "publication_coverage_regression" in str(result.get("error") or "")
+    assert result["generation"] == "thin-active"
+    assert "delta_parent_missing_corpus" in str(result.get("error") or "")
     assert published == []
     store.index._connect.assert_not_called()
-    assert (root / "ACTIVE").read_text(encoding="utf-8").strip() == "fat"
-    assert not (root / "generations" / "thin").exists()
+    assert (root / "ACTIVE").read_text(encoding="utf-8").strip() == "thin-active"
+    assert not (root / "generations" / "next").exists()

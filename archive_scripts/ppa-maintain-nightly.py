@@ -56,6 +56,12 @@ DEFAULT_ENRICHMENT_MODEL = "openai:gpt-4o-mini"
 LAUNCHD_LABEL = "com.rheeger.ppa.maintain-nightly"
 PLIST_NAME = f"{LAUNCHD_LABEL}.plist"
 FAILED_UPDATER_STATUSES = frozenset({"failed", "blocked"})
+# launchd StartCalendarInterval does not wake a sleeping Mac. powerd must.
+NIGHTLY_HOUR = 2
+NIGHTLY_MINUTE = 0
+NIGHTLY_WAKE_HOUR = 1
+NIGHTLY_WAKE_MINUTE = 55
+NIGHTLY_WAKE_DAYS = "MTWRFSU"
 # Nightly pull can add work that is not dirty yet. Size an incremental clip
 # against this many cards so a quiet DIRTY file does not under-plan disk.
 NIGHTLY_INCREMENTAL_UID_FLOOR = 50_000
@@ -333,7 +339,62 @@ def launch_agents_dir() -> Path:
     return Path.home() / "Library" / "LaunchAgents"
 
 
-def install_launchd(*, repo_root: Path, python: Path, load: bool = True) -> Path:
+def nightly_wake_clock() -> str:
+    return f"{NIGHTLY_WAKE_HOUR:02d}:{NIGHTLY_WAKE_MINUTE:02d}:00"
+
+
+def pmset_repeat_argv() -> list[str]:
+    """Wake (or power on) every day five minutes before the 02:00 LaunchAgent."""
+
+    return ["pmset", "repeat", "wakeorpoweron", NIGHTLY_WAKE_DAYS, nightly_wake_clock()]
+
+
+def _pmset_admin_osascript() -> list[str]:
+    inner = " ".join(pmset_repeat_argv())
+    return [
+        "osascript",
+        "-e",
+        f'do shell script "{inner}" with administrator privileges',
+    ]
+
+
+def schedule_nightly_wake(*, prompt: bool = False, runner=subprocess.run) -> bool:
+    """Ask powerd to wake the Mac before 02:00.
+
+    Sleep and a locked screen are fine after the disk has been unlocked
+    once this boot. A FileVault logout cannot read the vault. Needs root.
+    """
+
+    attempts: list[list[str]] = [["sudo", "-n", *pmset_repeat_argv()], pmset_repeat_argv()]
+    if prompt:
+        attempts.append(_pmset_admin_osascript())
+    for cmd in attempts:
+        try:
+            result = runner(cmd, capture_output=True, text=True)
+        except OSError as exc:
+            LOG.warning("nightly wake schedule failed cmd=%s error=%s", cmd[0], exc)
+            continue
+        if result.returncode == 0:
+            LOG.info("scheduled nightly wake at %s via %s", nightly_wake_clock(), cmd[0])
+            return True
+        err = (result.stderr or result.stdout or "").strip()
+        LOG.warning("nightly wake schedule failed cmd=%s rc=%s err=%s", cmd[0], result.returncode, err)
+    LOG.warning(
+        "nightly wake not scheduled; StartCalendarInterval will miss a sleeping Mac. "
+        "run once: sudo %s",
+        " ".join(pmset_repeat_argv()),
+    )
+    return False
+
+
+def install_launchd(
+    *,
+    repo_root: Path,
+    python: Path,
+    load: bool = True,
+    schedule_wake: bool = True,
+    wake_prompt: bool = False,
+) -> Path:
     dest = launch_agents_dir() / PLIST_NAME
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(render_plist(repo_root=repo_root, python=python), encoding="utf-8")
@@ -342,6 +403,8 @@ def install_launchd(*, repo_root: Path, python: Path, load: bool = True) -> Path
         domain = f"gui/{uid}"
         subprocess.run(["launchctl", "bootout", f"{domain}/{LAUNCHD_LABEL}"], check=False, capture_output=True)
         subprocess.run(["launchctl", "bootstrap", domain, str(dest)], check=True)
+    if schedule_wake:
+        schedule_nightly_wake(prompt=wake_prompt)
     return dest
 
 
@@ -372,7 +435,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--install",
         action="store_true",
-        help="Write ~/Library/LaunchAgents plist and launchctl bootstrap (2am local)",
+        help="Write ~/Library/LaunchAgents plist, launchctl bootstrap (2am local), schedule 01:55 wake",
     )
     parser.add_argument(
         "--install-plist-only",
@@ -437,10 +500,22 @@ def main(argv: list[str] | None = None) -> int:
         configure_wrapper_logging(verbose=args.verbose)
         apply_runtime_env()
         python = resolve_python()
-        dest = install_launchd(repo_root=REPO_ROOT, python=python, load=args.install)
+        dest = install_launchd(
+            repo_root=REPO_ROOT,
+            python=python,
+            load=args.install,
+            wake_prompt=args.install,
+        )
         LOG.info("wrote LaunchAgent dest=%s load=%s PATH=%s", dest, args.install, os.environ.get("PATH"))
         if args.install:
-            LOG.info("nightly maintain scheduled for 02:00 local; tail %s", default_log_path(REPO_ROOT))
+            LOG.info(
+                "nightly maintain %02d:%02d local after %s wake; sleep/lock is fine; "
+                "FileVault logout is not. tail %s",
+                NIGHTLY_HOUR,
+                NIGHTLY_MINUTE,
+                nightly_wake_clock(),
+                default_log_path(REPO_ROOT),
+            )
         else:
             LOG.info(
                 "plist written; load with: launchctl bootstrap gui/%s %s",
@@ -453,7 +528,11 @@ def main(argv: list[str] | None = None) -> int:
     log_file = default_log_path(REPO_ROOT)
     configure_wrapper_logging(verbose=args.verbose, log_file=log_file)
     started = time.monotonic()
-    LOG.info("nightly maintain start log_file=%s PATH=%s", log_file, os.environ.get("PATH"))
+    LOG.info(
+        "nightly maintain start log_file=%s PATH=%s sleep_or_lock_ok=1 filevault_logout_blocked=1",
+        log_file,
+        os.environ.get("PATH"),
+    )
 
     google_account = (os.environ.get("GOOGLE_ACCOUNT") or DEFAULT_GOOGLE_ACCOUNT).strip()
     source_keys = nightly_source_keys(google_account)

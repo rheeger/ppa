@@ -109,6 +109,9 @@ def _contact_content_hash(row: dict[str, Any]) -> str:
 # `vcard of every person` returns Apple Event -1741 on a real address book
 # (reply too large). Count and a single vcard succeed. Batches of 50 work.
 APPLE_CONTACTS_DUMP_BATCH = 50
+# CNContactStore authorized. Do not call requestAccess from nightly.
+_CN_AUTHORIZED = 3
+_CN_VCARD_BATCH = 100
 
 
 def _osascript_error_text(result: subprocess.CompletedProcess[str]) -> str:
@@ -190,8 +193,74 @@ def _dump_range_resilient(start: int, end: int, tmp: Path, parts: list[bytes]) -
         chunk.unlink(missing_ok=True)
 
 
+def _contact_store_modules() -> Any | None:
+    try:
+        import Contacts  # type: ignore[import-not-found]
+    except ImportError:
+        return None
+    return Contacts
+
+
+def _dump_apple_contacts_via_store(dest: Path) -> bool:
+    """Write unified vCards from CNContactStore. No Contacts.app.
+
+    Returns False when the framework is missing or this process is not
+    already authorized. Does not prompt. Nightly must not click Allow.
+    """
+
+    contacts_mod = _contact_store_modules()
+    if contacts_mod is None:
+        return False
+    status = int(contacts_mod.CNContactStore.authorizationStatusForEntityType_(contacts_mod.CNEntityTypeContacts))
+    if status != _CN_AUTHORIZED:
+        logger.info("apple contacts store unavailable auth_status=%s", status)
+        return False
+    store = contacts_mod.CNContactStore.alloc().init()
+    keys = [contacts_mod.CNContactVCardSerialization.descriptorForRequiredKeys()]
+    request = contacts_mod.CNContactFetchRequest.alloc().initWithKeysToFetch_(keys)
+    request.setUnifyResults_(True)
+    people: list[Any] = []
+
+    def _keep(contact: Any, _stop: Any) -> None:
+        contact_type = int(contact.contactType())
+        if contact_type == int(contacts_mod.CNContactTypeOrganization):
+            return
+        people.append(contact)
+
+    ok, err = store.enumerateContactsWithFetchRequest_error_usingBlock_(request, None, _keep)
+    if not ok:
+        raise RuntimeError(f"Contacts store enumerate failed: {err}")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if not people:
+        dest.write_bytes(b"")
+        logger.info("apple contacts dump via=contact_store people=0")
+        return True
+    chunks: list[bytes] = []
+    serialize = contacts_mod.CNContactVCardSerialization.dataWithContacts_error_
+    for start in range(0, len(people), _CN_VCARD_BATCH):
+        batch = people[start : start + _CN_VCARD_BATCH]
+        data, err = serialize(batch, None)
+        if data is None:
+            raise RuntimeError(f"Contacts store vCard serialize failed: {err}")
+        chunks.append(bytes(data))
+    dest.write_bytes(b"".join(chunks))
+    logger.info("apple contacts dump via=contact_store people=%s dest=%s", len(people), dest)
+    return True
+
+
 def dump_apple_contacts_vcf(dest: Path) -> None:
-    """Write unified Contacts.app vCards to dest. Raises on TCC denial."""
+    """Write unified Apple contact vCards to dest. Store first, then Contacts.app."""
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if _dump_apple_contacts_via_store(dest):
+        if not dest.is_file():
+            raise RuntimeError("Contacts store dump wrote no file")
+        return
+    _dump_apple_contacts_via_osascript(dest)
+
+
+def _dump_apple_contacts_via_osascript(dest: Path) -> None:
+    """Launch-on-demand Contacts.app dump. Fallback when the store is unavailable."""
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     count = _apple_contacts_count()

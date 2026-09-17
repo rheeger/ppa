@@ -238,6 +238,72 @@ def test_coverage_regression_reason_keeps_fatter_complete(tmp_path: Path) -> Non
     assert coverage_regression_reason(root, candidate_cards=100, candidate_embeddings=1000) is None
 
 
+def test_coverage_regression_reason_allows_delta_on_fat_parent(tmp_path: Path) -> None:
+    root = tmp_path / "idx"
+    fat = root / "generations" / "fat"
+    fat.mkdir(parents=True)
+    (fat / "manifest.json").write_text(json.dumps({"card_count": 100, "embedding_count": 1000}), encoding="utf-8")
+    (fat / "COMPLETE").write_text("{}\n", encoding="utf-8")
+    (root / "ACTIVE").write_text("fat\n", encoding="utf-8")
+    assert (
+        coverage_regression_reason(
+            root,
+            candidate_cards=5,
+            candidate_embeddings=9,
+            active_gid="fat",
+            mode="delta",
+        )
+        is None
+    )
+
+
+def test_coverage_regression_reason_refuses_delta_on_skinny_parent(tmp_path: Path) -> None:
+    root = tmp_path / "idx"
+    fat = root / "generations" / "fat"
+    thin = root / "generations" / "thin"
+    fat.mkdir(parents=True)
+    thin.mkdir()
+    (fat / "manifest.json").write_text(json.dumps({"card_count": 100, "embedding_count": 1000}), encoding="utf-8")
+    (fat / "COMPLETE").write_text("{}\n", encoding="utf-8")
+    (thin / "manifest.json").write_text(json.dumps({"card_count": 5, "embedding_count": 9}), encoding="utf-8")
+    (root / "ACTIVE").write_text("thin\n", encoding="utf-8")
+    reason = coverage_regression_reason(
+        root,
+        candidate_cards=6,
+        candidate_embeddings=10,
+        active_gid="thin",
+        mode="delta",
+    )
+    assert reason is not None
+    assert "delta_parent_missing_corpus" in reason
+
+
+def test_coverage_regression_reason_allows_delta_on_existing_stack(tmp_path: Path) -> None:
+    root = tmp_path / "idx"
+    fat = root / "generations" / "fat"
+    clip = root / "generations" / "clip"
+    fat.mkdir(parents=True)
+    clip.mkdir()
+    (fat / "manifest.json").write_text(json.dumps({"card_count": 100, "embedding_count": 1000}), encoding="utf-8")
+    (fat / "COMPLETE").write_text("{}\n", encoding="utf-8")
+    (clip / "manifest.json").write_text(json.dumps({"card_count": 5, "embedding_count": 9}), encoding="utf-8")
+    (clip / "layout.json").write_text(
+        json.dumps({"layout_version": 1, "mode": "delta", "parent_generation": "fat"}),
+        encoding="utf-8",
+    )
+    (root / "ACTIVE").write_text("clip\n", encoding="utf-8")
+    assert (
+        coverage_regression_reason(
+            root,
+            candidate_cards=8,
+            candidate_embeddings=12,
+            active_gid="clip",
+            mode="delta",
+        )
+        is None
+    )
+
+
 def test_publish_snapshot_refuses_smaller_full(tmp_path: Path) -> None:
     from archive_engine.contracts import EmbeddingSpec
     from archive_engine.errors import IncompatibleStateError

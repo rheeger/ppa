@@ -6,6 +6,8 @@
 	<string>com.rheeger.ppa.maintain-nightly</string>
 	<key>ProgramArguments</key>
 	<array>
+		<string>/usr/bin/caffeinate</string>
+		<string>-ims</string>
 		<string>__PPA_PYTHON__</string>
 		<string>__PPA_REPO__/archive_scripts/ppa-maintain-nightly.py</string>
 	</array>
@@ -28,12 +30,6 @@
 	</dict>
 	<key>RunAtLoad</key>
 	<false/>
-	<key>ProcessType</key>
-	<string>Background</string>
-	<key>Nice</key>
-	<integer>10</integer>
-	<key>LowPriorityIO</key>
-	<true/>
 	<key>StandardOutPath</key>
 	<string>__PPA_REPO__/logs/ppa-maintain-nightly-launchd.out.log</string>
 	<key>StandardErrorPath</key>

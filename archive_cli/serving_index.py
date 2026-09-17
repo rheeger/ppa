@@ -1925,6 +1925,7 @@ def _publish_serving_index_locked(
             candidate_cards=len(concrete),
             candidate_embeddings=len(concrete),
             active_gid=active_gid,
+            mode="delta",
         )
         if reason:
             log.warning("serving_index_publish skip %s keep_generation=%s", reason, active_gid)
@@ -1938,7 +1939,12 @@ def _publish_serving_index_locked(
                 "embeddings": 0,
             }
     if incremental:
-        log.info("serving_index_publish incremental uids=%s generation=%s", len(concrete), gid)
+        log.info(
+            "serving_index_publish stack parent=%s dirty_uids=%s generation=%s",
+            active_gid,
+            len(concrete),
+            gid,
+        )
     spec = serving_embedding_spec()
     dim = spec.dimension
     plan = plan_publication_resources(
@@ -2012,6 +2018,7 @@ def _export_and_publish(
         candidate_cards=len(snapshot.cards),
         candidate_embeddings=int(embed_n or 0),
         active_gid=active_gid,
+        mode="delta" if incremental else mode,
     )
     if reason:
         if incremental:

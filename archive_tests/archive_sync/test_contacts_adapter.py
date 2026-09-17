@@ -6,7 +6,11 @@ import os
 import sys
 import types
 
-from archive_sync.adapters.contacts import AppleContactsPermissionError, ContactsAdapter, dump_apple_contacts_vcf
+from archive_sync.adapters.contacts import (
+    AppleContactsPermissionError,
+    ContactsAdapter,
+    dump_apple_contacts_vcf,
+)
 from archive_sync.source_updaters.runner import classify_run_exception
 from archive_vault.schema import PersonCard
 
@@ -300,6 +304,7 @@ def test_dump_apple_contacts_vcf_raises_on_permission(monkeypatch, tmp_path):
         stderr = "osascript is not allowed to send Apple events to Contacts"
         stdout = ""
 
+    monkeypatch.setattr("archive_sync.adapters.contacts._dump_apple_contacts_via_store", lambda _dest: False)
     monkeypatch.setattr("archive_sync.adapters.contacts.subprocess.run", lambda *a, **k: Result())
     try:
         dump_apple_contacts_vcf(dest)
@@ -308,8 +313,114 @@ def test_dump_apple_contacts_vcf_raises_on_permission(monkeypatch, tmp_path):
         pass
 
 
+def test_dump_apple_contacts_vcf_prefers_store(monkeypatch, tmp_path):
+    dest = tmp_path / "out.vcf"
+
+    def fake_store(path):
+        path.write_bytes(b"BEGIN:VCARD\nFN:Store Person\nEND:VCARD\n")
+        return True
+
+    monkeypatch.setattr("archive_sync.adapters.contacts._dump_apple_contacts_via_store", fake_store)
+
+    def boom(*_a, **_k):
+        raise AssertionError("osascript must not run when the contact store is authorized")
+
+    monkeypatch.setattr("archive_sync.adapters.contacts._apple_contacts_count", boom)
+    dump_apple_contacts_vcf(dest)
+    assert "Store Person" in dest.read_text(encoding="utf-8")
+
+
+def test_dump_apple_contacts_via_store_skips_when_unauthorized(monkeypatch, tmp_path):
+    class FakeContacts:
+        CNEntityTypeContacts = 0
+        CNContactTypeOrganization = 1
+
+        class CNContactStore:
+            @staticmethod
+            def authorizationStatusForEntityType_(_entity):
+                return 0
+
+            def alloc(self):
+                raise AssertionError("must not open the store when unauthorized")
+
+    monkeypatch.setattr("archive_sync.adapters.contacts._contact_store_modules", lambda: FakeContacts)
+    dest = tmp_path / "out.vcf"
+    from archive_sync.adapters.contacts import _dump_apple_contacts_via_store
+
+    assert _dump_apple_contacts_via_store(dest) is False
+    assert not dest.exists()
+
+
+def test_dump_apple_contacts_via_store_skips_organizations(monkeypatch, tmp_path):
+    class _Person:
+        def contactType(self):
+            return 0
+
+    class _Org:
+        def contactType(self):
+            return 1
+
+    class FakeData:
+        def __init__(self, raw: bytes):
+            self._raw = raw
+
+        def __bytes__(self):
+            return self._raw
+
+    class FakeContacts:
+        CNEntityTypeContacts = 0
+        CNContactTypeOrganization = 1
+        CNContactTypePerson = 0
+
+        class CNContactStore:
+            @staticmethod
+            def authorizationStatusForEntityType_(_entity):
+                return 3
+
+            @classmethod
+            def alloc(cls):
+                return cls()
+
+            def init(self):
+                return self
+
+            def enumerateContactsWithFetchRequest_error_usingBlock_(self, _req, _err, block):
+                block(_Org(), None)
+                block(_Person(), None)
+                return True, None
+
+        class CNContactVCardSerialization:
+            @staticmethod
+            def descriptorForRequiredKeys():
+                return "keys"
+
+            @staticmethod
+            def dataWithContacts_error_(batch, _err):
+                assert len(batch) == 1
+                return FakeData(b"BEGIN:VCARD\nFN:Person\nEND:VCARD\n"), None
+
+        class CNContactFetchRequest:
+            @classmethod
+            def alloc(cls):
+                return cls()
+
+            def initWithKeysToFetch_(self, _keys):
+                return self
+
+            def setUnifyResults_(self, _unify):
+                return None
+
+    monkeypatch.setattr("archive_sync.adapters.contacts._contact_store_modules", lambda: FakeContacts)
+    dest = tmp_path / "out.vcf"
+    from archive_sync.adapters.contacts import _dump_apple_contacts_via_store
+
+    assert _dump_apple_contacts_via_store(dest) is True
+    assert dest.read_bytes() == b"BEGIN:VCARD\nFN:Person\nEND:VCARD\n"
+
+
 def test_dump_apple_contacts_vcf_writes_batches(monkeypatch, tmp_path):
     writes: list[tuple[int, int]] = []
+    monkeypatch.setattr("archive_sync.adapters.contacts._dump_apple_contacts_via_store", lambda _dest: False)
     monkeypatch.setattr("archive_sync.adapters.contacts._apple_contacts_count", lambda: 120)
 
     def fake_range(start, end, dest):
@@ -324,6 +435,7 @@ def test_dump_apple_contacts_vcf_writes_batches(monkeypatch, tmp_path):
 
 
 def test_dump_apple_contacts_vcf_splits_on_1741(monkeypatch, tmp_path):
+    monkeypatch.setattr("archive_sync.adapters.contacts._dump_apple_contacts_via_store", lambda _dest: False)
     monkeypatch.setattr("archive_sync.adapters.contacts.APPLE_CONTACTS_DUMP_BATCH", 4)
     monkeypatch.setattr("archive_sync.adapters.contacts._apple_contacts_count", lambda: 4)
 

@@ -114,6 +114,53 @@ def test_render_plist_substitutes_paths() -> None:
     assert "__PPA_TOOL_PATH__" not in rendered
     assert "<key>GEMINI_API_KEY</key>" not in rendered
     assert "gemini_key.txt" in rendered
+    assert "/usr/bin/caffeinate" in rendered
+    assert "-ims" in rendered
+    assert "LowPriorityIO" not in rendered
+    assert "ProcessType" not in rendered
+
+
+def test_pmset_repeat_argv_wakes_before_two() -> None:
+    mod = _load_mod()
+    assert mod.pmset_repeat_argv() == ["pmset", "repeat", "wakeorpoweron", "MTWRFSU", "01:55:00"]
+
+
+def test_schedule_nightly_wake_uses_passwordless_sudo() -> None:
+    mod = _load_mod()
+    calls: list[list[str]] = []
+
+    class _Result:
+        def __init__(self) -> None:
+            self.returncode = 0
+            self.stderr = ""
+            self.stdout = ""
+
+    def runner(cmd, **_kwargs):
+        calls.append(list(cmd))
+        return _Result()
+
+    assert mod.schedule_nightly_wake(prompt=False, runner=runner) is True
+    assert calls == [["sudo", "-n", "pmset", "repeat", "wakeorpoweron", "MTWRFSU", "01:55:00"]]
+
+
+def test_schedule_nightly_wake_osascript_when_prompted() -> None:
+    mod = _load_mod()
+    calls: list[list[str]] = []
+
+    class _Result:
+        def __init__(self, rc: int) -> None:
+            self.returncode = rc
+            self.stderr = "Must be run as root"
+            self.stdout = ""
+
+    def runner(cmd, **_kwargs):
+        calls.append(list(cmd))
+        return _Result(0 if cmd and cmd[0] == "osascript" else 1)
+
+    assert mod.schedule_nightly_wake(prompt=True, runner=runner) is True
+    assert calls[0][:2] == ["sudo", "-n"]
+    assert calls[-1][0] == "osascript"
+    assert "pmset repeat wakeorpoweron" in calls[-1][-1]
 
 
 def test_dry_run_exits_zero(tmp_path: Path, monkeypatch, caplog) -> None:
