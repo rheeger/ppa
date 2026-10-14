@@ -37,6 +37,7 @@ from archive_cli.index_config import (
     get_vector_dimension,
 )
 from archive_engine.contracts import ChangeBatch, EmbeddingSpec
+from archive_engine.disk_space import volume_available_bytes
 from archive_engine.errors import IncompatibleContractError, IncompatibleStateError, PublisherBusyError
 
 logger = logging.getLogger("ppa.publication")
@@ -461,6 +462,77 @@ def _manifest_int(data: Mapping[str, Any], key: str) -> int | None:
         return None
 
 
+_CARD_UID_MARK = b'"card_uid": "'
+
+
+def _card_uids(generation_dir: Path) -> set[str]:
+    path = Path(generation_dir) / "cards.jsonl"
+    if not path.is_file():
+        return set()
+    found: set[str] = set()
+    mark = _CARD_UID_MARK
+    with path.open("rb") as handle:
+        for line in handle:
+            start = line.find(mark)
+            if start < 0:
+                continue
+            start += len(mark)
+            end = line.find(b'"', start)
+            if end > start:
+                found.add(line[start:end].decode("utf-8"))
+    return found
+
+
+def _embedding_keys(generation_dir: Path) -> set[str]:
+    path = Path(generation_dir) / "embedding_keys.txt"
+    if not path.is_file():
+        return set()
+    with path.open("r", encoding="utf-8") as handle:
+        return {line.strip() for line in handle if line.strip()}
+
+
+def _generation_has_membership_files(generation_dir: Path) -> bool:
+    dest = Path(generation_dir)
+    return (dest / "cards.jsonl").is_file() or (dest / "embedding_keys.txt").is_file()
+
+
+def resolved_chain_coverage(index_root: Path, generation_id: str) -> tuple[int, int]:
+    """Cards and embeddings still visible on this chain after tombstones.
+
+    A later delta can delete cards that remain stored in an older full snapshot.
+    Search hides those cards. A compact reprints only what is still visible, so
+    the floor for that reprint is this count, not the raw size of the old file.
+    """
+
+    chain = walk_generation_chain(index_root, generation_id)
+    if not any(_generation_has_membership_files(dest) for dest in chain):
+        if len(chain) != 1:
+            raise IncompatibleContractError(
+                f"serving_index_chain_unreadable generation={generation_id}"
+            )
+        return generation_leaf_coverage(chain[0])
+
+    cards: set[str] = set()
+    keys: set[str] = set()
+    tombstoned: set[str] = set()
+    for dest in chain:
+        layout = read_layout(dest)
+        for uid in layout.get("tombstone_uids") or []:
+            text = str(uid).strip()
+            if text:
+                tombstoned.add(text)
+                cards.discard(text)
+        for key in layout.get("tombstone_chunk_keys") or []:
+            text = str(key).strip()
+            if text:
+                keys.discard(text)
+        for uid in _card_uids(dest):
+            if uid not in tombstoned:
+                cards.add(uid)
+        keys.update(_embedding_keys(dest))
+    return len(cards), len(keys)
+
+
 def generation_leaf_coverage(generation_dir: Path) -> tuple[int, int]:
     """Leaf ``(cards, embeddings)`` for one generation. Manifest wins when present."""
 
@@ -503,24 +575,6 @@ def max_complete_leaf_coverage(index_root: Path) -> tuple[str, int, int]:
     return best_gid, best_cards, best_emb
 
 
-def chain_max_leaf_coverage(index_root: Path, generation_id: str) -> tuple[str, int, int]:
-    """Fattest leaf on the parent walk. Empty gid or missing parent raises."""
-
-    best_gid = ""
-    best_cards = 0
-    best_emb = 0
-    gid = str(generation_id or "").strip()
-    if not gid:
-        return "", 0, 0
-    for dest in walk_generation_chain(index_root, gid):
-        cards, embeddings = generation_leaf_coverage(dest)
-        if (embeddings, cards) > (best_emb, best_cards):
-            best_gid = dest.name
-            best_cards = cards
-            best_emb = embeddings
-    return best_gid, best_cards, best_emb
-
-
 def coverage_regression_reason(
     index_root: Path,
     *,
@@ -529,20 +583,23 @@ def coverage_regression_reason(
     active_gid: str = "",
     mode: str = "",
 ) -> str | None:
-    """Refuse a reprint that drops corpus coverage.
+    """Refuse a publish that would drop the corpus search can already see.
 
-    A delta clip is supposed to be small. The live catalog is that clip stacked
-    on its parent chain. Allow the clip when the parent walk already includes
-    the fattest COMPLETE generation. Refuse a full or compact whose own leaf
-    is thinner than that catalog, and refuse a delta whose parent chain does
-    not include it.
+    A delta is a clip stacked on the active parent. Refuse it when that parent
+    is missing or its chain cannot be read, because the clip would then become
+    the index. An older complete file that is not on this chain is not a reason
+    to refuse. That file often still stores cards a later delta deleted, and
+    blocking the clip is what keeps new cards and embeddings out of search.
+
+    A full or compact reprint replaces the chain, so compare it to the cards
+    and embeddings still visible after tombstones.
     """
 
     root = Path(index_root)
     chosen = str(mode or "").strip().lower()
-    best_gid, best_cards, best_emb = max_complete_leaf_coverage(root)
     current = str(active_gid or read_active_generation(root) or "").strip()
     if chosen == "delta":
+        best_gid, best_cards, best_emb = max_complete_leaf_coverage(root)
         if not current:
             if best_emb <= 0 and best_cards <= 0:
                 return None
@@ -552,32 +609,34 @@ def coverage_regression_reason(
                 f"kept_embeddings={best_emb}"
             )
         try:
-            chain_gid, chain_cards, chain_emb = chain_max_leaf_coverage(root, current)
-        except Exception:
+            walk_generation_chain(root, current)
+        except IncompatibleContractError:
             return (
                 "publication_coverage_regression "
                 f"delta_parent_unreadable parent={current} kept={best_gid} "
                 f"kept_cards={best_cards} kept_embeddings={best_emb}"
             )
-        if best_emb <= 0 and best_cards <= 0:
-            return None
-        if chain_emb < best_emb or chain_cards < best_cards:
-            return (
-                "publication_coverage_regression "
-                f"delta_parent_missing_corpus parent={current} "
-                f"parent_chain={chain_gid} parent_cards={chain_cards} "
-                f"parent_embeddings={chain_emb} kept={best_gid} "
-                f"kept_cards={best_cards} kept_embeddings={best_emb}"
-            )
         return None
     if current:
-        cards, embeddings = generation_leaf_coverage(root / "generations" / current)
-        if (embeddings, cards) > (best_emb, best_cards):
-            best_gid, best_cards, best_emb = current, cards, embeddings
+        try:
+            best_cards, best_emb = resolved_chain_coverage(root, current)
+        except IncompatibleContractError:
+            return f"publication_coverage_regression chain_unreadable parent={current}"
+        best_gid = current
+    else:
+        best_gid, best_cards, best_emb = max_complete_leaf_coverage(root)
     if best_emb <= 0 and best_cards <= 0:
         return None
     cards = int(candidate_cards or 0)
     embeddings = int(candidate_embeddings or 0)
+    logger.info(
+        "publication coverage live generation=%s cards=%s embeddings=%s candidate_cards=%s candidate_embeddings=%s",
+        best_gid or "-",
+        best_cards,
+        best_emb,
+        cards,
+        embeddings,
+    )
     if embeddings < best_emb or cards < best_cards:
         return (
             "publication_coverage_regression "
@@ -667,7 +726,7 @@ def check_publication_budget(
     cap = get_publication_disk_budget_mb() if budget_mb is None else int(budget_mb)
     Path(index_root).mkdir(parents=True, exist_ok=True)
     reclaimed = reclaim_stale_export_tmp(index_root, keep=keep_export_tmp)
-    free = shutil.disk_usage(index_root).free
+    free = volume_available_bytes(index_root)
     cap_bytes = cap * 1024 * 1024
     logger.info(
         "publication disk budget estimated_mb=%.1f free_mb=%.1f reclaimed_mb=%.1f cap_mb=%s",
@@ -818,7 +877,7 @@ def plan_publication_resources(
         free = int(free_disk_bytes)
     else:
         probe = root if root.exists() else (root.parent if root.parent.exists() else Path.cwd())
-        free = int(shutil.disk_usage(probe).free)
+        free = int(volume_available_bytes(probe))
     avail = int(available_memory) if available_memory is not None else int(available_memory_bytes())
     phys = int(physical_memory) if physical_memory is not None else int(physical_memory_bytes())
     reasons: list[str] = []

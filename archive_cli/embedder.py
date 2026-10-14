@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import shutil
 import time
 from collections.abc import Collection
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
@@ -13,6 +12,7 @@ from threading import Lock
 from typing import Any
 
 from archive_engine.contracts import EmbeddingSpec
+from archive_engine.disk_space import volume_available_bytes
 from archive_engine.errors import IncompatibleStateError
 
 from .features import build_context_prefix_for_embed_row
@@ -835,17 +835,17 @@ class EmbedderMixin:
     def _warehouse_free_bytes(self) -> int:
         root = Path(getattr(self, "vault", None) or Path.home()).expanduser()
         try:
-            return int(shutil.disk_usage(root).free)
+            return int(volume_available_bytes(root))
         except OSError:
-            return int(shutil.disk_usage(Path.home()).free)
+            return int(volume_available_bytes(Path.home()))
 
     def _require_warehouse_free_space(self) -> None:
         min_gb = get_warehouse_min_free_gb()
         if min_gb <= 0:
             return
         free = self._warehouse_free_bytes()
-        if free < min_gb * 1024**3:
-            raise RuntimeError(f"warehouse_disk_low free_gb={free / 1024**3:.1f} min_gb={min_gb}")
+        if free < min_gb * 1_000_000_000:
+            raise RuntimeError(f"warehouse_disk_low free_gb={free / 1_000_000_000:.1f} min_gb={min_gb}")
 
     def delete_duplicate_leftover_embeddings(
         self,

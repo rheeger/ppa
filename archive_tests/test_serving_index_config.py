@@ -7,6 +7,7 @@ import pytest
 
 from archive_cli.errors import ServingIndexUnavailableError
 from archive_cli.index_config import (
+    get_publication_min_embed_coverage,
     get_query_embed_cache_max_age_days,
     get_query_embed_cache_max_rows,
     get_query_embed_cache_path,
@@ -43,12 +44,14 @@ def _stub_manifest(dest: str | Path) -> dict[str, object]:
 
 
 def test_serving_index_defaults(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("PPA_PUBLICATION_MIN_EMBED_COVERAGE", raising=False)
     monkeypatch.delenv("PPA_SERVING_INDEX_PATH", raising=False)
     monkeypatch.delenv("PPA_QUERY_EMBED_CACHE_PATH", raising=False)
     monkeypatch.delenv("PPA_SERVING_EXPORT_BATCH", raising=False)
     monkeypatch.delenv("PPA_SERVING_PREFAULT", raising=False)
     monkeypatch.delenv("PPA_SERVING_INDEX_FOLLOW_HTTP", raising=False)
     monkeypatch.delenv("PPA_MCP_PREPARE_ON_START", raising=False)
+    assert get_publication_min_embed_coverage() == 0.85
     assert get_serving_index_path(tmp_path) == tmp_path / "_meta" / "rust-search-index"
     assert get_query_embed_cache_path(tmp_path) == tmp_path / "_meta" / "query-embed-cache.sqlite"
     assert get_serving_index_max_rss_mb() >= 256
@@ -453,7 +456,9 @@ def test_publish_serving_index_stacks_incremental_on_fat(tmp_path: Path, monkeyp
     store.index._connect.assert_not_called()
 
 
-def test_publish_serving_index_skips_incremental_on_skinny_parent(tmp_path: Path, monkeypatch) -> None:
+def test_publish_serving_index_stacks_incremental_when_older_file_is_fatter(
+    tmp_path: Path, monkeypatch
+) -> None:
     root = tmp_path / "rust-search-index"
     fat = root / "generations" / "fat"
     thin = root / "generations" / "thin-active"
@@ -465,6 +470,7 @@ def test_publish_serving_index_skips_incremental_on_skinny_parent(tmp_path: Path
     )
     (fat / "COMPLETE").write_text("{}\n", encoding="utf-8")
     (thin / "manifest.json").write_text(json.dumps({"card_count": 5, "embedding_count": 9}), encoding="utf-8")
+    (thin / "COMPLETE").write_text("{}\n", encoding="utf-8")
     (root / "ACTIVE").write_text("thin-active\n", encoding="utf-8")
     monkeypatch.setenv("PPA_SERVING_INDEX_PATH", str(root))
     monkeypatch.setattr(
@@ -476,27 +482,18 @@ def test_publish_serving_index_skips_incremental_on_skinny_parent(tmp_path: Path
             "serving_index_format": 2,
         },
     )
-    published: list[str] = []
+    exported: list[str] = []
 
-    class _Crate:
-        @staticmethod
-        def serving_index_build(*_a, **_k):
-            raise AssertionError("must not build a thinner serving generation")
+    def _export(*_a, **kwargs: object) -> dict[str, object]:
+        exported.append(str(kwargs.get("gid") or ""))
+        return {"ok": True, "generation": str(kwargs.get("gid") or "next"), "cards": 1}
 
-        @staticmethod
-        def serving_index_publish(_root, gid):
-            published.append(gid)
-
-    monkeypatch.setattr("archive_cli.serving_index._crate", lambda: _Crate())
+    monkeypatch.setattr("archive_cli.serving_index._export_and_publish", _export)
     store = MagicMock()
     store.vault = tmp_path
     store.index.schema = "ppa"
     result = publish_serving_index(store, dirty_uids=["uid-new"], dest_generation="next")
     assert result["ok"] is True
-    assert result["skipped"] == "coverage_regression"
-    assert result["generation"] == "thin-active"
-    assert "delta_parent_missing_corpus" in str(result.get("error") or "")
-    assert published == []
+    assert result.get("skipped") in (None, "")
+    assert exported == ["next"]
     store.index._connect.assert_not_called()
-    assert (root / "ACTIVE").read_text(encoding="utf-8").strip() == "thin-active"
-    assert not (root / "generations" / "next").exists()

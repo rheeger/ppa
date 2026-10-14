@@ -381,6 +381,31 @@ def test_prune_keeps_higher_coverage_retired_generation(tmp_path: Path, monkeypa
     assert thin.exists()
 
 
+def test_prune_drops_off_chain_snapshot_covered_by_the_chain(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "rust-search-index"
+    gens = root / "generations"
+    base = gens / "base"
+    delta = gens / "delta"
+    orphan = gens / "orphan"
+    fatter = gens / "fatter-orphan"
+    for dest in (base, delta, orphan, fatter):
+        dest.mkdir(parents=True)
+    (base / "manifest.json").write_text(json.dumps({"embedding_count": 1000}), encoding="utf-8")
+    (base / "layout.json").write_text(json.dumps({"parent_generation": ""}), encoding="utf-8")
+    (delta / "manifest.json").write_text(json.dumps({"embedding_count": 10}), encoding="utf-8")
+    (delta / "layout.json").write_text(json.dumps({"parent_generation": "base"}), encoding="utf-8")
+    (orphan / "manifest.json").write_text(json.dumps({"embedding_count": 800}), encoding="utf-8")
+    (fatter / "manifest.json").write_text(json.dumps({"embedding_count": 5000}), encoding="utf-8")
+    (root / "ACTIVE").write_text("delta\n", encoding="utf-8")
+    monkeypatch.setenv("PPA_SERVING_INDEX_PATH", str(root))
+    removed = prune_retired_serving_generations(tmp_path)
+    assert removed == ["orphan"]
+    assert not orphan.exists()
+    assert fatter.exists()
+    assert base.exists()
+    assert delta.exists()
+
+
 @pytest.mark.integration
 def test_prior_schema_remap_copies_v5_vector(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pgvector_dsn: str

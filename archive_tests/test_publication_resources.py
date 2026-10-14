@@ -193,8 +193,8 @@ def test_publish_refuses_compact_before_warehouse_export(tmp_path: Path, monkeyp
         },
     )
     monkeypatch.setattr(
-        "archive_engine.publication.shutil.disk_usage",
-        lambda _path: MagicMock(free=2 * 1024 * 1024 * 1024, total=100 * 1024 * 1024 * 1024, used=98 * 1024 * 1024 * 1024),
+        "archive_engine.publication.volume_available_bytes",
+        lambda _path: 2 * 1024 * 1024 * 1024,
     )
     monkeypatch.setattr("archive_engine.publication.get_serving_index_max_rss_mb", lambda: 32_768)
     store = MagicMock()
@@ -231,11 +231,78 @@ def test_coverage_regression_reason_keeps_fatter_complete(tmp_path: Path) -> Non
     (thin / "manifest.json").write_text(json.dumps({"card_count": 5, "embedding_count": 9}), encoding="utf-8")
     (thin / "COMPLETE").write_text("{}\n", encoding="utf-8")
     (root / "ACTIVE").write_text("thin\n", encoding="utf-8")
-    reason = coverage_regression_reason(root, candidate_cards=20, candidate_embeddings=40, active_gid="thin")
+    reason = coverage_regression_reason(root, candidate_cards=1, candidate_embeddings=1, active_gid="thin")
     assert reason is not None
     assert "publication_coverage_regression" in reason
-    assert "kept=fat" in reason
+    assert "kept=thin" in reason
+    assert "kept_cards=5" in reason
+    assert coverage_regression_reason(root, candidate_cards=20, candidate_embeddings=40, active_gid="thin") is None
     assert coverage_regression_reason(root, candidate_cards=100, candidate_embeddings=1000) is None
+
+
+def test_coverage_regression_allows_compact_after_tombstones(tmp_path: Path) -> None:
+    root = tmp_path / "idx"
+    base = root / "generations" / "base"
+    tip = root / "generations" / "tip"
+    orphan = root / "generations" / "orphan"
+    base.mkdir(parents=True)
+    tip.mkdir()
+    orphan.mkdir()
+    (base / "cards.jsonl").write_text(
+        "".join(json.dumps({"card_uid": f"c{i}"}) + "\n" for i in range(10)),
+        encoding="utf-8",
+    )
+    (base / "embedding_keys.txt").write_text("".join(f"k{i}\n" for i in range(10)), encoding="utf-8")
+    (base / "manifest.json").write_text(
+        json.dumps({"card_count": 10, "embedding_count": 10}),
+        encoding="utf-8",
+    )
+    (base / "COMPLETE").write_text("{}\n", encoding="utf-8")
+    (base / "layout.json").write_text(
+        json.dumps({"parent_generation": "", "tombstone_uids": [], "tombstone_chunk_keys": []}),
+        encoding="utf-8",
+    )
+    (tip / "cards.jsonl").write_text(json.dumps({"card_uid": "c-new"}) + "\n", encoding="utf-8")
+    (tip / "embedding_keys.txt").write_text("k-new\n", encoding="utf-8")
+    (tip / "layout.json").write_text(
+        json.dumps(
+            {
+                "parent_generation": "base",
+                "mode": "delta",
+                "tombstone_uids": ["c0", "c1", "c2"],
+                "tombstone_chunk_keys": ["k0", "k1", "k2"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tip / "COMPLETE").write_text("{}\n", encoding="utf-8")
+    (orphan / "manifest.json").write_text(
+        json.dumps({"card_count": 100, "embedding_count": 1000}),
+        encoding="utf-8",
+    )
+    (orphan / "COMPLETE").write_text("{}\n", encoding="utf-8")
+    (root / "ACTIVE").write_text("tip\n", encoding="utf-8")
+    assert (
+        coverage_regression_reason(
+            root,
+            candidate_cards=8,
+            candidate_embeddings=8,
+            active_gid="tip",
+            mode="compact",
+        )
+        is None
+    )
+    reason = coverage_regression_reason(
+        root,
+        candidate_cards=7,
+        candidate_embeddings=8,
+        active_gid="tip",
+        mode="compact",
+    )
+    assert reason is not None
+    assert "kept=tip" in reason
+    assert "kept_cards=8" in reason
+    assert "kept_embeddings=8" in reason
 
 
 def test_coverage_regression_reason_allows_delta_on_fat_parent(tmp_path: Path) -> None:
@@ -257,7 +324,7 @@ def test_coverage_regression_reason_allows_delta_on_fat_parent(tmp_path: Path) -
     )
 
 
-def test_coverage_regression_reason_refuses_delta_on_skinny_parent(tmp_path: Path) -> None:
+def test_coverage_regression_reason_allows_delta_when_older_file_is_fatter(tmp_path: Path) -> None:
     root = tmp_path / "idx"
     fat = root / "generations" / "fat"
     thin = root / "generations" / "thin"
@@ -266,16 +333,70 @@ def test_coverage_regression_reason_refuses_delta_on_skinny_parent(tmp_path: Pat
     (fat / "manifest.json").write_text(json.dumps({"card_count": 100, "embedding_count": 1000}), encoding="utf-8")
     (fat / "COMPLETE").write_text("{}\n", encoding="utf-8")
     (thin / "manifest.json").write_text(json.dumps({"card_count": 5, "embedding_count": 9}), encoding="utf-8")
+    (thin / "COMPLETE").write_text("{}\n", encoding="utf-8")
     (root / "ACTIVE").write_text("thin\n", encoding="utf-8")
+    assert (
+        coverage_regression_reason(
+            root,
+            candidate_cards=6,
+            candidate_embeddings=10,
+            active_gid="thin",
+            mode="delta",
+        )
+        is None
+    )
+    assert (
+        coverage_regression_reason(
+            root,
+            candidate_cards=6,
+            candidate_embeddings=10,
+            active_gid="thin",
+            mode="compact",
+        )
+        is None
+    )
+    shrink = coverage_regression_reason(
+        root,
+        candidate_cards=4,
+        candidate_embeddings=8,
+        active_gid="thin",
+        mode="compact",
+    )
+    assert shrink is not None
+    assert "kept=thin" in shrink
+    assert "kept_cards=5" in shrink
+
+
+def test_coverage_regression_reason_refuses_delta_without_parent(tmp_path: Path) -> None:
+    root = tmp_path / "idx"
+    fat = root / "generations" / "fat"
+    fat.mkdir(parents=True)
+    (fat / "manifest.json").write_text(json.dumps({"card_count": 100, "embedding_count": 1000}), encoding="utf-8")
+    (fat / "COMPLETE").write_text("{}\n", encoding="utf-8")
     reason = coverage_regression_reason(
         root,
         candidate_cards=6,
         candidate_embeddings=10,
-        active_gid="thin",
+        active_gid="",
         mode="delta",
     )
     assert reason is not None
-    assert "delta_parent_missing_corpus" in reason
+    assert "delta_without_parent" in reason
+
+
+def test_coverage_regression_reason_refuses_unreadable_delta_parent(tmp_path: Path) -> None:
+    root = tmp_path / "idx"
+    (root / "generations").mkdir(parents=True)
+    (root / "ACTIVE").write_text("missing\n", encoding="utf-8")
+    reason = coverage_regression_reason(
+        root,
+        candidate_cards=6,
+        candidate_embeddings=10,
+        active_gid="missing",
+        mode="delta",
+    )
+    assert reason is not None
+    assert "delta_parent_unreadable" in reason
 
 
 def test_coverage_regression_reason_allows_delta_on_existing_stack(tmp_path: Path) -> None:

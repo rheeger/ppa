@@ -899,6 +899,21 @@ def _generation_embedding_count(generation_dir: Path) -> int:
     return count
 
 
+def _chain_embedding_count(index_root: Path, active_gid: str) -> int:
+    """Embeddings on the live chain, including the active generation.
+
+    A leaf delta is small. Comparing a retired snapshot to that leaf keeps
+    every older full snapshot on disk. The chain total is the corpus search
+    actually opens.
+    """
+
+    gens = Path(index_root) / "generations"
+    total = 0
+    for name in referenced_generations(index_root, active_gid):
+        total += _generation_embedding_count(gens / name)
+    return total
+
+
 def prune_retired_serving_generations(
     vault: Path | None = None,
     *,
@@ -908,8 +923,9 @@ def prune_retired_serving_generations(
 ) -> list[str]:
     """Delete generations that are not ACTIVE, not in the parent chain, and not pinned.
 
-    Never delete a generation whose embedding_count is higher than ACTIVE. That
-    is the paid ANN corpus; a thin publish must not prune it.
+    A retired snapshot is kept only when it has more embeddings than the whole
+    live chain. A thin active delta must not be the reason an off-chain full
+    snapshot stays on disk.
     """
 
     log = logger or logging.getLogger("ppa.serving_index")
@@ -923,7 +939,7 @@ def prune_retired_serving_generations(
             keep = ""
     keep = str(keep or "").strip()
     retain = referenced_generations(root, keep)
-    active_embeddings = _generation_embedding_count(gens / keep) if keep else 0
+    chain_embeddings = _chain_embedding_count(root, keep) if keep else 0
     removed: list[str] = []
     if not gens.is_dir():
         return removed
@@ -933,13 +949,13 @@ def prune_retired_serving_generations(
         if child.name in retain:
             continue
         child_embeddings = _generation_embedding_count(child)
-        if child_embeddings > active_embeddings:
+        if child_embeddings > chain_embeddings:
             log.warning(
-                "serving_index_prune_kept_higher_coverage generation=%s embeddings=%s active=%s active_embeddings=%s",
+                "serving_index_prune_kept_higher_coverage generation=%s embeddings=%s active=%s chain_embeddings=%s",
                 child.name,
                 child_embeddings,
                 keep,
-                active_embeddings,
+                chain_embeddings,
             )
             continue
         try:
