@@ -495,12 +495,9 @@ def _iter_processor_items(reports: list[dict[str, Any]]) -> list[dict[str, Any]]
     return items
 
 
-_SERVE_BLOCKING_PROCESSORS = frozenset(
-    {
-        "materialization",
-        "email_typed_extraction",
-    }
-)
+# Only a failed or pending materialization hides a card from search.
+# Typed extraction can still be running. The email itself is already a card.
+_SERVE_BLOCKING_PROCESSORS = frozenset({"materialization"})
 
 
 def failed_required_uids(reports: list[dict[str, Any]]) -> list[str]:
@@ -704,6 +701,55 @@ def _finish_maintain(
     return report
 
 
+def _embed_publish_uids(store: Any, uids: list[str], logger: logging.Logger) -> list[str]:
+    """Embed every chunk of the cards about to be published.
+
+    The embedding processor runs on cards whose snapshot hash looks stale, and
+    it runs before a feedback wave can rematerialize a wider set. That rebuild
+    replaces chunk keys. Publish exports the new keys, so a card left out of
+    the later embed batch shows up as a chunk with no vector. Embedding this
+    UID list, after those rebuilds, is the set publish will export.
+    """
+
+    if not uids:
+        return []
+    embed = getattr(store, "embed_pending", None)
+    if not callable(embed):
+        return list(uids)
+    from archive_cli.engine_factory import embedding_spec_from_env
+
+    spec = embedding_spec_from_env()
+    try:
+        result = embed(limit=0, uid_allowlist=list(uids), embedding_spec=spec)
+    except RuntimeError as exc:
+        if "warehouse_disk_low" not in str(exc):
+            raise
+        from archive_cli.serving_index import prune_retired_serving_generations
+
+        pruned = prune_retired_serving_generations(getattr(store, "vault", None), logger=logger)
+        logger.warning(
+            "serving_index_publish embed_pending disk_low pruned=%s retry=1 error=%s",
+            pruned,
+            exc,
+        )
+        result = embed(limit=0, uid_allowlist=list(uids), embedding_spec=spec)
+    if not isinstance(result, dict):
+        return list(uids)
+    pending = result.get("pending_chunk_keys") or []
+    logger.info(
+        "serving_index_publish embed_pending embedded=%s failed=%s pending=%s selected=%s uids=%s",
+        result.get("embedded"),
+        result.get("failed"),
+        len(pending),
+        result.get("selected"),
+        len(uids),
+    )
+    from archive_cli.serving_index import read_dirty_uids
+
+    merged = sorted({str(uid).strip() for uid in [*uids, *read_dirty_uids(store.vault)] if str(uid).strip()})
+    return merged
+
+
 def _publish_serving_index(store: Any, report: MaintenanceReport, logger: logging.Logger, *, dry_run: bool) -> None:
     """Publish only the eligible checkpoint through ``archive_engine.publication.publish``."""
 
@@ -763,6 +809,7 @@ def _publish_serving_index(store: Any, report: MaintenanceReport, logger: loggin
     try:
         from archive_engine.publication import publish
 
+        concrete = _embed_publish_uids(store, concrete, logger)
         logger.info(
             "serving_index_publish incremental uids=%s eligible_checkpoint=%s",
             len(concrete),

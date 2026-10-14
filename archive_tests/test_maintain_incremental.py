@@ -649,6 +649,122 @@ def test_maintain_publish_passes_rebuilt_and_updater_uids(tmp_path: Path, monkey
     assert "serving_index_publish (clean)" not in report.skipped_steps
 
 
+def test_maintain_publish_embeds_dirty_uids_before_publish(tmp_path: Path, monkeypatch) -> None:
+    import logging
+
+    from archive_cli.commands.maintain import MaintenanceReport, _publish_serving_index
+
+    store = _warehouse_store(tmp_path)
+    monkeypatch.setattr("archive_cli.index_store.PostgresArchiveIndex", type(store.index))
+    order: list[str] = []
+
+    def fake_embed(**kwargs):
+        order.append("embed")
+        assert kwargs["limit"] == 0
+        assert set(kwargs["uid_allowlist"]) == {"uid-rebuilt-1", "uid-updater-1"}
+        return {"embedded": 3, "failed": 0, "pending_chunk_keys": [], "selected": 4}
+
+    def fake_publish(_checkpoint, context):
+        order.append("publish")
+        assert list(context.get("dirty_uids") or []) == ["uid-rebuilt-1", "uid-updater-1"]
+        from archive_engine.publication import PublicationReceipt
+
+        return PublicationReceipt(
+            generation_id="gen-new",
+            mode="incremental",
+            parent_generation="",
+            base_generation="",
+            snapshot_id="",
+            source_watermark=0,
+            cards=1,
+            chunks=4,
+            embeddings=4,
+            tombstone_uids=(),
+            replaced_uids=(),
+            compacted=False,
+            ok=True,
+            acked_watermark=1,
+            eligible_checkpoint=1,
+        )
+
+    store.embed_pending = fake_embed
+    monkeypatch.setattr(
+        "archive_cli.serving_index.serving_index_status",
+        lambda _vault: {"serving_index_ready": True, "serving_index_generation": "gen-old"},
+    )
+    monkeypatch.setattr("archive_cli.serving_index.read_dirty_uids", lambda _vault: [])
+    monkeypatch.setattr("archive_engine.publication.publish", fake_publish)
+
+    report = MaintenanceReport(
+        cards_rebuilt=1,
+        publish_uids=["uid-rebuilt-1"],
+        source_updater_reports=[{"dirty_card_uids": ["uid-updater-1"]}],
+    )
+    _publish_serving_index(store, report, logging.getLogger("t"), dry_run=False)
+    assert order == ["embed", "publish"]
+    assert report.publication.get("ok") is True
+
+
+def test_maintain_publish_retries_embed_once_after_pruning_for_disk(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import logging
+
+    from archive_cli.commands.maintain import MaintenanceReport, _publish_serving_index
+
+    store = _warehouse_store(tmp_path)
+    monkeypatch.setattr("archive_cli.index_store.PostgresArchiveIndex", type(store.index))
+    embed_calls: list[int] = []
+    pruned: list[str] = []
+
+    def fake_embed(**_kwargs):
+        embed_calls.append(1)
+        if len(embed_calls) == 1:
+            raise RuntimeError("warehouse_disk_low free_gb=18.0 min_gb=40")
+        return {"embedded": 2, "failed": 0, "pending_chunk_keys": [], "selected": 2}
+
+    def fake_prune(_vault, logger=None):
+        pruned.append("pruned")
+        return ["orphan-gen"]
+
+    def fake_publish(_checkpoint, context):
+        assert list(context.get("dirty_uids") or []) == ["uid-disk"]
+        from archive_engine.publication import PublicationReceipt
+
+        return PublicationReceipt(
+            generation_id="gen-new",
+            mode="incremental",
+            parent_generation="",
+            base_generation="",
+            snapshot_id="",
+            source_watermark=0,
+            cards=1,
+            chunks=2,
+            embeddings=2,
+            tombstone_uids=(),
+            replaced_uids=(),
+            compacted=False,
+            ok=True,
+            acked_watermark=1,
+            eligible_checkpoint=1,
+        )
+
+    store.embed_pending = fake_embed
+    monkeypatch.setattr("archive_cli.serving_index.prune_retired_serving_generations", fake_prune)
+    monkeypatch.setattr(
+        "archive_cli.serving_index.serving_index_status",
+        lambda _vault: {"serving_index_ready": True, "serving_index_generation": "gen-old"},
+    )
+    monkeypatch.setattr("archive_cli.serving_index.read_dirty_uids", lambda _vault: [])
+    monkeypatch.setattr("archive_engine.publication.publish", fake_publish)
+
+    report = MaintenanceReport(cards_rebuilt=1, publish_uids=["uid-disk"])
+    _publish_serving_index(store, report, logging.getLogger("t"), dry_run=False)
+    assert pruned == ["pruned"]
+    assert len(embed_calls) == 2
+    assert report.publication.get("ok") is True
+
+
 def test_maintain_publish_does_not_skip_when_cards_rebuilt(tmp_path: Path, monkeypatch) -> None:
     import logging
 

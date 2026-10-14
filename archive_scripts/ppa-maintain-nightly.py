@@ -14,9 +14,15 @@ and disk for the publish mode it can already see (a small clip vs a full
 reprint). ``ppa maintain`` itself also skips junk email-attachment cards on
 Gmail apply, incrementally purges any that slipped through, and hash-links
 document/attachment duplicates (``file_identity``). No separate
-``embed-pending`` or ``link-file-duplicates`` step. No ``--catch-up``. No
-Photos / Apple Health. No ``--allow-full-embedding`` / IVFFlat / force-full
-rebuild. Passes ``--allow-broad-llm`` so dirty ``email_thread_enrichment``
+``embed-pending`` or ``link-file-duplicates`` step. Gmail incremental now
+resets the page cursor and lists only mail since the last ingest (one day
+of overlap). Threads whose From addresses are all GitHub are suppressed
+and not indexed. A message whose From address is GitHub is dropped even
+when the rest of the thread stays. The GitHub updater already has that
+history. A full
+mailbox walk stays the parked ``--catch-up`` flag. No Photos / Apple Health. No
+``--allow-full-embedding`` / IVFFlat / force-full rebuild. Passes
+``--allow-broad-llm`` so dirty ``email_thread_enrichment``
 (Gemini) can run; ``GEMINI_API_KEY`` is loaded at runtime from env or
 ``~/.ppa/gemini_key.txt`` (never hardcoded in the plist).
 
@@ -467,9 +473,10 @@ def apply_runtime_env() -> dict[str, str]:
     os.environ.setdefault("PPA_NONINTERACTIVE", "1")
     os.environ.setdefault("PPA_GITHUB_STAGE_DIR", str(DEFAULT_GITHUB_STAGE))
     os.environ.setdefault("IMESSAGE_SNAPSHOT_DIR", str(DEFAULT_IMESSAGE_SNAPSHOT))
-    # A compacted (full) publish holds every embedding in RAM: 4.7M x 1536 x 4 bytes is
-    # about 27.5 GB. The 8192 default refuses that; the seed contract is 32768.
-    os.environ.setdefault("PPA_SERVING_INDEX_MAX_RSS_MB", "32768")
+    # A compacted publish trains on every live vector. This seed is about 5.4 million
+    # vectors and the estimate is about 34 GB, so 32 GB refuses the compact. 64 GB
+    # is half of this machine's 128 GB.
+    os.environ.setdefault("PPA_SERVING_INDEX_MAX_RSS_MB", "65536")
     os.environ["PPA_INDEX_DSN"] = resolve_dsn()
     key = load_openai_key()
     if key:

@@ -130,7 +130,7 @@ def test_counts_match_real_receipts() -> None:
     assert counts["cards_extracted"] == 1
     assert counts["entities_resolved"] == 1
     assert counts["cards_rebuilt"] == 1
-    assert failed_required_uids(reports) == ["email-2"]
+    assert failed_required_uids(reports) == []
 
 
 def test_failed_revision_is_not_published(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -345,8 +345,8 @@ def test_preflight_nightly_publish_refuses_compact_without_disk(tmp_path: Path, 
         },
     )
     monkeypatch.setattr(
-        "archive_engine.publication.shutil.disk_usage",
-        lambda _path: MagicMock(free=2 * 1024 * 1024 * 1024),
+        "archive_engine.publication.volume_available_bytes",
+        lambda _path: 2 * 1024 * 1024 * 1024,
     )
     plan = mod.preflight_nightly_publish(vault=tmp_path, reclaim=False)
     assert plan["ok"] is False

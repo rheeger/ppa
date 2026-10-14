@@ -617,11 +617,17 @@ def get_publication_lease_stale_seconds() -> int:
 
 
 def get_publication_min_embed_coverage() -> float:
-    """Minimum embeddings/chunks ratio for a non-hash full publish. ``0`` disables."""
+    """Minimum embeddings/chunks ratio for an OpenAI generation, including a nightly delta.
+
+    ``0`` disables the check. A hash-embedding generation skips it. A generation
+    under ``get_publication_min_embed_chunks`` skips it. The floor is 85% so a
+    nightly delta that is a few points short still publishes, instead of leaving
+    the new cards out of search.
+    """
     raw = _ppa_env("PPA_PUBLICATION_MIN_EMBED_COVERAGE")
     if raw == "0":
         return 0.0
-    return min(max(_ppa_env_float("PPA_PUBLICATION_MIN_EMBED_COVERAGE", default=0.9), 0.0), 1.0)
+    return min(max(_ppa_env_float("PPA_PUBLICATION_MIN_EMBED_COVERAGE", default=0.85), 0.0), 1.0)
 
 
 def get_publication_min_embed_chunks() -> int:
@@ -648,7 +654,11 @@ def get_embed_gc_batch_size() -> int:
 
 
 def get_warehouse_min_free_gb() -> int:
-    """Stop warehouse writes when the vault volume has less than this many GiB free."""
+    """Stop warehouse writes when Finder-available space is under this many GB.
+
+    A GB is 1e9 bytes, the unit Finder shows. The free-space reading includes
+    purgeable snapshots macOS can delete for an important write.
+    """
     return max(_ppa_env_int("PPA_WAREHOUSE_MIN_FREE_GB", default=40), 0)
 
 
