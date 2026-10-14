@@ -189,16 +189,18 @@ def adapter_ingest_kwargs(
         kwargs["account_email"] = scope
         kwargs["gmail_promotion_gate"] = True
         kwargs["extract_attachment_text"] = True
+        # Incremental and nightly must start at newest. Resuming a stored
+        # page_token continues a historical walk and misses new inbox mail.
+        # After a completed ingest, the adapter lists only mail since last_sync
+        # (one day of overlap). --catch-up is the opt-in full mailbox walk.
+        # --max-items still bounds volume.
+        kwargs["reset_page_cursor"] = True
+        kwargs["quick_update"] = True
+        kwargs["max_threads"] = None
+        kwargs["max_messages"] = None
+        kwargs["max_attachments"] = None
         if catch_up:
-            # Reset page cursor so threads.list starts at newest mail.
-            # Keep the promotion gate on; history_id quick-update stays cheap.
-            # Adapter fetch defaults cap at 100 threads/messages/attachments.
-            # Catch-up must walk past that or a six-month mailbox gap stays empty.
             kwargs["catch_up"] = True
-            kwargs["quick_update"] = True
-            kwargs["max_threads"] = None
-            kwargs["max_messages"] = None
-            kwargs["max_attachments"] = None
         return kwargs
     if adapter_id == "calendar-events":
         kwargs["account_email"] = scope
@@ -499,8 +501,12 @@ def run_source_updater(
         warnings.append("gmail_promotion_gate=true")
         if max_items is not None:
             warnings.append(f"max_threads={max_items} (bounded fetch; promotion gate remains on)")
-    if catch_up and decl.adapter_source_id == "gmail-messages":
-        warnings.append("catch_up: gmail page cursor reset (newest-first; history_id skip kept)")
+    if decl.adapter_source_id == "gmail-messages" and (
+        catch_up or ingest_kwargs.get("reset_page_cursor") is True
+    ):
+        warnings.append(
+            "gmail newest-first: page cursor reset; history_id skip; stop at unchanged page"
+        )
 
     logger.info(
         "source updater start source_key=%s apply=%s max_items=%s catch_up=%s stage_dir=%s cursor_key=%s",

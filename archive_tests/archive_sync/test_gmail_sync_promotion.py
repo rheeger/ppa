@@ -275,6 +275,26 @@ def test_active_card_demotion_recommended_not_suppressed(tmp_path: Path) -> None
     assert any(s.startswith("recommended_corpus_state:") for s in result.record.decision_signals)
 
 
+def test_github_notification_not_emitted_when_card_exists(tmp_path: Path) -> None:
+    gate = _gate(tmp_path)
+    thread, messages = _marketing_thread_record()
+    thread["subject"] = "[endaoment/endaoment-backend] CI finished"
+    thread["participants"] = ["notifications@github.com"]
+    messages[0]["from_email"] = "notifications@github.com"
+    messages[0]["subject"] = thread["subject"]
+    messages[0]["participant_emails"] = ["notifications@github.com"]
+    result = gate.evaluate_loaded_thread(
+        thread,
+        messages,
+        account_email="me@example.com",
+        own_emails={"me@example.com"},
+        vault_has_active_card=True,
+    )
+    assert result.outcome == PromotionOutcome.SUPPRESS
+    assert result.emit_cards is False
+    assert result.record.decision_reason == "github_notification"
+
+
 def test_cursor_blocked_when_ledger_write_fails(tmp_path: Path) -> None:
     gate = GmailPromotionGate(
         ledger=FailingLedger(),

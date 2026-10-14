@@ -16,13 +16,15 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from email.header import decode_header
 from email.utils import getaddresses, parsedate_to_datetime
 from typing import Any
 
 from archive_auth import build_google_cli_token_manager
 from archive_sync.junk_attachments import should_emit_email_attachment
+from archive_sync.llm_enrichment.email_promotion_policy import _is_github_mail_domain
+from archive_sync.llm_enrichment.known_senders import _email_domain
 from archive_vault.identity import IdentityCache
 from archive_vault.schema import EmailAttachmentCard, EmailMessageCard, EmailThreadCard
 from archive_vault.thread_hash import (
@@ -124,6 +126,26 @@ def reset_gmail_page_cursor(cursor: dict[str, Any] | None) -> dict[str, Any]:
     return target
 
 
+def gmail_incremental_after_query(cursor: dict[str, Any] | None) -> str | None:
+    """Gmail ``after:`` day for a newest-first run that already completed a full list.
+
+    ``last_sync`` is when the last ingest finished, not the age of the mailbox.
+    Overlap one calendar day so mail that arrived during that run is listed again.
+    ``threads.list`` then only returns recent threads. An explicit ``--catch-up``
+    does not use this, so a full mailbox walk stays opt-in.
+    """
+
+    raw = str((cursor or {}).get("last_sync") or "").strip()
+    if len(raw) < 10:
+        return None
+    try:
+        day = date.fromisoformat(raw[:10])
+    except ValueError:
+        return None
+    overlap = day - timedelta(days=1)
+    return f"after:{overlap.strftime('%Y/%m/%d')}"
+
+
 def catch_up_requested(*, catch_up: bool = False, reset_page_cursor: bool = False, **kwargs: Any) -> bool:
     """True when caller asked for newest-first catch-up / page-cursor reset."""
 
@@ -148,6 +170,92 @@ def _attachment_uid(account_email: str, message_id: str, attachment_id: str) -> 
 
 def _wikilink_from_uid(uid: str) -> str:
     return f"[[{uid}]]"
+
+
+def strip_github_notification_mail(
+    thread_record: dict[str, Any] | None,
+    message_records: list[dict[str, Any]],
+    attachment_records: list[dict[str, Any]],
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]], list[dict[str, Any]]]:
+    """Drop messages whose From address is GitHub, and the attachments on those messages.
+
+    GitHub history already comes from the GitHub updater. A thread the owner
+    wrote in keeps the other messages. A thread that is only GitHub mail
+    returns no cards.
+    """
+
+    drop_ids: set[str] = set()
+    kept_messages: list[dict[str, Any]] = []
+    for record in message_records:
+        if _is_github_mail_domain(_email_domain(str(record.get("from_email") or ""))):
+            message_id = str(record.get("message_id") or "").strip()
+            if message_id:
+                drop_ids.add(message_id)
+            continue
+        kept_messages.append(record)
+    if not drop_ids:
+        return thread_record, message_records, attachment_records
+    kept_attachments = [
+        record
+        for record in attachment_records
+        if str(record.get("message_id") or "").strip() not in drop_ids
+    ]
+    if not kept_messages:
+        return None, [], []
+    if thread_record is None:
+        return None, kept_messages, kept_attachments
+
+    account = str(kept_messages[0].get("account_email") or thread_record.get("account_email") or "")
+    participants: list[str] = []
+    people: list[str] = []
+    labels: list[str] = []
+    links: list[str] = []
+    timestamps: list[str] = []
+    hash_payload: list[dict[str, Any]] = []
+    subject = ""
+    has_attachments = False
+    for record in kept_messages:
+        if not subject and record.get("subject"):
+            subject = str(record["subject"])
+        for value in record.get("participant_emails") or []:
+            if value not in participants:
+                participants.append(value)
+        for value in record.get("people") or []:
+            if value not in people:
+                people.append(value)
+        for value in record.get("label_ids") or []:
+            if value not in labels:
+                labels.append(value)
+        message_id = str(record.get("message_id") or "").strip()
+        if message_id:
+            link = _wikilink_from_uid(_message_uid(account, message_id))
+            if link not in links:
+                links.append(link)
+        sent_at = str(record.get("sent_at") or "")
+        if sent_at:
+            timestamps.append(sent_at)
+        hash_payload.append(
+            {
+                "message_id": message_id,
+                "sent_at": sent_at,
+                "message_body_sha": record.get("message_body_sha") or "",
+            }
+        )
+        has_attachments = has_attachments or bool(record.get("has_attachments"))
+    updated = dict(thread_record)
+    updated["subject"] = subject or str(thread_record.get("subject") or "")
+    updated["participants"] = participants
+    updated["people"] = people
+    updated["label_ids"] = labels
+    updated["messages"] = links
+    updated["message_count"] = len(links)
+    updated["has_attachments"] = has_attachments or bool(kept_attachments)
+    updated["first_message_at"] = timestamps[0] if timestamps else ""
+    updated["last_message_at"] = timestamps[-1] if timestamps else ""
+    updated["thread_body_sha"] = compute_email_thread_body_sha_from_payload(hash_payload)
+    if timestamps:
+        updated["created"] = _date_bucket(timestamps[0])
+    return updated, kept_messages, kept_attachments
 
 
 def _clean_text(value: str) -> str:
@@ -1318,10 +1426,19 @@ class GmailMessagesAdapter(BaseAdapter):
         own_emails.update(load_own_aliases(vault_path))
         identity_cache = IdentityCache(vault_path)
         hash_cache_enabled = bool(getattr(config, "gmail_thread_body_sha_cache_enabled", True))
-        if catch_up_requested(catch_up=catch_up, reset_page_cursor=reset_page_cursor, **kwargs):
+        newest_first = catch_up_requested(catch_up=catch_up, reset_page_cursor=reset_page_cursor, **kwargs)
+        if newest_first:
             reset_gmail_page_cursor(cursor)
             # Newest-first walk is cheap only if unchanged threads skip via history_id.
             quick_update = True
+            # A finished ingest stores last_sync. Bound the next list to that day
+            # so nightly does not page the whole mailbox again. Explicit catch-up
+            # and a caller-supplied query stay unbounded.
+            if not catch_up and not (query or "").strip():
+                after_query = gmail_incremental_after_query(cursor)
+                if after_query:
+                    query = after_query
+                    log.info("gmail newest-first incremental query=%s", query)
         quick_update_enabled = bool(quick_update and hash_cache_enabled)
         existing_thread_state: dict[str, dict[str, str]] = {}
         existing_message_hashes: dict[str, str] = {}
@@ -1430,13 +1547,17 @@ class GmailMessagesAdapter(BaseAdapter):
                 page_next_token = list_data.get("nextPageToken")
                 page_index = 0
                 if not page_thread_ids:
+                    listed_ids = [
+                        str(thread.get("id", "")).strip() for thread in page_threads if str(thread.get("id", "")).strip()
+                    ]
+                    caught_up = bool(newest_first and quick_update_enabled and listed_ids)
                     yield FetchedBatch(
                         items=[],
                         cursor_patch={
                             "page_thread_ids": [],
                             "page_index": 0,
                             "page_next_token": None,
-                            "page_token": page_next_token,
+                            "page_token": None if caught_up else page_next_token,
                             "scanned_threads": scanned_threads,
                             "emitted_threads": emitted_threads,
                             "emitted_messages": emitted_messages,
@@ -1450,6 +1571,13 @@ class GmailMessagesAdapter(BaseAdapter):
                         skip_details=page_skip_details,
                     )
                     sequence += 1
+                    if caught_up:
+                        log.info(
+                            "gmail newest-first caught up unchanged_page=%s scanned_threads=%s",
+                            len(listed_ids),
+                            scanned_threads,
+                        )
+                        break
                     if not page_next_token:
                         break
                     next_page_token = page_next_token
@@ -1549,6 +1677,17 @@ class GmailMessagesAdapter(BaseAdapter):
                             message_records = []
                             attachment_records = []
                         commit_cursor = commit_cursor and promo_result.commit_cursor
+
+                    kept_thread, message_records, attachment_records = strip_github_notification_mail(
+                        thread_record if thread_records else None,
+                        message_records,
+                        attachment_records,
+                    )
+                    if not message_records and not attachment_records:
+                        thread_records = []
+                    elif thread_records and kept_thread is not None:
+                        thread_records = [kept_thread]
+                        thread_record = kept_thread
 
                     if attachment_records or message_records:
                         self._enrich_gmail_attachment_text(

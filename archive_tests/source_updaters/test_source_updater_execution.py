@@ -426,7 +426,7 @@ def test_gmail_catch_up_resets_cursor_and_keeps_promotion_gate(tmp_path: Path) -
     assert adapter.ingest_kwargs.get("max_threads") is None
     assert adapter.ingest_kwargs.get("max_messages") is None
     assert adapter.ingest_kwargs.get("max_attachments") is None
-    assert "catch_up: gmail page cursor reset" in " ".join(result.report.warnings)
+    assert "gmail newest-first: page cursor reset" in " ".join(result.report.warnings)
     assert "gmail_promotion_gate=true" in result.report.warnings
 
 
@@ -464,7 +464,7 @@ def test_gmail_catch_up_with_max_items_still_bounds_and_keeps_gate(tmp_path: Pat
 def test_gmail_max_items_without_catch_up_still_keeps_promotion_gate(tmp_path: Path) -> None:
     vault = _minimal_vault(tmp_path)
     adapter = _RecordingGmailAdapter()
-    run_source_updater(
+    result = run_source_updater(
         source_key="gmail-messages:me@example.com",
         vault_path=vault,
         apply=False,
@@ -474,7 +474,10 @@ def test_gmail_max_items_without_catch_up_still_keeps_promotion_gate(tmp_path: P
     )
     assert adapter.ingest_kwargs.get("gmail_promotion_gate") is True
     assert adapter.ingest_kwargs.get("max_threads") == 10
+    assert adapter.ingest_kwargs.get("reset_page_cursor") is True
+    assert adapter.ingest_kwargs.get("quick_update") is True
     assert adapter.ingest_kwargs.get("catch_up") is not True
+    assert "gmail newest-first: page cursor reset" in " ".join(result.report.warnings)
 
 
 _LIVE_ADAPTERS: list[tuple[str, str, str]] = [
@@ -530,6 +533,11 @@ def test_adapter_ingest_kwargs_per_live_source(monkeypatch: pytest.MonkeyPatch) 
         "account_email": "me@example.com",
         "gmail_promotion_gate": True,
         "extract_attachment_text": True,
+        "reset_page_cursor": True,
+        "quick_update": True,
+        "max_threads": None,
+        "max_messages": None,
+        "max_attachments": None,
     }
 
     calendar = adapter_ingest_kwargs(resolve_declaration("calendar-events:cal@example.com"), apply=False)

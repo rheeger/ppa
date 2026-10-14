@@ -16,7 +16,9 @@ from archive_sync.adapters.gmail_messages import (
     _message_uid,
     _thread_uid,
     catch_up_requested,
+    gmail_incremental_after_query,
     reset_gmail_page_cursor,
+    strip_github_notification_mail,
 )
 from archive_vault.schema import EmailAttachmentCard, EmailMessageCard, EmailThreadCard, PersonCard
 from archive_vault.vault import read_note, write_card
@@ -1145,6 +1147,35 @@ def test_reset_gmail_page_cursor_clears_page_fields_keeps_history_id():
     assert cursor["scanned_threads"] == 400
 
 
+def test_incremental_after_query_overlaps_last_sync_day():
+    assert gmail_incremental_after_query({}) is None
+    assert gmail_incremental_after_query({"last_sync": "2026-09-21T22:22:56"}) == "after:2026/09/20"
+    assert gmail_incremental_after_query({"last_sync": "not-a-date"}) is None
+
+
+def test_newest_first_lists_only_since_last_sync(tmp_vault):
+    adapter = GmailMessagesAdapter()
+    seen: dict[str, object] = {}
+
+    def gws_response(args):
+        if args[:4] == ["gmail", "users", "threads", "list"]:
+            seen["params"] = json.loads(args[-1])
+            return {"threads": []}
+        raise AssertionError(f"Unexpected gws args: {args}")
+
+    adapter._gws = gws_response  # type: ignore[method-assign]
+    adapter.fetch(
+        str(tmp_vault),
+        {"last_sync": "2026-09-21T22:22:56.661017", "page_token": "stale", "page_index": 40},
+        account_email="me@example.com",
+        reset_page_cursor=True,
+        max_threads=None,
+        max_messages=None,
+        max_attachments=None,
+    )
+    assert seen["params"] == {"userId": "me", "maxResults": 25, "q": "after:2026/09/20"}
+
+
 def test_catch_up_requested_accepts_aliases():
     assert catch_up_requested(catch_up=True) is True
     assert catch_up_requested(reset_page_cursor=True) is True
@@ -1353,3 +1384,172 @@ def test_catch_up_respects_max_threads(tmp_vault):
     thread_ids = [item["thread_id"] for item in items if item["kind"] == "thread"]
     assert thread_ids == ["t1"]
     assert fetched_thread_ids == ["t1"]
+
+
+def test_newest_first_stops_after_unchanged_page(tmp_vault):
+    """Newest-first must not keep paging into older mail after a skip page."""
+
+    adapter = GmailMessagesAdapter()
+    initial = iter(
+        [
+            {"threads": [{"id": "t-old", "historyId": "h-old"}], "nextPageToken": None},
+            _thread(
+                "t-old",
+                _message(
+                    message_id="m-old",
+                    thread_id="t-old",
+                    internal_date="1710000000000",
+                    subject="Old thread",
+                    body="hello old",
+                    from_value="Alice Example <alice@example.com>",
+                    to_value="me@example.com",
+                    snippet="hello old",
+                ),
+                history_id="h-old",
+            ),
+        ]
+    )
+    adapter._gws = lambda args: next(initial)  # type: ignore[method-assign]
+    result = adapter.ingest(str(tmp_vault), account_email="me@example.com", max_threads=10, max_messages=10)
+    assert result.created == 2
+
+    list_tokens: list[str | None] = []
+    fetched_thread_ids: list[str] = []
+
+    def gws_response(args):
+        if args[:4] == ["gmail", "users", "threads", "list"]:
+            params = json.loads(args[-1])
+            token = params.get("pageToken")
+            list_tokens.append(token)
+            if token == "page-2":
+                return {
+                    "threads": [{"id": "t-old", "historyId": "h-old"}],
+                    "nextPageToken": "page-3",
+                }
+            if token == "page-3":
+                raise AssertionError("newest-first must stop before listing older page-3")
+            return {
+                "threads": [{"id": "t-new", "historyId": "h-new"}],
+                "nextPageToken": "page-2",
+            }
+        if args[:4] == ["gmail", "users", "threads", "get"]:
+            params = json.loads(args[-1])
+            fetched_thread_ids.append(params["id"])
+            if params["id"] != "t-new":
+                raise AssertionError(f"should not fetch unchanged thread {params['id']}")
+            return _thread(
+                "t-new",
+                _message(
+                    message_id="m-new",
+                    thread_id="t-new",
+                    internal_date="1750000000000",
+                    subject="New mail",
+                    body="hello new",
+                    from_value="Bob Example <bob@example.com>",
+                    to_value="me@example.com",
+                    snippet="hello new",
+                ),
+                history_id="h-new",
+            )
+        raise AssertionError(f"Unexpected gws args: {args}")
+
+    adapter = GmailMessagesAdapter()
+    adapter._gws = gws_response  # type: ignore[method-assign]
+    items = adapter.fetch(
+        str(tmp_vault),
+        {
+            "page_token": "stale-historical",
+            "page_index": 40,
+            "page_thread_ids": ["old-t1"],
+            "page_next_token": "stale-next",
+        },
+        account_email="me@example.com",
+        max_threads=None,
+        max_messages=None,
+        max_attachments=None,
+        page_size=25,
+        reset_page_cursor=True,
+    )
+    assert list_tokens == [None, "page-2"]
+    assert fetched_thread_ids == ["t-new"]
+    assert [item["thread_id"] for item in items if item["kind"] == "thread"] == ["t-new"]
+
+
+def test_strip_github_notification_mail_keeps_owner_reply() -> None:
+    thread = {
+        "kind": "thread",
+        "thread_id": "t1",
+        "account_email": "me@example.com",
+        "subject": "review requested",
+        "participants": ["notifications@github.com", "me@example.com"],
+        "messages": ["[[old-gh]]", "[[old-me]]"],
+        "message_count": 2,
+        "label_ids": [],
+        "people": [],
+    }
+    messages = [
+        {
+            "kind": "message",
+            "message_id": "m-gh",
+            "account_email": "me@example.com",
+            "from_email": "notifications@github.com",
+            "subject": "review requested",
+            "participant_emails": ["notifications@github.com", "me@example.com"],
+            "people": [],
+            "label_ids": [],
+            "sent_at": "2026-09-01T00:00:00Z",
+            "message_body_sha": "aaa",
+            "has_attachments": True,
+        },
+        {
+            "kind": "message",
+            "message_id": "m-me",
+            "account_email": "me@example.com",
+            "from_email": "me@example.com",
+            "subject": "Re: review requested",
+            "participant_emails": ["me@example.com"],
+            "people": [],
+            "label_ids": ["SENT"],
+            "sent_at": "2026-09-02T00:00:00Z",
+            "message_body_sha": "bbb",
+            "has_attachments": False,
+        },
+    ]
+    attachments = [
+        {"kind": "attachment", "message_id": "m-gh", "attachment_id": "a-gh"},
+        {"kind": "attachment", "message_id": "m-me", "attachment_id": "a-me"},
+    ]
+    kept_thread, kept_messages, kept_attachments = strip_github_notification_mail(
+        thread, messages, attachments
+    )
+    assert kept_thread is not None
+    assert [row["message_id"] for row in kept_messages] == ["m-me"]
+    assert [row["attachment_id"] for row in kept_attachments] == ["a-me"]
+    assert kept_thread["message_count"] == 1
+    assert kept_thread["messages"] == [f"[[{_message_uid('me@example.com', 'm-me')}]]"]
+    assert kept_thread["subject"] == "Re: review requested"
+
+
+def test_strip_github_notification_mail_drops_pure_thread() -> None:
+    thread = {"kind": "thread", "thread_id": "t-gh", "account_email": "me@example.com", "subject": "ci"}
+    messages = [
+        {
+            "kind": "message",
+            "message_id": "m1",
+            "from_email": "notifications@github.com",
+            "account_email": "me@example.com",
+        },
+        {
+            "kind": "message",
+            "message_id": "m2",
+            "from_email": "ci@noreply.github.com",
+            "account_email": "me@example.com",
+        },
+    ]
+    attachments = [{"kind": "attachment", "message_id": "m1", "attachment_id": "a1"}]
+    kept_thread, kept_messages, kept_attachments = strip_github_notification_mail(
+        thread, messages, attachments
+    )
+    assert kept_thread is None
+    assert kept_messages == []
+    assert kept_attachments == []

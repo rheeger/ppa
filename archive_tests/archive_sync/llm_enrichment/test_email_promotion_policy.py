@@ -106,11 +106,40 @@ def test_github_notification_storm_not_back_and_forth() -> None:
         owner_sent_message=False,
         owner_replied=False,
     )
-    assert d.decision_reason != "back_and_forth_participation"
-    assert d.corpus_decision != CorpusDecision.ACTIVE or d.decision_reason != "back_and_forth_participation"
-    # Missing/unknown → quarantine
-    assert d.corpus_decision == CorpusDecision.QUARANTINE
-    assert d.decision_reason in {"missing_classification", "low_confidence", "low_confidence_with_attachment"}
+    assert d.decision_reason == "github_notification"
+    assert d.corpus_decision == CorpusDecision.SUPPRESSED
+    assert d.processor_decision == ProcessorDecision.SUPPRESSED_NO_PROCESSING
+
+
+def test_github_noreply_host_is_suppressed() -> None:
+    d = _decide(
+        gmail_thread_id="t-github-noreply",
+        classification="personal",
+        confidence=0.9,
+        label_ids=("CATEGORY_PERSONAL",),
+        from_emails=("endaoment-frontend@noreply.github.com",),
+        participant_emails=("endaoment-frontend@noreply.github.com",),
+        message_count=3,
+        owner_sent_message=False,
+    )
+    assert d.corpus_decision == CorpusDecision.SUPPRESSED
+    assert d.decision_reason == "github_notification"
+
+
+def test_owner_reply_on_github_thread_stays_active() -> None:
+    d = _decide(
+        gmail_thread_id="t-github-reply",
+        classification="",
+        confidence=0.0,
+        classification_source="missing",
+        from_emails=("notifications@github.com", "owner@example.com"),
+        participant_emails=("notifications@github.com", "owner@example.com"),
+        message_count=3,
+        owner_email="owner@example.com",
+        owner_sent_message=True,
+    )
+    assert d.corpus_decision == CorpusDecision.ACTIVE
+    assert d.decision_reason == "back_and_forth_participation"
 
 
 def test_bay_clubs_inbound_promo_not_back_and_forth() -> None:

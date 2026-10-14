@@ -236,6 +236,26 @@ def _is_bulk_sender(from_emails: tuple[str, ...]) -> bool:
     return all(_email_domain(fe) in NOISE_DOMAINS for fe in from_emails)
 
 
+def _is_github_mail_domain(domain: str) -> bool:
+    """GitHub notification and noreply hosts. The GitHub source updater already has this history."""
+
+    dom = (domain or "").strip().lower()
+    return dom == "github.com" or dom.endswith(".github.com")
+
+
+def _is_github_notification(from_emails: tuple[str, ...]) -> bool:
+    """True when every From address is GitHub mail.
+
+    A thread the owner actually wrote in has a non-GitHub From, so it stays
+    on the normal rules. Billing and repo notifications from GitHub do not.
+    """
+
+    domains = [_email_domain(fe) for fe in from_emails if str(fe or "").strip()]
+    if not domains:
+        return False
+    return all(_is_github_mail_domain(dom) for dom in domains)
+
+
 def _has_owner_participation(inp: EmailPromotionInput) -> bool:
     return inp.owner_sent_message or inp.owner_replied
 
@@ -334,6 +354,17 @@ class EmailPromotionPolicy:
         owner = self._owner_action_override(inp, canonical, labels, signals)
         if owner is not None:
             return owner
+
+        # GitHub notification mail is already ingested by the GitHub updater.
+        # Suppress it before personal/promotions labels can mark it active.
+        if _is_github_notification(inp.from_emails):
+            signals.append("github_notification")
+            return _RuleOutcome(
+                CorpusDecision.SUPPRESSED,
+                ProcessorDecision.SUPPRESSED_NO_PROCESSING,
+                "github_notification",
+                signals.copy(),
+            )
 
         # Rule 3: transactional promotion.
         transactional = self._transactional_promotion(inp, canonical, card_types, signals)

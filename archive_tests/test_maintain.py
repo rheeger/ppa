@@ -558,7 +558,7 @@ def test_maintain_catch_up_handoff_dirty_uids_to_real_executor(
     if not dirty and isinstance(su.get("batch"), dict):
         dirty = list(su["batch"].get("dirty_card_uids") or [])
     assert "hfa-join-mail-1" in dirty
-    assert any("catch_up: gmail page cursor reset" in w for w in su.get("warnings") or [])
+    assert any("gmail newest-first: page cursor reset" in w for w in su.get("warnings") or [])
 
     assert rep.processor_runs == 1
     proc = rep.processor_reports[0]

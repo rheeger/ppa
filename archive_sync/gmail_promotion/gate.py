@@ -136,7 +136,15 @@ class GmailPromotionGate:
         corpus = policy_decision.corpus_decision.value
         dirty: tuple[str, ...] = ()
 
-        if vault_has_active_card and corpus in {CorpusDecision.SUPPRESSED.value, CorpusDecision.QUARANTINE.value}:
+        # GitHub notification threads stay out of the archive even when an
+        # older card already exists. Re-emitting them would put them back
+        # on the search dirty list.
+        github_notification = record.decision_reason == "github_notification"
+        if (
+            vault_has_active_card
+            and not github_notification
+            and corpus in {CorpusDecision.SUPPRESSED.value, CorpusDecision.QUARANTINE.value}
+        ):
             self.metrics.demotion_recommended += 1
             signals = tuple(record.decision_signals) + (
                 "routine_sync_keep_active",
