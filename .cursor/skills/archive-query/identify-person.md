@@ -1,6 +1,8 @@
 # Identify a person
 
-`archive_person` returns a candidate card. It is not identity.
+`archive_person` returns a candidate card. It is not identity. Finish
+this before `people_filter` or any story about someone. Channel census
+and ranking live in [SKILL.md](SKILL.md).
 
 ## Sequence
 

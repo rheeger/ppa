@@ -33,6 +33,26 @@ FILTER_HINT = (
 )
 
 CARD_STACK_PLAYBOOK = """\
+HOW TO RECONSTRUCT
+A question is almost never one card type. Assemble the event from cards
+you open. Rank by how close the card is to what happened:
+
+1. Lived: imessage_message, beeper_message (Discord/Slack/Telegram),
+   meeting_transcript, ride, flight. Query messages, not thread cards.
+2. Sent: email_message bodies (not email_thread, not attachments).
+3. Planned: calendar_event, invites. A calendar block is the plan, not
+   attendance. If a message and a calendar disagree, the message wins.
+4. Derived: search snippets, embeddings, knowledge, person aliases.
+5. Byproduct: git_commit / git_message unless the question is code.
+
+Census matched_total per channel (include Beeper) before you narrate.
+Query one type per call. Date-only filters are UTC; for a local day,
+query that UTC date and the next, then keep local-time rows. Read bodies
+for 1:1s that moved and for any line that would change the story. Follow
+parent / attachment / duplicate UIDs. A thin lived query is a thin
+index, not an empty life. Do not fill it with calendar or git. Do not
+hybrid-search funeral/drive/family without a date.
+
 HOW TO COMPOSE QUERIES
 Every retrieval tool is available: archive_search, archive_hybrid_search,
 archive_query, archive_analytics, archive_person, archive_read, archive_read_many,
@@ -40,34 +60,39 @@ archive_evidence, archive_timeline, archive_temporal_neighbors,
 archive_graph, archive_vector_search, archive_knowledge, archive_stats.
 Start wide or narrow. Then follow parent / attachment / duplicate UIDs.
 
+- Lived time: archive_query type_filter=imessage_message and
+  beeper_message separately. Untyped evidence and archive_timeline rank
+  git and calendar over texts.
 - Wide scan: archive_search or archive_hybrid_search (raise limit when
   you need more than the default). archive_query when you know type /
-  person / source. Multi-type is fine — run another type_filter.
+  person / source. Multi-type is fine; run another type_filter.
 - People: identify-person.md, then people_filter on search / query / hybrid /
   evidence. people_filter is a name/slug, never an email; put emails in
   query=. archive_person is a candidate. Census channels before a profile.
-- Dates: archive_timeline or start_date/end_date on evidence / hybrid /
-  search. archive_temporal_neighbors for a single timestamp.
-- Compact dated stack: archive_evidence (uid, date, type, title, why,
-  parent/duplicate/attachment pointers). narrative=true stitches a short
-  dated outline citing UIDs.
+- Dates: start_date/end_date on query / evidence / hybrid. Date-only is
+  UTC. archive_temporal_neighbors is for one timestamp you already have.
+- Compact dated stack: archive_evidence inside a type_filter or
+  people_filter (uid, date, type, title, why, parent/duplicate/attachment
+  pointers). narrative=true outlines whatever ranked, still not a recap.
 - Bodies: archive_read / archive_read_many for cards you will use.
-  include_attachment_uids / include_duplicate_uids return link lists —
-  read those UIDs when you need the text.
+  include_attachment_uids / include_duplicate_uids return link lists.
+  Read those UIDs when you need the text.
 - Weak lexical → archive_hybrid_search or archive_vector_search.
 - Relationships → archive_graph from a known card.
-- Subscriptions, trip costs, changes-since, or typed query + saved scope →
-  archive_analytics. Completeness and evidence kinds are in the JSON.
+- Totals, subscriptions, trip costs, changes-since, or typed query +
+  saved scope → archive_analytics. Completeness is in the JSON.
 
 Defaults (often 8–12) are starting points, not caps.
 """
 
 CARD_STACK_PLAYBOOK_HELP = (
-    "Compose queries: start wide (search / hybrid / query) or narrow "
+    "Reconstruct from cards: lived messages over calendar and git, "
+    "census matched_total (include Beeper), query one type per call. "
+    "Compose: start wide (search / hybrid / query) or narrow "
     "(person / type / dates), then follow parent/attachment/duplicate "
-    "UIDs. Use evidence for a compact dated stack; read for bodies; "
-    "hybrid when lexical is weak. Defaults are starting points — raise "
-    "limit or run another type_filter to go wider."
+    "UIDs. Evidence is a compact dated stack inside a type; read for "
+    "bodies; hybrid when lexical is weak. Defaults are starting points; "
+    "raise limit or run another type_filter to go wider."
 )
 
 _CONTRACT = (
@@ -96,10 +121,14 @@ HOW IT WORKS
   Compose: list compactly when you want a dated stack; read bodies for the
   UIDs you will use; follow parent/attachment/duplicate pointers on demand.
 
+"""
+    + CARD_STACK_PLAYBOOK
+    + """
 JOBS
 Pick one job. If you can read this repo, open
 .cursor/skills/archive-query/<file> and follow it before retrieving.
-MCP-only clients use the stop tests here.
+Every job follows HOW TO RECONSTRUCT. MCP-only clients use the stop tests
+here.
 
 1. Identify a person — identify-person.md
    archive_person is a candidate, not identity. Confirm summary equals the
@@ -111,29 +140,34 @@ MCP-only clients use the stop tests here.
 
 2. Census their channels — census-channels.md
    archive_analytics workflow=query once each for imessage_thread,
-   imessage_message, email_message, calendar_event. Read matched_total.
-   A page of 40 with truncated is not the corpus. Read thread cards
-   (message_count, first_message_at, last_message_at) before sampling
-   bodies. type_filter=person plus the same people_filter can be empty.
+   imessage_message, beeper_thread, beeper_message, email_message,
+   calendar_event, meeting_transcript. Read matched_total. A page of 40
+   with truncated is not the corpus. Empty iMessage is not "they did not
+   text." Read thread cards (message_count, first_message_at,
+   last_message_at) before sampling bodies. type_filter=person plus the
+   same people_filter can be empty.
 
 3. Read a stack — read-a-stack.md
-   archive_evidence for a compact dated list. Do not add life/school/work
-   to query= when people_filter is set. Recency-sorted archive_query
-   without a type is latest chatter. Follow parent/attachment/duplicate
-   UIDs. Read bodies only for UIDs you will use.
+   Query one type per call. archive_evidence for a compact dated list
+   inside a type_filter. Do not add life/school/work to query= when
+   people_filter is set. Recency-sorted archive_query without a type is
+   latest chatter (often git). Follow parent/attachment/duplicate UIDs.
+   Read bodies only for UIDs you will use.
 
 4. Answer a fact — answer-a-fact.md
-   Known UID → archive_read. Ground every cite. The person tool's first
-   hit is not a cite when summary is not the needle.
+   Known UID → archive_read. Ground every cite. Attendance and "did it
+   happen" are lived-message facts, not calendar facts. The person tool's
+   first hit is not a cite when summary is not the needle.
 
 5. Reconstruct a story — reconstruct-a-story.md
-   Identify, then census, then dated evidence without extra query text,
-   then bodies. Do not call the last email the last update until iMessage
-   (and Beeper) totals are in hand.
+   Identify, then census (include Beeper), then lived message types in
+   the window, then bodies. Calendar is the plan. Do not call the last
+   email the last update until iMessage and Beeper totals are in hand.
 
-"""
-    + CARD_STACK_PLAYBOOK
-    + """
+6. Recap a day — recap-a-day.md
+   One local day. Messages first, calendar as plan, skip git unless
+   asked about code. Date-only is UTC.
+
 DON'T
 - Don't treat snippets, titles, chunks, or embeddings as canonical.
 - Don't use hyphenated types (email-message, calendar-event).
@@ -144,7 +178,10 @@ DON'T
 - Don't call rebuild / embed / seed-link tools unless you are doing ops.
 - Don't give up on a specific fact after one phrasing.
 - Don't treat an alias-only person hit as identity.
-- Don't skip the channel census on a who-is / profile question.
+- Don't skip the channel census on a who-is / profile / what-happened question.
+- Don't narrate a calendar block as attended when messages say otherwise.
+- Don't fill a thin message query with git or calendar.
+- Don't hybrid-search biography words (funeral, drive, family) without a date.
 """
 )
 
@@ -177,9 +214,11 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         f"{FILTER_HINT} "
         "Examples: type_filter=email_message people_filter=Sarah; "
         "type_filter=calendar_event; type_filter=ride. "
+        "For a day or event, query message types (imessage_message, "
+        "beeper_message), not threads. Calendar is the plan. "
         "Totals and completeness are labeled. Aggregate client-side or use "
         "archive_analytics for the three workflows. Dates: start_date/end_date "
-        "or archive_evidence / archive_timeline."
+        "(date-only is UTC) or archive_evidence."
     ),
     "archive_hybrid_search": (
         "Open-ended discovery: lexical + semantic + graph. Start here when "
@@ -210,7 +249,9 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "expand_context labels matched vs adjacent context. saved_scope_name "
         "narrows. Completeness (coverage/freshness/truncated) is visible. "
         "Use search/hybrid/query first when you want a wide scan; use "
-        "archive_read when you need bodies. "
+        "archive_read when you need bodies. Untyped evidence ranks "
+        "git_commit and calendar_event over messages. For lived time, "
+        "call per type_filter (imessage_message, beeper_message). "
         f"{FILTER_HINT}"
     ),
     "archive_analytics": (
@@ -249,14 +290,17 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "widen hops when the neighborhood is too small."
     ),
     "archive_timeline": (
-        "Cards in a date range (start_date/end_date ISO) — dated listing, not "
-        "full bodies. Combine with archive_evidence when you also need people "
-        "filters and compact support lines. "
-        "Use archive_temporal_neighbors for a single timestamp."
+        "Cards in a date range (start_date/end_date ISO): dated listing, not "
+        "full bodies. Mixed listing; git and calendar dominate. Not a day "
+        "recap. For lived time, archive_query per message type instead. "
+        "Combine with archive_evidence when you also need people filters "
+        "and compact support lines. "
+        "Use archive_temporal_neighbors for a single timestamp you already have."
     ),
     "archive_temporal_neighbors": (
         "Cards before, after, or spanning a timestamp (ISO). "
-        "Use for 'what was I doing on Dec 27'. Accepts type/source/people filters. "
+        "Use around one timestamp you already have, not as a day recap. "
+        "Accepts type/source/people filters. "
         f"{FILTER_HINT}"
     ),
     "archive_knowledge": (

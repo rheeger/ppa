@@ -10,6 +10,7 @@ JOB_FILES = (
     "read-a-stack.md",
     "answer-a-fact.md",
     "reconstruct-a-story.md",
+    "recap-a-day.md",
 )
 
 
@@ -29,3 +30,20 @@ def test_mcp_router_names_every_job_file() -> None:
             continue
         assert name in text
     assert "candidate" in TOOL_DESCRIPTIONS["archive_person"].lower()
+
+
+def test_skill_teaches_reconstruct_ranking() -> None:
+    skill = (JOB_ROOT / "SKILL.md").read_text(encoding="utf-8")
+    for needle in (
+        "How to reconstruct",
+        "beeper_message",
+        "calendar_event",
+        "git_commit",
+        "matched_total",
+        "Thin index",
+    ):
+        assert needle in skill, needle
+    reconstruct = (JOB_ROOT / "reconstruct-a-story.md").read_text(encoding="utf-8")
+    assert "untyped" in reconstruct.lower()
+    census = (JOB_ROOT / "census-channels.md").read_text(encoding="utf-8")
+    assert "beeper_message" in census

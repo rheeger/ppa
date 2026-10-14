@@ -1,25 +1,20 @@
 ---
-description: PPA archive retrieval — warm MCP only; load archive-query job files
+description: PPA archive retrieval — warm archive-local tools only
 alwaysApply: true
 ---
 
 # PPA archive usage
 
 Do not spawn `python -m archive_cli` / `ppa <query>` once per question against
-the living archive. That cold-opens the multi-GB search index. Use HTTP
-`archive-local`. See `ppa-no-cold-cli-query.mdc` and
-`archive_docs/runbooks/http-mcp-singleton.md`.
+the living archive. That cold-opens the multi-GB search index.
 
-For retrieval, read `.cursor/skills/archive-query/SKILL.md` and open the job
-file for the work in front of you:
-
-1. Identify a person → `identify-person.md`
-2. Census their channels → `census-channels.md`
-3. Read a stack → `read-a-stack.md`
-4. Answer a fact → `answer-a-fact.md`
-5. Reconstruct a story → `reconstruct-a-story.md`
-
-A "who is X" or profile is jobs 1, then 2, then 5.
+For retrieval, call `archive-local` tools. Open
+`.cursor/skills/archive-query/SKILL.md` and follow How to reconstruct:
+lived messages over calendar and git, census channels, then read bodies.
+A day recap is `recap-a-day.md`. A person profile is identify, census,
+then `reconstruct-a-story.md`. If `archive-local` is missing from the tool
+catalog, stop and say so. Do not debug Tailscale or spawn `archive_cli`
+to answer a question.
 
 ## Grounding
 

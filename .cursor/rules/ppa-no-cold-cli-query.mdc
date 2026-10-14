@@ -9,9 +9,14 @@ The live search index is tens of GB. The **first** open of `archive_cli` mmaps i
 
 ## Do this
 
-- Ask the living archive through HTTP `archive-local` (LaunchAgent `com.rheeger.ppa.mcp-http`). Do not launch `run-local-seed-mcp.sh`.
-- `archive_search`, `archive_hybrid_search`, `archive_query`, `archive_person`, `archive_read`, `archive_evidence`, `archive_graph` — those tools.
-- If HTTP MCP is down, restart the LaunchAgent. Do not start a second `serve --http`. Never a new process per question.
+- Ask the living archive through Cursor `archive-local` tools
+  (`http://127.0.0.1:8765/mcp`, LaunchAgent `com.rheeger.ppa.mcp-http`).
+- `archive_search`, `archive_hybrid_search`, `archive_query`, `archive_person`,
+  `archive_read`, `archive_evidence`, `archive_graph` — those tools.
+- If those tools are not in the catalog, say so. Do not curl the Tailscale
+  hostname. Do not launch `run-local-seed-mcp.sh`. If HTTP MCP is down,
+  restart the LaunchAgent. Do not start a second `serve --http`. Never a new
+  process per question.
 
 ## Never do this
 

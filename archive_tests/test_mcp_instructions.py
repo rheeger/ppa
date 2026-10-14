@@ -31,6 +31,9 @@ REQUIRED_INSTRUCTION_NEEDLES = (
     "JOBS",
     "identify-person.md",
     "census-channels.md",
+    "recap-a-day.md",
+    "HOW TO RECONSTRUCT",
+    "beeper_message",
     "alias-only",
 )
 
@@ -108,6 +111,9 @@ def test_playbook_teaches_composition() -> None:
     assert "do not use archive_search" not in text
     assert "never use" not in text
     assert "only use evidence" not in text
+    assert "how to reconstruct" in text
+    assert "beeper_message" in text
+    assert "calendar" in text and "plan" in text
     help_text = CARD_STACK_PLAYBOOK_HELP.lower()
     assert "compose" in help_text
     assert "search" in help_text and "hybrid" in help_text and "query" in help_text
