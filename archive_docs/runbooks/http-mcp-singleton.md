@@ -4,13 +4,15 @@ The living seed index is tens of GB. One process may mmap it. Every Cursor windo
 
 ## Owner
 
-LaunchAgent `com.rheeger.ppa.mcp-http` starts `ppa-http-mcp/archive_scripts/run-http-mcp.sh`. That script binds the Tailscale IPv4 on port 8765 and writes `~/.ppa/mcp-http-owner.json`.
+LaunchAgent `com.rheeger.ppa.mcp-http` starts `archive_scripts/run-http-mcp.sh` from the main checkout (`/Users/rheeger/Code/rheeger/ppa`). That script binds `0.0.0.0:8765` and writes `~/.ppa/mcp-http-owner.json` with dial host `127.0.0.1`.
 
-Clients use:
+Local clients use:
 
 ```
-http://ginger-m4-max.tail935a40.ts.net:8765/mcp
+http://127.0.0.1:8765/mcp
 ```
+
+Arnold on the tailnet still uses `http://<tailscale-ip>:8765/mcp`. Do not point Cursor at the MagicDNS name. This Mac cannot hairpin to its own Tailscale IP.
 
 `/health` is public. `/mcp` needs `Authorization: Bearer` from `~/.ppa/mcp-http-token`. Do not commit that token.
 
@@ -22,7 +24,7 @@ http://ginger-m4-max.tail935a40.ts.net:8765/mcp
 
 ## Restart after a code deploy
 
-Copy the intended tree into `/Users/rheeger/Code/rheeger/ppa-http-mcp` (that checkout is the LaunchAgent working directory). Rebuild `archive_crate` in the shared `.venv`. Then:
+The LaunchAgent working directory is the main checkout. Rebuild `archive_crate` in that checkout's `.venv` when the extension changed. Then:
 
 ```bash
 launchctl kickstart -k "gui/$(id -u)/com.rheeger.ppa.mcp-http"
@@ -36,4 +38,4 @@ The crate streams `cards.jsonl` / `chunks.jsonl` / `edges.jsonl` into typed stru
 
 ## Client configs
 
-`ppa mcp-config` emits an HTTP block when `PPA_MCP_HTTP_URL` is set. Cursor, Claude Code, Codex, and Cline should all name the server `archive-local` and point at the URL above. Codex reads the bearer header from `~/.ppa/mcp-http-headers.py` so the token stays out of `config.toml`.
+`ppa mcp-config` emits an HTTP block when `PPA_MCP_HTTP_URL` is set. Local Cursor should name the server `archive-local` and point at `http://127.0.0.1:8765/mcp`. Codex reads the bearer header from `~/.ppa/mcp-http-headers.py` so the token stays out of `config.toml`.

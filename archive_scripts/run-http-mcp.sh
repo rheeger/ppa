@@ -2,7 +2,10 @@
 # Singleton streamable-HTTP MCP for every local agent (Cursor, Claude, Codex, Cline).
 # This process is the only one allowed to mmap the living serving index.
 # Token: PPA_MCP_AUTH_TOKEN or ~/.ppa/mcp-http-token
-# Tailscale Serve is opt-in (PPA_MCP_TAILSCALE_SERVE=1). Bind the Tailscale IP by default.
+# Tailscale Serve is opt-in (PPA_MCP_TAILSCALE_SERVE=1). Bind every local
+# interface by default so this Mac can dial 127.0.0.1 and Arnold can still
+# dial the Tailscale IP. Binding *only* the Tailscale IP makes local agents
+# hang (no hairpin to self).
 set -euo pipefail
 # launchd PATH is minimal — Tailscale and Homebrew must be explicit.
 export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:${PATH:-}"
@@ -21,13 +24,7 @@ export PPA_MCP_HTTP=1
 export PPA_SERVING_INDEX_FOLLOW_HTTP="${PPA_SERVING_INDEX_FOLLOW_HTTP:-1}"
 # Open the serving index once before /health answers. First retrieval is warm.
 export PPA_MCP_PREPARE_ON_START="${PPA_MCP_PREPARE_ON_START:-1}"
-if [[ -z "${PPA_MCP_HTTP_HOST:-}" ]]; then
-  # Prefer the Tailscale address so Arnold can reach us without Tailscale Serve.
-  if command -v tailscale >/dev/null 2>&1; then
-    export PPA_MCP_HTTP_HOST="$(command tailscale ip -4 2>/dev/null | head -1)"
-  fi
-  export PPA_MCP_HTTP_HOST="${PPA_MCP_HTTP_HOST:-127.0.0.1}"
-fi
+export PPA_MCP_HTTP_HOST="${PPA_MCP_HTTP_HOST:-0.0.0.0}"
 
 export PPA_EMBEDDING_PROVIDER="${PPA_EMBEDDING_PROVIDER:-openai}"
 export PPA_EMBEDDING_MODEL="${PPA_EMBEDDING_MODEL:-text-embedding-3-small}"

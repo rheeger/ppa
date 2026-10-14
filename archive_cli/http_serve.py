@@ -52,12 +52,26 @@ def http_owner_file() -> Path:
     return Path(raw) if raw else DEFAULT_OWNER_FILE
 
 
+def advertised_http_host(bind_host: str) -> str:
+    """Host clients should dial. A wildcard bind is not a connect address."""
+
+    host = str(bind_host or "").strip() or DEFAULT_HTTP_HOST
+    if host in {"0.0.0.0", "::", "[::]", "*"}:
+        return DEFAULT_HTTP_HOST
+    return host
+
+
 def write_http_owner(*, host: str, port: int, pid: int | None = None) -> Path:
     """Record the live HTTP MCP so stdio copies can refuse to mmap the index."""
 
     dest = http_owner_file()
     dest.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"pid": int(pid or os.getpid()), "host": str(host).strip(), "port": int(port)}
+    payload = {
+        "pid": int(pid or os.getpid()),
+        "host": advertised_http_host(host),
+        "port": int(port),
+        "bind": str(host).strip() or DEFAULT_HTTP_HOST,
+    }
     dest.write_text(json.dumps(payload) + "\n", encoding="utf-8")
     dest.chmod(0o600)
     return dest
@@ -227,8 +241,9 @@ def run_http(mcp: Any, *, host: str, port: int, token: str) -> None:
     app = BearerAuthASGI(inner, token=token)
     owner_path = write_http_owner(host=host, port=port)
     _log.info(
-        "http_mcp_listen host=%s port=%d path=/mcp health=/health owner=%s",
+        "http_mcp_listen bind=%s dial=%s port=%d path=/mcp health=/health owner=%s",
         host,
+        advertised_http_host(host),
         port,
         owner_path,
     )

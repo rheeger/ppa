@@ -12,6 +12,7 @@ import pytest
 
 from archive_cli.http_serve import (
     DEFAULT_TOKEN_FILE,
+    advertised_http_host,
     bearer_authorized,
     bind_http_access_context,
     clear_http_owner,
@@ -93,6 +94,26 @@ def test_http_owner_file_round_trip(monkeypatch: pytest.MonkeyPatch, tmp_path: P
     assert http_owner_health_url(payload) == "http://100.67.41.98:8765/health"
     clear_http_owner()
     assert read_http_owner() is None
+
+
+def test_advertised_http_host_rewrites_wildcard() -> None:
+    assert advertised_http_host("0.0.0.0") == "127.0.0.1"
+    assert advertised_http_host("::") == "127.0.0.1"
+    assert advertised_http_host("100.67.41.98") == "100.67.41.98"
+
+
+def test_http_owner_file_records_loopback_for_wildcard_bind(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    dest = tmp_path / "owner.json"
+    monkeypatch.setenv("PPA_MCP_HTTP_OWNER_FILE", str(dest))
+    write_http_owner(host="0.0.0.0", port=8765, pid=1217)
+    payload = read_http_owner()
+    assert payload is not None
+    assert payload["host"] == "127.0.0.1"
+    assert payload["bind"] == "0.0.0.0"
+    assert http_owner_health_url(payload) == "http://127.0.0.1:8765/health"
+    clear_http_owner()
 
 
 def test_mcp_config_http_url(monkeypatch: pytest.MonkeyPatch) -> None:
